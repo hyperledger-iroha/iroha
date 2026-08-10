@@ -77,7 +77,7 @@ PROVENANCE_VERIFICATION_SIGNATURE = bytes.fromhex(
     "5fb8821590a33bacc61e39701cf9b46b"
     "d25bf5f0595bbe24655141438e7a100b"
 )
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-hsm"
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-software"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
 TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = hashlib.sha256(
     b"sorafs-sf11-topology-signer-policy-v1"
@@ -207,7 +207,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--policy-digest-hex",
                 POLICY_DIGEST,
                 "--signing-provider",
-                "external_ed25519_hsm",
+                "authenticated_external_signer",
+                "--signing-backend",
+                "software",
                 "--signing-provider-revision",
                 "7",
             ]
@@ -271,7 +273,7 @@ def write_topology_qualification(path: Path) -> Path:
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
-        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_handle_kinds": ["monitoring", "external_signer", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
         "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
@@ -290,6 +292,7 @@ def write_topology_qualification(path: Path) -> Path:
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_backend": "software",
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
         "signer_key_fingerprint_hex": hashlib.sha256(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY
@@ -421,8 +424,11 @@ def test_response_file_can_build_signed_manifest_canary(tmp_path: Path) -> None:
     assert payload["manifest_digest_hex"] == MANIFEST_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["private_key_absent"] is True
-    assert payload["signing_provider"] == "external_ed25519_hsm"
+    assert payload["signing_provider"] == "authenticated_external_signer"
+    assert payload["signing_backend"] == "software"
     assert payload["signing_provider_revision"] == 7
+    assert payload["signer_response_verified"] is True
+    assert "hsm_signature_verified" not in payload
     assert payload["raw_manifest_included"] is False
 
 
@@ -686,18 +692,73 @@ def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
-def test_signed_manifest_requires_external_hsm_provider_before_write(
+@pytest.mark.parametrize("provider", ("external_ed25519_hsm", "local_file"))
+def test_signed_manifest_rejects_legacy_or_unapproved_provider_before_write(
     tmp_path: Path,
     capsys,
+    provider: str,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
     index = args.index("--signing-provider")
-    args[index + 1] = "local_file"
+    args[index + 1] = provider
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--signing-provider must be `external_ed25519_hsm`" in captured.err
+    assert (
+        "--signing-provider must be `authenticated_external_signer`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+def test_signed_manifest_rejects_non_software_backend_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    index = args.index("--signing-backend")
+    args[index + 1] = "hsm"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signing-backend must be `software`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+@pytest.mark.parametrize(
+    "option",
+    ("--policy-digest-hex", "--public-key-fingerprint-hex"),
+)
+def test_signed_manifest_rejects_zero_policy_or_key_binding_before_write(
+    tmp_path: Path,
+    capsys,
+    option: str,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    index = args.index(option)
+    args[index + 1] = "0" * 64
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert f"{option} must not be zero" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+def test_signed_manifest_rejects_nonpositive_provider_revision_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    index = args.index("--signing-provider-revision")
+    args[index + 1] = "0"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "argument --signing-provider-revision: must be positive" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 

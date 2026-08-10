@@ -29,7 +29,7 @@ MAX_REVIEW_AGE_SECS = 3_600
 REVIEWED_AT_UNIX = NOW_UNIX - 60
 DEPLOYMENT_ID = "sorafs-mainnet-2026-07"
 ENVIRONMENT = "production"
-SIGNER_IDENTITY = "sorafs-topology-qualification-hsm-primary"
+SIGNER_IDENTITY = "sorafs-topology-qualification-software-primary"
 SIGNER_KEY_REVISION = 7
 SIGNER_POLICY_DIGEST = hashlib.sha256(
     b"sorafs-topology-qualification-policy-v1"
@@ -75,7 +75,12 @@ def qualification_summary() -> dict[str, Any]:
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
-        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_handle_kinds": [
+            "monitoring",
+            "external_signer",
+            "kms",
+            "webauthn",
+        ],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
         "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
@@ -120,6 +125,7 @@ def signed_fixture(
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_identity": SIGNER_IDENTITY,
+        "signer_backend": "software",
         "signer_key_revision": SIGNER_KEY_REVISION,
         "signer_key_fingerprint_hex": hashlib.sha256(PUBLIC_KEY).hexdigest(),
         "signer_policy_digest_hex": SIGNER_POLICY_DIGEST,
@@ -175,10 +181,14 @@ def test_signed_envelope_authenticates_exact_unsigned_binding(tmp_path: Path) ->
     assert authenticated == expected
     signing_bytes = TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope)
     assert signing_bytes.startswith(TOPOLOGY.TOPOLOGY_QUALIFICATION_SIGNATURE_DOMAIN)
+    assert b'"signer_backend":"software"' in signing_bytes
+    assert b'"signature_algorithm":"ed25519"' in signing_bytes
     assert b"signature_hex" not in signing_bytes
 
 
-@pytest.mark.parametrize("missing_field", ["signature_hex", "signer_identity"])
+@pytest.mark.parametrize(
+    "missing_field", ["signature_hex", "signer_identity", "signer_backend"]
+)
 def test_unsigned_or_incomplete_envelope_fails_closed(
     tmp_path: Path,
     missing_field: str,
@@ -209,6 +219,28 @@ def test_exact_summary_bytes_are_bound(tmp_path: Path) -> None:
         in error
         for error in errors
     )
+
+
+@pytest.mark.parametrize("backend", ["hsm", "pkcs11", "hardware"])
+def test_non_software_signer_backend_is_rejected(
+    tmp_path: Path,
+    backend: str,
+) -> None:
+    """The signed topology policy accepts only the revised software backend."""
+
+    summary_path, envelope_path, _binding, envelope = signed_fixture(tmp_path)
+    envelope["signer_backend"] = backend
+    sign_envelope(envelope)
+    write_json(envelope_path, envelope)
+
+    authenticated, errors = verify(summary_path, envelope_path)
+
+    assert authenticated is None
+    assert (
+        "signed topology qualification envelope signer_backend must be `software`"
+        in errors
+    )
+    assert not any("signature must authenticate" in error for error in errors)
 
 
 @pytest.mark.parametrize(

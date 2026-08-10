@@ -5,27 +5,41 @@ readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_proof_ledger.py"
-readonly EVIDENCE_DIR="${REPO_ROOT}/target/formal/sumeragi_v2"
-readonly EVIDENCE_PATH="${EVIDENCE_DIR}/proof_evidence.json"
 readonly RESOURCE_GUARD="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_tlapm_guard.py"
-readonly RESOURCE_JSONL="${EVIDENCE_DIR}/tlaps_resource.jsonl"
-readonly RESOURCE_SUMMARY="${EVIDENCE_DIR}/tlaps_resource_summary.json"
 readonly RESOURCE_AUTH_MAGIC="IROHA_RESOURCE_GUARD_AUTH_V1"
 
 unset SUMERAGI_TLAPS_SUPERVISOR_PID
 resource_auth_fd="${IROHA_RESOURCE_GUARD_AUTH_FD:-}"
 resource_auth_token="${IROHA_RESOURCE_GUARD_AUTH_TOKEN:-}"
+if [[ -n "$resource_auth_fd" || -n "$resource_auth_token" ]] \
+  && [[ -z "$resource_auth_fd" || -z "$resource_auth_token" \
+  || ! "$resource_auth_fd" =~ ^([3-9]|[1-9][0-9]+)$ \
+  || ! "$resource_auth_token" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid resource-guard authorization capability" >&2
+  exit 1
+fi
+
+readonly EVIDENCE_DIR="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:?SUMERAGI_V2_FORMAL_EVIDENCE_DIR is required}"
+readonly EVIDENCE_PATH="${EVIDENCE_DIR}/proof_evidence.json"
+readonly RESOURCE_JSONL="${EVIDENCE_DIR}/tlaps_resource.jsonl"
+readonly RESOURCE_SUMMARY="${EVIDENCE_DIR}/tlaps_resource_summary.json"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "TLAPS must run through the external-target formal wrapper" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$REPO_ROOT"
+require_external_release_artifact_root "$REPO_ROOT"
+require_release_artifact_directory "$EVIDENCE_DIR"
+
 if [[ -z "$resource_auth_fd" && -z "$resource_auth_token" ]]; then
   exec python3 "$RESOURCE_GUARD" \
     --jsonl "$RESOURCE_JSONL" \
     --summary "$RESOURCE_SUMMARY" \
     -- /bin/bash "$0" "$@"
-fi
-if [[ -z "$resource_auth_fd" || -z "$resource_auth_token" \
-  || ! "$resource_auth_fd" =~ ^([3-9]|[1-9][0-9]+)$ \
-  || ! "$resource_auth_token" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "invalid resource-guard authorization capability" >&2
-  exit 1
 fi
 if ! IFS= read -r -t 2 -u "$resource_auth_fd" resource_auth_record; then
   echo "resource-guard authorization capability is unavailable" >&2
@@ -47,8 +61,12 @@ case "$(uname -s)-$(uname -m)" in
   *) default_platform="unsupported" ;;
 esac
 
-readonly DEFAULT_TLAPM="${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${default_platform}/tlapm/bin/tlapm"
-readonly TLAPM_BIN="${TLAPM_BIN:-$DEFAULT_TLAPM}"
+if [[ -n "${TLAPM_BIN:-}" ]]; then
+  resolved_tlapm_bin="$TLAPM_BIN"
+else
+  resolved_tlapm_bin="$(command -v tlapm || true)"
+fi
+readonly TLAPM_BIN="$resolved_tlapm_bin"
 readonly LOG_DIR="${EVIDENCE_DIR}/tlaps"
 readonly TARGET_LOG_DIR="${LOG_DIR}/targets"
 readonly CACHE_ROOT="${EVIDENCE_DIR}/tlaps-cache"
@@ -63,8 +81,7 @@ if [[ "${SUMERAGI_TLAPS_THREADS:-1}" != 1 ]]; then
 fi
 
 [[ -x "$TLAPM_BIN" ]] || {
-  echo "pinned TLAPM ${TLAPM_COMMIT} is required at ${TLAPM_BIN}" >&2
-  echo "run scripts/formal/install_sumeragi_v2_tlapm.sh first" >&2
+  echo "pinned TLAPM ${TLAPM_COMMIT} is required from the authenticated external tool inventory" >&2
   exit 1
 }
 version="$($TLAPM_BIN --version 2>&1)"
@@ -150,10 +167,12 @@ for module in "${proof_modules[@]}"; do
     --summary -N --strict --threads "$TLAPM_THREADS"
     --cache-dir "$module_cache"
   )
+  release_gate_boundary "tlaps:${module}:before-preflight" || exit $?
   (
     cd "$FORMAL_DIR"
     "$TLAPM_BIN" "${preflight_args[@]}" "${module}.tla"
   ) 2>&1 | tee "$preflight_log"
+  release_gate_boundary "tlaps:${module}:after-preflight-natural-completion" || exit $?
   if [[ ! -s "$preflight_log" ]]; then
     echo "TLAPM frontend preflight produced no output for ${module}" >&2
     exit 1
@@ -175,10 +194,12 @@ for module in "${proof_modules[@]}"; do
     --strict --nofp --threads "$TLAPM_THREADS"
     --cache-dir "$module_cache"
   )
+  release_gate_boundary "tlaps:${module}:before-proof" || exit $?
   (
     cd "$FORMAL_DIR"
     "$TLAPM_BIN" "${args[@]}" "${module}.tla"
   ) 2>&1 | tee "${LOG_DIR}/${module}.log"
+  release_gate_boundary "tlaps:${module}:after-proof-natural-completion" || exit $?
   completion_count="$(grep -Ec "$TLAPM_COMPLETION_PATTERN" "${LOG_DIR}/${module}.log" || true)"
   if [[ "$completion_count" != 1 ]] \
     || ! tail -n 1 "${LOG_DIR}/${module}.log" | grep -Eq "$TLAPM_COMPLETION_PATTERN"; then
@@ -205,7 +226,7 @@ for ((target_index = 0; target_index < ${#target_ids[@]}; target_index++)); do
   target_expected_count="${target_expected_counts[$target_index]}"
   target_cache="${CACHE_ROOT}/targets/${target_id}"
   target_log="${TARGET_LOG_DIR}/${target_id}.log"
-  canonical_target_cache="../../target/formal/sumeragi_v2/tlaps-cache/targets/${target_id}"
+  canonical_target_cache="$target_cache"
   mkdir -p "$target_cache"
 
   echo "[tlaps] exact target ${target_id} (${target_provider}!${target_theorem})"
@@ -215,10 +236,12 @@ for ((target_index = 0; target_index < ${#target_ids[@]}; target_index++)); do
     --cache-dir "$canonical_target_cache"
     "${target_provider}.tla"
   )
+  release_gate_boundary "tlaps:${target_id}:before-target" || exit $?
   (
     cd "$FORMAL_DIR"
     "$TLAPM_BIN" "${target_args[@]}"
   ) 2>&1 | tee "$target_log"
+  release_gate_boundary "tlaps:${target_id}:after-target-natural-completion" || exit $?
   completion_count="$(grep -Ec "$TLAPM_COMPLETION_PATTERN" "$target_log" || true)"
   if [[ "$completion_count" != 1 ]] \
     || ! tail -n 1 "$target_log" | grep -Eq "$TLAPM_COMPLETION_PATTERN"; then
@@ -242,6 +265,7 @@ for ((target_index = 0; target_index < ${#target_ids[@]}; target_index++)); do
 done
 
 require_frozen_formal_inputs "the complete TLAPM proof run"
+release_gate_boundary "tlaps:before-evidence-publication" || exit $?
 python3 "$CHECKER" \
   --write-evidence "$EVIDENCE_PATH" \
   --tlapm-version "$version" \
@@ -250,4 +274,5 @@ echo "[tlaps] observed target counts (review only; no contract was edited):"
 python3 "$CHECKER" \
   --print-promotion-target-counts \
   --evidence "$EVIDENCE_PATH"
+release_gate_boundary "tlaps:after-evidence-publication" || exit $?
 echo "[tlaps] all configured deductive modules discharged; evidence=${EVIDENCE_PATH}"

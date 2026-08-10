@@ -58,7 +58,7 @@ EXPECTED_LANE_SLOT_COUNT = 17
 MIN_SIGNED_MODEL_ARTIFACT_COUNT = 1
 MAX_SIGNED_MODEL_ARTIFACT_COUNT = 64
 MAX_SIGNED_MODEL_REVISION = (1 << 63) - 1
-RUNTIME_HANDLE_KINDS = ("monitoring", "hsm", "kms", "webauthn")
+RUNTIME_HANDLE_KINDS = ("monitoring", "external_signer", "kms", "webauthn")
 SIGNED_MODEL_SIGNATURE_ALGORITHMS = ("ed25519", "ml-dsa-87")
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*\Z")
 NON_PRODUCTION_HANDLE_COMPONENTS = frozenset(
@@ -67,6 +67,7 @@ NON_PRODUCTION_HANDLE_COMPONENTS = frozenset(
 RUNTIME_HANDLE_COMPACT_ROLES = frozenset(
     {
         "adapter",
+        "external",
         "hsm",
         "kms",
         "kubo",

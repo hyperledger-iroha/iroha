@@ -18,14 +18,13 @@ from pathlib import Path, PurePosixPath
 import re
 import secrets
 import selectors
-import signal
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, BinaryIO
 
 
 _LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
@@ -147,7 +146,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+    "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -182,11 +181,13 @@ _BOOTSTRAP_RUNNER_ENV_ALLOWLIST = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
+    "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
@@ -390,7 +391,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 850
+_PRODUCTION_TEST_COUNT = 857
 _G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
@@ -511,7 +512,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -627,7 +628,7 @@ _RUST_SDK_DIAGNOSTICS_TESTS = (
     "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
     "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
     "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
-    "client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito",
+    "client::tests::get_sumeragi_status_json_requires_exact_json_media_type",
     "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
     "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
     "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
@@ -637,7 +638,7 @@ _RUST_SDK_DIAGNOSTICS_TESTS = (
     "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
     "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
     "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
-    "client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header",
+    "client::tests::get_sumeragi_diagnostics_requires_declared_current_media_type",
 )
 _CROSS_SDK_TESTS = (
     "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
@@ -649,143 +650,29 @@ _NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
     ("python", 62),
-    ("javascript", 59),
+    ("javascript", 60),
     ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
-    ("python", 114),
+    ("python", 121),
     ("javascript", 88),
     ("swift", 17),
-    ("kotlin", 15),
-    ("java", 10),
+    ("kotlin", 26),
+    ("java", 24),
 )
-_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS = (
-    "ci/run_sumeragi_v2_sdk_diagnostics.sh",
-    "ci/native_amx_v2_grouped_gradle_init.gradle",
-    "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
-    "python/iroha_python/src/iroha_python/client.py",
-    "python/iroha_torii_client/tests/test_client.py",
-    "python/iroha_torii_client/client.py",
-    "javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js",
-    "javascript/iroha_js/test/toriiClient.test.js",
-    "javascript/iroha_js/src/toriiClient.js",
-    "javascript/iroha_js/scripts/build-dist.mjs",
-    "javascript/iroha_js/package.json",
-    "javascript/iroha_js/package-lock.json",
-    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
-    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-    "IrohaSwift/Package.swift",
-    "IrohaSwift/Package.resolved",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
-    "SumeragiDiagnosticsModelsTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
-    "HttpClientTransportTest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-    "SumeragiDiagnosticsModels.kt",
-    "kotlin/core-jvm/build.gradle.kts",
-    "kotlin/settings.gradle.kts",
-    "kotlin/gradlew",
-    "kotlin/gradle/wrapper/gradle-wrapper.jar",
-    "kotlin/gradle/wrapper/gradle-wrapper.properties",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
-    "SumeragiDiagnosticsModelsTests.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-    "SumeragiDiagnosticsModels.java",
-    "java/iroha_android/core/build.gradle.kts",
-    "java/iroha_android/settings.gradle.kts",
-    "java/iroha_android/gradlew",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
+_SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
+_SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"
+_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = "native-amx-v2-grouped"
+_SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE = "sumeragi-v2-sdk-diagnostics"
+_SDK_SOURCE_CLOSURE_SUITES = frozenset(
+    {
+        _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE,
+        _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE,
+    }
 )
-_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
-    "ci/run_native_amx_v2_grouped_sdk_parity.sh",
-    "ci/native_amx_v2_grouped_gradle_init.gradle",
-    "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
-    "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
-    "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
-    "python/iroha_python/src/iroha_python/client.py",
-    "python/iroha_python/src/iroha_python/__init__.py",
-    "python/iroha_torii_client/client.py",
-    "python/iroha_torii_client/native_amx.py",
-    "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
-    "javascript/iroha_js/src/toriiClient.js",
-    "javascript/iroha_js/src/norito.js",
-    "javascript/iroha_js/src/native.js",
-    "javascript/iroha_js/scripts/build-dist.mjs",
-    "javascript/iroha_js/scripts/native-build-provenance.mjs",
-    "javascript/iroha_js/index.d.ts",
-    "javascript/iroha_js/package.json",
-    "javascript/iroha_js/package-lock.json",
-    "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
-    "IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift",
-    "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
-    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
-    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-    "IrohaSwift/Package.swift",
-    "IrohaSwift/Package.resolved",
-    "crates/connect_norito_bridge/include/connect_norito_bridge.h",
-    "crates/connect_norito_bridge/src/lib.rs",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
-    "NativeAmxV2GroupedFixtureTest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-    "NativeAmxV2.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-    "SumeragiDiagnosticsModels.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
-    "HashLiteral.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
-    "IrohaHash.kt",
-    "kotlin/core-jvm/build.gradle.kts",
-    "kotlin/settings.gradle.kts",
-    "kotlin/gradlew",
-    "kotlin/gradle/wrapper/gradle-wrapper.jar",
-    "kotlin/gradle/wrapper/gradle-wrapper.properties",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
-    "NativeAmxV2GroupedFixtureTests.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-    "NativeAmxV2Models.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-    "SumeragiDiagnosticsModels.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
-    "IrohaHash.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
-    "HashLiteral.java",
-    "java/iroha_android/core/build.gradle.kts",
-    "java/iroha_android/settings.gradle.kts",
-    "java/iroha_android/gradlew",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
-    "artifacts/openapi/torii.json",
-    "artifacts/openapi/versions/current/torii.json",
-)
-def _native_amx_grouped_suite_source_manifest(repo_root: Path) -> str:
-    digest = hashlib.sha256()
-    for relative_path in _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS:
-        source = _bounded_path_contract(
-            repo_root / relative_path,
-            f"grouped Native AMX V2 suite source {relative_path}",
-            maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
-        )
-        digest.update(f"{relative_path}\t{source.sha256}\n".encode())
-    return digest.hexdigest()
-
-
-def _sumeragi_sdk_diagnostics_suite_source_manifest(repo_root: Path) -> str:
-    digest = hashlib.sha256()
-    for relative_path in _SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS:
-        source = _bounded_path_contract(
-            repo_root / relative_path,
-            f"Sumeragi v2 SDK diagnostics suite source {relative_path}",
-            maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
-        )
-        digest.update(f"{relative_path}\t{source.sha256}\n".encode())
-    return digest.hexdigest()
 
 
 def _canonical_production_tests(
@@ -993,42 +880,42 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs.extend(
         (
             (
+                "source-sealed-workspace-build",
+                "command",
+                0,
+                "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-workspace-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-irohad-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline -p irohad "
+                "--bin irohad --features test-network-message-control",
+            ),
+            (
+                "source-sealed-workspace-clippy",
+                "command",
+                0,
+                "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
+                "--all-targets -- -D warnings",
+            ),
+            (
                 "source-sealed-workspace-format",
                 "command",
                 0,
-                "cargo fmt --all -- --check",
+                "cargo +1.93.1 fmt --all -- --check",
             ),
             (
                 "source-sealed-legacy-codec-guard",
                 "command",
                 0,
                 "bash scripts/check_no_legacy_codec.sh",
-            ),
-            (
-                "source-sealed-workspace-build",
-                "command",
-                0,
-                "cargo build --locked --offline --workspace",
-            ),
-            (
-                "source-sealed-workspace-clippy",
-                "command",
-                0,
-                "cargo clippy --locked --offline --workspace --all-targets "
-                "-- -D warnings",
-            ),
-            (
-                "source-sealed-workspace-tests",
-                "command",
-                0,
-                "cargo test --locked --offline --workspace",
-            ),
-            (
-                "source-sealed-irohad-tests",
-                "command",
-                0,
-                "cargo test --locked --offline -p irohad --bin irohad "
-                "--features test-network-message-control",
             ),
         )
     )
@@ -1153,10 +1040,11 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                82,
+                257,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
-                "pytests/scripts/sumeragi_v2_release_bootstrap_test.py",
+                "pytests/scripts/sumeragi_v2_release_bootstrap_test.py "
+                "pytests/scripts/sumeragi_v2_release_bootstrap_cancellation_test.py",
             ),
             (
                 "preflight-release-bootstrap-validator",
@@ -1169,13 +1057,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                320,
+                362,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
                 "pytests/scripts/sumeragi_v2_release_receipt_components_test.py "
                 "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
-                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py",
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py "
+                "pytests/scripts/sumeragi_v2_release_process_policy_test.py",
             ),
             (
                 "preflight-multilane-scaling",
@@ -1189,12 +1078,15 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                4983,
+                5218,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
                 "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
+                "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
@@ -1203,6 +1095,10 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping "
                 "pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::"
                 "test_inflight_composed_contract_rejects_missing_direct_release_action "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_action_inventory_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening "
                 "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
                 "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping "
                 "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
@@ -2068,20 +1964,6 @@ def _closed_replay_environment(directory: Path) -> dict[str, str]:
     return environment
 
 
-def _abort_replay(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        try:
-            process.kill()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def _execution_contract(
     value: EvidenceSnapshot | PathContract,
 ) -> PathContract:
@@ -2246,6 +2128,45 @@ def _run_bounded_replay(
         raise ReceiptError(f"{name} executable path does not match its contract")
     descriptors, directory_contracts = _capture_execution_inputs(contracts)
     try:
+        selector = selectors.DefaultSelector()
+        deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        # Bounds determine the eventual verdict; they never control the child.
+        # Retain only the capped prefix while draining both streams through EOF.
+        retained_output_bytes = 0
+        output_limit_exceeded = False
+        runtime_limit_exceeded = False
+        pending_violation: BaseException | None = None
+
+        def latch(violation: BaseException) -> None:
+            nonlocal pending_violation
+            if pending_violation is None:
+                pending_violation = violation
+
+        def register_stream(
+            stream: BinaryIO,
+            events: int,
+            data: tuple[str, BinaryIO],
+        ) -> None:
+            while True:
+                descriptor: int | None = None
+                try:
+                    descriptor = stream.fileno()
+                    os.set_blocking(descriptor, False)
+                    selector.register(descriptor, events, data)
+                    return
+                except BaseException as error:
+                    latch(error)
+                    if descriptor is not None:
+                        try:
+                            selector.get_key(descriptor)
+                        except KeyError:
+                            pass
+                        except BaseException as lookup_error:
+                            latch(lookup_error)
+                        else:
+                            return
+
         try:
             process = subprocess.Popen(
                 (str(executable), *arguments),
@@ -2259,103 +2180,177 @@ def _run_bounded_replay(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 close_fds=True,
-                start_new_session=True,
             )
         except OSError as error:
+            selector.close()
             raise ReceiptError(f"{name} could not be started") from error
-        assert process.stdout is not None and process.stderr is not None
-        selector = selectors.DefaultSelector()
-        streams = {
-            process.stdout.fileno(): ("stdout", process.stdout),
-            process.stderr.fileno(): ("stderr", process.stderr),
-        }
-        buffers = {"stdout": bytearray(), "stderr": bytearray()}
-        for descriptor, item in streams.items():
-            os.set_blocking(descriptor, False)
-            selector.register(descriptor, selectors.EVENT_READ, item)
+        output_streams = tuple(
+            (stream, label)
+            for stream, label in (
+                (process.stdout, "stdout"),
+                (process.stderr, "stderr"),
+            )
+            if stream is not None
+        )
+        if len(output_streams) != 2:
+            latch(ReceiptError(f"{name} output pipes are unavailable"))
+        for stream, label in output_streams:
+            register_stream(
+                stream,
+                selectors.EVENT_READ,
+                (label, stream),
+            )
         stdin_offset = 0
         if process.stdin is not None:
-            os.set_blocking(process.stdin.fileno(), False)
             if stdin_data:
-                selector.register(
-                    process.stdin.fileno(),
+                register_stream(
+                    process.stdin,
                     selectors.EVENT_WRITE,
                     ("stdin", process.stdin),
                 )
             else:
-                process.stdin.close()
-        deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
-        try:
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    _abort_replay(process)
-                    raise ReceiptError(f"{name} exceeded its timeout")
-                for key, _ in selector.select(min(remaining, 0.25)):
-                    stream_name, stream = key.data
-                    if stream_name == "stdin":
-                        assert stdin_data is not None
-                        try:
-                            written = os.write(
-                                key.fd,
-                                stdin_data[
-                                    stdin_offset : stdin_offset + 64 * 1024
-                                ],
-                            )
-                        except BlockingIOError:
-                            continue
-                        except BrokenPipeError:
-                            selector.unregister(key.fd)
-                            stream.close()
-                            continue
-                        if written <= 0:
-                            _abort_replay(process)
-                            raise ReceiptError(
-                                f"{name} stdin write made no progress"
-                            )
-                        stdin_offset += written
-                        if stdin_offset == len(stdin_data):
-                            selector.unregister(key.fd)
-                            stream.close()
-                        continue
+                while True:
                     try:
-                        chunk = os.read(key.fd, 64 * 1024)
+                        process.stdin.close()
+                        break
+                    except BaseException as error:
+                        latch(error)
+        while True:
+            try:
+                if not selector.get_map():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 and not runtime_limit_exceeded:
+                    runtime_limit_exceeded = True
+                    latch(ReceiptError(f"{name} exceeded its timeout"))
+                events = selector.select(
+                    0.25 if runtime_limit_exceeded else min(remaining, 0.25)
+                )
+            except BaseException as error:
+                latch(error)
+                continue
+            for key, _ in events:
+                stream_name, stream = key.data
+                if stream_name == "stdin":
+                    assert stdin_data is not None
+                    try:
+                        written = os.write(
+                            key.fd,
+                            stdin_data[
+                                stdin_offset : stdin_offset + 64 * 1024
+                            ],
+                        )
                     except BlockingIOError:
                         continue
-                    if not chunk:
-                        selector.unregister(key.fd)
-                        stream.close()
-                        continue
-                    buffers[stream_name].extend(chunk)
-                    if (
-                        sum(len(value) for value in buffers.values())
-                        > maximum_output_bytes
-                    ):
-                        _abort_replay(process)
-                        raise ReceiptError(
-                            f"{name} output exceeds its closed limit"
+                    except BrokenPipeError:
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                        latch(
+                            ReceiptError(
+                                f"{name} cancelled its bounded stdin replay"
+                            )
                         )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _abort_replay(process)
-                raise ReceiptError(f"{name} exceeded its timeout")
+                        continue
+                    except BaseException as error:
+                        latch(error)
+                        continue
+                    if written <= 0:
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                        latch(
+                            ReceiptError(
+                                f"{name} stdin write made no progress"
+                            )
+                        )
+                        continue
+                    stdin_offset += written
+                    if stdin_offset == len(stdin_data):
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                    continue
+                try:
+                    chunk = os.read(key.fd, 64 * 1024)
+                except BlockingIOError:
+                    continue
+                except BaseException as error:
+                    latch(error)
+                    continue
+                if not chunk:
+                    try:
+                        selector.unregister(key.fd)
+                    except BaseException as error:
+                        latch(error)
+                    continue
+                try:
+                    retained_capacity = max(
+                        maximum_output_bytes - retained_output_bytes, 0
+                    )
+                    retained = chunk[:retained_capacity]
+                    buffers[stream_name].extend(retained)
+                    retained_output_bytes += len(retained)
+                    if (
+                        len(retained) != len(chunk)
+                        and not output_limit_exceeded
+                    ):
+                        output_limit_exceeded = True
+                        latch(
+                            ReceiptError(
+                                f"{name} output exceeds its closed limit"
+                            )
+                        )
+                except BaseException as error:
+                    latch(error)
+        while True:
             try:
-                status = process.wait(timeout=remaining)
-            except subprocess.TimeoutExpired as error:
-                _abort_replay(process)
-                raise ReceiptError(f"{name} exceeded its timeout") from error
-        except BaseException:
-            if process.poll() is None:
-                _abort_replay(process)
-            raise
-        finally:
+                status = process.wait()
+                break
+            except BaseException as error:
+                latch(error)
+        try:
+            if time.monotonic() > deadline and not runtime_limit_exceeded:
+                runtime_limit_exceeded = True
+                latch(ReceiptError(f"{name} exceeded its timeout"))
+        except BaseException as error:
+            latch(error)
+        try:
             selector.close()
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None and not stream.closed:
+        except BaseException as error:
+            latch(error)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
                     stream.close()
-        _revalidate_execution_inputs(
-            contracts, descriptors, directory_contracts
-        )
+                except BaseException as error:
+                    latch(error)
+        try:
+            _revalidate_execution_inputs(
+                contracts, descriptors, directory_contracts
+            )
+        except BaseException as error:
+            latch(error)
+        if pending_violation is not None:
+            raise pending_violation
         return status, bytes(buffers["stdout"]), bytes(buffers["stderr"])
     finally:
         for descriptor in descriptors:
@@ -2373,6 +2368,7 @@ def _run_bounded_python_validator(
     environment: dict[str, str],
     name: str,
     maximum_output_bytes: int = _MAX_REPLAY_OUTPUT_BYTES,
+    watched_contracts: tuple[EvidenceSnapshot | PathContract, ...] = (),
 ) -> tuple[int, bytes, bytes]:
     checker_snapshot = _bounded_evidence_snapshot(
         checker,
@@ -2408,7 +2404,7 @@ def _run_bounded_python_validator(
         name=name,
         maximum_output_bytes=maximum_output_bytes,
         executable_contract=interpreter_contract,
-        watched_contracts=(checker_snapshot,),
+        watched_contracts=(checker_snapshot, *watched_contracts),
         stdin_data=checker_snapshot.data,
     )
 
@@ -4220,7 +4216,11 @@ for _release_receipt_symbol in (
     "_validate_multilane_apalache_evidence",
     "_validate_formal_snapshot_replays",
     "_formal_artifacts",
+    "_sdk_suite_source_manifest",
     "_test_count_from_log",
+    "_prebuilt_artifact_root",
+    "_prebuilt_release_roots",
+    "_prebuilt_directory",
 ):
     if not callable(globals().get(_release_receipt_symbol)):
         raise RuntimeError(
@@ -4576,288 +4576,6 @@ def _validate_tlaps_resource_evidence(
             "TLAPS resource summary peaks do not match the authenticated sample stream"
         )
 
-def _formal_artifacts_with_tlaps_resource_validation(
-    completion: EvidenceSnapshot,
-    fields: dict[str, str],
-    sealed: dict[str, Any],
-    checker_environment: dict[str, str],
-    repo_root: Path,
-) -> tuple[
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-]:
-    completion_path = completion.path
-    checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
-    expected_completion_fields = {
-        "schema_version",
-        "head_commit",
-        "head_tree",
-        "source_manifest_sha256",
-        "cargo_lock_sha256",
-        "formal_gate_log_sha256",
-        "proof_coverage_sha256",
-        "proof_evidence_sha256",
-        "verus_evidence_sha256",
-        "verus_log_sha256",
-        "multilane_apalache_evidence_sha256",
-        "cross_tool_evidence_sha256",
-        "harness_cargo_lock_sha256",
-        "formal_toolchain_sha256",
-        "tlaps_resource_jsonl_sha256",
-        "tlaps_resource_summary_sha256",
-    }
-    _require_fields(
-        fields,
-        expected_completion_fields,
-        "formal completion",
-    )
-    expected = {
-        "schema_version": "1",
-        "head_commit": sealed["head_commit"],
-        "head_tree": sealed["head_tree"],
-        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
-        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
-    }
-    if any(fields.get(name) != value for name, value in expected.items()):
-        raise ReceiptError("formal completion is not bound to the release identity")
-
-    artifact_specs = (
-        (
-            "gate_log",
-            completion_path.with_name("formal-gate.log"),
-            "formal_gate_log_sha256",
-            "formal gate log",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "ledger",
-            completion_path.with_name("proof_coverage.json"),
-            "proof_coverage_sha256",
-            "formal proof ledger",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "evidence",
-            completion_path.with_name("proof_evidence.json"),
-            "proof_evidence_sha256",
-            "formal proof evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "verus_evidence",
-            completion_path.with_name("verus_evidence.json"),
-            "verus_evidence_sha256",
-            "formal Verus evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "verus_log",
-            completion_path.with_name("verus.log"),
-            "verus_log_sha256",
-            "formal Verus log",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "multilane_apalache_evidence",
-            completion_path.with_name("multilane_apalache_evidence.tsv"),
-            "multilane_apalache_evidence_sha256",
-            "formal multilane Apalache evidence",
-            _MAX_RELEASE_TSV_BYTES,
-        ),
-        (
-            "cross_tool_evidence",
-            completion_path.with_name("cross_tool_evidence.json"),
-            "cross_tool_evidence_sha256",
-            "formal cross-tool evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "harness_lock",
-            completion_path.with_name("harness-Cargo.lock"),
-            "harness_cargo_lock_sha256",
-            "formal harness lock",
-            _MAX_LOCK_BYTES,
-        ),
-        (
-            "toolchain",
-            completion_path.with_name("formal-toolchain.tsv"),
-            "formal_toolchain_sha256",
-            "formal toolchain",
-            _MAX_RELEASE_TSV_BYTES,
-        ),
-        (
-            "tlaps_resource_jsonl",
-            completion_path.with_name("tlaps_resource.jsonl"),
-            "tlaps_resource_jsonl_sha256",
-            "TLAPS resource samples",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "tlaps_resource_summary",
-            completion_path.with_name("tlaps_resource_summary.json"),
-            "tlaps_resource_summary_sha256",
-            "TLAPS resource summary",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-    )
-    snapshots: dict[str, EvidenceSnapshot] = {}
-    for key, path, digest_field, name, maximum_bytes in artifact_specs:
-        snapshot = _bounded_evidence_snapshot(
-            path,
-            name,
-            maximum_bytes=maximum_bytes,
-        )
-        if snapshot.sha256 != fields[digest_field]:
-            raise ReceiptError(f"{name} digest mismatch")
-        snapshots[key] = snapshot
-    gate_log = snapshots["gate_log"]
-    ledger = snapshots["ledger"]
-    evidence = snapshots["evidence"]
-    verus_evidence = snapshots["verus_evidence"]
-    verus_log = snapshots["verus_log"]
-    multilane_apalache_evidence = snapshots["multilane_apalache_evidence"]
-    cross_tool_evidence = snapshots["cross_tool_evidence"]
-    harness_lock = snapshots["harness_lock"]
-    toolchain_snapshot = snapshots["toolchain"]
-    tlaps_resource_jsonl = snapshots["tlaps_resource_jsonl"]
-    tlaps_resource_summary = snapshots["tlaps_resource_summary"]
-    _validate_multilane_apalache_evidence(
-        multilane_apalache_evidence,
-        sealed["workspace_source_manifest_sha256"],
-    )
-    _validate_tlaps_resource_evidence(
-        tlaps_resource_jsonl, tlaps_resource_summary
-    )
-    if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
-        raise ReceiptError("formal harness lock is not the pinned dependency graph")
-    toolchain = _tsv_fields_from_snapshot(
-        toolchain_snapshot, "formal toolchain"
-    )
-    _require_fields(
-        toolchain,
-        {
-            "schema_version",
-            "java_path",
-            "java_sha256",
-            "tlapm_path",
-            "tlapm_sha256",
-            "tla2tools_path",
-            "tla2tools_sha256",
-            "verus_path",
-            "verus_sha256",
-            "cargo_verus_path",
-            "cargo_verus_sha256",
-            "tlc_profile",
-            "tlaps_threads",
-        },
-        "formal toolchain",
-    )
-    if (
-        toolchain["schema_version"] != "1"
-        or toolchain["tlc_profile"] != "ci"
-        or toolchain["tlaps_threads"] != "1"
-    ):
-        raise ReceiptError("formal toolchain does not describe the pinned release profile")
-    for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
-        raw_path = Path(toolchain[f"{tool}_path"])
-        if not raw_path.is_absolute():
-            raise ReceiptError(f"formal {tool} path is not absolute")
-        tool_snapshot = _bounded_evidence_snapshot(
-            raw_path,
-            f"formal {tool} tool",
-            maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
-        )
-        digest = toolchain[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or tool_snapshot.sha256 != digest:
-            raise ReceiptError(f"formal {tool} tool digest mismatch")
-    log_lines = _decode_lf_text(gate_log, "formal gate log").splitlines()
-    if (
-        not log_lines
-        or log_lines[-1] != _FORMAL_FINAL_MARKER
-        or log_lines.count(_FORMAL_FINAL_MARKER) != 1
-    ):
-        raise ReceiptError("formal gate log lacks its one exact final success marker")
-    _validate_formal_snapshot_replays(
-        snapshots=snapshots,
-        checker=checker,
-        checker_environment=checker_environment,
-        repo_root=repo_root,
-    )
-    return (
-        _snapshot_contract(gate_log),
-        _snapshot_contract(ledger),
-        _snapshot_contract(evidence),
-        _snapshot_contract(verus_evidence),
-        _snapshot_contract(verus_log),
-        _snapshot_contract(multilane_apalache_evidence),
-        _snapshot_contract(cross_tool_evidence),
-        _snapshot_contract(harness_lock),
-        _snapshot_contract(toolchain_snapshot),
-        _snapshot_contract(tlaps_resource_jsonl),
-        _snapshot_contract(tlaps_resource_summary),
-    )
-
-
-# The formal-artifact component remains the canonical lexical owner; the
-# incoming resource-stream validator strengthens its runtime implementation.
-_formal_artifacts = _formal_artifacts_with_tlaps_resource_validation
-
-
-def _prebuilt_directory(path: Path, name: str) -> Path:
-    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
-        raise ReceiptError(f"{name} path must be absolute and normalized")
-    try:
-        resolved = path.resolve(strict=True)
-        metadata = path.lstat()
-    except OSError as error:
-        raise ReceiptError(f"{name} is unavailable") from error
-    if (
-        resolved != path
-        or stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or stat.S_IMODE(metadata.st_mode) != 0o500
-        or metadata.st_uid != os.geteuid()
-    ):
-        raise ReceiptError(
-            f"{name} must be an owner-owned resolved non-symlink directory "
-            "with exact mode 0500"
-        )
-    return path
-
-
-def _prebuilt_workspace_target(repo_root: Path) -> Path:
-    alias = repo_root / "target"
-    try:
-        alias_metadata = alias.lstat()
-        resolved = alias.resolve(strict=True)
-        resolved_metadata = resolved.lstat()
-    except (OSError, RuntimeError) as error:
-        raise ReceiptError("release workspace target authority is unavailable") from error
-    if (
-        not (stat.S_ISDIR(alias_metadata.st_mode) or stat.S_ISLNK(alias_metadata.st_mode))
-        or Path(os.path.abspath(resolved)) != resolved
-        or resolved.resolve(strict=True) != resolved
-        or stat.S_ISLNK(resolved_metadata.st_mode)
-        or not stat.S_ISDIR(resolved_metadata.st_mode)
-        or resolved_metadata.st_uid != os.geteuid()
-        or (not stat.S_ISLNK(alias_metadata.st_mode) and resolved != alias)
-    ):
-        raise ReceiptError(
-            "release workspace target authority must resolve to one owner-owned real directory"
-        )
-    return resolved
-
-
 def _prebuilt_directory_inventory(
     path: Path, expected_names: set[str], name: str
 ) -> None:
@@ -4888,18 +4606,8 @@ def _prebuilt_version_transcripts(
     corridor_fields: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     tool_specs = (
-        (
-            "cargo",
-            Path(corridor_fields["cargo_path"]),
-            ["--version"],
-            fields["cargo_version_sha256"],
-        ),
-        (
-            "rustc",
-            Path(corridor_fields["rustc_path"]),
-            ["-vV"],
-            fields["rustc_version_sha256"],
-        ),
+        ("cargo", Path(corridor_fields["cargo_path"]), (), fields["cargo_version_sha256"]),
+        ("rustc", Path(corridor_fields["rustc_path"]), ("-vV",), fields["rustc_version_sha256"]),
     )
     results: dict[str, dict[str, Any]] = {}
     environment = _closed_replay_environment(bundle_dir)
@@ -4914,15 +4622,19 @@ def _prebuilt_version_transcripts(
         )
         if contract.mode & 0o111 == 0:
             raise ReceiptError(f"authenticated corridor {tool} tool is not executable")
-        status, stdout, stderr = _run_bounded_replay(
-            executable,
-            arguments,
-            cwd=bundle_dir,
-            environment=environment,
-            name=f"authenticated {tool} version probe",
-            maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
-            executable_contract=contract,
-        )
+        if tool == "cargo":
+            # This transcript was captured earlier through run_cargo --version.
+            status, stdout, stderr = 0, (corridor_fields["cargo_version"] + "\n").encode(), b""
+        else:
+            status, stdout, stderr = _run_bounded_replay(
+                executable,
+                arguments,
+                cwd=bundle_dir,
+                environment=environment,
+                name=f"authenticated {tool} version probe",
+                maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
+                executable_contract=contract,
+            )
         if status != 0 or stderr or not stdout.endswith(b"\n"):
             raise ReceiptError(
                 f"authenticated {tool} version probe did not produce exact stdout"
@@ -4933,9 +4645,9 @@ def _prebuilt_version_transcripts(
             )
         observed_digest = hashlib.sha256(stdout).hexdigest()
         if observed_digest != expected_digest:
+            source = "policy-captured corridor transcript" if tool == "cargo" else "authenticated tool"
             raise ReceiptError(
-                f"prebuilt manifest {tool_label} version digest does not match "
-                "the authenticated tool"
+                f"prebuilt manifest {tool_label} version digest does not match the {source}"
             )
         try:
             lines = stdout.decode("utf-8").splitlines()
@@ -4945,9 +4657,7 @@ def _prebuilt_version_transcripts(
             ) from error
         if tool == "cargo":
             if lines != [corridor_fields["cargo_version"]]:
-                raise ReceiptError(
-                    "authenticated Cargo version probe disagrees with corridor"
-                )
+                raise ReceiptError("policy-captured Cargo version transcript is not exact")
         else:
             version = re.fullmatch(
                 r"rustc ([0-9]+\.[0-9]+\.[0-9]+) "
@@ -4955,28 +4665,15 @@ def _prebuilt_version_transcripts(
                 corridor_fields["rustc_version"],
             )
             expected_keys = (
-                "binary",
-                "commit-hash",
-                "commit-date",
-                "host",
-                "release",
-                "LLVM version",
+                "binary", "commit-hash", "commit-date", "host", "release", "LLVM version"
             )
             parsed: dict[str, str] = {}
-            if (
-                version is None
-                or not lines
-                or lines[0] != corridor_fields["rustc_version"]
-            ):
-                raise ReceiptError(
-                    "authenticated rustc version probe has the wrong version line"
-                )
+            if version is None or not lines or lines[0] != corridor_fields["rustc_version"]:
+                raise ReceiptError("authenticated rustc version probe has the wrong version line")
             for line in lines[1:]:
                 key, separator, value = line.partition(": ")
                 if not separator or key in parsed or not value:
-                    raise ReceiptError(
-                        "authenticated rustc version probe is not exact rustc -vV output"
-                    )
+                    raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
                 parsed[key] = value
             if (
                 tuple(parsed) != expected_keys
@@ -4986,15 +4683,10 @@ def _prebuilt_version_transcripts(
                 or parsed["commit-date"] != version.group(3)
                 or parsed["host"] != fields["host_triple"]
                 or parsed["release"] != version.group(1)
-                or re.fullmatch(
-                    r"[0-9]+\.[0-9]+(?:\.[0-9]+)?",
-                    parsed["LLVM version"],
-                )
+                or re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", parsed["LLVM version"])
                 is None
             ):
-                raise ReceiptError(
-                    "authenticated rustc version probe is not exact rustc -vV output"
-                )
+                raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
         after = _capture_path_contract(
             executable,
             f"authenticated corridor {tool} tool after version probe",
@@ -5005,11 +4697,10 @@ def _prebuilt_version_transcripts(
             expected_size=contract.size,
         )
         if after != contract:
-            raise ReceiptError(
-                f"authenticated corridor {tool} tool changed during version probe"
-            )
+            raise ReceiptError(f"authenticated corridor {tool} tool changed during version probe")
+        display_arguments = ("--version",) if tool == "cargo" else arguments
         results[tool] = {
-            "argv": [str(executable), *arguments],
+            "argv": [str(executable), *display_arguments],
             "sha256": observed_digest,
             "size_bytes": len(stdout),
         }
@@ -5023,15 +4714,16 @@ def _prebuilt_binary_bundle(
     fields: dict[str, str],
     sealed: dict[str, Any],
     repo_root: Path,
+    artifact_root: Path,
+    cargo_target_root: Path,
 ) -> dict[str, Any]:
     expected_manifest_sha256 = _require_digest(
         expected_manifest_sha256, "prebuilt binary manifest digest"
     )
     if manifest_path.name != _PREBUILT_MANIFEST_NAME:
         raise ReceiptError("prebuilt binary manifest has the wrong filename")
-    workspace_target = _prebuilt_workspace_target(repo_root)
     expected_programs = (
-        workspace_target
+        artifact_root
         / "sumeragi-v2-release"
         / sealed["workspace_source_manifest_sha256"]
         / "programs"
@@ -5178,6 +4870,8 @@ def _prebuilt_binary_bundle(
         "target_triple": manifest_fields["target_triple"],
         "profile": manifest_fields["profile"],
         "bundle_dir": str(bundle_dir),
+        "artifact_root": str(artifact_root),
+        "cargo_target_root": str(cargo_target_root),
         "version_transcripts": _prebuilt_version_transcripts(
             bundle_dir=bundle_dir,
             fields=manifest_fields,
@@ -5193,6 +4887,9 @@ def _corridor_artifacts(
     sealed: dict[str, Any],
     repo_root: Path,
     bootstrap_runner_tools: dict[str, Any],
+    *,
+    expected_artifact_root: Path,
+    expected_cargo_target_root: Path,
 ) -> tuple[
     PathContract,
     PathContract,
@@ -5209,6 +4906,8 @@ def _corridor_artifacts(
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
+            "artifact_root_path",
+            "cargo_target_root_path",
             "leg_count",
             "production_required_test_count",
             "g_unit_expected_test_count",
@@ -5246,6 +4945,12 @@ def _corridor_artifacts(
             "prebuilt_manifest_sha256",
         },
         "corridor completion",
+    )
+    artifact_root, cargo_target_root = _prebuilt_release_roots(
+        repo_root=repo_root,
+        fields=fields,
+        expected_artifact_root=expected_artifact_root,
+        expected_cargo_target_root=expected_cargo_target_root,
     )
     expected_identity = {
         "schema_version": "1",
@@ -5337,7 +5042,9 @@ def _corridor_artifacts(
         != fields["native_amx_grouped_fixture_sha256"]
     ):
         raise ReceiptError("grouped Native AMX V2 fixture digest mismatch")
-    expected_suite_manifest = _native_amx_grouped_suite_source_manifest(repo_root)
+    expected_suite_manifest = _sdk_suite_source_manifest(
+        repo_root, _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE
+    )
     if (
         not _DIGEST_RE.fullmatch(
             fields["native_amx_grouped_suite_source_manifest_sha256"]
@@ -5348,6 +5055,9 @@ def _corridor_artifacts(
         raise ReceiptError(
             "grouped Native AMX V2 suite-source manifest digest mismatch"
         )
+    expected_diagnostics_suite_manifest = _sdk_suite_source_manifest(
+        repo_root, _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE
+    )
 
     release_runner = _bounded_evidence_snapshot(
         repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh",
@@ -5584,7 +5294,7 @@ def _corridor_artifacts(
             expected_marker = (
                 f"sumeragi-v2-sdk-diagnostics surface={surface} "
                 f"tests={observed} suite_source_manifest_sha256="
-                f"{_sumeragi_sdk_diagnostics_suite_source_manifest(repo_root)}"
+                f"{expected_diagnostics_suite_manifest}"
             )
             if lines.count(expected_marker) != 1:
                 raise ReceiptError(
@@ -5599,6 +5309,8 @@ def _corridor_artifacts(
         fields=fields,
         sealed=sealed,
         repo_root=repo_root,
+        artifact_root=artifact_root,
+        cargo_target_root=cargo_target_root,
     )
     return (
         _snapshot_contract(summary),
@@ -5613,7 +5325,7 @@ def _seed_run_logs(
     seed_completion: EvidenceSnapshot,
     summary: EvidenceSnapshot,
     manifest: str,
-    repo_root: Path,
+    cargo_target_root: Path,
     prebuilt_bundle_dir: Path,
     prebuilt_manifest_sha256: str,
 ) -> list[PathContract]:
@@ -5637,8 +5349,7 @@ def _seed_run_logs(
         )
 
     run_logs = []
-    source_bound_root = repo_root / "target" / "sumeragi-v2-release" / manifest
-    cargo_target_dir = source_bound_root / "test-suite"
+    cargo_target_dir = cargo_target_root
     program_target_dir = prebuilt_bundle_dir
     irohad = program_target_dir / "release" / "irohad"
     message_control_irohad = (
@@ -7020,6 +6731,12 @@ def build_receipt(
         sealed,
         repo_root,
         bootstrap_authentication["runner"]["tools"],
+        expected_artifact_root=(
+            bootstrap_evidence_dir_path / "release-runner" / "output"
+        ),
+        expected_cargo_target_root=(
+            bootstrap_evidence_dir_path / "release-runner" / "target"
+        ),
     )
     prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
     g4p_evidence = _validate_g4p_evidence(
@@ -7102,7 +6819,7 @@ def build_receipt(
         seed_path,
         seed_summary,
         manifest,
-        repo_root,
+        Path(prebuilt_binary_bundle["cargo_target_root"]),
         Path(prebuilt_binary_bundle["bundle_dir"]),
         prebuilt_manifest_sha256,
     )
@@ -7244,7 +6961,11 @@ def build_receipt(
                 "--source-manifest",
                 manifest,
                 "--build-root",
-                str(repo_root / "target" / "sumeragi-v2-release" / manifest),
+                str(
+                    Path(prebuilt_binary_bundle["artifact_root"])
+                    / "sumeragi-v2-release"
+                    / manifest
+                ),
                 "--repo-root",
                 str(repo_root),
             ],

@@ -1324,9 +1324,6 @@ _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256 = {
         "f988f1de9f3d9d6b89880bc8ad31585ea848d0d098a2abb8bb07f874fdde7812"
     ),
 }
-_SERVICED_CANDIDATE_RUNNER_ITEM_SHA256 = {
-    "run_inner": "PENDING",
-}
 _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
     "direct_internal_discard_tombstones_a_b_a_and_survives_restart": (
         "268e4e8fd26c5b3b62932dd41b4236280da417d5ee2a1177a7d481c8896b722c"
@@ -1610,7 +1607,9 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "oldest_active_lifecycle_ordinal": (
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
-    "with_driver_and_lifecycle_ordinals": "PENDING",
+    "with_driver_and_lifecycle_ordinals": (
+        "c64394eb23aa7a0f2cebc630ac2c35558f6a31b54653d52bf4157cf065179b80"
+    ),
     "freeze_due_clock_owners": (
         "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
     ),
@@ -1621,12 +1620,12 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
     "minimum_runnable_lifecycle_ordinal": (
-        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
+        "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
-    "step": "PENDING",
+    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),
@@ -1647,7 +1646,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "PENDING",
+    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "snapshot_roundtrips_and_rejects_a_b_a_resurrection": (

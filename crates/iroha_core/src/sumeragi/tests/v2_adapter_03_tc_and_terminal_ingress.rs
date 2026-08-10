@@ -233,13 +233,17 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     let evidence = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(conflict.clone()))
         .expect("report the conflicting locked-round vote");
-    assert!(matches!(
-        evidence.effects(),
-        [AdapterEffect::ReportEquivocation {
-            kind: reducer::EquivocationKind::Vote,
-            ..
-        }]
-    ));
+    let [AdapterEffect::ReportEquivocation { evidence }] = evidence.effects() else {
+        panic!("conflicting locked-round vote must emit exact evidence")
+    };
+    let (first, second) = evidence
+        .vote_pair()
+        .expect("locked-round vote conflict carries a sealed vote pair");
+    assert_eq!(first.signer, 1);
+    assert_eq!(second.signer, 1);
+    assert_eq!(first.round, wire_round);
+    assert_eq!(second.round, wire_round);
+    assert_ne!(first.signature_preimage(), second.signature_preimage());
     assert_eq!(
         adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(conflict))

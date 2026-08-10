@@ -128,7 +128,8 @@ RELEASE_MANIFEST_BOUND_KINDS = (
 POLICY_BOUND_KINDS = ("governance_approval",)
 RELEASE_KEY_BOUND_KINDS = ("governance_approval",)
 ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)
-REQUIRED_SIGNING_PROVIDER = "external_ed25519_hsm"
+REQUIRED_SIGNING_PROVIDER = "authenticated_external_signer"
+REQUIRED_SIGNING_BACKEND = "software"
 SUPPLY_CHAIN_TARGET_RESULT_FIELDS = frozenset(
     {
         "target",
@@ -273,8 +274,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "private_key_absent",
         "signature_algorithm",
         "signing_provider",
+        "signing_backend",
         "signing_provider_revision",
-        "hsm_signature_verified",
+        "signer_response_verified",
         "manifest_digest_hex",
         "policy_digest_hex",
         "public_key_fingerprint_hex",
@@ -439,11 +441,18 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
         errors,
     )
     require_string_equal(payload, "signing_provider", REQUIRED_SIGNING_PROVIDER, errors)
+    require_string_equal(payload, "signing_backend", REQUIRED_SIGNING_BACKEND, errors)
     require_positive_int(payload, "signing_provider_revision", errors)
-    require_bool_true(payload, "hsm_signature_verified", errors)
+    require_bool_true(payload, "signer_response_verified", errors)
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
-    require_policy_digest(payload, errors)
-    require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
+    policy_digest = require_policy_digest(payload, errors)
+    if policy_digest and not any(bytes.fromhex(policy_digest)):
+        errors.append("policy_digest_hex must not be zero")
+    public_key_fingerprint = require_hex(
+        payload, "public_key_fingerprint_hex", HEX64_LEN, errors
+    )
+    if public_key_fingerprint and not any(bytes.fromhex(public_key_fingerprint)):
+        errors.append("public_key_fingerprint_hex must not be zero")
     require_false(payload, "raw_manifest_included", errors)
 
 

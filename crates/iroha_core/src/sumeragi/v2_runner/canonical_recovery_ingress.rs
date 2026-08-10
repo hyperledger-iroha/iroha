@@ -62,3 +62,13 @@ fn dispatch_canonical_executed_block_recovery_effects(
     }
     Ok(dispatched)
 }
+
+/// Advance one retained historical lane owner on the ordinary retransmission
+/// cadence, even when no lane or relay ingress arrives to trigger recovery.
+fn service_historical_recovery_tick(
+    lane_work: &mut V2LaneWorkAdapter,
+) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
+    lane_work
+        .service_next_historical_recovery()
+        .map_err(V2RunnerError::from)
+}

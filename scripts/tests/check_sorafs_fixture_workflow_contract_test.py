@@ -651,9 +651,34 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "check_mobile_sdk_artifacts.sh --apple-only" in parity
     assert parity.count("IROHA_JS_NATIVE_BUILD_PROFILE:") == 1
     assert 'IROHA_JS_NATIVE_BUILD_PROFILE: "release"' in parity
-    assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in parity
+    assert parity.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 3
     assert '"crates/iroha_js_host/**"' in parity
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
+    assert "  mobile-parity:" in parity
+    assert "  csharp-parity:" in parity
+    assert 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"' in parity
+    assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
+    assert "bash ci/check_kagemusha_jvm_native_bridge.sh" in parity
+    assert (
+        'cargo build --locked --release -p connect_norito_bridge --target "$target"'
+        in parity
+    )
+    assert "check_native_sdk_abi21_artifact.py record" in parity
+    assert "check_native_sdk_abi21_artifact.py verify" in parity
+    assert (
+        "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore "
+        "-warnaserror"
+        in parity
+    )
+    assert "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build" in parity
+    for trigger in (
+        '"kotlin/**"',
+        '"java/iroha_android/**"',
+        '"java/norito_java/**"',
+        '"csharp/**"',
+        '"gradle/mobile-sdk-external-android-build.settings.gradle.kts"',
+    ):
+        assert trigger in parity
 
 
 def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:

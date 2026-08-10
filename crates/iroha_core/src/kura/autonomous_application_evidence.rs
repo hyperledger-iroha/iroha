@@ -18,7 +18,8 @@ impl Kura {
         };
         receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution
             && receipt.proposal == *proposal
-            && self.lane_block_application_receipt_matches_merge_log(&receipt)
+            && self
+                .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)
     }
 
     /// Revalidate the exact predecessor of an autonomous proposal against a merge
@@ -51,6 +52,9 @@ impl Kura {
             && previous.lane_block_height == previous_height
             && previous.descriptor_hash == previous_descriptor_hash
             && previous.proposal_height < descriptor.proposal_height
-            && self.lane_block_application_receipt_matches_merge_log(&receipt)
+            && self
+                .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)
     }
 }
+
+include!("passive_diagnostic_reads.rs");

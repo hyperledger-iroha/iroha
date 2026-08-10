@@ -1,6 +1,36 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+import importlib.util
 import subprocess
+import sys
+
+
+def _load_recursive_reviewed_rust_source_module() -> Any:
+    """Load the shared authenticated recursive Rust include resolver."""
+
+    module_name = "_sumeragi_v2_proof_ledger_reviewed_rust_source"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    path = Path(__file__).with_name(
+        "sumeragi_v2_multilane_reviewed_rust_source.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"cannot load authenticated reviewed Rust source resolver: {path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+_RECURSIVE_REVIEWED_RUST_SOURCE = _load_recursive_reviewed_rust_source_module()
 
 def _retired_sidecar_gate_ttl_source_errors(
     path: Path,
@@ -41,7 +71,7 @@ def _require_exact_output_startup_and_successor_rollover_seams(
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get(
-            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"
         ),
         "adapter.hydrate_canonical_lane_artifacts()?;",
         "the production constructor must remain carrier-silent before exact Queue installation",
@@ -51,7 +81,7 @@ def _require_exact_output_startup_and_successor_rollover_seams(
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get(
-            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"
         ),
         "adapter.drive_lane_sessions();",
         "the production constructor must not drive a lane session before exact Queue installation",
@@ -417,6 +447,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/state.rs": (
         "state/vpn_lease_validation.rs",
         "state/zk_asset_state.rs",
+        "state/passive_lane_diagnostic_methods.rs",
         "state/diagnostic_state_generation.rs",
         "state/autonomous_predecessor_application.rs",
         "state/state_commit_lock_order_tests.rs",
@@ -557,14 +588,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 
 
-def _read_reviewed_rust_source(
+def _read_reviewed_rust_source_fixture(
     repo_root: Path,
     relative: str,
     errors: list[str],
     description: str,
     expanded_components: tuple[str, ...] | None = None,
 ) -> tuple[Path, str]:
-    """Read one Rust source after authenticating and expanding its include closure."""
+    """Expand a non-Git mutation fixture using the reviewed direct manifest."""
 
     path = repo_root / relative
     if not path.is_file() or path.is_symlink():
@@ -640,6 +671,40 @@ def _read_reviewed_rust_source(
         return component_source
 
     return path, include_pattern.sub(expand, source)
+
+
+def _read_reviewed_rust_source(
+    repo_root: Path,
+    relative: str,
+    errors: list[str],
+    description: str,
+    expanded_components: tuple[str, ...] | None = None,
+) -> tuple[Path, str]:
+    """Read one Rust source through the authenticated recursive resolver.
+
+    Production validation always uses the shared stage-aware recursive closure.
+    Synthetic mutation fixtures are intentionally not Git worktrees, so their
+    already-reviewed direct components retain the narrow fixture reader.
+    """
+
+    if expanded_components is not None or repo_root.resolve() != ROOT_DIR.resolve():
+        return _read_reviewed_rust_source_fixture(
+            repo_root,
+            relative,
+            errors,
+            description,
+            expanded_components,
+        )
+    closure = _RECURSIVE_REVIEWED_RUST_SOURCE._resolve_reviewed_rust_source(
+        repo_root,
+        relative,
+        description,
+        errors,
+    )
+    path = repo_root / relative
+    if closure is None:
+        return path, ""
+    return closure.path, closure.source
 
 
 def _reviewed_rust_include_manifest_errors(
@@ -735,7 +800,7 @@ def _kura_production_source_inventory(
     test_module_markers = tuple(
         re.finditer(
             r"(?m)^#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*\n"
-            r"mod\s+tests\s*\{",
+            r"(?:pub\s*\(\s*crate\s*\)\s+)?mod\s+tests\s*\{",
             masked_source,
         )
     )
@@ -952,7 +1017,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "PENDING",
+    "runtime_step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
     "runtime_step_recovery": (
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
@@ -1119,6 +1184,20 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
 # Exact comment/literal-free token digests for the production ownership bridge
 # which retains the complete canonical envelope and fair-ingress carrier from
 # authenticated admission through Busy-deferred service.
+_RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256 = (
+    "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+)
+_RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
+    "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+)
+_RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
+    "55911931e88d79735954f6bbe7f246bb91b7da1e28f941a7e6ada9a7a86c7d08"
+)
+_RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
+    "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
+)
+
+
 _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "matches_authenticated_runtime_bytes": (
         "1d5bd7b516504865f7f8f8db0416c7c1d337ba83342cbd66b564b24e46df3870"
@@ -1219,8 +1298,10 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "accept_driver_dispatch": (
         "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
+    # The public enqueue alias is shared with the timeout-episode inventory;
+    # the two admission predicates retain independently reviewed seals.
     "enqueue_network_with_ingress_ownership": (
-        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+        _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256
     ),
     "can_admit_pre_runtime_leader_wire": (
         "c87bffb9117487d2697e1cb242859927e0083d8c965674acc9b475a56b50d360"
@@ -1258,8 +1339,9 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_busy_producer": (
         "5ae5c533c0498b9d067634d88722b736f52ff78c6a63983111a390c36c3603fe"
     ),
+    # This alias is shared with the timeout-episode regression inventory.
     "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
-        "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+        _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256
     ),
 }
 
@@ -1286,9 +1368,11 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::try_recv_if_at_checked_classified": (
         "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
-    "runner::run_inner": "PENDING",
+    "runner::run_inner": (
+        "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032"
+    ),
     "runner::drain_v2_ingress": (
-        "dad59f9959e17dd1d504935ab1bacb07e7dc8652d71727ff96e6316ec6f3f5c5"
+        _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
     ),
     "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
         "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
@@ -1318,7 +1402,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "a4e4b2455b2c355c57bdeab05470e4a700afa498980adb02ed31504f75ed01ec"
     ),
     "runtime::enqueue_network_with_ingress_ownership": (
-        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+        _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256
     ),
     "runtime::can_admit_timeout_vote_recovery_episode": (
         "9b99f56691a9752e95501583a1e187d8727498035d8d899c55277ccd3ffde47b"
@@ -1327,7 +1411,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
 
 _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
-        "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+        _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256
     ),
     "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut": (
         "00eb6a4425997fe9ef985adb09e792913c5df8805e58c4de9473e7fd720724d2"
@@ -1738,10 +1822,10 @@ _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
 # ingress carrier and latch a fail-stop restart on malformed ownership.
 _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
     "enqueue_network_with_ingress_ownership": (
-        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+        "9bf3e8ec45247e920681de7f13941d8544df863b73c5a3ac243adcacae0b2587"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
+        "b2d35847177381a3f4ab5fd6fb06ce4b15e7449220db5daac00699cc5825677d"
     ),
 }
 
@@ -1760,7 +1844,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "9d50ba3ff1b4227c8e0ce7a8444796eb1b50c6c1a23b8c5f5669991652f7f4e0"
     ),
     "reserve_body_available_with_owner": (
-        "e720fe33878affa2fc49d22d23c55d163b2f01ecd4d845104fc7b72544b88779"
+        "a29bf418476f2b07e4821d63c6c1415ac611fc52a59868ea5fb7dc077d17dfa2"
     ),
     "rebind_unpublished_body_available": (
         "00bbe44f9d02199bee50f805425df0760caffc257598003f55aaa35ddb47d46c"
@@ -1775,7 +1859,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "3ed15174c27d497028b91f264a25ec2c1294c35e228298ebc5caa51f74332df5"
     ),
     "commit_pending_fetch_retirement": (
-        "294abee0df04fbef2a13698769e7b9def5202abea2c35b92140baf75a44d2a01"
+        "2a48078e9a5ffd2d2fc9d57011089be27f15e847b346ba2ff1c3b0a4343d4815"
     ),
     "install_view": (
         "27598c65a38ebe1921d51003a18203315d01e85133b755eed26b29e2251c7850"
@@ -1793,7 +1877,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "320015eab09976a0e9f6e823b77f366df19ddca3968aff99627fded06595d085"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
-        "361886bd2c3217c8ba621e15c51bbf80971812557fcd78c16c808fb024b696f1"
+        "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
     ),
     "tc_retires_unprotected_retryable_body_token_before_the_next_fetch": (
         "7ccd83a8975e7fa6c970e517cbdd546468fa19ca876b0deefe34a14f3db76638"
@@ -1824,19 +1908,19 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 850
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 857
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 87
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "f853be7fd492348c79c1ab3f8f1a8fc43e7593be76d3af1536c3710dac3e17c5"
+    "090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "325fdb372726408e0378b2785a93c4fa6be88ba32b885d782766bc0f7e7fb7ed"
+    "b67b0a6415389a7bcccee819b7104bc2cc14c1de267a770ad6000a85c5ac2db7"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
-    "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
+    "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -1955,7 +2039,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -2521,6 +2605,13 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order",
     "sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan",
     "sumeragi::v2_effects::tests::late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+    "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_excludes_coordinator_only_receipts",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_route_identity_conflict",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_duplicate_group_source",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -2857,7 +2948,8 @@ _PRODUCTION_MERGE_SIDECAR_BOUNDARY_TEST_SHA256 = {
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "5224fe67da91d648fef4cb803ffcd48e972fbd3b32dc85917773666adf39235e",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "53fdbca7b7129a438f9a19c5ab13d8b4d28da1190ebe58cf435765fc5a97a64c",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "b8c4084c7bedf4e48e5b1e1ffd6b4329120ec1283908e9fb452a5435cd3b15db",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
     "V2LaneWorkAdapter::accept_relay_message": "8c307167fe5ea486fc509817d12c352fa8a831751e0e7fc1342b6d43b6ef00bf",
@@ -2894,11 +2986,13 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "PENDING",
+    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
     "claim_runner_lifecycle_process_generation": "ceab58cdf06c44c2f85bdcbcae059c0ca7932bbb19fd61da94f1fb6015d4d292",
-    # TODO: Approve with the helper's exact-output alias after its focused
-    # non-descent and handoff mutations pass.
-    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
+    # Approved together with the exact-output alias after the focused
+    # non-descent and handoff mutations passed against the reconciled component.
+    "rollover_finalized_height_outputs": (
+        "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
+    ),
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -2927,9 +3021,13 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 )
 
 _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
-    "V2IoCertifiedServeIngressReservation": "PENDING",
-    # TODO: Promote only after completion-owner field/provenance mutations are rejected.
-    "V2IoCompletionOwnership": "PENDING",
+    "V2IoCertifiedServeIngressReservation": (
+        "8a169187bf7b80abe0350fd1cdbffc5baebb1f476a0f6813968f712202e1d565"
+    ),
+    # Bound after completion-owner field/provenance mutations were rejected.
+    "V2IoCompletionOwnership": (
+        "7e76f629cf23bbf9e665d1a8fef17d9fbae053f41edb43f06c0fb085a034d69f"
+    ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
@@ -2939,35 +3037,69 @@ _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
 }
 
 _EXACT_SERVE_PREDECESSOR_WITNESS_STRUCT_SHA256 = {
-    # TODO: Promote each carrier only after every construction, validation,
-    # mint, and consume mutation is rejected independently.
-    "ExactServePredecessorCompletionEvidence": "PENDING",
-    "ExactServePredecessorEpisodeWitness": "PENDING",
+    # Each carrier is bound after its construction, validation, mint, and
+    # consume mutations were rejected independently.
+    "ExactServePredecessorCompletionEvidence": (
+        "7082b85e0e2a57faf487af708330fa5a1b465ac7ca99688d0b33ffc1b643f017"
+    ),
+    "ExactServePredecessorEpisodeWitness": (
+        "b89048c6a5cd56665d845cf7c652a8f6acbb82d17197bc2694544ec8bcd45bf3"
+    ),
 }
 
 _EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256 = {
-    # TODO: Promote only after invalid construction and exact validation
-    # mutations are rejected independently.
-    "ExactServePredecessorCompletionEvidence::try_new": "PENDING",
-    "ExactServePredecessorCompletionEvidence::lifecycle_ordinal": "PENDING",
-    "ExactServePredecessorCompletionEvidence::validate_exact": "PENDING",
-    "ExactServePredecessorEpisodeWitness::try_new": "PENDING",
-    "ExactServePredecessorEpisodeWitness::validate_exact": "PENDING",
+    # Bound after invalid-construction and exact-validation mutations were
+    # rejected independently.
+    "ExactServePredecessorCompletionEvidence::try_new": (
+        "828911f00faca005db61b893bec82ef145090eb7d1bd33173b053e8be04e4598"
+    ),
+    "ExactServePredecessorCompletionEvidence::lifecycle_ordinal": (
+        "3ba70b16c7a9ecf65562435fe08dcfb3733263d1380bffe7e0b12b5302df667c"
+    ),
+    "ExactServePredecessorCompletionEvidence::validate_exact": (
+        "b0633ba009dd400f635563661d1dc9ae31a7a6b9a708abdaaeca8742cd042c8e"
+    ),
+    "ExactServePredecessorEpisodeWitness::try_new": (
+        "0a16fe612079276be78abafa73c67546047a1aefe40e9b1e0b203a9280f86f77"
+    ),
+    "ExactServePredecessorEpisodeWitness::validate_exact": (
+        "6b86676a3dbfc611646eaf2dd9eaf1f7148df6f2a5cc03e16e1162e6ee6bdba7"
+    ),
 }
 
 _EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256 = {
-    # TODO: Promote each provider only after retain/peek/abandon and exact
-    # lifecycle-ordinal mutations are independently rejected.
-    "V2IoCommand::runtime_lifecycle_ordinal": "PENDING",
-    "V2IoAdmission::retain_completion": "PENDING",
-    "V2IoAdmission::abandon_latest_completion": "PENDING",
-    "V2IoAdmission::completion_ownership_at": "PENDING",
-    "V2IoHandle::spawn": "PENDING",
-    "V2IoHandle::completion_ownership_at": "PENDING",
-    "LocalCompletion::runtime_lifecycle_ordinal": "PENDING",
-    "send_completion_with_lifecycle_ordinal": "PENDING",
-    "send_tracked_completion_with_lifecycle_ordinal": "PENDING",
-    "try_send_tracked_completion_with_lifecycle_ordinal": "PENDING",
+    # Each provider is bound after retain/peek/abandon and exact
+    # lifecycle-ordinal mutations were independently rejected.
+    "V2IoCommand::runtime_lifecycle_ordinal": (
+        "85b4ed4f21d28ef3ceeb92e55fc249bc7096e021856abaa3da55a7c7b11e5777"
+    ),
+    "V2IoAdmission::retain_completion": (
+        "5531929f63a9b9abc1c8d66beac2f81324b5e53bb5fba7e58c367e414cf4fdf8"
+    ),
+    "V2IoAdmission::abandon_latest_completion": (
+        "8b15ac13c7155d468869bc06451eda891a0e83306291e8979645a40b7b1403a4"
+    ),
+    "V2IoAdmission::completion_ownership_at": (
+        "d5344d0c356eefd40ac512da5052531d72b1b421293656086dea462874c8732e"
+    ),
+    "V2IoHandle::spawn": (
+        "4481d874df3ab188bcdf483a307af0e819b5a174e66ec233de57bc8e7f5039d0"
+    ),
+    "V2IoHandle::completion_ownership_at": (
+        "3b8de8e5d3c0702bee6510648bf0bd4f36f64fc46c79fcd04528d5cd8f892035"
+    ),
+    "LocalCompletion::runtime_lifecycle_ordinal": (
+        "f71dece7980910cbc53626ff041fd945f7f163082b943e1a429bd55e95559417"
+    ),
+    "send_completion_with_lifecycle_ordinal": (
+        "5d91be7698dbaf645fbe0d1d83cdfe346f97259ad437e8e6e02c36fe7444378e"
+    ),
+    "send_tracked_completion_with_lifecycle_ordinal": (
+        "77f39f7b7469a5e9fe6fc163bd4650e80d9af9b93c854db222c88c195f9dd8ea"
+    ),
+    "try_send_tracked_completion_with_lifecycle_ordinal": (
+        "02b7d43468ac9fedc802f264c1c828a7aa4e27ec1527d8fdaee7ea2bbf042784"
+    ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
@@ -2989,7 +3121,9 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
     "V2IoCommandQueue::close_receiver": (
         "fefb2552e1b12444fab81480a8d9b1ba0dff351a60113207ac02ac6336020bf7"
     ),
-    "V2IoCommandQueue::reserve_serve_ingress": "PENDING",
+    "V2IoCommandQueue::reserve_serve_ingress": (
+        "2077c9245b85b0447c9a9a29fa8211e706a4fb1f787378c21fd2a3104ed6a11e"
+    ),
     "V2IoCommandQueue::retire_selected_serve_ingress_occurrence": (
         "c0821d882ae2997fa2632ab0855afde09bf051d353a4a1bd76293b9491d0dce1"
     ),
@@ -3005,9 +3139,11 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
     "V2IoCommandQueue::claim_serve_runtime_episode": (
         "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
     ),
-    # TODO: Promote only after exact +1, same-witness stutter/conflict, and
-    # Complete-to-Ready mutations are all rejected.
-    "V2IoCommandQueue::observe_serve_predecessor_episode_witness": "PENDING",
+    # Bound after exact +1, same-witness stutter/conflict, and Complete-to-Ready
+    # mutations were all rejected.
+    "V2IoCommandQueue::observe_serve_predecessor_episode_witness": (
+        "5cd4dc9cd17670e62e308cd39ee85b85029b9d3332737505678aa848ef9de8ac"
+    ),
     "V2IoCommandQueue::serve_runtime_predecessor_capacity_available": (
         "203786f0b005ec7cf105e7189d4f05a23efe71d241c1cb16b3a700c2d4036733"
     ),
@@ -3023,11 +3159,15 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
     "ProductionV2Services::claim_certified_serve_runtime_episode": (
         "3b2fce586ae8d9b59bba1bd4f196ae8e9f5b6fcf3d65ae21d03c541480aef5db"
     ),
-    # TODO: Promote only after strict-cut, capacity, least-owner, and
-    # non-consuming projection mutations are all rejected.
-    "ProductionV2Services::certified_serve_predecessor_completion_evidence": "PENDING",
-    # TODO: Promote only after the production forwarding mutation is rejected.
-    "ProductionV2Services::observe_certified_serve_predecessor_episode_witness": "PENDING",
+    # Bound after strict-cut, capacity, least-owner, and non-consuming
+    # projection mutations were all rejected.
+    "ProductionV2Services::certified_serve_predecessor_completion_evidence": (
+        "d52c64cf0e0cfd12bce5b23e0b70242dad19f209fc5f62dff9df85691d178951"
+    ),
+    # Bound after the production forwarding mutation was rejected.
+    "ProductionV2Services::observe_certified_serve_predecessor_episode_witness": (
+        "77d06ede9f9ee5427ae010eb5256830de9aaa1acfc899cfe4409fa9bd9dca9be"
+    ),
     "ProductionV2Services::certified_serve_runtime_predecessor_capacity_available": (
         "b995b96761597dfa1f580742c4898a1ee4a365a627cbaf98203435c33f252ed2"
     ),
@@ -3055,50 +3195,65 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
     "advance_executor_once_before_exact_serve": (
         "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
-    # TODO: Promote only after the observe-before-claim ordering mutation is rejected.
-    "run_inner": "PENDING",
+    # Bound after the observe-before-claim ordering mutation was rejected.
+    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESTORE_ITEM_SHA256 = {
-    # TODO: Promote only after restart replay cannot synthesize a consumed witness.
-    "restore_certified_serve_tombstones": "PENDING",
+    # Bound after restart replay could not synthesize a consumed witness.
+    "restore_certified_serve_tombstones": (
+        "4c818b6e4e825ae655981aa1b04b886cfe27dfaf799422a42567c8420c3377d9"
+    ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256 = {
     "publish_external_lifecycle_owners": (
         "0b872fdf4ad76a4b092cadc6cd33d041463153adbe0d67724b7919767e7f46ab"
     ),
-    # TODO: Promote only after alternating retained-response/selected-Serve
-    # target-state mutations are rejected.
-    "older_runtime_lifecycle_predates_retained_response": "PENDING",
-    # TODO: Promote only after publication/delegation mutations are rejected.
-    "exact_serve_predecessor_episode_witness": "PENDING",
+    # Bound after alternating retained-response/selected-Serve target-state
+    # mutations were rejected.
+    "older_runtime_lifecycle_predates_retained_response": (
+        "596d7ac14ed46a77c83a8d1697ba45c4c6424563bdbe037de96c63eed99f5ec9"
+    ),
+    # Bound after publication/delegation mutations were rejected.
+    "exact_serve_predecessor_episode_witness": (
+        "42439ba19db76d9d46589b9a51ad27a5fb31689aa3b29e830fdd39f96e6f381d"
+    ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
-    # TODO: Promote only after every isolated target-state initialization
-    # mutation is rejected through all changed-item aliases.
-    "with_driver_and_lifecycle_ordinals": "PENDING",
+    # Bound after every isolated target-state initialization mutation was
+    # rejected through all changed-item aliases.
+    "with_driver_and_lifecycle_ordinals": (
+        "c64394eb23aa7a0f2cebc630ac2c35558f6a31b54653d52bf4157cf065179b80"
+    ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
-    # TODO: Promote only after completion-evidence integrity, minted-source,
-    # and least-runnable-owner mutations are rejected independently.
-    "minimum_runnable_lifecycle_ordinal": "PENDING",
+    # Bound after completion-evidence integrity, minted-source, and
+    # least-runnable-owner mutations were rejected independently.
+    "minimum_runnable_lifecycle_ordinal": (
+        "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3"
+    ),
     "active_lifecycle_uses_ordinal": (
         "ae450e3b7d749e88ebb10ea93d575ffd88257f1c691bc58d9478adde058cd869"
     ),
-    "older_lifecycle_predates_exact_serve": "PENDING",
-    # TODO: Promote only after alternating target-state mutations are rejected.
-    "older_lifecycle_predates_retained_response": "PENDING",
-    # TODO: Promote only after absence-to-presence mint and retry-latch
-    # mutations are rejected.
-    "exact_serve_predecessor_episode_witness": "PENDING",
-    # TODO: Promote only after both isolated target retry latches are mutated.
-    "step": "PENDING",
+    "older_lifecycle_predates_exact_serve": (
+        "960b126dc222020336f085ec86a1518295ee2c20f0953c69098c68f325555791"
+    ),
+    # Bound after alternating target-state mutations were rejected.
+    "older_lifecycle_predates_retained_response": (
+        "2a93432530d127c39a34cbf2abc8349809173a5af546f8aa23cad0da081efed1"
+    ),
+    # Bound after absence-to-presence mint and retry-latch mutations were rejected.
+    "exact_serve_predecessor_episode_witness": (
+        "4e1cf313800bf991188bbdc6097e775e9eafb4c9395d124b640642f674657a8d"
+    ),
+    # Bound after both isolated target retry latches were mutated.
+    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
@@ -3114,9 +3269,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
     "final_serve_retirement_yields_one_producer_episode_before_replenishment": (
         "059218b1bec2859b84f8fe440c785360072fca157e1ea7a4579bff252cd6dde0"
     ),
-    # TODO: Promote only after the non-consuming completion-evidence
-    # projection mutations are rejected.
-    "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io": "PENDING",
+    # Bound after non-consuming completion-evidence projection mutations were rejected.
+    "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io": (
+        "59a1d839e4970b6257be61f5e6c91c7964920697aa1f9cef132e5e81663030c1"
+    ),
     "repeated_exact_serve_claims_close_all_older_sources_before_later_io": (
         "e97bed021406e0a72e692d2ac6ed58e491a4826b5a9054f17ca8a64d95ef0968"
     ),
@@ -3135,22 +3291,28 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
         "4eb2da42d968642c6eaf184f0ddda6f726e4a7fe49d6b6c2499092ee3c97d075"
     ),
-    # TODO: Promote only after exact-witness consumer mutations are rejected.
-    "completed_exact_serve_episode_reopens_once_for_new_runtime_witness": "PENDING",
+    # Bound after exact-witness consumer mutations were rejected.
+    "completed_exact_serve_episode_reopens_once_for_new_runtime_witness": (
+        "3136dd2fbf27c196a4e7d279cdd36fbe12e376f71a8da12640f8985c70a6a3ec"
+    ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256 = {
-    # TODO: Promote only after the passive-Fetch late-runnable mutation set is rejected.
-    "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps": "PENDING",
+    # Bound after the passive-Fetch late-runnable mutation set was rejected.
+    "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps": (
+        "fec30fc71608a1656b86529ea2fb19fa81478ff23a67d5e44dcc33ae02d70f0f"
+    ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
         "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
     ),
-    # TODO: Promote after alternating selected-Serve/retained-response target
-    # mutations prove the two process-local target states remain isolated.
-    "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt": "PENDING",
+    # Bound after alternating selected-Serve/retained-response target mutations
+    # proved that the two process-local target states remain isolated.
+    "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt": (
+        "a5cb9f948cfc8411c6b8b38a87c9e6889f627f62b31f4a514e0540d3a8863cd0"
+    ),
 }
 
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
@@ -3181,7 +3343,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "PENDING",
+    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
     "service_certified_serve_barrier_liveness_turn": (
         "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
     ),
@@ -3207,29 +3369,47 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
 }
 
 # Exact comment/literal-free source seals for the production-shaped selected
-# Serve timeout-recovery regression. These are approved independently only
-# after each corresponding digest-refreshed semantic mutation is rejected.
+# Serve timeout-recovery regression. Each seal was approved independently after
+# its corresponding digest-refreshed semantic mutation was rejected.
 _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
     "runner::CertifiedServeBarrierLivenessAction": (
         "4a520a5e830e2eb78e6384de5e353c50d488698ab1f3ee622bcb97a7b8dc2d5b"
     ),
-    # TODO: Promote only after the composed late-passive-Fetch invocation is
-    # removed under a digest refresh and rejected semantically.
-    "runner::complete_certified_serve_episode_cannot_veto_pacemaker": "PENDING",
-    # TODO: Promote each new fixture carrier only after its exact inventory and
-    # field-removal mutations are rejected.
-    "worker::SelectedServeTimeoutRecoveryMode": "PENDING",
-    "worker::SelectedServeLatePassiveFetch": "PENDING",
-    "worker::SelectedServeTimeoutRecoveryFixture": "PENDING",
-    # TODO: Promote only after the two exact constructor delegates and the
-    # shared mode constructor survive their individual semantic mutations.
-    "worker::SelectedServeTimeoutRecoveryFixture::new": "PENDING",
-    "worker::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch": "PENDING",
-    "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode": "PENDING",
-    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": "PENDING",
-    # TODO: Promote only after the complete BodyAvailable -> Store -> Validate
-    # rejection -> Serve -> producer handoff mutation set is rejected.
-    "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve": "PENDING",
+    # Bound after the composed late-passive-Fetch invocation was removed under
+    # a digest refresh and rejected semantically.
+    "runner::complete_certified_serve_episode_cannot_veto_pacemaker": (
+        "0b221d9b897271b92cfb7c37cdf9f7cfe14699c4b372da7f122360de6c406e68"
+    ),
+    # Each fixture carrier is bound after exact-inventory and field-removal
+    # mutations were rejected.
+    "worker::SelectedServeTimeoutRecoveryMode": (
+        "4d7d121b2669db449618073d79f8c0d43a8195a584d958e2e847bba657c76c9c"
+    ),
+    "worker::SelectedServeLatePassiveFetch": (
+        "291c5357cc35ec7571fe2d166a9b6b1b4ea5f27fd509ebc1f1c5ac10417804b5"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture": (
+        "6bda84eb41716036a6938b9f727bf54bcba2f5ca3918146eadbb0cee9f859fc5"
+    ),
+    # Bound after both exact constructor delegates and the shared mode
+    # constructor survived their individual semantic mutations.
+    "worker::SelectedServeTimeoutRecoveryFixture::new": (
+        "793a3708eb7fdce3d109a60528acf0be0bc5771bc52027c2dbfcfe44414081d8"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch": (
+        "d23e6ab382f4c478ed392c4cdf9dafff92db47f6817fd0713075671442d2fca0"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode": (
+        "719e5ed9d2468727f993e2e8a5ae31970e858891438f18598e66dd7e62e25cb0"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
+        "9c456e9353ff8ef97a6ae0d329fb77fa90bdb6980dbda330984f61323c44365b"
+    ),
+    # Bound after the complete BodyAvailable -> Store -> Validate rejection ->
+    # Serve -> producer handoff mutation set was rejected.
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve": (
+        "b52fdd8a6acfd5951e9aa514dce783984a2edf6a752f638c91c31d0ce05b0b40"
+    ),
     "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode": (
         "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
     ),
@@ -3566,13 +3746,17 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 }
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
-    # TODO: Approve drain_v2_ingress separately after its three-mode drain
-    # mutations pass.
-    "run_inner": "PENDING",
-    "drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
-    # TODO: Approve after the exact-output handoff mutation survives refreshing
-    # this helper's own token digest.
-    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
+    # drain_v2_ingress was approved separately after its three-mode drain
+    # mutations passed.
+    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
+    "drain_v2_ingress": (
+        "55911931e88d79735954f6bbe7f246bb91b7da1e28f941a7e6ada9a7a86c7d08"
+    ),
+    # Bound after the exact-output handoff mutation survived refreshing this
+    # helper's own token digest.
+    "rollover_finalized_height_outputs": (
+        "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
+    ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
     ),
@@ -3581,33 +3765,50 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     ),
 }
 
-# Exact joint ownership of the two per-height fair-ingress gates. Each pending
-# seal is promoted only after a focused mutation refreshes that exact item
-# digest and the semantic close/validate/atomic-unbind contract still rejects
-# the change.
+# Exact joint ownership of the two per-height fair-ingress gates. Each seal was
+# bound after a focused mutation refreshed that exact item digest and the
+# semantic close/validate/atomic-unbind contract still rejected the change.
 _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
-    "runner::LeaderWireIngressBinding::bind": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::LeaderWireIngressBinding::retire": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::LeaderWireIngressBinding::drop": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::HeightIngressBindings::new": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::HeightIngressBindings::retire": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::HeightIngressBindings::drop": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::close_ingress_for_rollover": "PENDING_BEHAVIOR_VALIDATION",
-    "ingress::unbind_leader_wire_lifecycle_gate": (
-        "PENDING_BEHAVIOR_VALIDATION"
+    "runner::LeaderWireIngressBinding::bind": (
+        "4c9551aa9af0eea82b0bcf1f248c958d3e52c13f195bdde2f22f2a530d6b669e"
     ),
-    "ingress::unbind_height_ingress_gates": "PENDING_BEHAVIOR_VALIDATION",
-    "ingress::close": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::LeaderWireIngressBinding::retire": (
+        "7e6730493a8b093e2ac6f125942073158fbc539660c52f97900e12c9ff5012f0"
+    ),
+    "runner::LeaderWireIngressBinding::drop": (
+        "88ddf5ff64ea693fbb027a716505a017236eb44e435eced813a6e4f6fc9bba61"
+    ),
+    "runner::HeightIngressBindings::new": (
+        "48c192241bdc3ea37cf5f12f3322d5d2b52c4a48a52a1cee0b85335da25493a3"
+    ),
+    "runner::HeightIngressBindings::retire": (
+        "50d7b09d0862c3e5bdaca6bdf829c9d851b766f492bf492fd947b9d534e9f94f"
+    ),
+    "runner::HeightIngressBindings::drop": (
+        "ba86ff1b630d46218acf45e32823871f81a47c82ac31bd71988c0d21e53d3cf6"
+    ),
+    "runner::close_ingress_for_rollover": (
+        "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
+    ),
+    "ingress::unbind_leader_wire_lifecycle_gate": (
+        "4a5b25faedea52bea79ac5041b0f643b5baf7bbb0858d9e6953a5f9e9260869c"
+    ),
+    "ingress::unbind_height_ingress_gates": (
+        "966e4feae1f1ca53553abce8847c1a14f8275eb81d4003bedf95e3591f362714"
+    ),
+    "ingress::close": (
+        "24741c2de73120ea5e1a9564203f5d5e0bd9d80a7f1a89d0bca2511e73dee1a7"
+    ),
 }
 _PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
     "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "6f21dffceb9d005825946d6c39f5c02fc8c35c6ffc75fd379a825beb7d765208"
     ),
     "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "e4a8ab5a434808f3cc14752c4fbbfa4d6d9ce7e5fcf63d4da2dbeb2905ddc8d9"
     ),
     "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "5c5332520d71be5b2da300c4e4b7c629ad74e8ca42f486df5f33c488479476ca"
     ),
 }
 
@@ -3721,7 +3922,9 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
     "runtime::has_certified_fence_escape_credit": (
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
-    "runner::run_inner": "PENDING",
+    "runner::run_inner": (
+        "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032"
+    ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
     ),

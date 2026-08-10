@@ -357,22 +357,9 @@ def _formal_artifacts(
         multilane_apalache_evidence,
         sealed["workspace_source_manifest_sha256"],
     )
-    resource_summary = _decode_canonical_json(
-        tlaps_resource_summary.data, "TLAPS resource summary"
+    _validate_tlaps_resource_evidence(
+        tlaps_resource_jsonl, tlaps_resource_summary
     )
-    if (
-        resource_summary.get("schema_version") != 1
-        or resource_summary.get("event") != "summary"
-        or resource_summary.get("exit_reason") != "completed"
-        or resource_summary.get("exit_status") != 0
-        or resource_summary.get("memory_limit_bytes") != 2 * 1024 * 1024 * 1024
-        or resource_summary.get("sample_interval_seconds") != 0.25
-        or not isinstance(resource_summary.get("peak_memory_bytes"), int)
-        or resource_summary["peak_memory_bytes"] < 0
-        or resource_summary["peak_memory_bytes"]
-        > resource_summary["memory_limit_bytes"]
-    ):
-        raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     toolchain = _tsv_fields_from_snapshot(

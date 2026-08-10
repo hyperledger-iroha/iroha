@@ -2570,9 +2570,15 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         chain_id_hash,
         epoch,
     );
-    let cursor = kura
+    let cursor = match kura
         .persist_lane_new_view_certificate(lane_id, 1, new_view, chain_id_hash, epoch)
-        .expect("persist synthetic NewView cursor");
+        .expect("persist synthetic NewView cursor")
+    {
+        LaneBlockNewViewPersistenceOutcome::Persisted(cursor) => cursor,
+        LaneBlockNewViewPersistenceOutcome::AlreadyTerminal => {
+            panic!("non-terminal NewView fixture unexpectedly reached a terminal receipt")
+        }
+    };
     assert_eq!(cursor.descriptor.lane_block_view, 1);
     let next_view_deliver = durable_lane_payload_availability_for_kura(&payload, &cursor, &signer);
     assert!(

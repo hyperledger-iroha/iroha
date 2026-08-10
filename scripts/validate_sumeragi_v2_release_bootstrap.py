@@ -21,7 +21,6 @@ from pathlib import Path
 import re
 import selectors
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -108,11 +107,13 @@ _RUNNER_EXTRA_ENV = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
+    "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
@@ -942,20 +943,6 @@ def _validate_identity_semantics(
     return fingerprint
 
 
-def _abort(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        try:
-            process.kill()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def _run_bounded(
     executable: Path,
     arguments: Iterable[str],
@@ -963,6 +950,21 @@ def _run_bounded(
     cwd: Path,
     environment: dict[str, str],
 ) -> CommandResult:
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + _COMMAND_TIMEOUT_SECONDS
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    # Bounds determine the eventual verdict; they never control the child.
+    # Retain only the capped prefix while draining both streams through EOF.
+    retained_output_bytes = 0
+    output_limit_exceeded = False
+    runtime_limit_exceeded = False
+    pending_violation: BaseException | None = None
+
+    def latch(violation: BaseException) -> None:
+        nonlocal pending_violation
+        if pending_violation is None:
+            pending_violation = violation
+
     try:
         process = subprocess.Popen(
             [str(executable), *arguments],
@@ -971,51 +973,111 @@ def _run_bounded(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
         )
     except OSError as error:
+        selector.close()
         raise ValidationError("trusted manifest helper could not execute") from error
-    assert process.stdout is not None and process.stderr is not None
-    os.set_blocking(process.stdout.fileno(), False)
-    os.set_blocking(process.stderr.fileno(), False)
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    total = 0
-    deadline = time.monotonic() + _COMMAND_TIMEOUT_SECONDS
-    try:
-        while selector.get_map():
+    output_streams = tuple(
+        (stream, label)
+        for stream, label in (
+            (process.stdout, "stdout"),
+            (process.stderr, "stderr"),
+        )
+        if stream is not None
+    )
+    if len(output_streams) != 2:
+        latch(ValidationError("trusted manifest helper pipes are unavailable"))
+    for stream, label in output_streams:
+        while True:
+            descriptor: int | None = None
+            try:
+                descriptor = stream.fileno()
+                os.set_blocking(descriptor, False)
+                selector.register(descriptor, selectors.EVENT_READ, label)
+                break
+            except BaseException as error:
+                latch(error)
+                if descriptor is not None:
+                    try:
+                        selector.get_key(descriptor)
+                    except KeyError:
+                        pass
+                    except BaseException as lookup_error:
+                        latch(lookup_error)
+                    else:
+                        break
+    while True:
+        try:
+            if not selector.get_map():
+                break
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError
-            for key, _ in selector.select(min(remaining, 1.0)):
+            if remaining <= 0 and not runtime_limit_exceeded:
+                runtime_limit_exceeded = True
+                latch(
+                    ValidationError(
+                        "trusted manifest helper exceeded its runtime limit"
+                    )
+                )
+            events = selector.select(
+                1.0 if runtime_limit_exceeded else min(remaining, 1.0)
+            )
+        except BaseException as error:
+            latch(error)
+            continue
+        for key, _ in events:
+            try:
                 try:
-                    chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                    chunk = os.read(key.fd, 64 * 1024)
                 except BlockingIOError:
                     continue
                 if not chunk:
-                    selector.unregister(key.fileobj)
+                    selector.unregister(key.fd)
                     continue
-                total += len(chunk)
-                if total > _MAX_HELPER_OUTPUT_BYTES:
-                    raise ValidationError("trusted manifest helper exceeded its output limit")
-                buffers[key.data].extend(chunk)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError
-        returncode = process.wait(timeout=remaining)
-    except TimeoutError as error:
-        _abort(process)
-        raise ValidationError("trusted manifest helper exceeded its runtime limit") from error
-    except BaseException:
-        _abort(process)
-        raise
-    finally:
+                retained_capacity = max(
+                    _MAX_HELPER_OUTPUT_BYTES - retained_output_bytes, 0
+                )
+                retained = chunk[:retained_capacity]
+                buffers[key.data].extend(retained)
+                retained_output_bytes += len(retained)
+                if len(retained) != len(chunk) and not output_limit_exceeded:
+                    output_limit_exceeded = True
+                    latch(
+                        ValidationError(
+                            "trusted manifest helper exceeded its output limit"
+                        )
+                    )
+            except BaseException as error:
+                latch(error)
+    while True:
+        try:
+            returncode = process.wait()
+            break
+        except BaseException as error:
+            latch(error)
+    try:
+        if time.monotonic() > deadline and not runtime_limit_exceeded:
+            runtime_limit_exceeded = True
+            latch(
+                ValidationError(
+                    "trusted manifest helper exceeded its runtime limit"
+                )
+            )
+    except BaseException as error:
+        latch(error)
+    try:
         selector.close()
-        process.stdout.close()
-        process.stderr.close()
-    return CommandResult(returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]))
+    except BaseException as error:
+        latch(error)
+    for stream, _ in output_streams:
+        try:
+            stream.close()
+        except BaseException as error:
+            latch(error)
+    if pending_violation is not None:
+        raise pending_violation
+    return CommandResult(
+        returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"])
+    )
 
 
 def _runner_contract(

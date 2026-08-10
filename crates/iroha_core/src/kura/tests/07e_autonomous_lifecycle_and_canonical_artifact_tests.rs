@@ -6,7 +6,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let catalog = autonomous_temp_recovery_catalog();
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+    let lane = lane_config.primary();
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (chain_id_hash, epoch, payload_template) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
@@ -126,13 +126,28 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
 
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated bootstrap Kura");
+    for entry in lane_config.entries() {
+        let incarnation = Hash::new(
+            format!(
+                "kura-lane-incarnation:{}:{}",
+                entry.lane_id.as_u32(),
+                entry.dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        );
+        kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
+            .expect("install explicit authenticated bootstrap lane marker");
+    }
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
+    drop(kura);
+    let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("reopen authenticated bootstrap Kura after catalog publication");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind bootstrap local peer");
     let generation_one = kura
         .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
         .expect("claim bootstrap signing generation");
-    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let bootstrap_preimage = kura
         .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
             &generation_one,
@@ -560,11 +575,14 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .is_err(),
         "payload durability alone must not authorize bootstrap deletion",
     );
-    kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
-        &authority,
-        AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
-    )
-    .expect("publish exact signed Prepared ActivateKura cursor");
+    assert_eq!(
+        kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+            &authority,
+            AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+        )
+        .expect("publish exact signed Prepared ActivateKura cursor"),
+        LaneBlockAuxiliaryPersistenceOutcome::Persisted,
+    );
     drop(kura);
 
     let (kura, _) = Kura::new(&config, &lane_config)
@@ -593,11 +611,14 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .is_err(),
         "Prepared durability alone must not authorize bootstrap deletion",
     );
-    kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
-        &authority,
-        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-    )
-    .expect("publish exact signed Live successor");
+    assert_eq!(
+        kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+            &authority,
+            AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+        )
+        .expect("publish exact signed Live successor"),
+        LaneBlockAuxiliaryPersistenceOutcome::Persisted,
+    );
     drop(kura);
 
     let (kura, _) = Kura::new(&config, &lane_config)
@@ -645,6 +666,9 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let completion = kura
         .complete_autonomous_lifecycle_bootstrap(permit)
         .expect("complete exact bootstrap and synced deletion");
+    let AutonomousLifecycleBootstrapCompletionOutcome::Completed(completion) = completion else {
+        panic!("non-terminal bootstrap completion must return its exact Live cursor");
+    };
     assert!(completion.takeover_required());
     assert_eq!(completion.cursor(), &live_activate);
     assert!(!bootstrap_path.exists());
@@ -653,7 +677,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             &generation_five,
             &payload,
             binding.clone(),
-            prepared_activate,
+            prepared_activate.clone(),
             live_activate.clone(),
             bootstrap_signature,
             authentication_facts,
@@ -691,12 +715,9 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .expect("construct required old-generation crash takeover"),
     );
     assert_eq!(
-        kura.compare_and_swap_autonomous_lifecycle_cursor(
-            takeover_lease,
-            crashed_cursor.clone(),
-        )
-        .expect("publish required old-generation crash takeover")
-        .cursor(),
+        kura.compare_and_swap_autonomous_lifecycle_cursor(takeover_lease, crashed_cursor.clone(),)
+            .expect("publish required old-generation crash takeover")
+            .cursor(),
         Some(&crashed_cursor),
         "successful old-generation takeover must return its exact durable cursor",
     );
@@ -736,6 +757,321 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .cursor(),
         Some(&live_recovered),
         "successful current-generation recovery must return its exact durable cursor",
+    );
+
+    // Build the canonical merge source in a separate Kura so none of the
+    // target crash-stage fixtures gain payload, READY, or certified-session
+    // durability before their signed bootstrap reaches that boundary.
+    let terminal_source_temp_dir = TempDir::new().expect("terminal source temp dir");
+    let terminal_source_config =
+        kura_config_for_dir(&terminal_source_temp_dir, BLOCKS_IN_MEMORY);
+    let (terminal_source_kura, _) =
+        test_kura_with_default_lane_markers(&terminal_source_config, &lane_config);
+    install_autonomous_lane_marker_for_kura(&terminal_source_kura, &lane_config, &payload);
+    let terminal_execution =
+        canonical_terminal_merge_execution_for_test(&terminal_source_kura, &payload, &signer);
+    let (terminal_parent, terminal_carrier, terminal_merge_entry) =
+        canonical_terminal_merge_carrier_for_test(terminal_execution, 1);
+    let terminal_carrier_height = terminal_carrier.header().height().get();
+    let terminal_carrier_hash = terminal_carrier.hash();
+    drop(terminal_source_kura);
+
+    for receipt_stage in [
+        AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly,
+        AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
+        AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+    ] {
+        let terminal_temp_dir = TempDir::new().expect("terminal bootstrap temp dir");
+        let terminal_config = kura_config_for_dir(&terminal_temp_dir, BLOCKS_IN_MEMORY);
+        let (terminal_kura, _) =
+            test_kura_with_default_lane_markers(&terminal_config, &lane_config);
+        terminal_kura
+            .bind_local_peer_id(local_peer.clone())
+            .expect("bind terminal-bootstrap local peer");
+        let terminal_generation = terminal_kura
+            .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+            .expect("claim terminal-bootstrap generation");
+        install_autonomous_lane_marker_for_kura(&terminal_kura, &lane_config, &payload);
+        let terminal_bootstrap_preimage = terminal_kura
+            .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
+                &terminal_generation,
+                &payload,
+                binding.clone(),
+                prepared_activate.clone(),
+                live_activate.clone(),
+                authentication_facts,
+            )
+            .expect("build terminal-bootstrap signature preimage");
+        let terminal_bootstrap_signature = <[u8; 96]>::try_from(
+            Signature::try_new(signer.private_key(), &terminal_bootstrap_preimage)
+                .expect("sign terminal lifecycle bootstrap")
+                .payload(),
+        )
+        .expect("BLS-normal terminal-bootstrap signature is exactly 96 bytes");
+        let mut terminal_authority = terminal_kura
+            .persist_autonomous_lifecycle_bootstrap_for_tests(
+                &terminal_generation,
+                &payload,
+                binding.clone(),
+                prepared_activate.clone(),
+                live_activate.clone(),
+                terminal_bootstrap_signature,
+                authentication_facts,
+            )
+            .expect("persist terminal lifecycle bootstrap");
+        if receipt_stage != AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly {
+            assert_eq!(
+                terminal_kura
+                    .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                    .expect("persist terminal-bootstrap payload"),
+                LaneBlockAuxiliaryPersistenceOutcome::Persisted,
+            );
+            terminal_authority = terminal_kura
+                .refresh_autonomous_lifecycle_bootstrap_authority(terminal_authority)
+                .expect("refresh payload-durable terminal bootstrap");
+        }
+        if matches!(
+            receipt_stage,
+            AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
+                | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
+        ) {
+            assert_eq!(
+                terminal_kura
+                    .publish_autonomous_lifecycle_bootstrap_cursor_stage(
+                        &terminal_authority,
+                        AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+                    )
+                    .expect("publish independently durable Prepared cursor"),
+                LaneBlockAuxiliaryPersistenceOutcome::Persisted,
+            );
+            terminal_authority = terminal_kura
+                .refresh_autonomous_lifecycle_bootstrap_authority(terminal_authority)
+                .expect("refresh Prepared-durable terminal bootstrap");
+        }
+        if receipt_stage == AutonomousLifecycleBootstrapRecoveryStage::LiveDurable {
+            assert_eq!(
+                terminal_kura
+                    .publish_autonomous_lifecycle_bootstrap_cursor_stage(
+                        &terminal_authority,
+                        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+                    )
+                    .expect("publish independently durable Live cursor"),
+                LaneBlockAuxiliaryPersistenceOutcome::Persisted,
+            );
+            terminal_authority = terminal_kura
+                .refresh_autonomous_lifecycle_bootstrap_authority(terminal_authority)
+                .expect("refresh Live-durable terminal bootstrap");
+        }
+        assert_eq!(terminal_authority.stage(), receipt_stage);
+        let terminal_bootstrap_path = terminal_authority.path.clone();
+        terminal_kura
+            .store_block(Arc::clone(&terminal_parent))
+            .expect("store receipt-terminal carrier parent");
+        terminal_kura
+            .store_block_with_merge_entry(
+                Arc::clone(&terminal_carrier),
+                &terminal_merge_entry,
+            )
+            .expect("store receipt-terminal canonical merge carrier");
+        let _ = persist_v2_finality_chain_through(
+            &terminal_kura,
+            NonZeroUsize::new(
+                usize::try_from(terminal_carrier_height).expect("carrier height fits usize"),
+            )
+            .expect("carrier height is non-zero"),
+        );
+        terminal_kura
+            .persist_merge_lane_block_application_receipts(
+                &terminal_merge_entry,
+                terminal_carrier_height,
+                terminal_carrier_hash,
+            )
+            .expect("persist receipt-terminal merge receipt and frontier");
+        let receipt = terminal_kura
+            .read_lane_block_application_receipt(
+                payload.origin_proposal.descriptor.lane_id,
+                payload.origin_proposal.descriptor.lane_block_height,
+            )
+            .expect("read receipt-terminal merge receipt");
+        assert_eq!(receipt.proposal, payload.origin_proposal);
+        let terminal_source =
+            Kura::autonomous_lifecycle_terminal_source_from_merge_receipt(&receipt)
+                .expect("derive exact receipt terminal source");
+        let blocked = {
+            let _prune_guard = terminal_kura.prune_lock.lock();
+            terminal_kura
+                .ensure_prune_recovery_not_required()
+                .expect("terminal fixture has no prune recovery");
+            let _canonical_chain_guard = terminal_kura.canonical_chain_lock.lock();
+            let _geometry_guard = terminal_kura.lane_geometry_lock.lock();
+            let entry = terminal_kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("terminal fixture lane entry");
+            let _sidecar_guard = terminal_kura.sidecar_lock.lock();
+            terminal_kura.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
+                &entry,
+                &payload,
+                terminal_source,
+            )
+        };
+        let blocked = match blocked {
+            Ok(_) => panic!("terminal outcome must wait at {receipt_stage:?}"),
+            Err(error) => error,
+        };
+        assert!(
+            blocked
+                .to_string()
+                .contains("waits for signed lifecycle bootstrap completion"),
+            "unexpected terminal-outcome blocker at {receipt_stage:?}: {blocked}",
+        );
+        let terminal_permit = terminal_kura
+            .authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
+                terminal_authority,
+                authentication_facts,
+            )
+            .expect("authenticate receipt-terminal bootstrap");
+        assert!(matches!(
+            terminal_kura
+                .complete_autonomous_lifecycle_bootstrap(terminal_permit)
+                .expect("roll receipt-terminal bootstrap forward to exact Live"),
+            AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal,
+        ));
+        assert!(
+            !terminal_bootstrap_path.exists(),
+            "receipt-terminal {receipt_stage:?} bootstrap must be deleted only after exact Live",
+        );
+        let terminal_cursor = terminal_kura
+            .read_autonomous_lifecycle_cursor(&payload, &binding, &terminal_generation)
+            .expect("read receipt-terminal Live cursor");
+        assert_eq!(terminal_cursor.cursor(), Some(&live_activate));
+        let terminal_inventory = terminal_kura
+            .active_autonomous_lifecycle_attempt_inventory(
+                &terminal_generation,
+                lane.lane_id,
+                lane.dataspace_id,
+                payload.origin_proposal.descriptor.lane_incarnation,
+            )
+            .expect("receipt-terminal completion keeps active inventory valid");
+        assert_eq!(terminal_inventory.len(), 1);
+        assert_eq!(terminal_inventory[0].executable_payload(), &payload);
+        assert_eq!(terminal_inventory[0].cursor(), Some(&live_activate));
+        let publishable = {
+            let _prune_guard = terminal_kura.prune_lock.lock();
+            terminal_kura
+                .ensure_prune_recovery_not_required()
+                .expect("terminal fixture has no prune recovery");
+            let _canonical_chain_guard = terminal_kura.canonical_chain_lock.lock();
+            let _geometry_guard = terminal_kura.lane_geometry_lock.lock();
+            let entry = terminal_kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("terminal fixture lane entry");
+            let _sidecar_guard = terminal_kura.sidecar_lock.lock();
+            terminal_kura.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
+                &entry,
+                &payload,
+                terminal_source,
+            )
+        };
+        if let Err(error) = publishable {
+            panic!(
+                "receipt-terminal {receipt_stage:?} completion must leave a Pending-publishable Live unit: {error}"
+            );
+        }
+        drop(terminal_kura);
+
+        let (restarted_terminal_kura, _) = Kura::new(&terminal_config, &lane_config)
+            .expect("receipt-terminal Live lifecycle unit is restart-valid");
+        restarted_terminal_kura
+            .bind_local_peer_id(local_peer.clone())
+            .expect("rebind restarted terminal-bootstrap local peer");
+        let restarted_terminal_generation = restarted_terminal_kura
+            .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+            .expect("claim restarted terminal-bootstrap generation");
+        let restarted_bootstraps = restarted_terminal_kura
+            .autonomous_lifecycle_bootstrap_recovery_inventory(
+                &restarted_terminal_generation,
+                lane.lane_id,
+                lane.dataspace_id,
+                payload.origin_proposal.descriptor.lane_incarnation,
+            )
+            .expect("inventory receipt-terminal lifecycle unit after restart");
+        assert!(
+            restarted_bootstraps.is_empty(),
+            "receipt-terminal {receipt_stage:?} completion must not retain a bootstrap",
+        );
+    }
+}
+
+#[test]
+fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
+    let temp_dir = TempDir::new().expect("unfinalized carrier temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let lane = lane_config.primary();
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"kura-unfinalized-carrier-reservation-context"),
+    ));
+    let payload = canonical_terminal_payload_for_test(lane, height_context_id, &signer, 0x55);
+    let (kura, _) = Kura::new(&config, &lane_config).expect("unfinalized carrier Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind unfinalized carrier peer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(payload.chain_id_hash, &local_peer)
+        .expect("claim unfinalized carrier process generation");
+    let execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &signer);
+    let _ = install_live_lifecycle_cursor_for_terminal_test(
+        &kura,
+        &generation,
+        &payload,
+        height_context_id,
+        &signer,
+    );
+    let (parent, carrier, merge_entry) =
+        canonical_terminal_merge_carrier_for_test(execution, 1);
+    let carrier_height = carrier.header().height().get();
+    let entry_hash = crate::merge::merge_ledger_entry_hash(&merge_entry);
+    kura.store_block(parent)
+        .expect("store unfinalized carrier parent");
+    kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
+        .expect("store exact unfinalized carrier tip");
+    let reserved_before_restart = kura
+        .post_wsv_lane_artifact_budget_reserved_bytes()
+        .expect("read pre-finality reservation");
+    assert!(reserved_before_restart > 0);
+    assert!(
+        kura.merge_carrier_for_entry(entry_hash).is_err(),
+        "ordinary carrier lookup must remain unavailable before finality",
+    );
+    drop(kura);
+
+    let (reopened, _) = Kura::new(&config, &lane_config)
+        .expect("restart accepts the exact unfinalized carrier tip");
+    assert_eq!(
+        reopened
+            .post_wsv_lane_artifact_budget_reserved_bytes()
+            .expect("read rebuilt pre-finality reservation"),
+        reserved_before_restart,
+        "startup must rebuild the process-local post-WSV envelope",
+    );
+    assert!(
+        reopened.merge_carrier_for_entry(entry_hash).is_err(),
+        "reservation-only recovery must not expose unfinalized carrier authority",
+    );
+    let _ = persist_v2_finality_chain_through(
+        &reopened,
+        NonZeroUsize::new(usize::try_from(carrier_height).expect("carrier height fits usize"))
+            .expect("carrier height is non-zero"),
+    );
+    assert_eq!(
+        reopened
+            .merge_carrier_for_entry(entry_hash)
+            .expect("finalized carrier lookup succeeds")
+            .map(|record| record.block_hash),
+        Some(carrier.hash()),
     );
 }
 
@@ -2438,6 +2774,13 @@ fn canonical_terminal_merge_execution_for_test(
             payload.epoch,
         )
         .expect("read canonical terminal durable merge source");
+    canonical_terminal_merge_execution_from_durable_source_for_test(payload, source)
+}
+
+fn canonical_terminal_merge_execution_from_durable_source_for_test(
+    payload: &LaneExecutablePayloadV1,
+    source: DurableAutonomousLaneMergeSource,
+) -> MergeLaneExecution {
     let DurableAutonomousLaneMergeSource {
         bundle,
         source_bundle,
@@ -2512,6 +2855,55 @@ fn canonical_terminal_merge_execution_for_test(
         settlement_hash,
         settlement_commitment,
     }
+}
+
+fn canonical_terminal_merge_carrier_for_test(
+    execution: MergeLaneExecution,
+    merge_epoch: u64,
+) -> (Arc<SignedBlock>, Arc<SignedBlock>, MergeLedgerEntry) {
+    let mut blocks = DummyBlocks::new();
+    let parent = blocks.next();
+    let raw_carrier = blocks.next();
+    let entrypoint_count =
+        u64::try_from(execution.entrypoints.len()).expect("terminal entrypoint count fits u64");
+    let executions = vec![execution];
+    let base_state_hash = HashOf::from_untyped_unchecked(Hash::new(
+        b"canonical terminal single-lane base state",
+    ));
+    let write_set_root = Hash::new(b"canonical terminal single-lane write set");
+    let mut batch = MergeExecutionBatch {
+        version: 1,
+        base_state_height: 1,
+        base_state_hash,
+        application_block_header: crate::merge::merge_application_header_from_carrier(
+            &raw_carrier.header(),
+        ),
+        execution_root: crate::merge::merge_execution_root(&executions),
+        entrypoint_count,
+        entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(&executions)
+            .expect("terminal carrier has an entrypoint"),
+        result_merkle_root: crate::merge::merge_execution_result_merkle_root(&executions)
+            .expect("terminal carrier has a result"),
+        lanes: executions,
+        application_write_set_root: Hash::new(
+            b"canonical terminal single-lane application writes",
+        ),
+        write_set_root,
+        expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+            1,
+            base_state_hash,
+            write_set_root,
+        ),
+        batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+    let mut merge_entry = sample_merge_entry(merge_epoch);
+    merge_entry.epoch_id = merge_epoch;
+    merge_entry.execution_batch = Some(batch);
+    let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
+    let mut executed_carrier = bound_carrier.as_ref().clone();
+    attach_ok_results_to_block(&mut executed_carrier);
+    (parent, Arc::new(executed_carrier), merge_entry)
 }
 
 fn canonical_terminal_projection_for_test(

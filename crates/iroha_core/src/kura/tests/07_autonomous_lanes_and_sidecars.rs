@@ -728,6 +728,78 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
 }
 
 #[test]
+fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane_id = LaneId::new(1);
+    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (chain_id_hash, epoch, payload) =
+        autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+        .expect("persist autonomous payload");
+
+    let new_view = next_durable_lane_view_certificate_for_kura(
+        &payload.origin_proposal,
+        &payload,
+        &signer,
+        chain_id_hash,
+        epoch,
+    );
+    let mut advanced = kura
+        .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+        .expect("read origin view state");
+    advanced.new_view_certificates.push(new_view);
+    let advanced_state = AutonomousLaneBlockViewState::from_artifact(&advanced);
+    let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        lane_entry,
+        &kura.store_root,
+        1,
+        payload.origin_proposal.descriptor.proposal_height,
+    );
+    let view_state_temp = Kura::autonomous_lane_block_view_state_temp_path(&view_state_path);
+    let temp_bytes = norito::encode_canonical(&advanced_state).expect("encode crash-temp view state");
+    fs::write(&view_state_temp, &temp_bytes).expect("stage higher-view crash temp");
+    let main_before = fs::read(&view_state_path).expect("read stable main view state");
+
+    let record = {
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        kura.read_autonomous_lane_block_record_read_only_latest_locked(
+            lane_entry,
+            lane_id,
+            1,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("read logical view-state winner")
+        .expect("read retained autonomous attempt")
+    };
+    let current = Kura::validate_autonomous_lane_block_artifact(
+        &record.artifact,
+        chain_id_hash,
+        epoch,
+    )
+    .expect("validate read-only logical winner");
+    assert_eq!(current.descriptor.lane_block_view, 1);
+    assert_eq!(
+        fs::read(&view_state_path).expect("reread stable main view state"),
+        main_before,
+        "read-only winner selection must not promote the crash temp",
+    );
+    assert_eq!(
+        fs::read(&view_state_temp).expect("reread higher-view crash temp"),
+        temp_bytes,
+        "read-only winner selection must not delete or rewrite the crash temp",
+    );
+}
+
+#[test]
 fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart() {
     let temp_dir = TempDir::new().expect("temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1322,9 +1394,15 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
             chain_id_hash,
             epoch,
         );
-        current = kura
+        current = match kura
             .persist_lane_new_view_certificate(lane_id, 1, durable, chain_id_hash, epoch)
-            .expect("persist NewView certificate");
+            .expect("persist NewView certificate")
+        {
+            LaneBlockNewViewPersistenceOutcome::Persisted(cursor) => cursor,
+            LaneBlockNewViewPersistenceOutcome::AlreadyTerminal => {
+                panic!("non-terminal checkpoint fixture unexpectedly reached a terminal receipt")
+            }
+        };
         if target_view == 257 {
             let artifact = kura
                 .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)

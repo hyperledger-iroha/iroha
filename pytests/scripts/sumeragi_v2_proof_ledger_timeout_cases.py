@@ -1125,23 +1125,17 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
     pending_relatives = tuple(
         relative
         for relative, expected_sha256 in source_seals.items()
-        if expected_sha256 == "PENDING"
+        if expected_sha256.startswith("PENDING")
     )
-    assert pending_relatives == (
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-    )
+    assert pending_relatives == ()
     baseline_errors = module._same_round_semantic_kernel_source_fidelity_errors(
         ROOT_DIR
     )
-    for relative in pending_relatives:
-        assert any(
-            relative in error
-            and "same-round semantic kernel source must match exact reviewed SHA-256"
-            in error
-            for error in baseline_errors
-        ), (relative, baseline_errors)
+    assert not any(
+        "same-round semantic kernel source must match exact reviewed SHA-256"
+        in error
+        for error in baseline_errors
+    ), baseline_errors
     source_paths = tuple(
         Path(relative)
         for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
@@ -1245,6 +1239,14 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "let _ = reconcile_executor_locked_body(executor, services)?;",
             "let _ = (executor, services);",
             "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
+        ),
+        (
+            "worker_completion_projection_consumes_or_skips_held_offset",
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            "certified_serve_predecessor_completion_evidence",
+            ".and_then(|io| io.completion_ownership_at(ownership_position))",
+            ".and_then(|io| io.completion_ownership_at(0))",
+            "selected-Serve completion evidence must project the exact held offset without consuming a completion",
         ),
         (
             "production_gate_disconnected",
@@ -1594,7 +1596,8 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             )
         else:
             mutate_rust_item_source(module, path, item, old, new)
-        for reviewed_relative, expected_sha256 in source_seals.items():
+        changed_relatives: list[str] = []
+        for reviewed_relative in source_seals:
             expansion_errors: list[str] = []
             _reviewed_path, reviewed_source = module._read_reviewed_rust_source(
                 repo_root,
@@ -1606,14 +1609,12 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             reviewed_sha256 = hashlib.sha256(
                 reviewed_source.encode("utf-8")
             ).hexdigest()
-            if (
-                expected_sha256 == "PENDING"
-                or reviewed_sha256
-                != canonical_expanded_sha256[reviewed_relative]
-            ):
+            if reviewed_sha256 != canonical_expanded_sha256[reviewed_relative]:
                 module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[
                     reviewed_relative
                 ] = reviewed_sha256
+                changed_relatives.append(reviewed_relative)
+        assert len(changed_relatives) == 1, (case, changed_relatives)
         errors = module._same_round_semantic_kernel_source_fidelity_errors(
             repo_root
         )

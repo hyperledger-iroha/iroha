@@ -21,6 +21,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.decodeFromString
+import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Maximum number of Native AMX participant-application rows in diagnostics. */
@@ -564,13 +565,20 @@ data class SumeragiDiagnosticsStatus(
     companion object {
         /** Parse one strict UTF-8 JSON diagnostics response. */
         @JvmStatic
-        fun parseJson(payload: ByteArray): SumeragiDiagnosticsStatus =
-            parseJson(payload.toString(Charsets.UTF_8))
+        fun parseJson(payload: ByteArray): SumeragiDiagnosticsStatus {
+            require(payload.isNotEmpty()) { "Sumeragi diagnostics response must not be empty" }
+            require(payload.size.toLong() <= SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES) {
+                "Sumeragi diagnostics response exceeds $SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES bytes"
+            }
+            return parseJson(SumeragiJsonPrimitives.decodeUtf8(payload, "Sumeragi diagnostics"))
+        }
 
         /** Parse one strict JSON diagnostics response. */
         @JvmStatic
-        fun parseJson(payload: String): SumeragiDiagnosticsStatus =
-            STRICT_SUMERAGI_DIAGNOSTICS_JSON.decodeFromString(payload)
+        fun parseJson(payload: String): SumeragiDiagnosticsStatus {
+            JsonParser.parse(payload)
+            return STRICT_SUMERAGI_DIAGNOSTICS_JSON.decodeFromString(payload)
+        }
     }
 }
 
@@ -615,7 +623,6 @@ internal object SumeragiU64Serializer : KSerializer<BigInteger> {
 
 private val CANONICAL_U64_TOKEN = Regex("0|[1-9][0-9]*")
 private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
 
 private fun validateNativeAmxDiagnosticsEvidence(
     settlements: List<JsonObject>,
@@ -660,17 +667,9 @@ private fun validateNativeAmxSettlementEvidence(
 }
 
 private fun requireU64(value: BigInteger, field: String): BigInteger {
-    require(value.signum() >= 0 && value <= U64_MAX) {
-        "$field must fit in an unsigned 64-bit integer"
-    }
-    return value
+    return SumeragiJsonPrimitives.requireU64(value, field)
 }
 
 private fun requireCanonicalNonzeroHash(value: String, field: String) {
-    require(CANONICAL_HASH.matches(value)) { "$field must be a canonical Iroha hash literal" }
-    val bytes = HashLiteral.decode(value)
-    require(bytes.any { it.toInt() != 0 }) { "$field must not be the zero hash" }
-    require((bytes[bytes.lastIndex].toInt() and 1) == 1) {
-        "$field has an invalid Iroha hash marker bit"
-    }
+    SumeragiJsonPrimitives.requireCanonicalNonzeroHash(value, field)
 }

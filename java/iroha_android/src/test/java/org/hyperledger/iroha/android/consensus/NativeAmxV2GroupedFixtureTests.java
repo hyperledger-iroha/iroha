@@ -112,6 +112,18 @@ public final class NativeAmxV2GroupedFixtureTests {
     assertEquals(
         NativeAmxParticipantApplicationState.DURABLY_APPLIED, application.state());
     validateApplicationEvidence(fixture);
+
+    final IllegalArgumentException invalidGroupUtf8 =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> NativeAmxV2Models.parseReceiptGroup(new byte[] {(byte) 0xff}));
+    assertEquals(
+        "Native AMX receipt group must be valid UTF-8", invalidGroupUtf8.getMessage());
+    final IllegalArgumentException invalidReceiptUtf8 =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> NativeAmxV2Models.parseReceipt(new byte[] {(byte) 0xff}));
+    assertEquals("Native AMX V2 receipt must be valid UTF-8", invalidReceiptUtf8.getMessage());
   }
 
   @Test

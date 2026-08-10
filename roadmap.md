@@ -23,6 +23,18 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
+  and lifecycle-retention release gate from one final source seal. Run the
+  focused Kura and Sumeragi regressions, build the optimized `irohad` and
+  Kagami artifacts from the signed revision, and run a pristine four-validator
+  canary through the complete multi-stage autonomous contract workload. Require
+  all stages to apply, four-peer health, an empty
+  queue, no unexpected rejection, equality of total and non-empty block
+  heights, and stable height throughout the idle observation window. Then roll
+  the identical attested artifacts to the live four-validator Taira cohort in
+  one coordinated operation and repeat chain-health, manifest, and signed-write
+  canaries before reopening public traffic; source tests or a partial cohort
+  replacement do not satisfy this gate.
 - Finish source-seal, proof, and release validation for the selected-Serve
   Taira `missing_proposal` repair. Live evidence showed a responsive pacemaker
   rotating views while proposal scheduling stayed behind one selected Serve:
@@ -492,7 +504,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 87-leg release inventory contract is
-sealed at 850 production tests across 40 modules, 524 G-UNIT rows, and four
+sealed at 857 production tests across 40 modules, 524 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -536,12 +548,12 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `850/850` production tests across 40
+The static release inventory now matches `857/857` production tests across 40
 modules and `524/524` focused `G-UNIT` entries. Its canonical 525-line TSV has
 SHA-256
 `bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
 The separate canonical production module/test TSV has SHA-256
-`f853be7fd492348c79c1ab3f8f1a8fc43e7593be76d3af1536c3710dac3e17c5`;
+`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, ten deterministic network
 simulations, and the exact pre-mutation terminal-sweep partition.
@@ -587,7 +599,7 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_no_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 850-test production inventory, 524-test G-UNIT source inventory, 12
+exact 857-test production inventory, 524-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
@@ -634,7 +646,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 850-test,
+  mutations before promotion, then finish the remaining 857-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -798,7 +810,7 @@ authenticated native replay record exists, so no native-dependent SDK suite is
 qualified. Clean native rebuilds, unskipped fixture replay, and source-bound
 provenance across all five release targets remain open. Kotlin/JVM and mirrored
 Java Android now require
-both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 2 before
+both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 3 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. Swift package admission now requires an embedded

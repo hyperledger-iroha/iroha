@@ -893,7 +893,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "merge_entry: Option<&MergeLedgerEntry>",
             "self.merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
             "Self::maximum_index_growth_for_unresolved_sidecar_write(",
-            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry",
         ),
     ),
     (
@@ -1116,7 +1116,8 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
             "let mut total =",
             "self.merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
             "if let Some(bundle) = block.execution_context()",
-            "NativeAmxApplicationManifestV1::from_result_bearing_block(block)",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(",
+            "merge_entry,",
             "Ok(total)",
         ),
     ),

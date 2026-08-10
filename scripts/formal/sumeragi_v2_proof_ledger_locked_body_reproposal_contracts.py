@@ -317,6 +317,20 @@ pub(crate) struct LocalProposalDirective {
                     "replayed proposal tag/round/subject projection",
                 ),
                 (
+                    "locked_body_recovery_plan",
+                    (),
+                    (),
+                    "locked_body_recovery_plan",
+                    "locked-body acquisition and reproposal eligibility projection",
+                ),
+                (
+                    "local_consensus_duties",
+                    (),
+                    (),
+                    "local_consensus_duties",
+                    "independent lane-author and successor-global duty projection",
+                ),
+                (
                     "schedule_local_proposal",
                     (),
                     ("#[allow(clippy::too_many_arguments)]",),
@@ -355,6 +369,20 @@ pub(crate) struct LocalProposalDirective {
                     ("#[test]",),
                     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
                     "exact replayed-proposal lock-owner regression",
+                ),
+                (
+                    "locked_body_recovery_is_independent_of_reproposal_gates",
+                    (),
+                    ("#[test]",),
+                    "locked_body_recovery_is_independent_of_reproposal_gates",
+                    "locked-body acquisition/reproposal split regression",
+                ),
+                (
+                    "lane_production_duty_survives_successor_global_roster_removal",
+                    (),
+                    ("#[test]",),
+                    "lane_production_duty_survives_successor_global_roster_removal",
+                    "successor-roster-independent lane duty regression",
                 ),
             ),
         ),
@@ -483,6 +511,55 @@ let mut local_proposal_state =
     LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
 """,
         "startup must bind the retained replay identity to the exact current proposal owner",
+    )
+    require_sequence(
+        "run_inner",
+        """
+let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
+if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some() {
+    services
+        .request_locked_candidate(executor.current_tag(), locked_round, locked)
+        .map_err(V2RunnerError::Service)?;
+}
+""",
+        "locked-body refinement evidence must be requested only by a local validator at exact first admission",
+    )
+    require_sequence(
+        "locked_body_recovery_plan",
+        """
+let request = directive
+    .decided_subject()
+    .is_none()
+    .then(|| directive.locked_body())
+    .flatten()
+    .map(|(round, subject)| (directive.tag(), round, subject));
+""",
+        "locked-body acquisition must project the exact undecided lock independently of reproposal eligibility",
+    )
+    require_sequence(
+        "locked_body_recovery_plan",
+        """
+LockedBodyRecoveryPlan {
+    request,
+    may_repropose: request.is_some()
+        && directive.leader() == local_validator
+        && attempted != Some(owner)
+        && can_admit_local_proposal,
+}
+""",
+        "locked-body reproposal eligibility must retain leader, owner, and capacity gates without suppressing acquisition",
+    )
+    require_sequence(
+        "local_consensus_duties",
+        """
+LocalConsensusDuties {
+    autonomous_lane_view: (directive.decided_subject().is_none()
+        && directive.locked_body().is_none())
+    .then_some(directive.tag().view()),
+    global_validator,
+}
+""",
+        "lane-author duty must remain independent of successor-global validator membership while locks and decisions suppress fresh work",
     )
     require_sequence(
         "from_replayed_proposal",
@@ -634,15 +711,57 @@ Ok(LocalProposalDirective {
         "the adapter must return the durable lock projection without reconstruction",
     )
     require_sequence(
+        "can_schedule_local_proposal",
+        """
+self.ensure_open()?;
+if !self.can_admit_local_proposal() {
+    return Ok(false);
+}
+let tag = self.current_tag();
+self.runtime
+    .local_proposal_admission_available(tag)
+    .map_err(EffectExecutorError::Runtime)
+""",
+        "proposal scheduling must combine queue capacity with the serialized active-view one-shot producer reservation",
+    )
+    require_sequence(
         "schedule_local_proposal",
         """
-if let Some((locked_round, locked)) = directive.locked_body() {
+let directive = executor.local_proposal_directive()?;
+let duties = local_consensus_duties(directive, local_validator);
+if let Some(active_view) = duties.autonomous_lane_view {
+    lane_work.schedule_autonomous_lane_production(active_view, candidate_limits)?;
+}
+let Some(local_validator) = duties.global_validator else {
+    return Ok(());
+};
+let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
+""",
+        "lane-author service must precede the successor-global observer return",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        "executor.can_schedule_local_proposal()?",
+        "every locked-load and fresh candidate observation must retain the serialized one-shot producer gate",
+        count=3,
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+let recovery_plan = locked_body_recovery_plan(
+    directive,
+    local_validator,
+    proposal_state.attempted,
+    executor.can_schedule_local_proposal()?,
+);
+if let Some((tag, locked_round, locked)) = recovery_plan.request {
     services
-        .request_locked_candidate(directive.tag(), locked_round, locked)
+        .request_locked_candidate(tag, locked_round, locked)
         .map_err(V2RunnerError::Service)?;
 }
+while let Some(loaded) = services.take_loaded_candidate() {
 """,
-        "the runner must request the exact durable locked-body key before observing readiness",
+        "locked-body acquisition must remain independent of reproposal gates and precede loaded-body observation",
     )
     require_sequence(
         "schedule_local_proposal",
@@ -652,6 +771,43 @@ if loaded.tag() != current.tag()
 {
 """,
         "the runner must discard a load which no longer matches the exact current lock",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+let current_recovery_plan = locked_body_recovery_plan(
+    current,
+    local_validator,
+    proposal_state.attempted,
+    executor.can_schedule_local_proposal()?,
+);
+if !current_recovery_plan.may_repropose {
+    continue;
+}
+""",
+        "loaded locked-body reproposal must recheck the current leader, owner, and capacity gates",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+executor.retain_locked_body_for_recovery(
+    current.tag(),
+    loaded_round,
+    loaded_subject,
+    canonical_wire.clone(),
+    services,
+)?;
+submit_exact_body(
+    context,
+    current,
+    canonical_wire,
+    executor,
+    services,
+    proposal_state,
+)?;
+proposal_state.attempted = Some(current_owner);
+""",
+        "reproposal must retain the exact-origin recovery carrier before submitting the unchanged locked body",
     )
     require_sequence(
         "schedule_local_proposal",
@@ -744,5 +900,102 @@ if request.directive.locked_subject().is_some() {
 }
 """,
         "fresh candidate construction must reject every directive which owns a locked subject",
+    )
+    require_sequence(
+        "locked_body_recovery_is_independent_of_reproposal_gates",
+        """
+for (local_validator, attempted, can_admit) in [
+    (nonleader, None, true),
+    (leader, Some(owner), true),
+    (leader, None, false),
+] {
+    let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
+    assert_eq!(plan.request, expected_request);
+    assert!(!plan.may_repropose, "body recovery must survive every local reproposal gate");
+}
+let eligible = locked_body_recovery_plan(directive, leader, None, true);
+assert_eq!(eligible.request, expected_request);
+assert!(eligible.may_repropose);
+""",
+        "the locked-body regression must separate unconditional exact acquisition from leader/owner/capacity reproposal gates",
+    )
+    require_sequence(
+        "locked_body_recovery_is_independent_of_reproposal_gates",
+        """
+assert_eq!(
+    locked_body_recovery_plan(decided, leader, None, true),
+    LockedBodyRecoveryPlan {
+        request: None,
+        may_repropose: false,
+    }
+);
+""",
+        "the locked-body regression must prove that a decision retires acquisition and reproposal",
+    )
+    require_sequence(
+        "lane_production_duty_survives_successor_global_roster_removal",
+        """
+assert_eq!(
+    local_consensus_duties(directive, None),
+    LocalConsensusDuties {
+        autonomous_lane_view: Some(tag.view()),
+        global_validator: None,
+    },
+    "successor-global observer status must not suppress independently frozen lane-author work"
+);
+""",
+        "the lane-duty regression must retain lane-author work after successor-global roster removal",
+    )
+    require_sequence(
+        "lane_production_duty_survives_successor_global_roster_removal",
+        """
+assert_eq!(
+    local_consensus_duties(locked, None).autonomous_lane_view,
+    None,
+    "a global lock still suppresses fresh lane payload production"
+);
+""",
+        "the lane-duty regression must prove that a global lock suppresses fresh lane work",
+    )
+    require_sequence(
+        "lane_production_duty_survives_successor_global_roster_removal",
+        """
+assert_eq!(
+    local_consensus_duties(decided, None).autonomous_lane_view,
+    None,
+    "a terminal global decision retires fresh lane payload production"
+);
+""",
+        "the lane-duty regression must prove that a terminal decision retires fresh lane work",
+    )
+    require_sequence(
+        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+        """
+let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+assert!(
+    LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
+        .attempted
+        .is_none(),
+    "an equal-tag proposal for another subject cannot reserve the current lock owner"
+);
+let mismatched_round = ReplayedProposalSign {
+    round: wire::ConsensusRound { view: 2, ..round },
+    ..replayed
+};
+assert!(
+    LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
+        .attempted
+        .is_none(),
+    "the replayed proposal round must match its reducer tag"
+);
+let decided = directive(Some(subject), Some(subject));
+assert!(
+    LocalProposalState::from_replayed_proposal(Some(replayed), decided)
+        .attempted
+        .is_none(),
+    "a decision retires every replayed proposal reservation"
+);
+""",
+        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles",
     )
     return errors

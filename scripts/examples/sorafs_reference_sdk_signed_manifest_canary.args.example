@@ -19,6 +19,8 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --signature-algorithm
 ed25519
 --signing-provider
-external_ed25519_hsm
+authenticated_external_signer
+--signing-backend
+software
 --signing-provider-revision
 1

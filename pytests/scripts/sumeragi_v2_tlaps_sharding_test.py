@@ -74,6 +74,14 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         kind == "theorem"
         for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
     ) == 24
+    continuation_theorems = [
+        name
+        for name, kind, _, _ in checker._top_level_declarations(
+            sources[continuation]
+        )
+        if kind == "theorem"
+    ]
+    assert len(continuation_theorems) == len(set(continuation_theorems))
 
     recovery_header = f"---- MODULE {recovery} ----\nEXTENDS SumeragiV2AsyncTimeoutKernelProofs\n\n"
     continuation_header = (
@@ -88,7 +96,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "087da6f3ee0a1e7771b25e80215f297dd5019c28999454db77a6731a9db3454a"
+        "47b2d3c026f34d25c09134f4afc7c1f06e2fe0f240cbfc86f10d6ee6b1ffb431"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
@@ -141,8 +149,8 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
     )
     expected_deadlock_prefix = (
         "---- MODULE SumeragiV2AsyncDeadlockProofs ----\n"
-        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs,\n"
-        "        SumeragiV2AsyncCandidateProducerContinuationProofs\n\n"
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n"
     )
     assert checker._async_liveness_shard_source_prefix(
         deadlock, deadlock_index
@@ -178,7 +186,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "1afd0b7075a4e1ab1ccfdf3d012e592669e2adc7f9523d6d261a8c7f5490e4aa"
+        "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
     )
 
 
@@ -186,8 +194,10 @@ def test_shard_contract_rejects_prefix_and_footer_drift() -> None:
     prefix_drift = _sources()
     deadlock = "SumeragiV2AsyncDeadlockProofs"
     prefix_drift[deadlock] = prefix_drift[deadlock].replace(
-        "        SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
-        "       SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs,  "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
         1,
     )
     errors, _ = checker._async_liveness_shard_contract(prefix_drift)
@@ -360,7 +370,8 @@ def test_shard_contract_rejects_reconstruction_header_bypass() -> None:
     errors, _ = checker._async_liveness_shard_contract(sources)
 
     assert any(
-        f"{deadlock}.tla must retain the exact mechanical shard header" in error
+        f"{deadlock}.tla must start with its exact reviewed async liveness "
+        "shard prefix" in error
         for error in errors
     )
 
@@ -373,7 +384,7 @@ def test_facade_evidence_maps_symbols_to_provider_logs() -> None:
         "symbol": "AsyncTypeInvariantObligation",
         "module": "SumeragiV2AsyncProtectedSlotProofs",
         "log": (
-            "target/formal/sumeragi_v2/tlaps/"
+            "formal/sumeragi_v2/tlaps/"
             "SumeragiV2AsyncProtectedSlotProofs.log"
         ),
     }

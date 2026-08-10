@@ -25,6 +25,15 @@ import kotlin.test.assertTrue
 
 class SumeragiDiagnosticsModelsTest {
     @Test
+    fun `diagnostics byte parser rejects malformed UTF-8 instead of replacing it`() {
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                byteArrayOf(0x7b, 0x22, 0xc3.toByte(), 0x28, 0x22, 0x7d),
+            )
+        }
+    }
+
+    @Test
     fun `native participant application uses exact diagnostics JSON names`() {
         val row = application(3)
         val encoded = Json.encodeToString(row)
@@ -423,6 +432,11 @@ class SumeragiDiagnosticsModelsTest {
     fun `complete diagnostics parser rejects unknown and missing fields`() {
         val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
 
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(root).toString().replaceFirst("{", "{\"tx_queue_depth\":0,"),
+            )
+        }
         assertFails {
             SumeragiDiagnosticsStatus.parseJson(
                 JsonObject(root + ("legacy_round" to JsonPrimitive(1))).toString(),

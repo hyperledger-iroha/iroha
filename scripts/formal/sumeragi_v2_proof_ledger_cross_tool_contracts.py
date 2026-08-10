@@ -387,7 +387,7 @@ _HISTORICAL_BODY_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SE
 )
 
 _SUCCESSOR_APPLIED_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -398,7 +398,7 @@ _SUCCESSOR_APPLIED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -406,7 +406,7 @@ _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
 )
 
 _SUCCESSOR_RECOVERED_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("canonical_identity_is_zero_body", "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d"),
@@ -417,19 +417,19 @@ _SUCCESSOR_RECOVERED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_LIFECYCLE_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("production_startup_failure_and_restart_trace_body", "5aa2d29e594aef4f585c74cf2c6875f5d7f98f8b04a6fb597657bc62a8d42eb7"),
 )
 
 _HISTORICAL_CERTIFICATE_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("production_historical_certificate_trace_body", "1b004a044c33700c93a06a9684a21559c64c25e5eae42b337866ed0f5cd26b4e"),
 )
 
 _HISTORICAL_BODY_SHARED_MACROS = (
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("production_historical_body_pipeline_trace_body", "c999442642f008ace2e73caf53cd2f18af1732dd06638b8d86ae3e17ba7a3ead"),
@@ -1236,13 +1236,29 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolSourceItemSeal(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step",
-                        # TODO: Promote only after the dual exact-target retry
-                        # latch mutation is rebound through this cross-tool seal.
-                        item_token_sha256="PENDING_BEHAVIOR_VALIDATION",
+                        item_token_sha256="bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
                             "SerializedV2Runtime", "<", "D", ">",
                         ),),
+                        required_expressions=(
+                            """
+                            if self
+                                .exact_serve_target_ordinal
+                                .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                            {
+                                self.exact_serve_predecessor_retry_attempted = true;
+                            }
+                            """,
+                            """
+                            if self
+                                .retained_response_predecessor_target_ordinal
+                                .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                            {
+                                self.retained_response_predecessor_retry_attempted = true;
+                            }
+                            """,
+                        ),
                     ),
                     CrossToolSourceItemSeal(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -1445,7 +1461,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
-                    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+                    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
                     ("production_durable_intent_trace_body", "8bc5f5f07d5d188dc48e6cbc02f0c43d67af2591a8cf5f379e11b39fd0013e4c"),
                     ("pending_projection_is_absent_body", "1ee3ae9d3fa183f21f330af54f681f77c7c54300b6c436f34ff47fca238871ac"),
                     ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd3511b82ebdbb9b12c10cd30577f8"),
@@ -1582,7 +1598,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_decision_recovery_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
                     ("production_decision_recovery_trace_body", "8c0db740cb3c62621e42f7ed6fa3db06c2926f11e530d7549b07efda2b5bf64d"),
                 ),
                 theorem_kernel_projection=(
@@ -2293,7 +2309,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_reliable_flush_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
                     ("production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5"),
                 ),
                 theorem_kernel_projection=(
@@ -2372,7 +2388,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "production_reliable_flush_application_body!(projection)"
                         ),
                         verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
                             ("production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80"),
                         ),
                         theorem_kernel_projection=(
@@ -2539,7 +2555,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body="production_application_trace_body!(projection)",
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
+    ("refinement_tag_value", "db6d42572257edf02ae97e143c4270d2ade85c45bce4e11c46232dd12a47d49c"),
                     ("production_application_trace_body", "c2a02aabdd24ec9d7a2f23d57cf0cf59514e1c6928105dd5d3617d47a55dc719"),
                 ),
                 theorem_kernel_projection=(
@@ -3138,49 +3154,6 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 source_item_seals=(
                     _SUCCESSOR_TERMINAL_APPLICATION_SOURCE_ITEM_SEALS
-                ),
-                production_call_sites=(
-                    CrossToolProductionCallContract(
-                        source="crates/iroha_core/src/sumeragi/v2_runner.rs",
-                        item="run_inner",
-                        # TODO: Promote only after observe-before-claim is
-                        # rebound through this terminal-application call site.
-                        item_token_sha256="PENDING_BEHAVIOR_VALIDATION",
-                        projection="terminal_application,",
-                        required_expression="""
-                            let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
-                            let artifact_hash = HashOf::new(&artifact);
-                            let terminal_application =
-                                ProductionTerminalApplicationWithoutSuccessorActivationProjection {
-                                    context_id: successor_context_refinement_projection(context.id()),
-                                    context_height: context.height,
-                                    receipt_context_id: successor_context_refinement_projection(receipt.context_id()),
-                                    receipt_height: receipt.height(),
-                                    receipt_block_hash: successor_block_refinement_projection(receipt.block_hash()),
-                                    receipt_artifact_hash: CanonicalIdentityProjection::from_bytes(
-                                        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-                                        IDENTITY_KIND_FINALITY_ARTIFACT,
-                                        *receipt.artifact_hash().as_ref(),
-                                    ),
-                                    artifact_context_id: successor_context_refinement_projection(artifact.context_id()),
-                                    artifact_height: artifact.height,
-                                    artifact_block_hash: successor_block_refinement_projection(artifact.block_hash),
-                                    artifact_hash: CanonicalIdentityProjection::from_bytes(
-                                        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-                                        IDENTITY_KIND_FINALITY_ARTIFACT,
-                                        *artifact_hash.as_ref(),
-                                    ),
-                                    predecessor: predecessor.refinement_projection(),
-                                    pending_successor_activation_present: pending_successor_activation.is_some(),
-                                };
-                            if !production_terminal_application_without_successor_activation_kernel(
-                                terminal_application,
-                            ) {
-                                return Err(V2RunnerError::SuccessorRefinementRejected);
-                            }
-                            let activation = PendingSuccessorConstruction::begin(predecessor)?;
-                        """,
-                    ),
                 ),
             ),
         ),

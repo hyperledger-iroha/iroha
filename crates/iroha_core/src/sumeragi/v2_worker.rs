@@ -110,7 +110,8 @@ use super::{
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
-        authenticate_certified_body_request, authenticate_certified_body_request_identity,
+        authenticate_certified_body_request_identity,
+        authenticate_certified_body_request_with_validator_pops,
     },
 };
 use crate::{
@@ -1745,13 +1746,12 @@ fn fully_authenticate_persisted_certified_serve_request(
     validator_set_pops: &[Vec<u8>],
 ) -> Result<AuthenticatedCertifiedBodyRequest, String> {
     let requester = request.requester.clone();
-    authenticate_certified_body_request(context, request, &requester, |context, certificate| {
-        wire::finality::verify_quorum_certificate_with_validator_pops(
-            context,
-            certificate,
-            validator_set_pops,
-        )
-    })
+    authenticate_certified_body_request_with_validator_pops(
+        context,
+        validator_set_pops,
+        request,
+        &requester,
+    )
     .map_err(|error| error.to_string())
 }
 
@@ -2241,7 +2241,7 @@ fn persistent_v2_io_command_channel(
     ))
 }
 
-fn certified_serve_family_capacity(
+pub(super) fn certified_serve_family_capacity(
     roster_serve_capacity: usize,
     observer_source_capacity: usize,
     observer_per_source_capacity: usize,
@@ -7882,6 +7882,32 @@ enum BodyFetchServiceOwner {
     None,
     Live,
     Reconstructed(usize),
+}
+
+/// Exact service-owner removal frozen before a guarded certified response
+/// handoff.
+///
+/// This token owns the service's exclusive borrow, so a live fetch cannot move
+/// into or out of the reconstructed queue between preflight and commit.
+/// Dropping it leaves every service index unchanged. The commit surface stays
+/// private until the final late-response transaction joins it to the response
+/// claim, queue CAS, runtime reservation, registry swap, and coordinator wake.
+struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
+    services: &'a mut ProductionV2Services,
+    task: BodyFetchTask,
+    owner: BodyFetchServiceOwner,
+}
+
+impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
+    fn commit(self, permit: &ConsensusOutputPermit<'_>) -> CertifiedBodyFetchCompletionDisposition {
+        assert!(
+            permit.authorizes(self.services.output_guard.as_ref()),
+            "certified body-fetch removal requires this service's live output permit"
+        );
+        self.services
+            .commit_exact_body_fetch_owner_removal(&self.task, self.owner);
+        CertifiedBodyFetchCompletionDisposition::Completed
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14176,6 +14202,24 @@ impl ProductionV2Services {
         Ok(owner)
     }
 
+    fn prepare_certified_body_fetch_owner_removal(
+        &mut self,
+        task: &BodyFetchTask,
+    ) -> Result<PreparedCertifiedBodyFetchOwnerRemoval<'_>, String> {
+        if task.certified_request().is_none() {
+            return Err(format!(
+                "Sumeragi v2 body-fetch work {} completed without certified authority",
+                task.id().get()
+            ));
+        }
+        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        Ok(PreparedCertifiedBodyFetchOwnerRemoval {
+            services: self,
+            task: task.clone(),
+            owner,
+        })
+    }
+
     fn commit_exact_body_fetch_owner_removal(
         &mut self,
         task: &BodyFetchTask,
@@ -18226,23 +18270,17 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
-        if task.certified_request().is_none() {
-            return Err(format!(
-                "Sumeragi v2 body-fetch work {} completed without certified authority",
-                task.id().get()
-            ));
-        }
         // Complete every fallible ownership check before arming the fail-stop
         // boundary. The guarded tail is then one infallible removal, so every
         // returned error leaves the exact service owner byte-for-byte intact.
-        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
         let output_guard = Arc::clone(&self.output_guard);
+        let prepared = self.prepare_certified_body_fetch_owner_removal(task)?;
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.commit_exact_body_fetch_owner_removal(task, owner);
+        let disposition = prepared.commit(operation.permit());
         operation.complete();
-        Ok(CertifiedBodyFetchCompletionDisposition::Completed)
+        Ok(disposition)
     }
 
     fn accept_authenticated_chunk(
@@ -19558,6 +19596,23 @@ pub(super) mod tests {
             _certificate: &wire::QuorumCertificate,
         ) -> Result<(), String> {
             Ok(())
+        }
+
+        fn authenticate_certified_body_request(
+            &self,
+            context: &wire::HeightContext,
+            request: wire::CertifiedBodyRequest,
+            authenticated_requester: &PeerId,
+        ) -> Result<
+            AuthenticatedCertifiedBodyRequest,
+            crate::sumeragi::v2_transport::V2TransportError,
+        > {
+            authenticate_certified_body_request(
+                context,
+                request,
+                authenticated_requester,
+                |context, certificate| self.verify_certificate(context, certificate),
+            )
         }
 
         fn queued_commands(&self) -> usize {
@@ -24064,11 +24119,8 @@ pub(super) mod tests {
             .expect("admitted exact request owns a barrier");
         assert_eq!(barrier.scheduler_ordinal(), 3);
 
-        let first = ExactServePredecessorEpisodeWitness::for_test(
-            barrier.scheduler_ordinal(),
-            1,
-            1,
-        );
+        let first =
+            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);
         assert!(
             command_tx
                 .claim_serve_runtime_episode(barrier)
@@ -24093,22 +24145,16 @@ pub(super) mod tests {
                 .expect("same witness cannot reopen a completed turn")
         );
 
-        let conflicting = ExactServePredecessorEpisodeWitness::for_test(
-            barrier.scheduler_ordinal(),
-            2,
-            1,
-        );
+        let conflicting =
+            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);
         assert!(
             command_tx
                 .observe_serve_predecessor_episode_witness(barrier, conflicting)
                 .is_err(),
             "one episode cannot change its exact predecessor evidence"
         );
-        let skipped = ExactServePredecessorEpisodeWitness::for_test(
-            barrier.scheduler_ordinal(),
-            2,
-            3,
-        );
+        let skipped =
+            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);
         assert!(
             command_tx
                 .observe_serve_predecessor_episode_witness(barrier, skipped)
@@ -24116,11 +24162,8 @@ pub(super) mod tests {
             "the consumer cannot skip a predecessor episode ordinal"
         );
 
-        let replenished = ExactServePredecessorEpisodeWitness::for_test(
-            barrier.scheduler_ordinal(),
-            2,
-            2,
-        );
+        let replenished =
+            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);
         assert!(
             command_tx
                 .observe_serve_predecessor_episode_witness(barrier, replenished)
@@ -25214,6 +25257,48 @@ pub(super) mod tests {
         service
             .enqueue_body_fetch(live_task.clone())
             .expect("start hybrid fetch");
+        let manifest_hash = HashOf::new(payload.manifest());
+        let prepared = service
+            .prepare_certified_body_fetch_owner_removal(&live_task)
+            .expect("exact live owner prepares without mutation");
+        drop(prepared);
+        assert_eq!(
+            service
+                .fetches
+                .get(&live_task.id())
+                .map(|fetch| &fetch.task),
+            Some(&live_task)
+        );
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&live_task.id())
+        );
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+
+        let foreign_guard = ConsensusOutputGuard::isolated();
+        let foreign_permit = foreign_guard.acquire().expect("foreign output permit");
+        let prepared = service
+            .prepare_certified_body_fetch_owner_removal(&live_task)
+            .expect("exact live owner prepares for permit-binding negative");
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = prepared.commit(&foreign_permit);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            service
+                .fetches
+                .get(&live_task.id())
+                .map(|fetch| &fetch.task),
+            Some(&live_task)
+        );
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&live_task.id())
+        );
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+        drop(foreign_permit);
         service
             .complete_certified_body_fetch(&live_task)
             .expect("certified response retires live owner");

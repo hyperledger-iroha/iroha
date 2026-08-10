@@ -1291,8 +1291,10 @@ WAL-intent replay, and divergent Taira views. They bring the inventory to the
 847-test checkpoint. The source-bound terminal-sweep partition regression brings
 the current
 source-bound inventory to the 848-test checkpoint. The late passive-Fetch
-completion and one-shot completed-Serve reopening regressions bring the current
-source-bound inventory to 850 exact tests across 40 modules and 87 pre-network
+completion and one-shot completed-Serve reopening regressions bring the
+850-test checkpoint. Seven Native AMX finality-bound merge-projection
+regressions bring the current
+source-bound inventory to 857 exact tests across 40 modules and 87 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1301,7 +1303,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`f853be7fd492348c79c1ab3f8f1a8fc43e7593be76d3af1536c3710dac3e17c5`.
+`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`.
 Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 525 TSV lines and has SHA-256
 `bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
@@ -1561,7 +1563,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 850-test inventory is a mechanically checked
+The current 857-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1751,7 +1753,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 850 exact production
+Before those longer scenarios, the PR gate inventories 857 exact production
 liveness tests and executes all 40 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 524-test
 focus inventory. The
@@ -1911,7 +1913,9 @@ and startup-recovery coverage plus final source reconciliation bring the
 then bring the 847-test checkpoint across 40 modules and 87 legs. The
 source-bound terminal-sweep partition regression brings the current inventory
 to the 848-test checkpoint. The two late-predecessor reopening regressions bring
-the current inventory to 850 tests across the same 40 modules and 87 legs.
+the 850-test checkpoint. Seven Native AMX finality-bound merge-projection
+regressions bring the current inventory to 857 tests across the same 40 modules
+and 87 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2196,7 +2200,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 87 pre-network corridor legs and
-their exact 850-test production inventory, the separate 524-test G-UNIT
+their exact 857-test production inventory, the separate 524-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

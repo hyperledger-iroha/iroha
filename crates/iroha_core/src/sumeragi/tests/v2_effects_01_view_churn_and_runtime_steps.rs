@@ -28,7 +28,7 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(1),
                 certificate: first_timeout,
-                protected_body: Some((original.round, original.subject)),
+                protected_lock: Some(original.clone()),
             }],
             &mut services,
         )
@@ -56,7 +56,7 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(2),
                 certificate: replacement_timeout,
-                protected_body: Some((replacement.round, replacement.subject)),
+                protected_lock: Some(replacement.clone()),
             }],
             &mut services,
         )
@@ -122,7 +122,7 @@ fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),
-                    protected_body: None,
+                    protected_lock: None,
                 }],
                 &mut services,
             )
@@ -168,7 +168,7 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),
-                    protected_body: None,
+                    protected_lock: None,
                 }],
                 &mut services,
             )
@@ -511,9 +511,7 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
         .push_back(Ok(RuntimeStep::Advanced(vec![
             AdapterEffect::Broadcast(message.clone()),
             AdapterEffect::ReportEquivocation {
-                offender: fixture.context.roster[1].validator.clone(),
-                round: fixture.manifest.round,
-                kind: EquivocationKind::Vote,
+                evidence: vote_equivocation_evidence(&fixture, 1),
             },
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject: fixture.manifest.subject,

@@ -1,3 +1,488 @@
+fn direct_archive_tempdir() -> tempfile::TempDir {
+    let root = std::env::current_dir().expect("resolve direct archive test root");
+    tempfile::tempdir_in(root).expect("create direct archive test directory")
+}
+
+fn provider_ingest_archive_bounds(
+    max_record_bytes: u64,
+    max_total_bytes: u64,
+) -> ProviderIngestFinalizedArchiveBoundsV1 {
+    ProviderIngestFinalizedArchiveBoundsV1::try_new(
+        max_record_bytes,
+        16,
+        max_total_bytes,
+        16,
+        16,
+        64,
+        16,
+    )
+    .expect("valid provider-ingest archive bounds")
+}
+
+fn fixture_reserve_asset_definition() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
+        "xor".parse().expect("valid fixture settlement asset name"),
+    )
+}
+
+fn fixture_queue(state: &State, events_sender: crate::EventsSender) -> Arc<Queue> {
+    let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+    let manifests = state.lane_manifests.read().clone();
+    queue.install_lane_manifests(&manifests);
+    queue
+}
+
+type ApplyNativeReceiptBuilder = fn(
+    &ApplyFixture,
+    &wire::HeightContext,
+    Hash,
+    &LaneBlockProposalV1,
+    &[TransactionEntrypoint],
+    &[crate::queue::LaneQueueReservationKeyV2],
+    &[crate::queue::RoutingPlan],
+) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
+
+fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightContext) {
+    use iroha_data_model::nexus::{
+        DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecyclePlan,
+    };
+
+    let participant_lane = LaneId::new(1);
+    let participant_dataspace = DataSpaceId::new(7);
+    let mut nexus = state.nexus_snapshot();
+    assert!(nexus.enabled, "Native fixture requires enabled Nexus");
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: participant_dataspace,
+            alias: "independent-dataspace".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("valid Native fixture dataspace catalog");
+    state
+        .set_nexus(nexus)
+        .expect("install Native fixture dataspace before genesis");
+
+    let lane = LaneConfig {
+        id: participant_lane,
+        dataspace_id: participant_dataspace,
+        alias: "independent-lane".to_owned(),
+        ..LaneConfig::default()
+    };
+    state
+        .apply_lane_lifecycle(&LaneLifecyclePlan {
+            additions: vec![lane.clone()],
+            retire: Vec::new(),
+        })
+        .expect("install Native fixture lane before genesis");
+
+    let validators = context
+        .roster
+        .iter()
+        .map(|validator| AccountId::new(validator.validator.public_key().clone()))
+        .collect::<Vec<_>>();
+    let validator_bindings = validators
+        .iter()
+        .zip(&context.roster)
+        .map(|(validator, power)| ManifestValidatorBinding {
+            validator: validator.clone(),
+            peer_id: power.validator.clone(),
+            torii_url: None,
+        })
+        .collect();
+    let status = LaneManifestStatus {
+        lane: lane.id,
+        alias: lane.alias,
+        dataspace: lane.dataspace_id,
+        visibility: lane.visibility,
+        storage: lane.storage,
+        governance: lane.governance,
+        manifest_path: Some(std::path::PathBuf::from(
+            "/tmp/sumeragi-v2-apply-native-lane-manifest.json",
+        )),
+        governance_rules: Some(GovernanceRules {
+            validators,
+            validator_bindings,
+            ..GovernanceRules::default()
+        }),
+        privacy_commitments: Vec::new(),
+    };
+    let mut statuses = {
+        let manifests = state.lane_manifests.read();
+        manifests
+            .statuses()
+            .into_iter()
+            .map(|status| (status.lane, status))
+            .collect::<BTreeMap<_, _>>()
+    };
+    statuses.insert(participant_lane, status);
+    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+    let mut expected = context
+        .roster
+        .iter()
+        .map(|validator| validator.validator.clone())
+        .collect::<Vec<_>>();
+    expected.sort();
+    expected.dedup();
+    let mut actual =
+        state.authoritative_lane_peer_ids_at_height(participant_lane, context.height);
+    actual.sort();
+    actual.dedup();
+    assert_eq!(actual, expected, "Native fixture participant authority");
+    let incarnation = state
+        .lane_incarnation_at_height(participant_lane, context.height)
+        .expect("Native fixture participant incarnation is active");
+    assert!(
+        incarnation.as_ref().iter().any(|byte| *byte != 0),
+        "Native fixture participant incarnation is non-zero"
+    );
+    context.nexus_amx_context_hash =
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state);
+}
+
+fn native_amx_receipts_for_apply_fixture(
+    fixture: &ApplyFixture,
+    context: &wire::HeightContext,
+    chain_id_hash: Hash,
+    coordinator_proposal: &LaneBlockProposalV1,
+    entrypoints: &[TransactionEntrypoint],
+    reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
+    routing_plans: &[crate::queue::RoutingPlan],
+) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>> {
+    use crate::{
+        native_amx::{
+            NativeAmxAttestationRequestV2, NativeAmxVoteV2, aggregate_votes_to_qc,
+            receipt_shape_matches_coordinator_payload,
+        },
+        queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
+    };
+    use iroha_data_model::block::consensus::{
+        NativeAmxAttestationBodyV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+        SumeragiLanePayloadOwnership,
+    };
+
+    assert_eq!(entrypoints.len(), 2, "grouped Native fixture source count");
+    assert_eq!(reservation_keys.len(), entrypoints.len());
+    assert_eq!(routing_plans.len(), entrypoints.len());
+    let participant_lane = LaneId::new(1);
+    let participant_dataspace = DataSpaceId::new(7);
+    let expected_plan = RoutingPlan::native_amx(
+        RoutingDecision::default(),
+        vec![RouteLeg::new(
+            RoutingDecision::new(participant_lane, participant_dataspace),
+            RouteLegRole::Participant,
+        )],
+    );
+    assert!(
+        routing_plans.iter().all(|plan| plan == &expected_plan),
+        "grouped fixture transactions derive one exact Native plan"
+    );
+
+    let source_ids = reservation_keys
+        .iter()
+        .map(|key| {
+            let mut source_id = [0_u8; Hash::LENGTH];
+            source_id.copy_from_slice(key.signed_transaction_hash.as_ref());
+            source_id
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        source_ids.windows(2).all(|pair| pair[0] < pair[1]),
+        "grouped Native sources are in canonical signed-transaction order"
+    );
+    let entrypoint_hashes = entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect::<Vec<_>>();
+    assert!(
+        reservation_keys
+            .iter()
+            .zip(&entrypoint_hashes)
+            .all(|(key, entrypoint_hash)| key.entrypoint_hash == *entrypoint_hash),
+        "grouped Native reservations bind the typed entrypoints"
+    );
+
+    let mut validator_set = fixture
+        .state
+        .authoritative_lane_peer_ids_at_height(participant_lane, context.height);
+    validator_set.sort();
+    validator_set.dedup();
+    let mut expected_validators = context
+        .roster
+        .iter()
+        .map(|validator| validator.validator.clone())
+        .collect::<Vec<_>>();
+    expected_validators.sort();
+    expected_validators.dedup();
+    assert_eq!(
+        validator_set, expected_validators,
+        "participant proposal uses the frozen authoritative committee"
+    );
+    let validator_pops = validator_set
+        .iter()
+        .map(|validator| {
+            let index = context
+                .roster
+                .iter()
+                .position(|candidate| &candidate.validator == validator)
+                .expect("participant validator occurs in the frozen roster");
+            fixture.service.validator_set_pops[index].clone()
+        })
+        .collect::<Vec<_>>();
+    let validator_keys = validator_set
+        .iter()
+        .map(|validator| {
+            fixture
+                .validator_keys
+                .iter()
+                .find(|key| key.public_key() == validator.public_key())
+                .expect("participant validator has a fixture signing key")
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let min_signers =
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+    let validator_count =
+        u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+    let participant_min_quorum =
+        u32::try_from(min_signers).expect("fixture participant quorum fits u32");
+    let participant_incarnation = fixture
+        .state
+        .lane_incarnation_at_height(participant_lane, context.height)
+        .expect("participant incarnation is active in the frozen context");
+    let base_mode_tag = match context.mode {
+        wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
+        wire::ConsensusMode::Npos => wire::NPOS_TAG,
+    };
+    let context_mode_tag = format!(
+        "{base_mode_tag}::height-context:{}::epoch:{}",
+        hex::encode(context.id().0.as_ref()),
+        context.epoch
+    );
+    let accepted_transaction_hashes = entrypoint_hashes
+        .iter()
+        .copied()
+        .map(Hash::from)
+        .collect::<Vec<_>>();
+    let mut participant_ownership = SumeragiLanePayloadOwnership {
+        proposal_height: context.height,
+        proposal_view: 0,
+        lane_id: participant_lane,
+        dataspace_id: participant_dataspace,
+        lane_incarnation: participant_incarnation,
+        lane_block_height: 1,
+        lane_block_view: 0,
+        subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+        qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+            participant_lane,
+            participant_dataspace,
+            &context_mode_tag,
+        ),
+        accepted_candidate_indices: (0_u64..2).collect(),
+        accepted_transaction_hashes,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: validator_set.clone(),
+        lane_block_descriptor_validator_count: validator_count,
+        lane_block_descriptor_min_quorum: participant_min_quorum,
+        payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    let replay = participant_ownership
+        .compute_replay_hashes()
+        .expect("participant ownership replay material is canonical");
+    participant_ownership.subject_hash = replay.subject_hash;
+    participant_ownership.payload_ownership_hash = replay.payload_ownership_hash;
+    participant_ownership.rbc_instance_hash = replay.rbc_instance_hash;
+    participant_ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+    let mut participant_descriptor = LaneBlockDescriptorV1 {
+        lane_id: participant_ownership.lane_id,
+        dataspace_id: participant_ownership.dataspace_id,
+        lane_incarnation: participant_ownership.lane_incarnation,
+        proposal_height: participant_ownership.proposal_height,
+        previous_lane_block_height: participant_ownership.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: participant_ownership
+            .previous_lane_block_descriptor_hash,
+        lane_block_height: participant_ownership.lane_block_height,
+        lane_block_view: participant_ownership.lane_block_view,
+        subject_hash: participant_ownership.subject_hash,
+        payload_ownership_hash: participant_ownership.payload_ownership_hash,
+        rbc_instance_hash: participant_ownership.rbc_instance_hash,
+        accepted_candidate_indices: participant_ownership.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: participant_ownership.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count,
+        min_quorum: participant_min_quorum,
+        qc_mode_tag: participant_ownership.qc_mode_tag,
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    participant_descriptor.descriptor_hash = participant_descriptor.computed_descriptor_hash();
+    assert_eq!(
+        participant_descriptor.descriptor_hash,
+        replay.lane_block_descriptor_hash
+    );
+    let mut participant_proposal = LaneBlockProposalV1 {
+        descriptor: participant_descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: None,
+    };
+    participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+    crate::lane_consensus::validate_lane_block_proposal(&participant_proposal)
+        .expect("grouped Native participant proposal is production-valid");
+
+    let coordinator_descriptor = &coordinator_proposal.descriptor;
+    assert_eq!(
+        RoutingDecision::new(
+            coordinator_descriptor.lane_id,
+            coordinator_descriptor.dataspace_id,
+        ),
+        RoutingDecision::default(),
+        "grouped Native coordinator remains the universal route"
+    );
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let participant_validator_set_hash = HashOf::new(&validator_set);
+    let body_for = |source_id,
+                    tx_entrypoint_hash,
+                    phase,
+                    participant_settlement_commitment| NativeAmxAttestationBodyV2 {
+        round,
+        epoch: context.epoch,
+        chain_id_hash,
+        source_id,
+        tx_entrypoint_hash,
+        plan_digest: expected_plan.digest(),
+        phase,
+        coordinator_lane_id: coordinator_descriptor.lane_id,
+        coordinator_dataspace_id: coordinator_descriptor.dataspace_id,
+        coordinator_lane_incarnation: coordinator_descriptor.lane_incarnation,
+        participant_lane_id: participant_lane,
+        participant_dataspace_id: participant_dataspace,
+        participant_lane_incarnation: participant_incarnation,
+        participant_previous_block_height: 0,
+        participant_previous_block_descriptor_hash: None,
+        participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
+        participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
+        participant_proposal_hash: participant_proposal.proposal_hash,
+        participant_settlement_commitment,
+        participant_validator_set_hash,
+        participant_validator_count: validator_count,
+        participant_min_quorum,
+        authority_context_height: context.height,
+        planned_coordinator_block_height: coordinator_descriptor.lane_block_height,
+        coordinator_lane_block_view: coordinator_descriptor.lane_block_view,
+        coordinator_proposal_hash: coordinator_proposal.proposal_hash,
+    };
+    let settlement_template = body_for(
+        source_ids[0],
+        entrypoint_hashes[0],
+        NativeAmxPhase::Prepare,
+        Hash::prehashed([0; Hash::LENGTH]),
+    );
+    let participant_settlement = settlement_template
+        .computed_grouped_participant_settlement(&source_ids)
+        .expect("derive exact two-source participant settlement");
+    let participant_settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+            .expect("hash exact two-source participant settlement");
+
+    let qc_for = |body: NativeAmxAttestationBodyV2| {
+        let votes = validator_keys
+            .iter()
+            .take(min_signers)
+            .map(|key| NativeAmxVoteV2 {
+                body,
+                signer: PeerId::new(key.public_key().clone()),
+                bls_signature: Signature::try_new(key.private_key(), &body.signature_preimage())
+                    .expect("sign grouped Native participant attestation")
+                    .payload()
+                    .to_vec(),
+            })
+            .collect::<Vec<_>>();
+        aggregate_votes_to_qc(
+            body,
+            validator_set.clone(),
+            validator_pops.clone(),
+            &votes,
+            min_signers,
+        )
+        .expect("aggregate grouped Native participant QC")
+    };
+
+    source_ids
+        .iter()
+        .copied()
+        .zip(entrypoint_hashes.iter().copied())
+        .zip(routing_plans)
+        .map(|((source_id, entrypoint_hash), routing_plan)| {
+            let prepare_body = body_for(
+                source_id,
+                entrypoint_hash,
+                NativeAmxPhase::Prepare,
+                Hash::from(participant_settlement_hash),
+            );
+            let request = NativeAmxAttestationRequestV2 {
+                body: prepare_body,
+                plan_legs: routing_plan.legs(),
+                coordinator_proposal: coordinator_proposal.clone(),
+                participant_proposal: participant_proposal.clone(),
+                participant_settlement: participant_settlement.clone(),
+            };
+            request
+                .validate_plan_binding()
+                .expect("grouped Native request binds the complete production plan");
+            let prepare_qc = qc_for(prepare_body);
+            let mut commit_body = prepare_body;
+            commit_body.phase = NativeAmxPhase::Commit;
+            let leg = NativeAmxLegRecordV2 {
+                lane_id: participant_lane,
+                dataspace_id: participant_dataspace,
+                participant_proposal: participant_proposal.clone(),
+                participant_settlement: participant_settlement.clone(),
+                participant_settlement_hash,
+                prepare_qc,
+                commit_qc: qc_for(commit_body),
+            };
+            let receipt = NativeAmxReceipt {
+                version: 2,
+                source_id,
+                chain_id_hash,
+                plan_digest: routing_plan.digest(),
+                lane_id: coordinator_descriptor.lane_id,
+                dataspace_id: coordinator_descriptor.dataspace_id,
+                lane_incarnation: coordinator_descriptor.lane_incarnation,
+                authority_context_height: coordinator_descriptor.proposal_height,
+                lane_block_height: coordinator_descriptor.lane_block_height,
+                lane_block_view: coordinator_descriptor.lane_block_view,
+                coordinator_proposal_hash: coordinator_proposal.proposal_hash,
+                legs: vec![leg],
+            };
+            assert!(
+                receipt_shape_matches_coordinator_payload(
+                    Some(&receipt),
+                    routing_plan,
+                    source_id.as_slice(),
+                    Hash::from(entrypoint_hash),
+                    chain_id_hash,
+                    coordinator_proposal,
+                ),
+                "grouped Native receipt matches the exact coordinator payload"
+            );
+            Some(receipt)
+        })
+        .collect()
+}
+
 v2_apply_test!(
     checkpoint_write_failure_keeps_wsv_behind_durable_kura_tip,
     {

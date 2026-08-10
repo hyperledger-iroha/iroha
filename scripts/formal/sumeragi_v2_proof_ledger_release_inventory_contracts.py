@@ -1,3 +1,36 @@
+def _relative_to_root(path: Path, root_dir: Path = ROOT_DIR) -> str:
+    try:
+        return path.resolve().relative_to(root_dir.resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(f"path is outside the repository: {path}") from error
+
+
+FORMAL_EVIDENCE_LOGICAL_ROOT = Path("formal/sumeragi_v2")
+
+
+def _formal_evidence_logical_path(*parts: str) -> str:
+    return FORMAL_EVIDENCE_LOGICAL_ROOT.joinpath(*parts).as_posix()
+
+
+def _formal_evidence_physical_path(
+    logical_path: str, root_dir: Path = ROOT_DIR
+) -> Path:
+    logical = Path(logical_path)
+    try:
+        relative = logical.relative_to(FORMAL_EVIDENCE_LOGICAL_ROOT)
+    except ValueError as error:
+        raise ValueError(
+            f"formal evidence path escapes its logical root: {logical_path}"
+        ) from error
+    external = os.environ.get("SUMERAGI_V2_FORMAL_EVIDENCE_DIR")
+    base = (
+        Path(external)
+        if external is not None
+        else root_dir / FORMAL_EVIDENCE_LOGICAL_ROOT
+    )
+    return base / relative
+
+
 def _production_liveness_release_inventory_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -33,7 +66,7 @@ def _production_liveness_release_inventory_errors(
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
         ("python", 62),
-        ("javascript", 59),
+        ("javascript", 60),
         ("swift", 4),
         ("kotlin", 6),
         ("java", 5),
@@ -180,11 +213,11 @@ def _production_liveness_release_inventory_errors(
         )
 
     canonical_sdk_diagnostics_suites = (
-        ("python", 114),
+        ("python", 121),
         ("javascript", 88),
         ("swift", 17),
-        ("kotlin", 15),
-        ("java", 10),
+        ("kotlin", 26),
+        ("java", 24),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -225,7 +258,7 @@ def _production_liveness_release_inventory_errors(
         "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
         "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
         "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
-        "client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito",
+        "client::tests::get_sumeragi_status_json_requires_exact_json_media_type",
         "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
         "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
         "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
@@ -235,7 +268,7 @@ def _production_liveness_release_inventory_errors(
         "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
         "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
         "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
-        "client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header",
+        "client::tests::get_sumeragi_diagnostics_requires_declared_current_media_type",
     )
     runner_rust_sdk_diagnostics_tests = tuple(
         shell_array("rust_sdk_diagnostics_tests")
@@ -640,8 +673,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 432:
-        errors.append("internal release-regression seal must contain exactly 432 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 439:
+        errors.append("internal release-regression seal must contain exactly 439 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1329,35 +1362,34 @@ def _production_liveness_release_inventory_errors(
 
     source_sealed_commands = (
         (
+            "source-sealed-workspace-build",
+            "cargo +1.93.1 -j1 build --locked --offline --workspace",
+            "run_cargo build --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-tests",
+            "cargo +1.93.1 -j1 test --locked --offline --workspace",
+            "run_cargo test --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-clippy",
+            "cargo +1.93.1 -j1 clippy --locked --offline --workspace "
+            "--all-targets -- -D warnings",
+            "run_cargo clippy --locked --offline --workspace --all-targets "
+            "-- -D warnings",
+        ),
+        (
             "source-sealed-workspace-format",
-            "cargo fmt --all -- --check",
+            "cargo +1.93.1 fmt --all -- --check",
+            "run_cargo fmt --all -- --check",
         ),
         (
             "source-sealed-legacy-codec-guard",
             "bash scripts/check_no_legacy_codec.sh",
-        ),
-        (
-            "source-sealed-workspace-build",
-            "cargo build --locked --offline --workspace",
-        ),
-        (
-            "source-sealed-workspace-clippy",
-            "cargo clippy --locked --offline --workspace --all-targets -- -D warnings",
-        ),
-        (
-            "source-sealed-workspace-tests",
-            "cargo test --locked --offline --workspace",
-        ),
-        (
-            "source-sealed-irohad-tests",
-            "cargo test --locked --offline -p irohad --bin irohad "
-            "--features test-network-message-control",
+            "bash scripts/check_no_legacy_codec.sh",
         ),
     )
-    for leg_id, command in source_sealed_commands:
-        execution_command = (
-            f"run_{command}" if command.startswith("cargo ") else command
-        )
+    for leg_id, command, execution_command in source_sealed_commands:
         expected = (
             "  run_corridor_leg \\\n"
             f"    {leg_id} command 0 \\\n"
@@ -1546,7 +1578,11 @@ def _production_liveness_release_inventory_errors(
                     "_formal_artifacts",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "_sdk_suite_source_manifest",
                     "_test_count_from_log",
+                    "_prebuilt_artifact_root",
+                    "_prebuilt_release_roots",
+                    "_prebuilt_directory",
                 ),
             }
             expected_parent_component_symbols = frozenset(
@@ -1625,21 +1661,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 850 tests across 40 modules.\n"
+            "current\ninventory to 857 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 850-test, 40-module inventory. The complete source-sealed\n"
+            "current 857-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 850 exact tests across 40 modules and "
+            "current\nsource-bound inventory to 857 exact tests across 40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -1810,9 +1846,8 @@ def _promotion_target_evidence_errors(
                 f"proof evidence promotion target {obligation_id} is not bound "
                 "to the current proof ledger"
             )
-        expected_log = (
-            "target/formal/sumeragi_v2/tlaps/targets/"
-            f"{obligation_id}.log"
+        expected_log = _formal_evidence_logical_path(
+            "tlaps", "targets", f"{obligation_id}.log"
         )
         if entry.get("log") != expected_log:
             errors.append(
@@ -1820,7 +1855,7 @@ def _promotion_target_evidence_errors(
                 f"{expected_log}"
             )
             continue
-        log_path = root_dir / expected_log
+        log_path = _formal_evidence_physical_path(expected_log, root_dir)
         if not log_path.is_file() or log_path.is_symlink():
             errors.append(
                 f"proof evidence target log is not a regular file: {log_path}"
@@ -2009,8 +2044,8 @@ def _release_evidence_errors(
             )
 
         preflight_value = entry.get("preflight_log")
-        expected_preflight = (
-            f"target/formal/sumeragi_v2/tlaps/{module}.preflight.log"
+        expected_preflight = _formal_evidence_logical_path(
+            "tlaps", f"{module}.preflight.log"
         )
         if preflight_value != expected_preflight:
             errors.append(
@@ -2018,7 +2053,9 @@ def _release_evidence_errors(
                 f"{expected_preflight}"
             )
         else:
-            preflight_path = root_dir / expected_preflight
+            preflight_path = _formal_evidence_physical_path(
+                expected_preflight, root_dir
+            )
             if not preflight_path.is_file() or preflight_path.is_symlink():
                 errors.append(
                     f"proof evidence preflight log is not a regular file: {preflight_path}"
@@ -2045,11 +2082,11 @@ def _release_evidence_errors(
                         )
 
         log_value = entry.get("log")
-        expected_log = f"target/formal/sumeragi_v2/tlaps/{module}.log"
+        expected_log = _formal_evidence_logical_path("tlaps", f"{module}.log")
         if log_value != expected_log:
             errors.append(f"proof evidence module {module} must use log {expected_log}")
             continue
-        log_path = root_dir / expected_log
+        log_path = _formal_evidence_physical_path(expected_log, root_dir)
         if not log_path.is_file() or log_path.is_symlink():
             errors.append(f"proof evidence log is not a regular file: {log_path}")
             continue

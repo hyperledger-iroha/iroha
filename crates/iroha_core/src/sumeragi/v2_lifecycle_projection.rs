@@ -1,0 +1,3455 @@
+//! Sealed projection from exact runtime-bound adapter effects into lifecycle admission.
+
+use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::Encode;
+use thiserror::Error;
+
+use super::schema::{
+    AdmissionRequest, CandidateAdmission, CausalRoot, DurablePayloadReference,
+    DurableServeNegativeOutcome, InitialLifecycleState, LifecycleContext, LifecycleDigest,
+    LifecycleKey, LifecyclePhase, LifecycleRound, LifecycleStage, LifecycleStageKind,
+    LifecycleWorkClass, OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId, PredecessorScope,
+    ProducerTurnAdmission, TerminalOutcome, WaitSource, producer_turn_key_for_serve,
+};
+use crate::sumeragi::{
+    v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
+    v2_certified_serve_payload_store::{
+        AuthenticatedRecoveredCertifiedServePayload,
+        AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
+        CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
+        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
+        DurableCertifiedServeNegativeReceipt,
+    },
+    v2_core::EquivocationKind,
+    v2_runtime::{PendingRuntimeEffectBinding, RuntimeCandidateSemanticStatement},
+    v2_transport::AuthenticatedCertifiedBodyRequest,
+};
+
+const BLOCK_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:block-subject:v1";
+const EXECUTION_COMMITMENT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:execution-commitment:v1";
+const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
+const CERTIFIED_SERVE_KEY_SUBJECT_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:certified-serve-key-subject:v1";
+const CERTIFIED_FETCH_WAIT_SOURCE_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:certified-fetch-wait-source:v1";
+const DURABLE_VALIDATION_WAIT_SOURCE_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:durable-validation-wait-source:v1";
+const REDUCER_FENCE_WAIT_SOURCE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:reducer-fence:v1";
+const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
+
+/// Fail-closed reason why an exact adapter effect could not become lifecycle admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdapterEffectAdmissionError {
+    /// The runtime sidecar did not exactly bind the supplied concrete effect.
+    UnboundEffect,
+    /// The verified height context and coordinator episode disagree.
+    ForeignContext,
+    /// A bound effect carried internally inconsistent semantic coordinates.
+    InvalidCarrier,
+    /// Store or Validate lost the inherited route-neutral body statement.
+    MissingInheritedStatement,
+    /// Broadcast carried a transport-only auxiliary payload.
+    UnsupportedBroadcastPayload,
+}
+
+/// Fail-closed reason why durable Certified-Serve work could not be admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedServeAdmissionError {
+    /// The verified height context and coordinator episode disagree.
+    ForeignContext,
+    /// The sealed authenticated request lost its exact structural identity.
+    InvalidRequest,
+    /// The post-fsync receipt names another request or certificate.
+    ReceiptMismatch,
+}
+
+/// Failure at the payload-first/ledger-second Certified-Serve admission
+/// boundary.
+#[derive(Debug, Error)]
+pub(crate) enum CertifiedServeAdmissionBoundaryError {
+    /// The exact payload could not be durably published or safely rolled back.
+    #[error(transparent)]
+    PayloadStore(#[from] CertifiedServePayloadStoreError),
+    /// The authenticated request and its durable receipt did not project into
+    /// the active lifecycle episode.
+    #[error("authenticated Certified-Serve projection failed: {0:?}")]
+    Projection(CertifiedServeAdmissionError),
+}
+
+/// Fail-closed reason why a Certified-Serve terminal receipt could not settle
+/// its exact active lifecycle lease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedServeSettlementError {
+    /// The lease has no matching pending Certified-Serve durable material.
+    InvalidLease,
+    /// The post-fsync terminal receipt names another request or certificate.
+    ReceiptMismatch,
+    /// The coordinator rejected or could not durably publish the transition.
+    CoordinatorFault(super::CoordinatorFault),
+}
+
+impl super::LifecycleCoordinator {
+    /// Durably retain and atomically admit one authenticated Certified-Serve
+    /// request.
+    ///
+    /// Payload publication necessarily precedes ledger publication so restart
+    /// can always resolve a durable Serve row. Capacity-fenced requests retain
+    /// one payload owned by their bounded admission-wait entry; conclusive
+    /// rejections synchronously remove the exact pending payload again. A ledger
+    /// durability failure retains the payload as an authenticated crash tail
+    /// for startup reconciliation and latches the coordinator fault.
+    pub(crate) fn persist_and_admit_certified_serve(
+        &mut self,
+        payload_store: &mut CertifiedServePayloadStoreV1,
+        verified: &VerifiedHeightContext,
+        local_signer: &KeyPair,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<super::AdmissionDecision, CertifiedServeAdmissionBoundaryError> {
+        if self.active_context() != lifecycle_context(verified.context()) {
+            return Err(CertifiedServeAdmissionBoundaryError::Projection(
+                CertifiedServeAdmissionError::ForeignContext,
+            ));
+        }
+        if let Some(fault) = self.fault() {
+            return Ok(super::AdmissionDecision::FailClosed(fault));
+        }
+        let publication = payload_store
+            .retain_for_admission_with_verified_retention(verified, local_signer, authenticated)
+            .map_err(CertifiedServeAdmissionBoundaryError::PayloadStore)?;
+        let receipt = publication.receipt();
+        let request = match certified_serve_admission_request(
+            self.active_context(),
+            verified,
+            authenticated,
+            receipt,
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                if !publication.is_pending() {
+                    self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                    return Err(CertifiedServeAdmissionBoundaryError::Projection(error));
+                }
+                if let Err(rollback) = payload_store.rollback_pending(receipt) {
+                    self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                    return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(rollback));
+                }
+                return Err(CertifiedServeAdmissionBoundaryError::Projection(error));
+            }
+        };
+        let AdmissionRequest::Candidate(candidate) = &request else {
+            unreachable!("Certified-Serve projection always yields one candidate")
+        };
+        let candidate_key = candidate.key;
+        if !publication.is_pending() && !self.key_index.contains_key(&candidate.key) {
+            self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(
+                CertifiedServePayloadStoreError::OrphanTerminalPayload,
+            ));
+        }
+        let decision = self.admit(request);
+        if matches!(decision, super::AdmissionDecision::WaitForCapacity(_)) {
+            let attached = self
+                .admission_waits
+                .get_mut(&candidate_key)
+                .is_some_and(|waiting| match waiting.serve_payload_receipt {
+                    Some(existing) => existing == receipt,
+                    None => {
+                        waiting.serve_payload_receipt = Some(receipt);
+                        true
+                    }
+                });
+            if !attached {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Ok(super::AdmissionDecision::FailClosed(
+                    super::CoordinatorFault::DurabilityFailure,
+                ));
+            }
+        }
+        if matches!(
+            decision,
+            super::AdmissionDecision::Rejected(_) | super::AdmissionDecision::NonCandidate
+        ) {
+            if !publication.is_pending() {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(
+                    CertifiedServePayloadStoreError::TerminalConflict,
+                ));
+            }
+            if let Err(error) = payload_store.rollback_pending(receipt) {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(error));
+            }
+        }
+        Ok(decision)
+    }
+
+    /// Settle one Certified-Serve completion only after its exact response
+    /// metadata is durable in the payload store.
+    pub(crate) fn settle_certified_serve_completed(
+        &mut self,
+        lease: super::TurnLease,
+        receipt: DurableCertifiedServeCompletedReceipt,
+    ) -> Result<(), CertifiedServeSettlementError> {
+        self.require_active_serve_lease(&lease)?;
+        let current = self
+            .durable_records
+            .get(&lease.ordinal)
+            .map(|metadata| metadata.payload)
+            .ok_or(CertifiedServeSettlementError::InvalidLease)?;
+        let payload = completed_serve_payload(current, receipt)?;
+        let response = match payload {
+            DurablePayloadReference::CertifiedServeCompleted { response, .. } => response,
+            _ => unreachable!("completed receipt projects a completed payload"),
+        };
+        self.settle_turn_with_durable_serve_payload(
+            lease,
+            super::TurnOutcome::Terminal(TerminalOutcome::Completed(Some(response))),
+            payload,
+        );
+        self.fault()
+            .map(CertifiedServeSettlementError::CoordinatorFault)
+            .map_or(Ok(()), Err)
+    }
+
+    /// Settle one deterministic Certified-Serve failure only after its exact
+    /// negative result is durable in the payload store.
+    pub(crate) fn settle_certified_serve_negative(
+        &mut self,
+        lease: super::TurnLease,
+        receipt: DurableCertifiedServeNegativeReceipt,
+    ) -> Result<(), CertifiedServeSettlementError> {
+        self.require_active_serve_lease(&lease)?;
+        let current = self
+            .durable_records
+            .get(&lease.ordinal)
+            .map(|metadata| metadata.payload)
+            .ok_or(CertifiedServeSettlementError::InvalidLease)?;
+        let payload = negative_serve_payload(current, receipt)?;
+        let outcome = match payload {
+            DurablePayloadReference::CertifiedServeNegative { outcome, .. } => outcome.terminal(),
+            _ => unreachable!("negative receipt projects a negative payload"),
+        };
+        self.settle_turn_with_durable_serve_payload(
+            lease,
+            super::TurnOutcome::Terminal(outcome),
+            payload,
+        );
+        self.fault()
+            .map(CertifiedServeSettlementError::CoordinatorFault)
+            .map_or(Ok(()), Err)
+    }
+
+    fn require_active_serve_lease(
+        &mut self,
+        lease: &super::TurnLease,
+    ) -> Result<(), CertifiedServeSettlementError> {
+        if let Some(fault) = self.fault() {
+            return Err(CertifiedServeSettlementError::CoordinatorFault(fault));
+        }
+        if self.active_lease.as_ref() != Some(lease)
+            || lease.work_class != LifecycleWorkClass::CertifiedServe
+            || !self.records.get(&lease.ordinal).is_some_and(|record| {
+                record.owner == lease.owner
+                    && record.state == super::LifecycleState::Claimed(lease.id)
+            })
+        {
+            self.fault = Some(super::CoordinatorFault::StaleLease);
+            return Err(CertifiedServeSettlementError::InvalidLease);
+        }
+        Ok(())
+    }
+}
+
+fn completed_serve_payload(
+    current: DurablePayloadReference,
+    receipt: DurableCertifiedServeCompletedReceipt,
+) -> Result<DurablePayloadReference, CertifiedServeSettlementError> {
+    let DurablePayloadReference::CertifiedServePending {
+        request,
+        certificate,
+    } = current
+    else {
+        return Err(CertifiedServeSettlementError::InvalidLease);
+    };
+    if request != digest_from_bytes(receipt.id().request_hash().as_ref())
+        || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
+    {
+        return Err(CertifiedServeSettlementError::ReceiptMismatch);
+    }
+    Ok(DurablePayloadReference::CertifiedServeCompleted {
+        request,
+        certificate,
+        response: digest_from_bytes(receipt.response_hash().as_ref()),
+    })
+}
+
+fn negative_serve_payload(
+    current: DurablePayloadReference,
+    receipt: DurableCertifiedServeNegativeReceipt,
+) -> Result<DurablePayloadReference, CertifiedServeSettlementError> {
+    let DurablePayloadReference::CertifiedServePending {
+        request,
+        certificate,
+    } = current
+    else {
+        return Err(CertifiedServeSettlementError::InvalidLease);
+    };
+    if request != digest_from_bytes(receipt.id().request_hash().as_ref())
+        || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
+    {
+        return Err(CertifiedServeSettlementError::ReceiptMismatch);
+    }
+    let outcome = match receipt.outcome() {
+        CertifiedServePayloadNegativeOutcome::Cancelled => DurableServeNegativeOutcome::Cancelled,
+        CertifiedServePayloadNegativeOutcome::Rejected(code) => {
+            DurableServeNegativeOutcome::Rejected(code)
+        }
+        CertifiedServePayloadNegativeOutcome::Failed(code) => {
+            DurableServeNegativeOutcome::Failed(code)
+        }
+    };
+    Ok(DurablePayloadReference::CertifiedServeNegative {
+        request,
+        certificate,
+        outcome,
+    })
+}
+
+/// Complete recovery projection for one authenticated Certified-Serve payload.
+///
+/// The candidate always carries pending admission material. The resolved
+/// payload and optional terminal outcome additionally describe the exact
+/// payload-store cut which may be ahead of the lifecycle ledger.
+pub(super) struct RecoveredCertifiedServeProjection {
+    candidate: CandidateAdmission,
+    resolved_payload: DurablePayloadReference,
+    terminal_outcome: Option<TerminalOutcome>,
+}
+
+impl RecoveredCertifiedServeProjection {
+    /// Consume the sealed projection into coordinator-owned recovery parts.
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        CandidateAdmission,
+        DurablePayloadReference,
+        Option<TerminalOutcome>,
+    ) {
+        (self.candidate, self.resolved_payload, self.terminal_outcome)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProjectedShape {
+    key: LifecycleKey,
+    work_class: LifecycleWorkClass,
+    stage_kind: LifecycleStageKind,
+}
+
+/// Project one authenticated, durably retained request into an atomic
+/// Certified-Serve/ProducerTurn admission.
+///
+/// # Errors
+///
+/// Returns an error when the verified episode is foreign, the signed request
+/// is structurally inconsistent, or the post-fsync receipt names different
+/// request or certificate bytes.
+pub(super) fn certified_serve_admission_request(
+    active_context: LifecycleContext,
+    verified: &VerifiedHeightContext,
+    authenticated: &AuthenticatedCertifiedBodyRequest,
+    receipt: DurableCertifiedServeAdmissionReceipt,
+) -> Result<AdmissionRequest, CertifiedServeAdmissionError> {
+    let context = verified.context();
+    if lifecycle_context(context) != active_context {
+        return Err(CertifiedServeAdmissionError::ForeignContext);
+    }
+    authenticated
+        .request()
+        .validate(context)
+        .map_err(|_| CertifiedServeAdmissionError::InvalidRequest)?;
+    let request_hash = authenticated.request_hash();
+    if receipt.id().request_hash() != request_hash
+        || receipt.certificate_hash() != HashOf::new(&authenticated.request().certificate)
+    {
+        return Err(CertifiedServeAdmissionError::ReceiptMismatch);
+    }
+    certified_serve_candidate(active_context, authenticated, receipt.payload_hash())
+        .map(AdmissionRequest::Candidate)
+}
+
+/// Reconstruct one authenticated payload-store record into its exact
+/// admission candidate, resolved durable payload, and optional terminal cut.
+///
+/// # Errors
+///
+/// Returns an error when the authenticated record no longer projects into the
+/// active lifecycle context or its request/certificate coordinates drifted.
+pub(super) fn recovered_certified_serve_projection(
+    active_context: LifecycleContext,
+    recovered: &AuthenticatedRecoveredCertifiedServePayload,
+) -> Result<RecoveredCertifiedServeProjection, CertifiedServeAdmissionError> {
+    let authenticated = recovered.request();
+    let candidate =
+        certified_serve_candidate(active_context, authenticated, recovered.payload_hash())?;
+    let request = digest_from_bytes(authenticated.request_hash().as_ref());
+    let certificate = digest_from_bytes(recovered.certificate_hash().as_ref());
+    let (resolved_payload, terminal_outcome) = match recovered.state() {
+        AuthenticatedRecoveredCertifiedServePayloadState::Pending => (
+            DurablePayloadReference::CertifiedServePending {
+                request,
+                certificate,
+            },
+            None,
+        ),
+        AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) => {
+            let response = digest_from_bytes(HashOf::new(completed.response()).as_ref());
+            (
+                DurablePayloadReference::CertifiedServeCompleted {
+                    request,
+                    certificate,
+                    response,
+                },
+                Some(TerminalOutcome::Completed(Some(response))),
+            )
+        }
+        AuthenticatedRecoveredCertifiedServePayloadState::Negative(outcome) => {
+            let (outcome, terminal) = match outcome {
+                CertifiedServePayloadNegativeOutcome::Cancelled => (
+                    DurableServeNegativeOutcome::Cancelled,
+                    TerminalOutcome::Cancelled,
+                ),
+                CertifiedServePayloadNegativeOutcome::Rejected(code) => (
+                    DurableServeNegativeOutcome::Rejected(*code),
+                    TerminalOutcome::Rejected(*code),
+                ),
+                CertifiedServePayloadNegativeOutcome::Failed(code) => (
+                    DurableServeNegativeOutcome::Failed(*code),
+                    TerminalOutcome::Failed(*code),
+                ),
+            };
+            (
+                DurablePayloadReference::CertifiedServeNegative {
+                    request,
+                    certificate,
+                    outcome,
+                },
+                Some(terminal),
+            )
+        }
+    };
+    Ok(RecoveredCertifiedServeProjection {
+        candidate,
+        resolved_payload,
+        terminal_outcome,
+    })
+}
+
+fn certified_serve_candidate(
+    active_context: LifecycleContext,
+    authenticated: &AuthenticatedCertifiedBodyRequest,
+    durable_payload_hash: Hash,
+) -> Result<CandidateAdmission, CertifiedServeAdmissionError> {
+    let request = authenticated.request();
+    let request_hash = authenticated.request_hash();
+    let certificate = &request.certificate;
+    if request_hash != HashOf::new(request)
+        || digest_from_bytes(request.round.context_id.0.as_ref()) != active_context.id()
+        || request.round.height != active_context.height()
+        || certificate.round.context_id != request.round.context_id
+        || certificate.round.height != request.round.height
+        || certificate.proposal_round != request.round
+        || certificate.subject != request.subject
+    {
+        return Err(CertifiedServeAdmissionError::InvalidRequest);
+    }
+
+    let reconstruction_source = digest_from_bytes(request_hash.as_ref());
+    let certificate_digest = digest_from_bytes(HashOf::new(certificate).as_ref());
+    let key_subject = certified_serve_key_subject(request.subject, request_hash);
+    let commitment = Some(execution_commitment(certificate.execution_commitment));
+    let context = active_context.id();
+    let round = LifecycleRound::new(certificate.round.height, certificate.round.view);
+    let proposal_round = Some(LifecycleRound::new(
+        request.round.height,
+        request.round.view,
+    ));
+    let serve_key = LifecycleKey::new(
+        context,
+        round,
+        proposal_round,
+        Some(key_subject),
+        LifecyclePhase::Serve,
+        commitment,
+    );
+    let producer_key = producer_turn_key_for_serve(serve_key)
+        .expect("Certified-Serve key deterministically yields one producer key");
+
+    let serve_slot =
+        PhysicalSlotId::for_capacity(LifecycleWorkClass::CertifiedServe.capacity_class(), 0);
+    let producer_slot =
+        PhysicalSlotId::for_capacity(LifecycleWorkClass::ProducerTurn.capacity_class(), 0);
+    let producer_digest = domain_digest(PRODUCER_TURN_PHYSICAL_DOMAIN, request_hash.as_ref());
+    let producer_turn = ProducerTurnAdmission::new(
+        producer_key,
+        LifecycleStage::new(
+            LifecycleStageKind::ProducerTurn,
+            PredecessorScope::ProducerHandoffBarrier,
+        ),
+        reconstruction_source,
+        PhysicalGeometry::new(
+            [PhysicalSlot::new(producer_slot, producer_digest)],
+            [producer_slot],
+        ),
+    );
+    Ok(CandidateAdmission::new(
+        serve_key,
+        CausalRoot::new(reconstruction_source),
+        LifecycleWorkClass::CertifiedServe,
+        LifecycleStage::new(
+            LifecycleStageKind::CertifiedServe,
+            PredecessorScope::ReadyOrdinalPrefix,
+        ),
+        InitialLifecycleState::Ready,
+        reconstruction_source,
+        DurablePayloadReference::certified_serve_pending(reconstruction_source, certificate_digest),
+        PhysicalGeometry::new(
+            [PhysicalSlot::new(
+                serve_slot,
+                digest_from_hash(&durable_payload_hash),
+            )],
+            [serve_slot],
+        ),
+        Some(producer_turn),
+    ))
+}
+
+pub(super) fn admission_request(
+    active_context: LifecycleContext,
+    verified: &VerifiedHeightContext,
+    effect: &AdapterEffect,
+    binding: &PendingRuntimeEffectBinding,
+) -> Result<AdmissionRequest, AdapterEffectAdmissionError> {
+    if !binding.exactly_binds_adapter_effect(effect) {
+        return Err(AdapterEffectAdmissionError::UnboundEffect);
+    }
+    let context = verified.context();
+    if lifecycle_context(context) != active_context {
+        return Err(AdapterEffectAdmissionError::ForeignContext);
+    }
+    let shape = project_shape(context, effect, binding.candidate_statement())?;
+    if shape.key.context() != active_context.id()
+        || shape.key.round().height() != active_context.height()
+        || shape
+            .key
+            .proposal_round()
+            .is_some_and(|round| round.height() != active_context.height())
+    {
+        return Err(AdapterEffectAdmissionError::ForeignContext);
+    }
+
+    let causal_root = pending_effect_causal_root(binding);
+    let causal_digest = causal_root.digest();
+    let physical_digest = digest_from_hash(binding.exact_effect_identity());
+    let slot_id = PhysicalSlotId::for_capacity(shape.work_class.capacity_class(), 0);
+    let candidate = CandidateAdmission::new(
+        shape.key,
+        causal_root,
+        shape.work_class,
+        LifecycleStage::new(shape.stage_kind, PredecessorScope::Independent),
+        InitialLifecycleState::Ready,
+        causal_digest,
+        DurablePayloadReference::None,
+        PhysicalGeometry::new([PhysicalSlot::new(slot_id, physical_digest)], [slot_id]),
+        None,
+    );
+    Ok(AdmissionRequest::Candidate(candidate))
+}
+
+fn project_shape(
+    context: &wire::HeightContext,
+    effect: &AdapterEffect,
+    inherited: Option<RuntimeCandidateSemanticStatement>,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    match effect {
+        AdapterEffect::Sign { tag, request } => project_sign(context, *tag, request),
+        AdapterEffect::Broadcast(message) => project_broadcast(context, message),
+        AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest,
+            certified_sources,
+            certificate,
+        } => project_fetch(
+            context,
+            *tag,
+            *round,
+            *subject,
+            manifest.as_ref(),
+            certified_sources,
+            certificate.as_ref(),
+        ),
+        AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } => project_inherited_body_stage(
+            context,
+            *tag,
+            *round,
+            *subject,
+            inherited,
+            LifecyclePhase::Store,
+            LifecycleWorkClass::Store,
+            LifecycleStageKind::StoreBody,
+        ),
+        AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } => project_inherited_body_stage(
+            context,
+            *tag,
+            *round,
+            *subject,
+            inherited,
+            LifecyclePhase::Validate,
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+        ),
+        AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } => project_apply(context, *tag, *subject, certificate),
+        AdapterEffect::EnterView {
+            tag,
+            certificate,
+            protected_lock,
+        } => project_enter_view(context, *tag, certificate, protected_lock.as_ref()),
+        AdapterEffect::ReportEquivocation { evidence } => {
+            evidence
+                .validate_structure(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            let round = evidence.round();
+            validate_round(context, round)?;
+            let (phase, stage_kind) = match evidence.kind() {
+                EquivocationKind::Proposal => (
+                    LifecyclePhase::DiagnosticProposalEquivocation,
+                    LifecycleStageKind::ReportProposalEquivocation,
+                ),
+                EquivocationKind::Vote => (
+                    LifecyclePhase::DiagnosticVoteEquivocation,
+                    LifecycleStageKind::ReportVoteEquivocation,
+                ),
+                EquivocationKind::Timeout => (
+                    LifecyclePhase::DiagnosticTimeoutEquivocation,
+                    LifecycleStageKind::ReportTimeoutEquivocation,
+                ),
+            };
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    round,
+                    None,
+                    Some(equivocation_subject(evidence)),
+                    phase,
+                    None,
+                ),
+                work_class: LifecycleWorkClass::EquivocationReport,
+                stage_kind,
+            })
+        }
+        AdapterEffect::ReportInvalidCertifiedBody {
+            subject,
+            certificate,
+        } => {
+            certificate
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            if certificate.phase != wire::GlobalPhase::Prepare || certificate.subject != *subject {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    certificate.round,
+                    Some(certificate.proposal_round),
+                    Some(block_subject(*subject)),
+                    LifecyclePhase::DiagnosticInvalidBody,
+                    Some(execution_commitment(certificate.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::InvalidBodyReport,
+                stage_kind: LifecycleStageKind::ReportInvalidBody,
+            })
+        }
+    }
+}
+
+fn project_sign(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    request: &SignRequest,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    match request {
+        SignRequest::Proposal(proposal) => {
+            if !proposal.signature.is_empty() {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            let mut structural = proposal.clone();
+            structural.signature.push(1);
+            structural
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            validate_tag_for_round(context, tag, proposal.round)?;
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    proposal.round,
+                    Some(proposal.round),
+                    Some(block_subject(proposal.subject)),
+                    LifecyclePhase::Proposal,
+                    None,
+                ),
+                work_class: LifecycleWorkClass::SignProposal,
+                stage_kind: LifecycleStageKind::SignProposal,
+            })
+        }
+        SignRequest::Vote(vote) => {
+            if !vote.signature.is_empty() {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            let mut structural = vote.clone();
+            structural.signature.push(1);
+            structural
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            validate_tag_for_round(context, tag, vote.round)?;
+            let (phase, stage_kind) = match vote.phase {
+                wire::GlobalPhase::Prepare => {
+                    (LifecyclePhase::Prepare, LifecycleStageKind::SignPrepareVote)
+                }
+                wire::GlobalPhase::Commit => {
+                    (LifecyclePhase::Commit, LifecycleStageKind::SignCommitVote)
+                }
+            };
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    vote.round,
+                    Some(vote.proposal_round),
+                    Some(block_subject(vote.subject)),
+                    phase,
+                    Some(execution_commitment(vote.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::SignVote,
+                stage_kind,
+            })
+        }
+        SignRequest::TimeoutVote(vote) => {
+            if !vote.signature.is_empty() {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            let mut structural = vote.clone();
+            structural.signature.push(1);
+            structural
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            validate_tag_for_round(context, tag, vote.round)?;
+            let highest = vote.highest_prepare_qc.as_ref();
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    vote.round,
+                    highest.map(|qc| qc.proposal_round),
+                    highest.map(|qc| block_subject(qc.subject)),
+                    LifecyclePhase::Timeout,
+                    highest.map(|qc| execution_commitment(qc.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::SignTimeout,
+                stage_kind: LifecycleStageKind::SignTimeoutVote,
+            })
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_fetch(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    manifest: Option<&wire::PayloadManifest>,
+    certified_sources: &[iroha_data_model::peer::PeerId],
+    certificate: Option<&wire::QuorumCertificate>,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    validate_tag_for_round(context, tag, round)?;
+    if let Some(manifest) = manifest {
+        manifest
+            .validate(context)
+            .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+        if manifest.round != round || manifest.subject != subject {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+    }
+    let (key_round, proposal_round, authority) = match certificate {
+        None => {
+            if manifest.is_none() || !certified_sources.is_empty() {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            (round, round, None)
+        }
+        Some(certificate) => {
+            certificate
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            if certificate.proposal_round != round
+                || certificate.subject != subject
+                || !certified_sources
+                    .iter()
+                    .eq(context.roster.iter().map(|entry| &entry.validator))
+            {
+                return Err(AdapterEffectAdmissionError::InvalidCarrier);
+            }
+            (
+                certificate.round,
+                certificate.proposal_round,
+                Some((certificate.phase, certificate.execution_commitment)),
+            )
+        }
+    };
+    let key = match authority {
+        None => lifecycle_key(
+            context,
+            key_round,
+            Some(proposal_round),
+            Some(block_subject(subject)),
+            LifecyclePhase::Fetch,
+            None,
+        ),
+        Some((phase, commitment)) => certified_fetch_lifecycle_key(
+            lifecycle_context(context),
+            key_round,
+            proposal_round,
+            subject,
+            phase,
+            commitment,
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?,
+    };
+    Ok(ProjectedShape {
+        key,
+        work_class: LifecycleWorkClass::Fetch,
+        stage_kind: LifecycleStageKind::FetchBody,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_inherited_body_stage(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    effect_round: wire::ConsensusRound,
+    effect_subject: wire::BlockSubject,
+    inherited: Option<RuntimeCandidateSemanticStatement>,
+    phase: LifecyclePhase,
+    work_class: LifecycleWorkClass,
+    stage_kind: LifecycleStageKind,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    let inherited = inherited.ok_or(AdapterEffectAdmissionError::MissingInheritedStatement)?;
+    validate_round(context, inherited.round())?;
+    validate_round(context, inherited.proposal_round())?;
+    if inherited.context_id() != context.id()
+        || inherited.proposal_round() != effect_round
+        || inherited.subject() != Some(effect_subject)
+        || inherited.phase().is_some() != inherited.execution_commitment().is_some()
+        || !matches!(
+            inherited.phase(),
+            None | Some(wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)
+        )
+    {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    validate_tag_for_round(context, tag, inherited.round())?;
+    Ok(ProjectedShape {
+        key: lifecycle_key(
+            context,
+            inherited.round(),
+            Some(inherited.proposal_round()),
+            Some(block_subject(effect_subject)),
+            phase,
+            inherited.execution_commitment().map(execution_commitment),
+        ),
+        work_class,
+        stage_kind,
+    })
+}
+
+fn project_apply(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    subject: wire::BlockSubject,
+    certificate: &wire::QuorumCertificate,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    certificate
+        .validate(context)
+        .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+    if certificate.phase != wire::GlobalPhase::Commit || certificate.subject != subject {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    validate_tag_for_round(context, tag, certificate.round)?;
+    Ok(ProjectedShape {
+        key: lifecycle_key(
+            context,
+            certificate.round,
+            Some(certificate.proposal_round),
+            Some(block_subject(subject)),
+            LifecyclePhase::Apply,
+            Some(execution_commitment(certificate.execution_commitment)),
+        ),
+        work_class: LifecycleWorkClass::Apply,
+        stage_kind: LifecycleStageKind::ApplyDecision,
+    })
+}
+
+fn project_broadcast(
+    context: &wire::HeightContext,
+    message: &wire::ConsensusMessageV2,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    message
+        .validate_version()
+        .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+    match &message.payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+            proposal
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    proposal.round,
+                    Some(proposal.round),
+                    Some(block_subject(proposal.subject)),
+                    LifecyclePhase::BroadcastProposal,
+                    None,
+                ),
+                work_class: LifecycleWorkClass::Broadcast,
+                stage_kind: LifecycleStageKind::BroadcastProposal,
+            })
+        }
+        wire::ConsensusMessageV2Payload::Vote(vote) => {
+            vote.validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            let (phase, stage_kind) = match vote.phase {
+                wire::GlobalPhase::Prepare => (
+                    LifecyclePhase::BroadcastPrepareVote,
+                    LifecycleStageKind::BroadcastPrepareVote,
+                ),
+                wire::GlobalPhase::Commit => (
+                    LifecyclePhase::BroadcastCommitVote,
+                    LifecycleStageKind::BroadcastCommitVote,
+                ),
+            };
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    vote.round,
+                    Some(vote.proposal_round),
+                    Some(block_subject(vote.subject)),
+                    phase,
+                    Some(execution_commitment(vote.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::Broadcast,
+                stage_kind,
+            })
+        }
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+            certificate
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            let (phase, stage_kind) = match certificate.phase {
+                wire::GlobalPhase::Prepare => (
+                    LifecyclePhase::BroadcastPrepareQc,
+                    LifecycleStageKind::BroadcastPrepareQc,
+                ),
+                wire::GlobalPhase::Commit => (
+                    LifecyclePhase::BroadcastCommitQc,
+                    LifecycleStageKind::BroadcastCommitQc,
+                ),
+            };
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    certificate.round,
+                    Some(certificate.proposal_round),
+                    Some(block_subject(certificate.subject)),
+                    phase,
+                    Some(execution_commitment(certificate.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::Broadcast,
+                stage_kind,
+            })
+        }
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
+            vote.validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            let highest = vote.highest_prepare_qc.as_ref();
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    vote.round,
+                    highest.map(|qc| qc.proposal_round),
+                    highest.map(|qc| block_subject(qc.subject)),
+                    LifecyclePhase::BroadcastTimeoutVote,
+                    highest.map(|qc| execution_commitment(qc.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::Broadcast,
+                stage_kind: LifecycleStageKind::BroadcastTimeoutVote,
+            })
+        }
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
+            certificate
+                .validate(context)
+                .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+            let highest = certificate.highest_prepare_qc();
+            Ok(ProjectedShape {
+                key: lifecycle_key(
+                    context,
+                    certificate.round,
+                    highest.map(|qc| qc.proposal_round),
+                    highest.map(|qc| block_subject(qc.subject)),
+                    LifecyclePhase::BroadcastTc,
+                    highest.map(|qc| execution_commitment(qc.execution_commitment)),
+                ),
+                work_class: LifecycleWorkClass::Broadcast,
+                stage_kind: LifecycleStageKind::BroadcastTc,
+            })
+        }
+        wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            Err(AdapterEffectAdmissionError::UnsupportedBroadcastPayload)
+        }
+    }
+}
+
+fn project_enter_view(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    certificate: &wire::TimeoutCertificate,
+    protected_lock: Option<&wire::QuorumCertificate>,
+) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
+    certificate
+        .validate(context)
+        .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+    if tag.height() != context.height
+        || certificate.round.context_id != context.id()
+        || certificate.round.height != context.height
+        || certificate.round.view.checked_add(1) != Some(tag.view())
+    {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    if let Some(protected) = protected_lock {
+        protected
+            .validate(context)
+            .map_err(|_| AdapterEffectAdmissionError::InvalidCarrier)?;
+        if protected.phase != wire::GlobalPhase::Prepare
+            || protected.proposal_round.context_id != context.id()
+            || protected.proposal_round.height != context.height
+            || protected.proposal_round.view >= tag.view()
+        {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+    }
+    if let Some(highest) = certificate.highest_prepare_qc() {
+        let Some(protected) = protected_lock else {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        };
+        if protected.round.view < highest.round.view
+            || (protected.round.view == highest.round.view
+                && (protected.round != highest.round
+                    || protected.proposal_round != highest.proposal_round
+                    || protected.phase != highest.phase
+                    || protected.subject != highest.subject
+                    || protected.execution_commitment != highest.execution_commitment))
+        {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+    }
+    let execution_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: tag.view(),
+    };
+    Ok(ProjectedShape {
+        key: lifecycle_key(
+            context,
+            execution_round,
+            protected_lock.map(|lock| lock.proposal_round),
+            protected_lock.map(|lock| block_subject(lock.subject)),
+            LifecyclePhase::EnterView,
+            protected_lock.map(|lock| execution_commitment(lock.execution_commitment)),
+        ),
+        work_class: LifecycleWorkClass::EnterView,
+        stage_kind: LifecycleStageKind::EnterView,
+    })
+}
+
+fn validate_tag_for_round(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    round: wire::ConsensusRound,
+) -> Result<(), AdapterEffectAdmissionError> {
+    validate_round(context, round)?;
+    if tag.height() != context.height || tag.view() < round.view {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    Ok(())
+}
+
+fn validate_round(
+    context: &wire::HeightContext,
+    round: wire::ConsensusRound,
+) -> Result<(), AdapterEffectAdmissionError> {
+    if round.context_id != context.id() || round.height != context.height {
+        return Err(AdapterEffectAdmissionError::ForeignContext);
+    }
+    Ok(())
+}
+
+fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
+    LifecycleContext::new(digest_from_bytes(context.id().0.as_ref()), context.height)
+}
+
+fn lifecycle_key(
+    context: &wire::HeightContext,
+    round: wire::ConsensusRound,
+    proposal_round: Option<wire::ConsensusRound>,
+    subject: Option<LifecycleDigest>,
+    phase: LifecyclePhase,
+    execution_commitment: Option<LifecycleDigest>,
+) -> LifecycleKey {
+    LifecycleKey::new(
+        digest_from_bytes(context.id().0.as_ref()),
+        LifecycleRound::new(round.height, round.view),
+        proposal_round.map(|round| LifecycleRound::new(round.height, round.view)),
+        subject,
+        phase,
+        execution_commitment,
+    )
+}
+
+fn block_subject(subject: wire::BlockSubject) -> LifecycleDigest {
+    domain_digest(BLOCK_SUBJECT_DOMAIN, &subject.encode())
+}
+
+fn execution_commitment(commitment: wire::ExecutionCommitment) -> LifecycleDigest {
+    domain_digest(EXECUTION_COMMITMENT_DOMAIN, &commitment.encode())
+}
+
+/// Derive the logical key shared by certified-Fetch admission and its
+/// authenticated late response. Ordinary, uncertified Fetch work is excluded:
+/// this helper requires explicit certificate phase and commitment authority.
+pub(super) fn certified_fetch_lifecycle_key(
+    active_context: LifecycleContext,
+    round: wire::ConsensusRound,
+    proposal_round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    authority_phase: wire::GlobalPhase,
+    commitment: wire::ExecutionCommitment,
+) -> Option<LifecycleKey> {
+    let round_context = digest_from_bytes(round.context_id.0.as_ref());
+    let proposal_context = digest_from_bytes(proposal_round.context_id.0.as_ref());
+    if round_context != active_context.id()
+        || proposal_context != active_context.id()
+        || round.height != active_context.height()
+        || proposal_round.height != active_context.height()
+    {
+        return None;
+    }
+    match authority_phase {
+        wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit => {}
+    }
+    Some(LifecycleKey::new(
+        active_context.id(),
+        LifecycleRound::new(round.height, round.view),
+        Some(LifecycleRound::new(
+            proposal_round.height,
+            proposal_round.view,
+        )),
+        Some(block_subject(subject)),
+        LifecyclePhase::Fetch,
+        Some(execution_commitment(commitment)),
+    ))
+}
+
+/// Derive the unique external generation source for one exact signed
+/// certified-body request. Future Fetch settlement and response wake
+/// publication must share this function.
+pub(super) fn certified_fetch_wait_source(
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+) -> WaitSource {
+    WaitSource::External(domain_digest(
+        CERTIFIED_FETCH_WAIT_SOURCE_DOMAIN,
+        request_hash.as_ref(),
+    ))
+}
+
+/// Derive the unique external generation source for one exact closed durable
+/// Validate carrier.
+///
+/// This raw projection remains sealed inside the lifecycle module. Its sole
+/// caller is the borrow-bound concrete-registry preflight, which supplies the
+/// coordinator-minted address, revalidated pending-binding coordinates, exact
+/// durable frame hash, independently transferred expected manifest hash, and
+/// the immutable lifecycle key/stage accepted before async detachment.
+/// Including the inherited statement prevents an in-flight Prepare/Commit
+/// authority refinement from sharing wake authority with the old carrier.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn durable_validation_wait_source(
+    owner: OwnerId,
+    ordinal: u128,
+    slot: PhysicalSlotId,
+    incumbent_digest: LifecycleDigest,
+    causal_lifecycle_key: &Hash,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    durable_frame_hash: &Hash,
+    expected_manifest_hash: HashOf<wire::PayloadManifest>,
+    lifecycle_key: LifecycleKey,
+    lifecycle_stage: LifecycleStage,
+) -> WaitSource {
+    let mut encoded = Vec::new();
+    append_field(&mut encoded, owner.causal_root().digest().as_bytes());
+    append_field(&mut encoded, &owner.first_admission_ordinal().to_le_bytes());
+    append_field(&mut encoded, &ordinal.to_le_bytes());
+    append_field(&mut encoded, &slot.0.to_le_bytes());
+    append_field(&mut encoded, &slot.1.to_le_bytes());
+    append_field(&mut encoded, incumbent_digest.as_bytes());
+    append_field(&mut encoded, causal_lifecycle_key.as_ref());
+    append_field(&mut encoded, durable_frame_hash.as_ref());
+    append_field(&mut encoded, expected_manifest_hash.as_ref());
+    append_field(&mut encoded, lifecycle_key.context().as_bytes());
+    append_field(&mut encoded, &lifecycle_key.round().height().to_le_bytes());
+    append_field(&mut encoded, &lifecycle_key.round().view().to_le_bytes());
+    match lifecycle_key.proposal_round() {
+        None => encoded.push(0),
+        Some(round) => {
+            encoded.push(1);
+            append_field(&mut encoded, &round.height().to_le_bytes());
+            append_field(&mut encoded, &round.view().to_le_bytes());
+        }
+    }
+    match lifecycle_key.subject() {
+        None => encoded.push(0),
+        Some(subject) => {
+            encoded.push(1);
+            append_field(&mut encoded, subject.as_bytes());
+        }
+    }
+    encoded.push(
+        u8::try_from(
+            LifecyclePhase::ALL
+                .iter()
+                .position(|phase| *phase == lifecycle_key.phase())
+                .expect("closed lifecycle phase is present in its canonical inventory"),
+        )
+        .expect("closed lifecycle phase inventory fits u8"),
+    );
+    match lifecycle_key.execution_commitment() {
+        None => encoded.push(0),
+        Some(commitment) => {
+            encoded.push(1);
+            append_field(&mut encoded, commitment.as_bytes());
+        }
+    }
+    encoded.push(
+        u8::try_from(
+            LifecycleStageKind::ALL
+                .iter()
+                .position(|kind| *kind == lifecycle_stage.kind())
+                .expect("closed lifecycle stage is present in its canonical inventory"),
+        )
+        .expect("closed lifecycle stage inventory fits u8"),
+    );
+    encoded.push(match lifecycle_stage.predecessor_scope() {
+        PredecessorScope::Independent => 0,
+        PredecessorScope::ReadyOrdinalPrefix => 1,
+        PredecessorScope::ProducerHandoffBarrier => 2,
+    });
+    match candidate_statement {
+        None => encoded.push(0),
+        Some(statement) => {
+            encoded.push(1);
+            append_field(&mut encoded, &statement.context_id().encode());
+            append_field(&mut encoded, &statement.round().encode());
+            append_field(&mut encoded, &statement.proposal_round().encode());
+            append_field(&mut encoded, &statement.subject().encode());
+            append_field(&mut encoded, &statement.phase().encode());
+            append_field(&mut encoded, &statement.execution_commitment().encode());
+        }
+    }
+    WaitSource::External(domain_digest(
+        DURABLE_VALIDATION_WAIT_SOURCE_DOMAIN,
+        &encoded,
+    ))
+}
+
+/// Derive the one context-scoped external generation source which wakes direct
+/// completions after the adapter's reducer fence changes.
+///
+/// The generation itself remains process-local and is sampled from the same
+/// borrow-bound adapter token. Including both authenticated context identity
+/// and height makes accidental cross-height context reuse fail closed.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource {
+    let encoded = (*context.id().as_bytes(), context.height()).encode();
+    WaitSource::External(domain_digest(REDUCER_FENCE_WAIT_SOURCE_DOMAIN, &encoded))
+}
+
+/// Recover the coordinator's semantic owner root from one sealed pending
+/// runtime-effect binding.
+pub(super) fn pending_effect_causal_root(binding: &PendingRuntimeEffectBinding) -> CausalRoot {
+    CausalRoot::new(digest_from_hash(binding.causal_lifecycle_key()))
+}
+
+/// Build the six-field Serve-key subject from the certified block and exact
+/// signed request. The request hash is deliberately part of the semantic key:
+/// the durable ledger stores one terminal response per record, and responses
+/// are valid only for their exact request hash. Two requesters for one body
+/// therefore cannot alias one singular cached response lifecycle.
+fn certified_serve_key_subject(
+    subject: wire::BlockSubject,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+) -> LifecycleDigest {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(CERTIFIED_SERVE_KEY_SUBJECT_DOMAIN);
+    append_field(&mut projection, &subject.encode());
+    append_field(&mut projection, request_hash.as_ref());
+    digest_from_hash(&Hash::new(projection))
+}
+
+fn equivocation_subject(
+    evidence: &crate::sumeragi::v2::AdapterEquivocationEvidence,
+) -> LifecycleDigest {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(EQUIVOCATION_SUBJECT_DOMAIN);
+    projection.push(match evidence.kind() {
+        EquivocationKind::Proposal => 1,
+        EquivocationKind::Vote => 2,
+        EquivocationKind::Timeout => 3,
+    });
+    projection.extend_from_slice(&evidence.offender_index().to_le_bytes());
+    let (first, second) = evidence.canonical_unsigned_statement_pair();
+    append_field(&mut projection, &first);
+    append_field(&mut projection, &second);
+    digest_from_hash(&Hash::new(projection))
+}
+
+fn domain_digest(domain: &[u8], encoded: &[u8]) -> LifecycleDigest {
+    let mut projection = Vec::with_capacity(domain.len() + 8 + encoded.len());
+    projection.extend_from_slice(domain);
+    append_field(&mut projection, encoded);
+    digest_from_hash(&Hash::new(projection))
+}
+
+fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
+    projection.extend_from_slice(
+        &u64::try_from(field.len())
+            .expect("bounded lifecycle projection field fits u64")
+            .to_le_bytes(),
+    );
+    projection.extend_from_slice(field);
+}
+
+fn digest_from_hash(hash: &Hash) -> LifecycleDigest {
+    digest_from_bytes(hash.as_ref())
+}
+
+fn digest_from_bytes(hash: &[u8]) -> LifecycleDigest {
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(hash);
+    LifecycleDigest::new(bytes)
+}
+
+#[cfg(test)]
+mod wait_source_tests {
+    use super::*;
+
+    #[test]
+    fn reducer_fence_source_is_context_and_height_scoped() {
+        let first = LifecycleContext::new(LifecycleDigest::new([0xA1; 32]), 7);
+        let other_context = LifecycleContext::new(LifecycleDigest::new([0xA2; 32]), 7);
+        let other_height = LifecycleContext::new(first.id(), 8);
+
+        let source = reducer_fence_wait_source(first);
+        assert!(matches!(source, WaitSource::External(_)));
+        assert_eq!(source, reducer_fence_wait_source(first));
+        assert_ne!(source, reducer_fence_wait_source(other_context));
+        assert_ne!(source, reducer_fence_wait_source(other_height));
+    }
+}
+
+#[cfg(all(test, feature = "bls"))]
+mod tests {
+    use std::{collections::BTreeSet, num::NonZeroU64};
+
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature, SignedBlock},
+        peer::PeerId,
+    };
+    use tempfile::TempDir;
+
+    use super::super::{
+        AdmissionDecision, AdmissionRejection, AuthenticatedLifecycleRecoveryCut,
+        LifecycleCoordinator, LifecycleState, RetryAction, RolloverSnapshot, SchedulerInputs,
+        SchedulerReadyInputs, TurnPlan, WaitSource,
+        schema::{CapacityClass, CapacityGeometry},
+    };
+    use super::*;
+    use crate::sumeragi::{
+        v2::AdapterEquivocationEvidence,
+        v2_body_store::V2BodyStore,
+        v2_certified_serve_payload_store::{
+            AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadNegativeOutcome,
+            CertifiedServePayloadStoreV1,
+        },
+        v2_chunks::encode_payload,
+        v2_core::{EventTag, Generation},
+        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
+        v2_transport::authenticate_certified_body_request,
+    };
+
+    struct Fixture {
+        verified: VerifiedHeightContext,
+        keys: Vec<KeyPair>,
+        context: wire::HeightContext,
+        round: wire::ConsensusRound,
+        tag: EventTag,
+        body: Vec<u8>,
+        encoded_chunks: Vec<Vec<u8>>,
+        subject: wire::BlockSubject,
+        manifest: wire::PayloadManifest,
+        proposal: wire::Proposal,
+        prepare_vote: wire::Vote,
+        commit_vote: wire::Vote,
+        prepare_qc: wire::QuorumCertificate,
+        commit_qc: wire::QuorumCertificate,
+        timeout_vote: wire::TimeoutVote,
+        timeout_certificate: wire::TimeoutCertificate,
+    }
+
+    type ExpectedProjection = (
+        AdapterEffect,
+        LifecycleWorkClass,
+        LifecyclePhase,
+        LifecycleStageKind,
+    );
+
+    impl Fixture {
+        #[allow(clippy::too_many_lines)]
+        fn new() -> Self {
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic lifecycle-projection BLS key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let proofs = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("fixture BLS proof of possession")
+                })
+                .collect::<Vec<_>>();
+            let roster = keys
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let context = wire::HeightContext {
+                chain_id: "sumeragi-v2-lifecycle-projection-test".into(),
+                protocol_version: wire::PROTOCOL_VERSION,
+                height: 1,
+                epoch: 1,
+                epoch_end_height: 100,
+                next_epoch_snapshot: None,
+                mode: wire::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: None,
+                quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"lifecycle projection nexus context"),
+                execution_policy_hash: Hash::new(b"lifecycle projection execution policy"),
+                da_layout: wire::DataAvailabilityLayout {
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
+                    chunk_size_bytes: 1024,
+                    data_shards: 1,
+                    parity_shards: 1,
+                    max_payload_size_bytes: 512 * 1024,
+                    max_chunk_count: 1024,
+                },
+                leader_seed: [0xA7; 32],
+            };
+            let verified = VerifiedHeightContext::genesis(context.clone(), proofs)
+                .expect("verified lifecycle-projection context");
+            let round = wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 0,
+            };
+            let tag = EventTag::new(context.height, round.view, Generation::new(1));
+            let body = vec![0x41; 4];
+            let subject = block_subject_for_body(&body, 0x41);
+            let encoded_chunks =
+                wire::encode_payload_chunks(context.da_layout, &body).expect("encode fixture body");
+            let manifest = wire::PayloadManifest::derive(
+                &context,
+                round,
+                subject,
+                u64::try_from(body.len()).expect("small fixture body"),
+                &encoded_chunks,
+            )
+            .expect("derive fixture manifest");
+            let proposal = wire::Proposal {
+                round,
+                proposer: context.leader(round.view),
+                subject,
+                manifest: manifest.clone(),
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: vec![0x41],
+            };
+            let commitment = execution_commitment_for(0x41);
+            let prepare_vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment: commitment,
+                signer: 0,
+                signature: vec![0x42],
+            };
+            let commit_vote = wire::Vote {
+                phase: wire::GlobalPhase::Commit,
+                signature: vec![0x43],
+                ..prepare_vote.clone()
+            };
+            let prepare_qc = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment: commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x44],
+            };
+            let commit_qc = wire::QuorumCertificate {
+                phase: wire::GlobalPhase::Commit,
+                aggregate_signature: vec![0x45],
+                ..prepare_qc.clone()
+            };
+            let timeout_vote = wire::TimeoutVote {
+                round,
+                highest_prepare_qc: None,
+                signer: 0,
+                signature: vec![0x46],
+            };
+            let timeout_certificate = wire::TimeoutCertificate {
+                round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: None,
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x47],
+                }],
+            };
+            Self {
+                verified,
+                keys,
+                context,
+                round,
+                tag,
+                body,
+                encoded_chunks,
+                subject,
+                manifest,
+                proposal,
+                prepare_vote,
+                commit_vote,
+                prepare_qc,
+                commit_qc,
+                timeout_vote,
+                timeout_certificate,
+            }
+        }
+
+        fn coordinator(&self) -> LifecycleCoordinator {
+            LifecycleCoordinator::new(
+                lifecycle_context(&self.context),
+                0,
+                CapacityGeometry::new(CapacityClass::ALL.map(|class| (class, 64))),
+            )
+        }
+
+        fn authenticated_serve_request(
+            &self,
+            requester_index: usize,
+        ) -> AuthenticatedCertifiedBodyRequest {
+            self.authenticated_serve_request_for(self.round, self.subject, requester_index)
+        }
+
+        fn authenticated_serve_request_for(
+            &self,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+            requester_index: usize,
+        ) -> AuthenticatedCertifiedBodyRequest {
+            let execution_commitment = execution_commitment_for(0x81);
+            let signers = vec![0, 1, 2];
+            let preimage = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let shares = signers
+                .iter()
+                .map(|signer| {
+                    Signature::new(
+                        self.keys[usize::try_from(*signer).expect("small fixture signer")]
+                            .private_key(),
+                        &preimage,
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate fixture PrepareQC");
+            let mut request = wire::CertifiedBodyRequest {
+                round,
+                subject,
+                certificate: wire::QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Prepare,
+                    subject,
+                    execution_commitment,
+                    signers,
+                    aggregate_signature,
+                },
+                requester: PeerId::new(self.keys[requester_index].public_key().clone()),
+                signature: Vec::new(),
+            };
+            request.signature = Signature::new(
+                self.keys[requester_index].private_key(),
+                &request.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            let requester = request.requester.clone();
+            authenticate_certified_body_request(
+                &self.context,
+                request,
+                &requester,
+                |context, certificate| {
+                    wire::finality::verify_quorum_certificate_with_validator_pops(
+                        context,
+                        certificate,
+                        self.verified.proofs_of_possession(),
+                    )
+                    .map_err(|error| error.to_string())
+                },
+            )
+            .expect("authenticate exact fixture CertifiedBodyRequest")
+        }
+
+        fn canonical_body_and_manifest(&self) -> (Vec<u8>, wire::PayloadManifest) {
+            let leader = self.context.leader(self.round.view);
+            let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
+            let header = BlockHeader::new(
+                NonZeroU64::new(self.round.height).expect("non-zero fixture height"),
+                None,
+                None,
+                None,
+                1_000,
+                self.round.view,
+            );
+            let signature =
+                SignatureOf::try_from_hash(self.keys[leader_index].private_key(), header.hash())
+                    .expect("sign fixture block header");
+            let block = SignedBlock::presigned(
+                BlockSignature::new(u64::from(leader), signature),
+                header,
+                Vec::new(),
+            );
+            let body = block.encode_wire().expect("canonical SignedBlockWire");
+            let subject = wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: block.hash(),
+                payload_hash: Hash::new(&body),
+            };
+            let manifest = encode_payload(&self.context, self.round, subject, &body)
+                .expect("encode canonical fixture payload")
+                .manifest()
+                .clone();
+            (body, manifest)
+        }
+
+        fn proposal_for(&self, marker: u8, signature: u8) -> wire::Proposal {
+            let body = vec![marker; 4];
+            let subject = block_subject_for_body(&body, marker);
+            let encoded_chunks = wire::encode_payload_chunks(self.context.da_layout, &body)
+                .expect("encode conflicting fixture body");
+            let manifest = wire::PayloadManifest::derive(
+                &self.context,
+                self.round,
+                subject,
+                u64::try_from(body.len()).expect("small fixture body"),
+                &encoded_chunks,
+            )
+            .expect("derive conflicting fixture manifest");
+            wire::Proposal {
+                round: self.round,
+                proposer: self.context.leader(self.round.view),
+                subject,
+                manifest,
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: vec![signature],
+            }
+        }
+    }
+
+    fn block_subject_for_body(body: &[u8], marker: u8) -> wire::BlockSubject {
+        wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 0xB1])),
+            payload_hash: Hash::new(body),
+        }
+    }
+
+    fn execution_commitment_for(marker: u8) -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new([marker, 1]),
+            Hash::new([marker, 2]),
+            Hash::new([marker, 3]),
+            1,
+            Hash::new([marker, 4]),
+        )
+    }
+
+    fn bound_ownership(
+        effect: &AdapterEffect,
+        owner_tag: EventTag,
+        ordinal: u128,
+    ) -> RuntimeEffectOwnership {
+        bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(owner_tag, ordinal)],
+        )
+        .expect("bind exact lifecycle-projection effect")
+        .pop()
+        .expect("one bound ownership")
+    }
+
+    fn candidate(
+        fixture: &Fixture,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> CandidateAdmission {
+        let pending = ownership
+            .pending_adapter_effect_binding(effect)
+            .expect("mint ordinal-free pending lifecycle binding");
+        let request = admission_request(
+            lifecycle_context(&fixture.context),
+            &fixture.verified,
+            effect,
+            &pending,
+        )
+        .expect("project exact bound adapter effect");
+        let AdmissionRequest::Candidate(candidate) = request else {
+            panic!("all adapter effects project to lifecycle candidates")
+        };
+        candidate
+    }
+
+    fn assert_candidate_shape(
+        candidate: &CandidateAdmission,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+        work_class: LifecycleWorkClass,
+        phase: LifecyclePhase,
+        stage_kind: LifecycleStageKind,
+    ) {
+        assert_eq!(candidate.work_class, work_class);
+        assert_eq!(candidate.key.phase(), phase);
+        assert_eq!(candidate.stage.kind(), stage_kind);
+        assert_eq!(
+            candidate.stage.predecessor_scope(),
+            PredecessorScope::Independent
+        );
+        assert_eq!(candidate.initial_state, InitialLifecycleState::Ready);
+        assert_eq!(candidate.payload, DurablePayloadReference::None);
+        assert!(candidate.producer_turn.is_none());
+        assert_eq!(
+            candidate.causal_root.digest(),
+            candidate.reconstruction_source
+        );
+        assert_eq!(candidate.physical_geometry.initial.len(), 1);
+        assert_eq!(candidate.physical_geometry.replenishment_slots.len(), 1);
+        let slot = candidate.physical_geometry.initial[0];
+        assert_eq!(
+            slot.id().capacity_class(),
+            Some(work_class.capacity_class())
+        );
+        assert_eq!(slot.id().index(), 0);
+        assert!(
+            candidate
+                .physical_geometry
+                .replenishment_slots
+                .contains(&slot.id())
+        );
+        let authority = ownership
+            .pending_adapter_effect_binding(effect)
+            .expect("the tested effect remains exactly bound");
+        assert_eq!(
+            slot.digest(),
+            digest_from_hash(authority.exact_effect_identity())
+        );
+    }
+
+    fn vote_conflict(fixture: &Fixture) -> (wire::Vote, wire::Vote) {
+        let first = fixture.prepare_vote.clone();
+        let second = wire::Vote {
+            subject: fixture.proposal_for(0x52, 0x53).subject,
+            execution_commitment: execution_commitment_for(0x52),
+            signature: vec![0x53],
+            ..first.clone()
+        };
+        (first, second)
+    }
+
+    fn authenticated_payload_cut(
+        fixture: &Fixture,
+        payload_root: &std::path::Path,
+        body_store: &V2BodyStore,
+        local_signer: &KeyPair,
+    ) -> (
+        CertifiedServePayloadStoreV1,
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) {
+        let (store, recovery) = CertifiedServePayloadStoreV1::open(payload_root, &fixture.context)
+            .expect("reopen exact Certified-Serve payload store");
+        let authenticated = recovery
+            .authenticate(&fixture.verified, local_signer, body_store)
+            .expect("authenticate exact Certified-Serve recovery cut");
+        (store, authenticated)
+    }
+
+    fn lifecycle_recovery_cut(
+        fixture: &Fixture,
+        payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) -> AuthenticatedLifecycleRecoveryCut {
+        AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
+            lifecycle_context(&fixture.context),
+            [],
+            payloads,
+        )
+        .expect("assemble sealed lifecycle recovery cut")
+    }
+
+    fn execute_ready_turn(coordinator: &mut LifecycleCoordinator) -> super::super::TurnLease {
+        let ready = coordinator.ready_index.iter().map(|ordinal| {
+            let record = &coordinator.records[ordinal];
+            (
+                *ordinal,
+                SchedulerReadyInputs::new(record.owner, record.key, 0, 0, 0, 0, 0, 0),
+            )
+        });
+        let TurnPlan::Execute(lease) = coordinator.plan_turn(
+            SchedulerInputs::new([], ready).expect("Serve ready rows have unique ordinals"),
+        ) else {
+            panic!("one ready Certified-Serve record must execute")
+        };
+        lease
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let receipt = payload_store
+            .persist_pending(&request)
+            .expect("persist signed request before admission");
+        let mut coordinator = fixture.coordinator();
+
+        let decision = coordinator
+            .admit_certified_serve(&fixture.verified, &request, receipt)
+            .expect("project exact durable request");
+        let AdmissionDecision::Admitted {
+            ordinal,
+            producer_turn_ordinal,
+            ..
+        } = decision
+        else {
+            panic!("fresh Certified-Serve request must be admitted")
+        };
+        assert_eq!(ordinal, 1);
+        assert_eq!(producer_turn_ordinal, Some(2));
+        assert_eq!(coordinator.records.len(), 2);
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, receipt),
+            Ok(AdmissionDecision::Retry {
+                ordinal: 1,
+                action: RetryAction::ReenqueueIncumbent,
+                ..
+            })
+        ));
+        assert_eq!(coordinator.records.len(), 2, "exact retry remains 1 + 1");
+
+        let serve = &coordinator.records[&1];
+        let producer = &coordinator.records[&2];
+        assert_eq!(serve.work_class, LifecycleWorkClass::CertifiedServe);
+        assert_eq!(serve.stage.kind(), LifecycleStageKind::CertifiedServe);
+        assert_eq!(
+            serve.stage.predecessor_scope(),
+            PredecessorScope::ReadyOrdinalPrefix
+        );
+        assert_eq!(serve.state, LifecycleState::Ready);
+        assert_eq!(producer.work_class, LifecycleWorkClass::ProducerTurn);
+        assert_eq!(producer.stage.kind(), LifecycleStageKind::ProducerTurn);
+        assert_eq!(
+            producer.stage.predecessor_scope(),
+            PredecessorScope::ProducerHandoffBarrier
+        );
+        assert!(matches!(
+            producer.state,
+            LifecycleState::Waiting(wait)
+                if wait.source() == WaitSource::ProducerTurn(ordinal)
+        ));
+        assert_eq!(producer.ordinal, ordinal + 1);
+        assert_eq!(producer.owner, serve.owner);
+
+        let expected_request = digest_from_bytes(request.request_hash().as_ref());
+        let expected_certificate =
+            digest_from_bytes(HashOf::new(&request.request().certificate).as_ref());
+        assert_eq!(serve.owner.causal_root().digest(), expected_request);
+        assert_eq!(
+            coordinator.durable_records[&1].reconstruction_source,
+            expected_request
+        );
+        assert_eq!(
+            coordinator.durable_records[&2].reconstruction_source,
+            expected_request
+        );
+        assert_eq!(
+            coordinator.durable_records[&1].payload,
+            DurablePayloadReference::CertifiedServePending {
+                request: expected_request,
+                certificate: expected_certificate,
+            }
+        );
+        assert_eq!(
+            serve.key.context(),
+            lifecycle_context(&fixture.context).id()
+        );
+        assert_eq!(
+            serve.key.round(),
+            LifecycleRound::new(fixture.round.height, fixture.round.view)
+        );
+        assert_eq!(
+            serve.key.proposal_round(),
+            Some(LifecycleRound::new(
+                fixture.round.height,
+                fixture.round.view,
+            ))
+        );
+        assert_eq!(
+            serve.key.subject(),
+            Some(certified_serve_key_subject(
+                request.request().subject,
+                request.request_hash(),
+            ))
+        );
+        assert_ne!(
+            serve.key.subject(),
+            Some(block_subject(request.request().subject)),
+            "Serve key subject is request-bound rather than a raw block subject"
+        );
+        assert_eq!(serve.key.phase(), LifecyclePhase::Serve);
+        assert_eq!(
+            serve.key.execution_commitment(),
+            Some(execution_commitment(
+                request.request().certificate.execution_commitment,
+            ))
+        );
+        assert_eq!(producer.key.phase(), LifecyclePhase::ProducerTurn);
+        assert_eq!(producer.key.subject(), serve.key.subject());
+        assert_eq!(producer.key.context(), serve.key.context());
+        assert_eq!(producer.key.round(), serve.key.round());
+        assert_eq!(producer.key.proposal_round(), serve.key.proposal_round());
+        assert_eq!(
+            producer.key.execution_commitment(),
+            serve.key.execution_commitment()
+        );
+        assert_eq!(
+            serve.physical_slots.values().copied().collect::<Vec<_>>(),
+            vec![digest_from_hash(&receipt.payload_hash())]
+        );
+        assert_eq!(
+            serve.physical_slots.keys().copied().collect::<Vec<_>>(),
+            vec![PhysicalSlotId::for_capacity(CapacityClass::Serve, 0)]
+        );
+        assert_eq!(
+            producer
+                .physical_slots
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![domain_digest(
+                PRODUCER_TURN_PHYSICAL_DOMAIN,
+                request.request_hash().as_ref(),
+            )]
+        );
+        assert_eq!(
+            producer.physical_slots.keys().copied().collect::<Vec<_>>(),
+            vec![PhysicalSlotId::for_capacity(CapacityClass::Producer, 0)]
+        );
+    }
+
+    #[test]
+    fn capacity_wait_retains_one_bounded_payload_publication() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let first = fixture.authenticated_serve_request(2);
+        let waiting = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let mut coordinator = LifecycleCoordinator::new(
+            lifecycle_context(&fixture.context),
+            0,
+            CapacityGeometry::new([
+                (CapacityClass::Consensus, 64),
+                (CapacityClass::Effect, 64),
+                (CapacityClass::Serve, 1),
+                (CapacityClass::Producer, 2),
+            ]),
+        );
+
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &first,
+            ),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &waiting,
+            ),
+            Ok(AdmissionDecision::WaitForCapacity(_))
+        ));
+        drop(payload_store);
+
+        let (mut payload_store, recovery) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("reopen payload store with one bounded wait");
+        assert_eq!(recovery.len(), 2);
+        assert!(
+            recovery
+                .iter()
+                .any(|payload| payload.id().request_hash() == first.request_hash())
+        );
+        assert!(
+            recovery
+                .iter()
+                .any(|payload| payload.id().request_hash() == waiting.request_hash())
+        );
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &waiting,
+            ),
+            Ok(AdmissionDecision::WaitForCapacity(_))
+        ));
+        drop(payload_store);
+        let (_, recovery) = CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+            .expect("reopen after unchanged-generation retry");
+        assert_eq!(
+            recovery.len(),
+            2,
+            "retries reuse the single payload owned by the admission wait"
+        );
+    }
+
+    #[test]
+    fn conclusive_admission_rejection_rolls_back_the_pending_payload() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let mut coordinator = LifecycleCoordinator::new(
+            lifecycle_context(&fixture.context),
+            0,
+            CapacityGeometry::new([
+                (CapacityClass::Consensus, 64),
+                (CapacityClass::Effect, 64),
+                (CapacityClass::Serve, 0),
+                (CapacityClass::Producer, 1),
+            ]),
+        );
+
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &request,
+            ),
+            Ok(AdmissionDecision::Rejected(
+                AdmissionRejection::InvalidEpisodeUniverse
+            ))
+        ));
+        drop(payload_store);
+        let (_, recovery) = CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+            .expect("reopen after conclusive rejection");
+        assert!(
+            recovery.is_empty(),
+            "a rejected request cannot consume durable payload capacity"
+        );
+    }
+
+    #[test]
+    fn certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let other = fixture.authenticated_serve_request(2);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist admitted request");
+        let other_pending = payload_store
+            .persist_pending(&other)
+            .expect("persist foreign request");
+        let foreign_terminal = payload_store
+            .persist_negative(
+                other_pending.id(),
+                CertifiedServePayloadNegativeOutcome::Rejected(17),
+            )
+            .expect("persist foreign negative result");
+        let mut coordinator = fixture.coordinator();
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+
+        assert_eq!(
+            coordinator.settle_certified_serve_negative(lease.clone(), foreign_terminal),
+            Err(CertifiedServeSettlementError::ReceiptMismatch)
+        );
+        assert_eq!(coordinator.active_lease, Some(lease.clone()));
+        let terminal = payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Rejected(19),
+            )
+            .expect("persist exact negative result");
+        coordinator
+            .settle_certified_serve_negative(lease, terminal)
+            .expect("exact post-fsync receipt settles Serve");
+
+        assert_eq!(
+            coordinator.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Rejected(19))
+        );
+        assert_eq!(coordinator.records[&2].state, LifecycleState::Ready);
+        assert!(matches!(
+            coordinator.durable_records[&1].payload,
+            DurablePayloadReference::CertifiedServeNegative {
+                outcome: DurableServeNegativeOutcome::Rejected(19),
+                ..
+            }
+        ));
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &request,
+            ),
+            Ok(AdmissionDecision::StutterTerminal { .. })
+        ));
+    }
+
+    #[test]
+    fn cancelled_certified_serve_tombstone_replays_with_its_terminal_producer_pair() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist admitted request");
+        let mut coordinator = fixture.coordinator();
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+        let terminal = payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Cancelled,
+            )
+            .expect("persist cancellation before ledger settlement");
+        coordinator
+            .settle_certified_serve_negative(lease, terminal)
+            .expect("settle cancellation from its durable receipt");
+        assert_eq!(
+            coordinator.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Cancelled)
+        );
+        assert_eq!(
+            coordinator.records[&2].state,
+            LifecycleState::Terminal(TerminalOutcome::Cancelled)
+        );
+        assert!(!coordinator.producer_debts.contains_key(&1));
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &request,
+            ),
+            Ok(AdmissionDecision::StutterTerminal { .. })
+        ));
+    }
+
+    #[test]
+    fn certified_serve_completion_settles_from_the_post_fsync_response_receipt() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist admitted request");
+        let mut coordinator = fixture.coordinator();
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+        let responder = 0;
+        let mut response = wire::CertifiedBodyResponse {
+            request_hash: request.request_hash(),
+            manifest: fixture.manifest.clone(),
+            body: fixture.body.clone(),
+            responder,
+            signature: Vec::new(),
+        };
+        response.signature = Signature::new(
+            fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+            &response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let terminal = payload_store
+            .persist_completed(&request, &response)
+            .expect("persist exact response metadata");
+        coordinator
+            .settle_certified_serve_completed(lease, terminal)
+            .expect("exact post-fsync response receipt settles Serve");
+
+        let response = digest_from_bytes(HashOf::new(&response).as_ref());
+        assert_eq!(
+            coordinator.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Completed(Some(response)))
+        );
+        assert_eq!(coordinator.records[&2].state, LifecycleState::Ready);
+        assert!(matches!(
+            coordinator.durable_records[&1].payload,
+            DurablePayloadReference::CertifiedServeCompleted {
+                response: retained,
+                ..
+            } if retained == response
+        ));
+        assert!(matches!(
+            coordinator.persist_and_admit_certified_serve(
+                &mut payload_store,
+                &fixture.verified,
+                &fixture.keys[0],
+                &request,
+            ),
+            Ok(AdmissionDecision::ReplayTerminal {
+                outcome: TerminalOutcome::Completed(Some(retained)),
+                ..
+            }) if retained == response
+        ));
+    }
+
+    #[test]
+    fn certified_serve_rejects_a_receipt_for_another_signed_request() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let first = fixture.authenticated_serve_request(2);
+        let second = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        payload_store
+            .persist_pending(&first)
+            .expect("persist first request");
+        let second_receipt = payload_store
+            .persist_pending(&second)
+            .expect("persist second request");
+        let mut coordinator = fixture.coordinator();
+
+        assert_eq!(
+            coordinator.admit_certified_serve(&fixture.verified, &first, second_receipt),
+            Err(CertifiedServeAdmissionError::ReceiptMismatch)
+        );
+        assert!(coordinator.records.is_empty());
+    }
+
+    #[test]
+    fn two_signed_requests_for_one_body_have_distinct_serve_lifecycles() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let first = fixture.authenticated_serve_request(2);
+        let second = fixture.authenticated_serve_request(3);
+        assert_eq!(first.request().subject, second.request().subject);
+        assert_ne!(first.request_hash(), second.request_hash());
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let first_receipt = payload_store
+            .persist_pending(&first)
+            .expect("persist first request");
+        let second_receipt = payload_store
+            .persist_pending(&second)
+            .expect("persist second request");
+        let mut coordinator = fixture.coordinator();
+
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &first, first_receipt),
+            Ok(AdmissionDecision::Admitted {
+                ordinal: 1,
+                producer_turn_ordinal: Some(2),
+                ..
+            })
+        ));
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &second, second_receipt),
+            Ok(AdmissionDecision::Admitted {
+                ordinal: 3,
+                producer_turn_ordinal: Some(4),
+                ..
+            })
+        ));
+        assert_ne!(coordinator.records[&1].key, coordinator.records[&3].key);
+        assert_ne!(
+            coordinator.records[&1].key.subject(),
+            coordinator.records[&3].key.subject()
+        );
+    }
+
+    #[test]
+    fn durable_rollover_removes_the_exact_capacity_wait_payload() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let retired_ledger_root = temporary.path().join("retired-ledger");
+        let successor_ledger_root = temporary.path().join("successor-ledger");
+        let payload_root = temporary.path().join("payloads");
+        let fixture = Fixture::new();
+        let first = fixture.authenticated_serve_request(2);
+        let waiting = fixture.authenticated_serve_request(3);
+        let geometry = CapacityGeometry::new([
+            (CapacityClass::Consensus, 4),
+            (CapacityClass::Effect, 4),
+            (CapacityClass::Serve, 1),
+            (CapacityClass::Producer, 1),
+        ]);
+        let mut coordinator =
+            LifecycleCoordinator::new(lifecycle_context(&fixture.context), 0, geometry.clone());
+        coordinator
+            .attach_empty_test_ledger(&retired_ledger_root)
+            .expect("attach retired lifecycle ledger");
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open retired payload store");
+        let first_receipt = payload_store
+            .persist_pending_with_verified_retention(&fixture.verified, &fixture.keys[0], &first)
+            .expect("persist first request");
+        assert!(matches!(
+            coordinator
+                .persist_and_admit_certified_serve(
+                    &mut payload_store,
+                    &fixture.verified,
+                    &fixture.keys[0],
+                    &first,
+                )
+                .expect("admit first Serve"),
+            AdmissionDecision::Admitted {
+                ordinal: 1,
+                producer_turn_ordinal: Some(2),
+                ..
+            }
+        ));
+        assert!(matches!(
+            coordinator
+                .persist_and_admit_certified_serve(
+                    &mut payload_store,
+                    &fixture.verified,
+                    &fixture.keys[0],
+                    &waiting,
+                )
+                .expect("retain one exact capacity fence"),
+            AdmissionDecision::WaitForCapacity(_)
+        ));
+        let waiting_key = *coordinator
+            .admission_waits
+            .keys()
+            .next()
+            .expect("capacity wait remains coordinator-owned");
+        assert!(
+            coordinator.admission_waits[&waiting_key]
+                .serve_payload_receipt
+                .is_some(),
+            "the sealed admission boundary retains its own rollback receipt"
+        );
+        let cancellation = payload_store
+            .persist_negative(
+                first_receipt.id(),
+                CertifiedServePayloadNegativeOutcome::Cancelled,
+            )
+            .expect("persist exact admitted-Serve cancellation");
+        let successor = LifecycleContext::new(LifecycleDigest::new([0xDD; 32]), 2);
+        let successor_authority = super::super::authority::test_authority(
+            successor,
+            (2_u8..=5).map(|byte| LifecycleDigest::new([byte; 32])),
+            0,
+            geometry,
+        )
+        .expect("construct successor test authority");
+
+        coordinator.rollover_with_payload_store(
+            RolloverSnapshot {
+                retired_context: lifecycle_context(&fixture.context),
+                successor_context: successor,
+                successor_predecessor: lifecycle_context(&fixture.context).id(),
+                successor_authority,
+                successor_ledger_root: Some(successor_ledger_root),
+                serve_cancellations: vec![cancellation],
+                retained_high_water: 2,
+                retire_ordinals: BTreeSet::from([1, 2]),
+                retire_admission_keys: BTreeSet::from([waiting_key]),
+            },
+            &mut payload_store,
+        );
+
+        assert_eq!(coordinator.fault(), None);
+        assert_eq!(coordinator.active_context(), successor);
+        drop(payload_store);
+        let (_, recovered) = CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+            .expect("reopen retired payload store");
+        assert_eq!(recovered.len(), 1);
+        assert!(recovered.get(first_receipt.id()).is_some());
+    }
+
+    #[test]
+    fn durable_open_prunes_authenticated_pending_store_only_orphans() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let admitted_request = fixture.authenticated_serve_request(2);
+        let orphan_request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let admitted_receipt = payload_store
+            .persist_pending(&admitted_request)
+            .expect("persist ledger-backed request");
+        payload_store
+            .persist_pending(&orphan_request)
+            .expect("persist payload-only crash tail");
+        drop(payload_store);
+
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(
+                &fixture.verified,
+                &admitted_request,
+                admitted_receipt,
+            ),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        drop(coordinator);
+
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (mut payload_store, payloads) =
+            authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
+        assert_eq!(payloads.len(), 2);
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let restarted = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            cut,
+        )
+        .expect("ledger-backed request resolves while store-only orphan is pruned");
+
+        assert_eq!(restarted.high_water, 2);
+        assert_eq!(restarted.records.len(), 2);
+        assert_eq!(restarted.records[&1].state, LifecycleState::Ready);
+        assert!(matches!(
+            restarted.records[&2].state,
+            LifecycleState::Waiting(wait) if wait.source() == WaitSource::ProducerTurn(1)
+        ));
+        let orphan_subject = certified_serve_key_subject(
+            orphan_request.request().subject,
+            orphan_request.request_hash(),
+        );
+        assert!(
+            restarted
+                .records
+                .values()
+                .all(|record| record.key.subject() != Some(orphan_subject))
+        );
+        drop(restarted);
+        drop(payload_store);
+        let (_, pruned) = CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+            .expect("reopen pruned payload store");
+        assert_eq!(pruned.len(), 1, "store-only crash tail is removed durably");
+    }
+
+    #[test]
+    fn durable_open_rejects_a_terminal_store_only_payload() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist pending orphan");
+        payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Failed(7),
+            )
+            .expect("persist impossible terminal orphan");
+        drop(payload_store);
+
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (mut payload_store, payloads) =
+            authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let authority = fixture.coordinator().episode_authority;
+        assert!(
+            LifecycleCoordinator::open_with_authority(
+                authority,
+                &ledger_root,
+                &mut payload_store,
+                cut,
+            )
+            .is_err(),
+            "terminal payloads cannot exist without a ledger admission"
+        );
+        drop(payload_store);
+        let (_, recovered) = CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+            .expect("failed open preserves terminal evidence");
+        assert_eq!(recovered.len(), 1);
+    }
+
+    #[test]
+    fn durable_open_rejects_a_recovery_cut_from_another_same_context_store() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let first_root = temporary.path().join("first-payloads");
+        let second_root = temporary.path().join("second-payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let first = fixture.authenticated_serve_request(2);
+        let second = fixture.authenticated_serve_request(3);
+        let (mut first_store, _) =
+            CertifiedServePayloadStoreV1::open(&first_root, &fixture.context)
+                .expect("open first payload store");
+        first_store
+            .persist_pending(&first)
+            .expect("persist first-store payload");
+        drop(first_store);
+        let (mut second_store, _) =
+            CertifiedServePayloadStoreV1::open(&second_root, &fixture.context)
+                .expect("open second payload store");
+        second_store
+            .persist_pending(&second)
+            .expect("persist second-store payload");
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (first_store, payloads) =
+            authenticated_payload_cut(&fixture, &first_root, &body_store, &fixture.keys[0]);
+        drop(first_store);
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let authority = fixture.coordinator().episode_authority;
+
+        assert!(
+            LifecycleCoordinator::open_with_authority(
+                authority,
+                &ledger_root,
+                &mut second_store,
+                cut,
+            )
+            .is_err(),
+            "same-context stores cannot exchange authenticated recovery cuts"
+        );
+    }
+
+    #[test]
+    fn durable_open_rejects_a_ledger_serve_missing_from_authenticated_storage() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let admitted_payload_root = temporary.path().join("admitted-payloads");
+        let empty_payload_root = temporary.path().join("empty-payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&admitted_payload_root, &fixture.context)
+                .expect("open admitted payload store");
+        let receipt = payload_store
+            .persist_pending(&request)
+            .expect("persist admitted request");
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, receipt),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        drop(coordinator);
+
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (mut payload_store, payloads) =
+            authenticated_payload_cut(&fixture, &empty_payload_root, &body_store, &fixture.keys[0]);
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        assert!(
+            LifecycleCoordinator::open_with_authority(
+                authority,
+                &ledger_root,
+                &mut payload_store,
+                cut,
+            )
+            .is_err()
+        );
+        let (_, ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            &ledger_root,
+            lifecycle_context(&fixture.context),
+        )
+        .expect("failed open leaves ledger readable");
+        assert_eq!(ledger.high_water(), 2);
+        assert_eq!(ledger.records()[0].terminal(), Some(None));
+    }
+
+    #[test]
+    fn durable_open_applies_typed_negative_payload_store_ahead_cut() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist pending request");
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Rejected(19),
+            )
+            .expect("persist typed negative store-ahead cut");
+        drop(payload_store);
+        drop(coordinator);
+
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (mut payload_store, payloads) =
+            authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let restarted = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            cut,
+        )
+        .expect("typed negative store-ahead cut settles atomically");
+
+        assert_eq!(
+            restarted.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Rejected(19))
+        );
+        assert_eq!(restarted.records[&2].state, LifecycleState::Ready);
+        assert!(matches!(
+            restarted.durable_records[&1].payload,
+            DurablePayloadReference::CertifiedServeNegative {
+                outcome: DurableServeNegativeOutcome::Rejected(19),
+                ..
+            }
+        ));
+        let (_, ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            &ledger_root,
+            lifecycle_context(&fixture.context),
+        )
+        .expect("reload reconciled negative ledger");
+        assert_eq!(
+            ledger.records()[0].terminal(),
+            Some(Some(TerminalOutcome::Rejected(19)))
+        );
+    }
+
+    #[test]
+    fn durable_open_applies_completed_payload_store_ahead_cut() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let (body, manifest) = fixture.canonical_body_and_manifest();
+        let request = fixture.authenticated_serve_request_for(manifest.round, manifest.subject, 3);
+        let mut body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        body_store
+            .store(manifest.clone(), body.clone())
+            .expect("persist canonical response body");
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist pending request");
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let responder = 0;
+        let mut response = wire::CertifiedBodyResponse {
+            request_hash: request.request_hash(),
+            manifest,
+            body,
+            responder,
+            signature: Vec::new(),
+        };
+        response.signature = Signature::new(
+            fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+            &response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        payload_store
+            .persist_completed(&request, &response)
+            .expect("persist completed response metadata");
+        drop(payload_store);
+        drop(coordinator);
+
+        let (mut payload_store, payloads) = authenticated_payload_cut(
+            &fixture,
+            &payload_root,
+            &body_store,
+            &fixture.keys[usize::try_from(responder).expect("small responder")],
+        );
+        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let restarted = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            cut,
+        )
+        .expect("completed store-ahead cut settles atomically");
+        let response_digest = digest_from_bytes(HashOf::new(&response).as_ref());
+
+        assert_eq!(
+            restarted.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Completed(Some(response_digest)))
+        );
+        assert_eq!(restarted.records[&2].state, LifecycleState::Ready);
+        assert!(matches!(
+            restarted.durable_records[&1].payload,
+            DurablePayloadReference::CertifiedServeCompleted {
+                response,
+                ..
+            } if response == response_digest
+        ));
+        let (_, ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            &ledger_root,
+            lifecycle_context(&fixture.context),
+        )
+        .expect("reload reconciled completion ledger");
+        assert_eq!(
+            ledger.records()[0].terminal(),
+            Some(Some(TerminalOutcome::Completed(Some(response_digest))))
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn accepted_effects(fixture: &Fixture) -> Vec<ExpectedProjection> {
+        let mut unsigned_proposal = fixture.proposal.clone();
+        unsigned_proposal.signature.clear();
+        let mut unsigned_prepare_vote = fixture.prepare_vote.clone();
+        unsigned_prepare_vote.signature.clear();
+        let mut unsigned_commit_vote = fixture.commit_vote.clone();
+        unsigned_commit_vote.signature.clear();
+        let mut unsigned_timeout_vote = fixture.timeout_vote.clone();
+        unsigned_timeout_vote.signature.clear();
+
+        let certified_sources = fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let entered_tag = EventTag::new(
+            fixture.context.height,
+            fixture.round.view + 1,
+            Generation::new(0),
+        );
+        let proposal_conflict = AdapterEquivocationEvidence::proposal_for_test(
+            fixture.proposal.clone(),
+            fixture.proposal_for(0x51, 0x51),
+        );
+        let (first_vote, second_vote) = vote_conflict(fixture);
+        let vote_conflict = AdapterEquivocationEvidence::vote_for_test(first_vote, second_vote);
+        let timeout_conflict = AdapterEquivocationEvidence::timeout_vote_for_test(
+            fixture.timeout_vote.clone(),
+            wire::TimeoutVote {
+                highest_prepare_qc: Some(fixture.prepare_qc.clone()),
+                signature: vec![0x54],
+                ..fixture.timeout_vote.clone()
+            },
+        );
+
+        vec![
+            (
+                AdapterEffect::Sign {
+                    tag: fixture.tag,
+                    request: SignRequest::Proposal(unsigned_proposal),
+                },
+                LifecycleWorkClass::SignProposal,
+                LifecyclePhase::Proposal,
+                LifecycleStageKind::SignProposal,
+            ),
+            (
+                AdapterEffect::Sign {
+                    tag: fixture.tag,
+                    request: SignRequest::Vote(unsigned_prepare_vote),
+                },
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Prepare,
+                LifecycleStageKind::SignPrepareVote,
+            ),
+            (
+                AdapterEffect::Sign {
+                    tag: fixture.tag,
+                    request: SignRequest::Vote(unsigned_commit_vote),
+                },
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Commit,
+                LifecycleStageKind::SignCommitVote,
+            ),
+            (
+                AdapterEffect::Sign {
+                    tag: fixture.tag,
+                    request: SignRequest::TimeoutVote(unsigned_timeout_vote),
+                },
+                LifecycleWorkClass::SignTimeout,
+                LifecyclePhase::Timeout,
+                LifecycleStageKind::SignTimeoutVote,
+            ),
+            (
+                AdapterEffect::FetchBody {
+                    tag: fixture.tag,
+                    round: fixture.round,
+                    subject: fixture.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                },
+                LifecycleWorkClass::Fetch,
+                LifecyclePhase::Fetch,
+                LifecycleStageKind::FetchBody,
+            ),
+            (
+                AdapterEffect::FetchBody {
+                    tag: fixture.tag,
+                    round: fixture.round,
+                    subject: fixture.subject,
+                    manifest: None,
+                    certified_sources,
+                    certificate: Some(fixture.prepare_qc.clone()),
+                },
+                LifecycleWorkClass::Fetch,
+                LifecyclePhase::Fetch,
+                LifecycleStageKind::FetchBody,
+            ),
+            (
+                AdapterEffect::Apply {
+                    tag: fixture.tag,
+                    subject: fixture.subject,
+                    certificate: fixture.commit_qc.clone(),
+                },
+                LifecycleWorkClass::Apply,
+                LifecyclePhase::Apply,
+                LifecycleStageKind::ApplyDecision,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(fixture.proposal.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastProposal,
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastPrepareVote,
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(fixture.commit_vote.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastCommitVote,
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.prepare_qc.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastPrepareQc,
+                LifecycleStageKind::BroadcastPrepareQc,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.commit_qc.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastCommitQc,
+                LifecycleStageKind::BroadcastCommitQc,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(fixture.timeout_vote.clone()),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastTimeoutVote,
+                LifecycleStageKind::BroadcastTimeoutVote,
+            ),
+            (
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                        fixture.timeout_certificate.clone(),
+                    ),
+                )),
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastTc,
+                LifecycleStageKind::BroadcastTc,
+            ),
+            (
+                AdapterEffect::EnterView {
+                    tag: entered_tag,
+                    certificate: fixture.timeout_certificate.clone(),
+                    protected_lock: Some(fixture.prepare_qc.clone()),
+                },
+                LifecycleWorkClass::EnterView,
+                LifecyclePhase::EnterView,
+                LifecycleStageKind::EnterView,
+            ),
+            (
+                AdapterEffect::ReportEquivocation {
+                    evidence: proposal_conflict,
+                },
+                LifecycleWorkClass::EquivocationReport,
+                LifecyclePhase::DiagnosticProposalEquivocation,
+                LifecycleStageKind::ReportProposalEquivocation,
+            ),
+            (
+                AdapterEffect::ReportEquivocation {
+                    evidence: vote_conflict,
+                },
+                LifecycleWorkClass::EquivocationReport,
+                LifecyclePhase::DiagnosticVoteEquivocation,
+                LifecycleStageKind::ReportVoteEquivocation,
+            ),
+            (
+                AdapterEffect::ReportEquivocation {
+                    evidence: timeout_conflict,
+                },
+                LifecycleWorkClass::EquivocationReport,
+                LifecyclePhase::DiagnosticTimeoutEquivocation,
+                LifecycleStageKind::ReportTimeoutEquivocation,
+            ),
+            (
+                AdapterEffect::ReportInvalidCertifiedBody {
+                    subject: fixture.subject,
+                    certificate: fixture.prepare_qc.clone(),
+                },
+                LifecycleWorkClass::InvalidBodyReport,
+                LifecyclePhase::DiagnosticInvalidBody,
+                LifecycleStageKind::ReportInvalidBody,
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work() {
+        let fixture = Fixture::new();
+        let cases = accepted_effects(&fixture);
+        assert_eq!(cases.len(), 19);
+        for (ordinal, (effect, work_class, phase, stage_kind)) in (1_u128..).zip(cases) {
+            let ownership = bound_ownership(&effect, fixture.tag, ordinal);
+            let projected = candidate(&fixture, &effect, &ownership);
+            assert_candidate_shape(
+                &projected, &effect, &ownership, work_class, phase, stage_kind,
+            );
+            if phase == LifecyclePhase::Timeout {
+                assert_eq!(projected.key.proposal_round(), None);
+                assert_eq!(projected.key.subject(), None);
+                assert_eq!(projected.key.execution_commitment(), None);
+            }
+            let mut coordinator = fixture.coordinator();
+            assert!(matches!(
+                coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &ownership),
+                Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn certified_store_and_validate_inherit_exact_fetch_authority() {
+        let fixture = Fixture::new();
+        let fetch = AdapterEffect::FetchBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+            manifest: None,
+            certified_sources: fixture
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(fixture.prepare_qc.clone()),
+        };
+        let fetch_owner = bound_ownership(&fetch, fixture.tag, 20);
+        let store = AdapterEffect::StoreBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let store_owner = fetch_owner
+            .rebind_as_inherited_adapter_effect(&store)
+            .expect("Fetch authorizes exact Store successor");
+        let validate = AdapterEffect::ValidateBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let validate_owner = store_owner
+            .rebind_as_inherited_adapter_effect(&validate)
+            .expect("Store authorizes exact Validate successor");
+
+        let store_candidate = candidate(&fixture, &store, &store_owner);
+        let validate_candidate = candidate(&fixture, &validate, &validate_owner);
+        assert_candidate_shape(
+            &store_candidate,
+            &store,
+            &store_owner,
+            LifecycleWorkClass::Store,
+            LifecyclePhase::Store,
+            LifecycleStageKind::StoreBody,
+        );
+        assert_candidate_shape(
+            &validate_candidate,
+            &validate,
+            &validate_owner,
+            LifecycleWorkClass::Validate,
+            LifecyclePhase::Validate,
+            LifecycleStageKind::ValidateBody,
+        );
+        let expected_commitment = Some(execution_commitment(
+            fixture.prepare_qc.execution_commitment,
+        ));
+        assert_eq!(
+            store_candidate.key.execution_commitment(),
+            expected_commitment
+        );
+        assert_eq!(
+            validate_candidate.key.execution_commitment(),
+            expected_commitment
+        );
+        assert_eq!(store_candidate.causal_root, validate_candidate.causal_root);
+
+        let mut coordinator = fixture.coordinator();
+        assert!(matches!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &store, &store_owner),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        assert!(matches!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &validate, &validate_owner,),
+            Ok(AdmissionDecision::Admitted { ordinal: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
+        let fixture = Fixture::new();
+        let mut unsigned = fixture.proposal.clone();
+        unsigned.signature.clear();
+        let effect = AdapterEffect::Sign {
+            tag: fixture.tag,
+            request: SignRequest::Proposal(unsigned),
+        };
+        let exact = bound_ownership(&effect, fixture.tag, 30);
+        let foreign_tag = EventTag::new(
+            fixture.tag.height(),
+            fixture.tag.view(),
+            Generation::new(fixture.tag.generation().get() + 1),
+        );
+        let foreign = bound_ownership(&effect, foreign_tag, 31);
+        let mut coordinator = fixture.coordinator();
+
+        assert!(matches!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &exact),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        assert_eq!(coordinator.records.len(), 1, "0 -> 1 owner admission");
+        assert!(matches!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &exact),
+            Ok(AdmissionDecision::Retry {
+                ordinal: 1,
+                action: RetryAction::StutterLiveSigner,
+                ..
+            })
+        ));
+        assert_eq!(coordinator.records.len(), 1, "same-owner retry is 1 -> 1");
+        assert_eq!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &foreign),
+            Ok(AdmissionDecision::Rejected(
+                AdmissionRejection::ForeignOwner
+            ))
+        );
+        assert_eq!(coordinator.records.len(), 1);
+    }
+
+    #[test]
+    fn unbound_and_foreign_context_effects_fail_before_admission() {
+        let fixture = Fixture::new();
+        let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
+        ));
+        let unbound = RuntimeEffectOwnership::fresh_for_test(fixture.tag, 40);
+        let mut coordinator = fixture.coordinator();
+        assert_eq!(
+            coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &unbound),
+            Err(AdapterEffectAdmissionError::UnboundEffect)
+        );
+        assert!(coordinator.records.is_empty());
+
+        let ownership = bound_ownership(&effect, fixture.tag, 41);
+        let foreign_context = LifecycleContext::new(LifecycleDigest::new([0xFF; 32]), 1);
+        let mut foreign = LifecycleCoordinator::new(
+            foreign_context,
+            0,
+            CapacityGeometry::new(CapacityClass::ALL.map(|class| (class, 64))),
+        );
+        assert_eq!(
+            foreign.admit_bound_adapter_effect(&fixture.verified, &effect, &ownership),
+            Err(AdapterEffectAdmissionError::ForeignContext)
+        );
+        assert!(foreign.records.is_empty());
+    }
+
+    #[test]
+    fn broadcast_vote_and_qc_have_collision_free_specialized_keys() {
+        let fixture = Fixture::new();
+        let vote = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
+        ));
+        let qc = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.prepare_qc.clone()),
+        ));
+        let vote_owner = bound_ownership(&vote, fixture.tag, 50);
+        let qc_owner = bound_ownership(&qc, fixture.tag, 51);
+        let vote_candidate = candidate(&fixture, &vote, &vote_owner);
+        let qc_candidate = candidate(&fixture, &qc, &qc_owner);
+
+        assert_eq!(vote_candidate.key.subject(), qc_candidate.key.subject());
+        assert_eq!(
+            vote_candidate.key.execution_commitment(),
+            qc_candidate.key.execution_commitment()
+        );
+        assert_eq!(
+            vote_candidate.key.phase(),
+            LifecyclePhase::BroadcastPrepareVote
+        );
+        assert_eq!(qc_candidate.key.phase(), LifecyclePhase::BroadcastPrepareQc);
+        assert_ne!(vote_candidate.key, qc_candidate.key);
+        assert_ne!(
+            vote_candidate.physical_geometry.initial[0].digest(),
+            qc_candidate.physical_geometry.initial[0].digest()
+        );
+    }
+
+    #[test]
+    fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
+        let fixture = Fixture::new();
+        let certified_request = wire::CertifiedBodyRequest {
+            round: fixture.round,
+            subject: fixture.subject,
+            certificate: fixture.prepare_qc.clone(),
+            requester: fixture.context.roster[0].validator.clone(),
+            signature: vec![0x61],
+        };
+        let commit_request = wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            chain_id: fixture.context.chain_id.clone(),
+            context_id: fixture.context.id(),
+            height: fixture.context.height,
+            requester: fixture.context.roster[0].validator.clone(),
+            signature: vec![0x62],
+        };
+        let payloads = vec![
+            wire::ConsensusMessageV2Payload::PayloadManifest(fixture.manifest.clone()),
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::new(&fixture.manifest),
+                index: 0,
+                bytes: fixture.encoded_chunks[0].clone(),
+                sender: 0,
+                signature: vec![0x63],
+            }),
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(certified_request.clone()),
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(wire::CertifiedBodyResponse {
+                request_hash: HashOf::new(&certified_request),
+                manifest: fixture.manifest.clone(),
+                body: fixture.body.clone(),
+                responder: 0,
+                signature: vec![0x64],
+            }),
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
+            wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                wire::CommitCertificateResponse {
+                    request_hash: HashOf::new(&commit_request),
+                    certificate: fixture.commit_qc.clone(),
+                    responder: fixture.context.roster[0].validator.clone(),
+                    signature: vec![0x65],
+                },
+            ),
+            wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
+                epoch: fixture.context.epoch,
+                commitment: [0x66; 32],
+                signer: 0,
+                bls_sig: vec![0x66],
+            }),
+            wire::ConsensusMessageV2Payload::VrfReveal(wire::VrfReveal {
+                epoch: fixture.context.epoch,
+                reveal: [0x67; 32],
+                signer: 0,
+                vrf_proof: vec![0x67],
+                bls_sig: vec![0x67],
+            }),
+        ];
+        assert_eq!(payloads.len(), 8);
+
+        for (ordinal, payload) in (60_u128..).zip(payloads) {
+            let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
+            let ownership = bound_ownership(&effect, fixture.tag, ordinal);
+            let mut coordinator = fixture.coordinator();
+            assert_eq!(
+                coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &ownership),
+                Err(AdapterEffectAdmissionError::UnsupportedBroadcastPayload)
+            );
+            assert!(coordinator.records.is_empty());
+        }
+    }
+
+    #[test]
+    fn enter_view_key_and_physical_identity_retain_protected_commitment() {
+        let fixture = Fixture::new();
+        let entered_tag = EventTag::new(
+            fixture.context.height,
+            fixture.round.view + 1,
+            Generation::new(0),
+        );
+        let second_lock = wire::QuorumCertificate {
+            execution_commitment: execution_commitment_for(0x71),
+            aggregate_signature: vec![0x71],
+            ..fixture.prepare_qc.clone()
+        };
+        let first = AdapterEffect::EnterView {
+            tag: entered_tag,
+            certificate: fixture.timeout_certificate.clone(),
+            protected_lock: Some(fixture.prepare_qc.clone()),
+        };
+        let second = AdapterEffect::EnterView {
+            tag: entered_tag,
+            certificate: fixture.timeout_certificate.clone(),
+            protected_lock: Some(second_lock),
+        };
+        let first_owner = bound_ownership(&first, fixture.tag, 70);
+        let second_owner = bound_ownership(&second, fixture.tag, 71);
+        let first_candidate = candidate(&fixture, &first, &first_owner);
+        let second_candidate = candidate(&fixture, &second, &second_owner);
+
+        assert_eq!(
+            first_candidate.key.subject(),
+            second_candidate.key.subject()
+        );
+        assert_ne!(
+            first_candidate.key.execution_commitment(),
+            second_candidate.key.execution_commitment()
+        );
+        assert_ne!(first_candidate.key, second_candidate.key);
+        assert_ne!(
+            first_candidate.physical_geometry.initial[0].digest(),
+            second_candidate.physical_geometry.initial[0].digest()
+        );
+    }
+
+    #[test]
+    fn diagnostic_logical_identity_normalizes_order_and_signatures_but_physical_does_not() {
+        let fixture = Fixture::new();
+        let (first, second) = vote_conflict(&fixture);
+        let mut resigned = first.clone();
+        resigned.signature = vec![0x7F];
+        let forward = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(first.clone(), second.clone()),
+        };
+        let reversed = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(second.clone(), first.clone()),
+        };
+        let re_signed = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(resigned, second),
+        };
+        let forward_owner = bound_ownership(&forward, fixture.tag, 80);
+        let reversed_owner = bound_ownership(&reversed, fixture.tag, 81);
+        let re_signed_owner = bound_ownership(&re_signed, fixture.tag, 82);
+        let forward_candidate = candidate(&fixture, &forward, &forward_owner);
+        let reversed_candidate = candidate(&fixture, &reversed, &reversed_owner);
+        let re_signed_candidate = candidate(&fixture, &re_signed, &re_signed_owner);
+
+        assert_eq!(forward_candidate.key, reversed_candidate.key);
+        assert_eq!(forward_candidate.key, re_signed_candidate.key);
+        let forward_digest = forward_candidate.physical_geometry.initial[0].digest();
+        let reversed_digest = reversed_candidate.physical_geometry.initial[0].digest();
+        let re_signed_digest = re_signed_candidate.physical_geometry.initial[0].digest();
+        assert_ne!(forward_digest, reversed_digest);
+        assert_ne!(forward_digest, re_signed_digest);
+        assert_ne!(reversed_digest, re_signed_digest);
+    }
+
+    #[test]
+    fn bound_but_drifted_carriers_fail_closed_without_records() {
+        let fixture = Fixture::new();
+        let mut signed_proposal = fixture.proposal.clone();
+        signed_proposal.signature = vec![0x91];
+        let pre_signed = AdapterEffect::Sign {
+            tag: fixture.tag,
+            request: SignRequest::Proposal(signed_proposal),
+        };
+        let invalid_body = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: fixture.proposal_for(0x92, 0x92).subject,
+            certificate: fixture.prepare_qc.clone(),
+        };
+        let foreign_protocol = AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            protocol_version: wire::PROTOCOL_VERSION + 1,
+            payload: wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
+        });
+
+        for (ordinal, effect) in (90_u128..).zip([pre_signed, invalid_body, foreign_protocol]) {
+            let ownership = bound_ownership(&effect, fixture.tag, ordinal);
+            let mut coordinator = fixture.coordinator();
+            assert_eq!(
+                coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &ownership),
+                Err(AdapterEffectAdmissionError::InvalidCarrier)
+            );
+            assert!(coordinator.records.is_empty());
+        }
+    }
+}

@@ -933,6 +933,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network.reply_route_source_capacity(),
             consensus_frame_byte_capacity,
             block_sync_frame_byte_capacity,
+            retransmit_interval,
+            round_timeout,
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
@@ -1926,10 +1928,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // lets the runtime issue one newer episode witness before
                     // the worker claims capacity and admits the completion.
                     let _ = services
-                        .observe_certified_serve_predecessor_episode_witness(
-                            serve_barrier,
-                            witness,
-                        )
+                        .observe_certified_serve_predecessor_episode_witness(serve_barrier, witness)
                         .map_err(V2RunnerError::Service)?;
                 }
                 let claimed_older_runtime_episode = services
@@ -3480,7 +3479,7 @@ fn drain_v2_ingress(
         // later owner.
         return Ok(());
     }
-    for turn in outer_ingress_turns(limit) {
+    for turn in outer_ingress_turns(limit, executor.context().id(), executor.context().height) {
         if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {
             continue;
         }
@@ -4446,14 +4445,148 @@ enum OuterIngressTurn {
     Ingress,
 }
 
-fn outer_ingress_turns(limit: usize) -> impl Iterator<Item = OuterIngressTurn> {
-    (0..limit.max(1)).flat_map(|_| {
-        [
-            OuterIngressTurn::Completion,
-            OuterIngressTurn::Runtime,
-            OuterIngressTurn::Ingress,
-        ]
-    })
+/// Closed outer-runner target named by one lifecycle rank observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum LifecycleRunnerRankTarget {
+    /// The next effect/I/O completion service turn.
+    Completion,
+    /// The next serialized reducer-runtime service turn.
+    Runtime,
+    /// The next authenticated fair-ingress service turn.
+    Ingress,
+}
+
+impl LifecycleRunnerRankTarget {
+    const fn turn(self) -> OuterIngressTurn {
+        match self {
+            Self::Completion => OuterIngressTurn::Completion,
+            Self::Runtime => OuterIngressTurn::Runtime,
+            Self::Ingress => OuterIngressTurn::Ingress,
+        }
+    }
+}
+
+/// Runner-owned, context-bound reach debt for one exact outer turn.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "the runner observation must be consumed by the composite planner snapshot"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct LifecycleRunnerRankSnapshot {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    target: LifecycleRunnerRankTarget,
+    debt: u64,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl LifecycleRunnerRankSnapshot {
+    /// Frozen height-context identity owning this cursor observation.
+    pub(crate) const fn context_id(&self) -> wire::HeightContextId {
+        self.context_id
+    }
+
+    /// Frozen height owning this cursor observation.
+    pub(crate) const fn height(&self) -> wire::Height {
+        self.height
+    }
+
+    /// Closed outer turn whose reach was measured.
+    pub(crate) const fn target(&self) -> LifecycleRunnerRankTarget {
+        self.target
+    }
+
+    /// Number of cursor turns strictly before the target.
+    pub(crate) const fn debt(&self) -> u64 {
+        self.debt
+    }
+}
+
+/// Move-only cursor for the exact outer Completion/Runtime/Ingress cycle.
+///
+/// Reifying the cursor preserves the existing iterator order while giving the
+/// future authenticated lifecycle planner a real runner-reach debt instead of
+/// a caller-supplied zero. It remains private and is not yet a planner mint.
+// TODO: Bind this cursor into the composite lifecycle planner snapshot in the
+// one-cut scheduler switch; it must never independently mint SchedulerInputs.
+#[derive(Debug)]
+struct OuterIngressTurns {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    cycles_remaining: usize,
+    next_turn: OuterIngressTurn,
+}
+
+impl OuterIngressTurns {
+    fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) -> Self {
+        Self {
+            context_id,
+            height,
+            cycles_remaining: limit.max(1),
+            next_turn: OuterIngressTurn::Completion,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn reach_debt(&self, target: OuterIngressTurn) -> Option<u64> {
+        if self.cycles_remaining == 0 {
+            return None;
+        }
+        let next = outer_ingress_turn_index(self.next_turn);
+        let target = outer_ingress_turn_index(target);
+        if target >= next {
+            return Some(u64::from(target - next));
+        }
+        (self.cycles_remaining > 1).then(|| u64::from(3 - next + target))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn lifecycle_rank_snapshot(
+        &self,
+        target: LifecycleRunnerRankTarget,
+    ) -> Option<LifecycleRunnerRankSnapshot> {
+        Some(LifecycleRunnerRankSnapshot {
+            context_id: self.context_id,
+            height: self.height,
+            target,
+            debt: self.reach_debt(target.turn())?,
+        })
+    }
+}
+
+impl Iterator for OuterIngressTurns {
+    type Item = OuterIngressTurn;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cycles_remaining == 0 {
+            return None;
+        }
+        let turn = self.next_turn;
+        self.next_turn = match turn {
+            OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
+            OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
+            OuterIngressTurn::Ingress => {
+                self.cycles_remaining -= 1;
+                OuterIngressTurn::Completion
+            }
+        };
+        Some(turn)
+    }
+}
+
+const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
+    match turn {
+        OuterIngressTurn::Completion => 0,
+        OuterIngressTurn::Runtime => 1,
+        OuterIngressTurn::Ingress => 2,
+    }
+}
+
+fn outer_ingress_turns(
+    limit: usize,
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+) -> OuterIngressTurns {
+    OuterIngressTurns::new(limit, context_id, height)
 }
 
 fn v2_ingress_head_can_drain(
@@ -4938,6 +5071,8 @@ fn lane_work_limits(
     reply_source_capacity: usize,
     consensus_frame_byte_capacity: usize,
     block_sync_frame_byte_capacity: usize,
+    historical_recovery_retry_floor: Duration,
+    historical_recovery_retry_ceiling: Duration,
 ) -> Result<V2LaneWorkLimits, V2RunnerError> {
     let non_zero = |value: u64| {
         usize::try_from(value)
@@ -5002,6 +5137,8 @@ fn lane_work_limits(
         merge_leader_body_frame_headroom_bytes,
         non_zero(config.limits.autonomous_carrier_headroom_bytes)?,
         Duration::from_millis(autonomous_producer_recheck_ms.get()),
+        historical_recovery_retry_floor,
+        historical_recovery_retry_ceiling,
         non_zero_u32(config.limits.historical_recovery_stuck_attempts)?,
         non_zero_u32(config.limits.historical_recovery_retry_tier_attempts)?,
         non_zero_u32(config.limits.historical_recovery_max_retry_tier)?,
@@ -5411,16 +5548,6 @@ fn drain_lane_relay_ingress(
         let _ = lane_work.service_next_historical_recovery()?;
     }
     Ok(())
-}
-
-/// Advance one retained historical lane owner on the ordinary retransmission
-/// cadence, even when no lane or relay ingress arrives to trigger recovery.
-fn service_historical_recovery_tick(
-    lane_work: &mut V2LaneWorkAdapter,
-) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
-    lane_work
-        .service_next_historical_recovery()
-        .map_err(V2RunnerError::from)
 }
 
 /// Fail-closed live-runner error.

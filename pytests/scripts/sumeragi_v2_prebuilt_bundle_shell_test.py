@@ -13,6 +13,7 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 HELPER = ROOT_DIR / "scripts" / "sumeragi_v2_prebuilt_bundle.py"
 SHELL_HELPER = ROOT_DIR / "scripts" / "sumeragi_v2_prebuilt_bundle.sh"
+PROCESS_POLICY = ROOT_DIR / "scripts" / "sumeragi_v2_release_process_policy.sh"
 SOURCE_MANIFEST = "c" * 64
 
 
@@ -55,17 +56,30 @@ exit "${BUNDLE_TEST_RUSTC_VERSION_STATUS:-0}"
     )
     rustc.chmod(0o755)
     build_log = tmp_path / "builds.log"
+    cargo_target = tmp_path / "cargo-target"
+    artifact_root = tmp_path / "artifacts"
+    cargo_target.mkdir(mode=0o700)
+    artifact_root.mkdir(mode=0o700)
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     env["BUNDLE_TEST_BUILD_LOG"] = str(build_log)
+    env["CARGO_TARGET_DIR"] = str(cargo_target)
+    env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifact_root)
+    env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(tmp_path / "cancel-request.json")
     return repo, env, build_log
 
 
 def _run_harness(repo: Path, env: dict[str, str], body: str) -> subprocess.CompletedProcess[str]:
     script = f"""set -euo pipefail
+source {shlex_quote(str(PROCESS_POLICY))}
+require_external_private_directory() {{ :; }}
 source {shlex_quote(str(SHELL_HELPER))}
 wait_for_external_cargo() {{ :; }}
 run_cargo() {{
+  if [[ "${{1-}}" == --version ]]; then
+    command cargo --version
+    return
+  fi
   [[ "${{1-}}" == build ]]
   mkdir -p -- "$CARGO_TARGET_DIR/release"
   case " $* " in
@@ -141,8 +155,7 @@ printf '%s\\n' \
     bundle = Path(lines[0])
     assert bundle != inherited_target
     assert bundle.parent == (
-        repo
-        / "target"
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
         / "sumeragi-v2-release"
         / SOURCE_MANIFEST
         / "programs"
@@ -216,7 +229,7 @@ printf '%s\\n' "$first_bundle" "$IROHA_TEST_TARGET_DIR"
     assert len(build_log.read_text(encoding="utf-8").splitlines()) == 8
 
 
-def test_creation_uses_the_resolved_repository_target_authority(
+def test_creation_ignores_repository_target_symlink_authority(
     tmp_path: Path,
 ) -> None:
     repo, env, build_log = _shell_fixture(tmp_path)
@@ -237,12 +250,13 @@ printf '%s\\n' "$IROHA_TEST_TARGET_DIR"
     assert result.returncode == 0, result.stderr
     bundle = Path(result.stdout.strip())
     assert bundle.parent == (
-        workspace_target
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
         / "sumeragi-v2-release"
         / SOURCE_MANIFEST
         / "programs"
     )
     assert (repo / "target").is_symlink()
+    assert not list(workspace_target.iterdir())
     assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
 
 
@@ -264,13 +278,25 @@ sumeragi_v2_ensure_source_bound_localnet_binaries \
     assert result.returncode != 0
     assert len(build_log.read_text(encoding="utf-8").splitlines()) == 2
     programs = (
-        repo
-        / "target"
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
         / "sumeragi-v2-release"
         / SOURCE_MANIFEST
         / "programs"
     )
     assert not programs.exists() or not list(programs.glob("invocation.*"))
+
+    nested_repo, nested_env, nested_build_log = _shell_fixture(tmp_path / "nested")
+    nested_artifacts = Path(nested_env["CARGO_TARGET_DIR"]) / "artifacts"
+    nested_artifacts.mkdir()
+    nested_env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(nested_artifacts)
+    nested = _run_harness(
+        nested_repo,
+        nested_env,
+        f"sumeragi_v2_ensure_source_bound_localnet_binaries "
+        f"{shlex_quote(str(nested_repo))} {SOURCE_MANIFEST}",
+    )
+    assert nested.returncode == 2
+    assert not nested_build_log.exists()
 
 
 @pytest.mark.parametrize(
@@ -296,8 +322,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries \
     assert result.returncode != 0
     assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
     programs = (
-        repo
-        / "target"
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
         / "sumeragi-v2-release"
         / SOURCE_MANIFEST
         / "programs"

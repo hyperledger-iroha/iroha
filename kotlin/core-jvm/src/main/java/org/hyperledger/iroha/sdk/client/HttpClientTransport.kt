@@ -27,6 +27,9 @@ import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportException
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
+import org.hyperledger.iroha.sdk.consensus.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES
+import org.hyperledger.iroha.sdk.consensus.SUMERAGI_STATUS_JSON_MAX_BYTES
+import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
 import org.hyperledger.iroha.sdk.nexus.*
 import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotJsonV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1
@@ -536,12 +539,21 @@ class HttpClientTransport(
         200,
     )
 
+    override fun getSumeragiStatus(): CompletableFuture<SumeragiV2Status> =
+        fetchExactJson(
+            buildExactJsonGetRequest("/v1/sumeragi/status", SUMERAGI_STATUS_JSON_MAX_BYTES),
+            Function { payload -> SumeragiV2Status.parseJson(payload) },
+            "Sumeragi status",
+        )
+
     override fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> =
-        fetchJson(
-            buildJsonGetRequest("/v1/sumeragi/diagnostics", emptyMap()),
+        fetchExactJson(
+            buildExactJsonGetRequest(
+                "/v1/sumeragi/diagnostics",
+                SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES,
+            ),
             Function { payload -> SumeragiDiagnosticsStatus.parseJson(payload) },
             "Sumeragi diagnostics",
-            200,
         )
 
     override fun resolveAccountAliasIndex(
@@ -1296,6 +1308,12 @@ class HttpClientTransport(
         request: TransportRequest,
         parser: Function<ByteArray, T>,
         errorContext: String,
+    ): CompletableFuture<T> = fetchExactJson(request, parser, errorContext)
+
+    private fun <T> fetchExactJson(
+        request: TransportRequest,
+        parser: Function<ByteArray, T>,
+        errorContext: String,
     ): CompletableFuture<T> {
         notifyRequest(request)
         val future = CompletableFuture<T>()
@@ -1315,13 +1333,11 @@ class HttpClientTransport(
                 extractRejectCode(response),
             )
             try {
-                requireExactSccpJsonResponse(response, errorContext)
+                requireExactJsonResponse(response, errorContext)
                 val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
                     "$errorContext request must declare a response-body limit"
                 }
-                require(body.isNotEmpty()) {
-                    "$errorContext response must not be empty"
-                }
+                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
                 require(body.size.toLong() <= maximumResponseBytes) {
                     "$errorContext response exceeds $maximumResponseBytes bytes"
                 }
@@ -1329,9 +1345,9 @@ class HttpClientTransport(
                 val parsed = parser.apply(body)
                 notifyResponse(request, clientResponse)
                 future.complete(parsed)
-            } catch (ex: RuntimeException) {
-                notifyFailure(request, ex)
-                future.completeExceptionally(ex)
+            } catch (error: RuntimeException) {
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
             }
         }
         return future
@@ -1399,15 +1415,20 @@ class HttpClientTransport(
         actualBytes: Int,
         errorContext: String,
     ) {
-        val values = headers.entries
-            .asSequence()
+        val matchingHeaders = headers.entries
             .filter { (name, _) -> name.equals("Content-Length", ignoreCase = true) }
+        if (matchingHeaders.isEmpty()) return
+        val values = matchingHeaders
+            .asSequence()
             .flatMap { (_, headerValues) -> headerValues.asSequence() }
             .toList()
-        if (values.isEmpty()) return
         require(values.size == 1) { "$errorContext response has ambiguous Content-Length" }
         val value = values.single()
-        require(value == "0" || (value.isNotEmpty() && value[0] in '1'..'9' && value.drop(1).all { it in '0'..'9' })) {
+        require(
+            value == "0" ||
+                (value.isNotEmpty() && value[0] in '1'..'9' &&
+                    value.drop(1).all { it in '0'..'9' }),
+        ) {
             "$errorContext response Content-Length must be one canonical decimal integer"
         }
         require(value.toLongOrNull() == actualBytes.toLong()) {
@@ -1469,6 +1490,13 @@ class HttpClientTransport(
     }
 
     private fun requireExactSccpJsonResponse(
+        response: TransportResponse,
+        errorContext: String,
+    ) {
+        requireExactJsonResponse(response, errorContext)
+    }
+
+    private fun requireExactJsonResponse(
         response: TransportResponse,
         errorContext: String,
     ) {

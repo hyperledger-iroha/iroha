@@ -25,10 +25,10 @@ use super::v2_core::{
 };
 use crate::{
     kura::{
-        AutonomousLifecycleAttemptBindingV1, AutonomousLifecycleCursorPhaseKindV2,
-        AutonomousLifecycleCursorPhaseV2, AutonomousLifecycleCursorRead,
-        AutonomousLifecycleCursorUnsignedV2, AutonomousLifecycleCursorV2,
-        AutonomousLifecyclePayloadCustodySourceV1,
+        AutonomousLifecycleAttemptBindingV1, AutonomousLifecycleBootstrapCompletionOutcome,
+        AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
+        AutonomousLifecycleCursorRead, AutonomousLifecycleCursorUnsignedV2,
+        AutonomousLifecycleCursorV2, AutonomousLifecyclePayloadCustodySourceV1,
         AutonomousLifecyclePendingReservationGroupObservation,
         AutonomousLifecyclePendingTerminalOutcomeRecovery,
         AutonomousLifecycleProcessGenerationClaim, AutonomousLifecycleTerminalOutcomeDurableStage,
@@ -1618,12 +1618,18 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         let completion = kura
             .complete_autonomous_lifecycle_bootstrap(permit)
             .map_err(|error| lifecycle_error("bootstrap completion failed", error))?;
-        if completion.cursor() != &expected_live {
-            return Err(
-                "autonomous lifecycle bootstrap completed with a different Live cursor".to_owned(),
-            );
+        match completion {
+            AutonomousLifecycleBootstrapCompletionOutcome::Completed(completion) => {
+                if completion.cursor() != &expected_live {
+                    return Err(
+                        "autonomous lifecycle bootstrap completed with a different Live cursor"
+                            .to_owned(),
+                    );
+                }
+                drop(completion);
+            }
+            AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal => {}
         }
-        drop(completion);
         completed_bootstraps = completed_bootstraps.saturating_add(1);
     }
 

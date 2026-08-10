@@ -345,23 +345,24 @@ def test_diagnostics_parse_separately_from_authoritative_status() -> None:
 def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str, tuple[int, ...]]] = []
+    calls: list[tuple[str, str, int]] = []
     payloads = {
         "/v1/sumeragi/status": _healthy_diagnostics(),
         "/v1/sumeragi/diagnostics": _healthy_status(),
     }
     client = ToriiClient("http://node.test", max_retries=0)
 
-    def request_json(
-        method: str,
+    def get_sccp_json_object(
         path: str,
         *,
-        expected_status: tuple[int, ...],
+        context: str,
+        maximum_body_bytes: int,
+        parser: object,
     ) -> object:
-        calls.append((method, path, expected_status))
+        calls.append((path, context, maximum_body_bytes))
         return payloads[path]
 
-    monkeypatch.setattr(client, "request_json", request_json)
+    monkeypatch.setattr(client, "_get_sccp_json_object", get_sccp_json_object)
 
     with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
         client.get_sumeragi_status_typed()
@@ -371,9 +372,23 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
         client.get_sumeragi_diagnostics_typed()
 
     assert calls == [
-        ("GET", "/v1/sumeragi/status", (200,)),
-        ("GET", "/v1/sumeragi/diagnostics", (200,)),
+        ("/v1/sumeragi/status", "sumeragi status", 1 * 1024 * 1024),
+        (
+            "/v1/sumeragi/diagnostics",
+            "sumeragi diagnostics",
+            16 * 1024 * 1024,
+        ),
     ]
+
+    response = client_module.requests.Response()
+    response.status_code = 200
+    response.headers["Content-Type"] = "application/json"
+    response._content = b'{"receipt":{"version":1,"version":2}}'
+    response._content_consumed = True
+    strict_client = ToriiClient("http://node.test", max_retries=0)
+    monkeypatch.setattr(strict_client, "_request", lambda *args, **kwargs: response)
+    with pytest.raises(ValueError, match="duplicate field `version`"):
+        strict_client.get_sumeragi_diagnostics_typed()
 
 
 def test_qc_reference_preserves_execution_commitment() -> None:

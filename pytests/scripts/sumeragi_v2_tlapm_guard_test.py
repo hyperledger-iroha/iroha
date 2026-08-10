@@ -6,7 +6,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
 import shutil
 import subprocess
 import sys
@@ -39,26 +38,79 @@ def _wait_for(path: Path, timeout: float = 10.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
-def _wait_for_process_group_exit(process_group_id: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process_group_id, 0)
-        except (ProcessLookupError, PermissionError):
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"process group {process_group_id} is still present")
+class _FakeControl:
+    def __init__(self, record: str, events: list[str]) -> None:
+        self.record = record
+        self.events = events
+
+    def read_line(self, *, timeout: float, description: str) -> str:
+        assert timeout == guard.CONTROL_RECORD_TIMEOUT_SECONDS
+        assert description == "lifeline wrapper exit status"
+        self.events.append("exit-record")
+        return self.record
+
+    def drain_to_eof(self) -> bytes:
+        self.events.append("control-eof")
+        return b""
+
+    def close(self) -> None:
+        self.events.append("control-close")
 
 
-def _wait_for_process_exit(process_id: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(process_id, 0)
-        except (ProcessLookupError, PermissionError):
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"process {process_id} is still present")
+class _NaturallyCompletingWrapper:
+    pid = 700
+
+    def __init__(self, events: list[str], polls_before_completion: int = 4) -> None:
+        self.events = events
+        self.remaining_polls = polls_before_completion
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if self.remaining_polls > 0:
+            self.remaining_polls -= 1
+            return None
+        if self.returncode is None:
+            self.events.append("natural-completion")
+            self.returncode = 0
+        return self.returncode
+
+    def wait(self) -> int:
+        self.events.append("natural-wait")
+        self.returncode = 0
+        return 0
+
+
+def _fake_session(
+    events: list[str],
+    *,
+    record: str = "EXIT 0 0 0 0 0",
+    polls_before_completion: int = 4,
+) -> guard.GuardedSession:
+    return guard.GuardedSession(
+        wrapper=_NaturallyCompletingWrapper(events, polls_before_completion),
+        process_group_id=501,
+        lifeline_writer=-1,
+        control=_FakeControl(record, events),
+    )
+
+
+def _install_fake_session(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[str],
+    *,
+    record: str = "EXIT 0 0 0 0 0",
+    polls_before_completion: int = 4,
+) -> None:
+    session = _fake_session(
+        events,
+        record=record,
+        polls_before_completion=polls_before_completion,
+    )
+    monkeypatch.setattr(
+        guard,
+        "_spawn_guarded_session",
+        lambda *_args, **_kwargs: session,
+    )
 
 
 def test_host_lock_is_exclusive_and_rejects_unsafe_metadata(tmp_path: Path) -> None:
@@ -103,48 +155,110 @@ def test_foreign_job_detection_excludes_owned_process_group() -> None:
     ] == [12]
 
 
-def test_process_inspection_is_bounded_and_timeout_fails_closed(
+def _pipe_with_bytes(data: bytes) -> object:
+    reader, writer = os.pipe()
+    os.write(writer, data)
+    os.close(writer)
+    return os.fdopen(reader, "rb", buffering=0)
+
+
+def test_process_inspection_timeout_is_reported_after_natural_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert guard.CONTROL_RECORD_TIMEOUT_SECONDS == 0.2
     assert guard.PROCESS_INSPECTION_TIMEOUT_SECONDS == 10.0
     assert guard.PHYSICAL_FOOTPRINT_INTERVAL_SECONDS == 5.0
+    events: list[str] = []
 
-    def timeout(*_args: object, **_kwargs: object) -> None:
-        raise subprocess.TimeoutExpired([guard.PS], guard.PROCESS_INSPECTION_TIMEOUT_SECONDS)
+    class FakeProcess:
+        stdout = _pipe_with_bytes(b"11 1 11 501 64 /bin/example\n")
+        stderr = _pipe_with_bytes(b"")
 
-    monkeypatch.setattr(guard.subprocess, "run", timeout)
-    with pytest.raises(guard.GuardError, match="exceeded 10 s"):
-        guard._process_rows()
+        @staticmethod
+        def wait() -> int:
+            events.append("natural-completion")
+            return 0
 
+    clock = iter((0.0, 11.0, 12.0))
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(guard.time, "monotonic", lambda: next(clock, 12.0))
 
-def test_process_inspection_tolerates_legacy_two_second_overrun(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed_timeouts: list[float] = []
-
-    def completes_after_legacy_deadline(
-        command: list[str], **options: object
-    ) -> subprocess.CompletedProcess[str]:
-        timeout = options.get("timeout")
-        assert isinstance(timeout, float)
-        assert options.get("env") == guard.PROCESS_INSPECTION_ENVIRONMENT
-        observed_timeouts.append(timeout)
-        if timeout <= 2.0:
-            raise subprocess.TimeoutExpired(command, timeout)
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout="11 1 11 501 64 /bin/example\n",
-            stderr="",
+    with pytest.raises(
+        guard.GuardViolation, match="before natural completion"
+    ) as violation:
+        guard._run_bounded_observation(
+            ["/bin/ps"],
+            timeout_seconds=10.0,
+            maximum_output_bytes=1024,
+            environment={},
         )
 
-    monkeypatch.setattr(guard.subprocess, "run", completes_after_legacy_deadline)
+    assert violation.value.reason == "process_inspection_timeout"
+    assert events == ["natural-completion"]
+
+
+def test_process_inspection_output_limit_is_reported_after_eof_and_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeProcess:
+        stdout = _pipe_with_bytes(b"observed-natural-sentinel")
+        stderr = _pipe_with_bytes(b"")
+
+        @staticmethod
+        def wait() -> int:
+            events.append("natural-completion")
+            return 0
+
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+
+    with pytest.raises(
+        guard.GuardViolation, match="retained-output limit.*natural completion"
+    ) as violation:
+        guard._run_bounded_observation(
+            ["/bin/ps"],
+            timeout_seconds=10.0,
+            maximum_output_bytes=4,
+            environment={},
+        )
+
+    assert violation.value.reason == "process_inspection_output_limit"
+    assert events == ["natural-completion"]
+
+
+def test_process_rows_parses_naturally_collected_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[float, int]] = []
+
+    def completed(
+        _argv: object,
+        *,
+        timeout_seconds: float,
+        maximum_output_bytes: int,
+        environment: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert environment == guard.PROCESS_INSPECTION_ENVIRONMENT
+        observed.append((timeout_seconds, maximum_output_bytes))
+        return subprocess.CompletedProcess(
+            ["/bin/ps"],
+            0,
+            stdout=b"11 1 11 501 64 /bin/example\n",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(guard, "_run_bounded_observation", completed)
 
     assert guard._process_rows() == [
         guard.ProcessRow(11, 1, 11, 501, 64 * 1024, "/bin/example")
     ]
-    assert observed_timeouts == [10.0]
+    assert observed == [
+        (
+            guard.PROCESS_INSPECTION_TIMEOUT_SECONDS,
+            guard.PROCESS_INSPECTION_OUTPUT_LIMIT_BYTES,
+        )
+    ]
 
 
 def _darwin_identity(
@@ -321,6 +435,32 @@ def test_macos_libproc_load_failure_fails_closed(
         guard._physical_footprint_bytes([123])
 
 
+@pytest.mark.parametrize("still_present", [False, True])
+def test_darwin_footprint_exit_race_requires_confirmed_pid_absence(
+    monkeypatch: pytest.MonkeyPatch, still_present: bool
+) -> None:
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        guard,
+        "_darwin_process_physical_footprint_bytes",
+        lambda _pid: (_ for _ in ()).throw(
+            guard.DarwinProcessUnavailable("natural exit race")
+        ),
+    )
+    rows = (
+        [guard.ProcessRow(123, 1, 123, os.getuid(), 0, "/bin/tool")]
+        if still_present
+        else []
+    )
+    monkeypatch.setattr(guard, "_process_rows", lambda: rows)
+
+    if still_present:
+        with pytest.raises(guard.DarwinProcessUnavailable):
+            guard._physical_footprint_bytes([123])
+    else:
+        assert guard._physical_footprint_bytes([123]) == 0
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Darwin libproc is required")
 def test_macos_libproc_reports_current_process_footprint() -> None:
     footprint = guard._darwin_process_physical_footprint_bytes(os.getpid())
@@ -335,7 +475,7 @@ def test_sampler_uses_larger_rss_or_physical_footprint(
     monkeypatch.setattr(
         guard,
         "_group_rows",
-        lambda _pgid, _rows=None: [
+        lambda _pgid, _rows=None, *, known_owned_process_ids=None: [
             guard.ProcessRow(11, 1, 11, uid, 9, "/bin/tool")
         ],
     )
@@ -377,7 +517,7 @@ def test_sampler_can_enforce_rss_while_retaining_footprint_diagnostics(
     monkeypatch.setattr(
         guard,
         "_group_rows",
-        lambda _pgid, _rows=None: [
+        lambda _pgid, _rows=None, *, known_owned_process_ids=None: [
             guard.ProcessRow(11, 1, 11, uid, 9, "/bin/tool")
         ],
     )
@@ -411,6 +551,8 @@ def test_rss_enforcement_does_not_stop_on_diagnostic_footprint(
 
         def diagnostic_process_memory(pid: int) -> guard.DarwinProcessMemory:
             measured = process_memory(pid)
+            if measured.rss_bytes == 0 and measured.physical_footprint_bytes == 0:
+                return measured
             return guard.DarwinProcessMemory(
                 measured.rss_bytes, diagnostic_footprint
             )
@@ -441,7 +583,7 @@ def test_rss_enforcement_does_not_stop_on_diagnostic_footprint(
         for event in _events(jsonl)
         if event.get("physical_footprint_bytes") == diagnostic_footprint
     ]
-    assert status == 0
+    assert status == 0, json.dumps(document, sort_keys=True)
     assert document["exit_reason"] == "completed"
     assert document["memory_enforcement_mode"] == (
         guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
@@ -458,7 +600,7 @@ def test_sample_group_reuses_supplied_process_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     uid = os.getuid()
-    rows = [guard.ProcessRow(11, 1, 55, uid, 9, "/bin/tool")]
+    rows = [guard.ProcessRow(55, 1, 55, uid, 9, "/bin/tool")]
 
     def unexpected_inspection() -> list[guard.ProcessRow]:
         raise AssertionError("sample performed a second process inspection")
@@ -478,7 +620,7 @@ def test_rss_sample_can_defer_physical_footprint(
     """A loader-startup sample must not invoke macOS footprint eagerly."""
 
     uid = os.getuid()
-    rows = [guard.ProcessRow(11, 1, 55, uid, 9, "/bin/tool")]
+    rows = [guard.ProcessRow(55, 1, 55, uid, 9, "/bin/tool")]
 
     def unexpected_footprint(_pids: object) -> int:
         raise AssertionError("deferred sample invoked physical footprint")
@@ -496,98 +638,121 @@ def test_rss_sample_can_defer_physical_footprint(
     assert sample.accounting_method == "rss"
 
 
-def test_signal_race_is_benign_after_group_absence_is_verified(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def raced_killpg(_process_group_id: int, _signum: int) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("process exited during signal")
-        raise ProcessLookupError
-
-    monkeypatch.setattr(guard.os, "killpg", raced_killpg)
-
-    guard._signal_process_group(12345, signal.SIGTERM)
-    assert calls == 2
-
-
-def test_signal_error_remains_fatal_while_group_exists(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def failed_killpg(_process_group_id: int, _signum: int) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("signal failed")
-
-    monkeypatch.setattr(guard.os, "killpg", failed_killpg)
-
-    with pytest.raises(guard.GuardError, match="could not signal owned process group"):
-        guard._signal_process_group(12345, signal.SIGTERM)
-    assert calls == 2
-
-
-def test_delayed_distinct_wrapper_gets_long_reap_bound_without_extra_signal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    waits: list[float] = []
-    signals: list[tuple[int, int]] = []
-
-    class DelayedWrapper:
-        pid = 111
-
-        def wait(self, *, timeout: float) -> int:
-            waits.append(timeout)
-            if timeout <= guard.TERM_GRACE_SECONDS:
-                raise subprocess.TimeoutExpired(self.pid, timeout)
-            return 0
-
-    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
-    monkeypatch.setattr(
-        guard,
-        "_signal_process_group",
-        lambda pgid, signum: signals.append((pgid, signum)),
+def test_guard_source_contains_no_process_control_or_timed_termination() -> None:
+    source = GUARD_PATH.read_text(encoding="utf-8")
+    forbidden = (
+        "import signal",
+        "os.kill",
+        "killpg(",
+        ".terminate(",
+        ".kill(",
+        "start_new_session",
+        "SIGSTOP",
+        "SIGTERM",
+        "SIGKILL",
+        "wait(timeout=",
     )
 
-    guard._kill_owned_group_immediately(DelayedWrapper(), 222)
-
-    assert waits == [guard.WRAPPER_REAP_TIMEOUT_SECONDS]
-    assert signals == [(222, signal.SIGKILL)]
+    assert all(token not in source for token in forbidden)
 
 
-def test_wedged_distinct_wrapper_is_killed_and_timeout_becomes_guard_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    waits: list[float] = []
-    signals: list[tuple[int, int]] = []
+def test_guarded_session_close_waits_naturally_before_control_eof() -> None:
+    events: list[str] = []
+    session = _fake_session(events)
 
-    class WedgedWrapper:
-        pid = 111
+    session.close()
 
-        def wait(self, *, timeout: float) -> int:
-            waits.append(timeout)
-            raise subprocess.TimeoutExpired(self.pid, timeout)
+    assert events == ["natural-wait", "control-eof", "control-close"]
 
-    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
-    monkeypatch.setattr(
-        guard,
-        "_signal_process_group",
-        lambda pgid, signum: signals.append((pgid, signum)),
-    )
 
-    with pytest.raises(guard.GuardError, match="wrapper 111 could not be reaped"):
-        guard._kill_owned_group_immediately(WedgedWrapper(), 222)
-
-    assert waits == [
-        guard.WRAPPER_REAP_TIMEOUT_SECONDS,
-        guard.TERM_GRACE_SECONDS,
+def test_owned_tree_tracks_descendants_without_group_membership() -> None:
+    uid = os.getuid()
+    rows = [
+        guard.ProcessRow(501, 700, 42, uid, 1, "/bin/root"),
+        guard.ProcessRow(502, 501, 99, uid, 2, "/bin/child"),
+        guard.ProcessRow(503, 502, 77, uid, 3, "/bin/grandchild"),
+        guard.ProcessRow(504, 1, 42, uid, 4, "/bin/unrelated"),
     ]
-    assert signals == [(222, signal.SIGKILL), (111, signal.SIGKILL)]
+    known = {501}
+
+    observed = guard._group_rows(
+        501, rows, known_owned_process_ids=known
+    )
+
+    assert [row.pid for row in observed] == [501, 502, 503]
+    assert known == {501, 502, 503}
+
+
+def test_wrapper_latches_lifeline_and_observes_descendant_to_natural_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    uid = os.getuid()
+
+    class FakeChild:
+        pid = 501
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self) -> int:
+            raise AssertionError("non-cooperative wrapper fallback was used")
+
+    def fake_popen(_command: object, **options: object) -> FakeChild:
+        assert "start_new_session" not in options
+        events.append("body-spawned")
+        return FakeChild()
+
+    snapshots = iter(
+        (
+            [
+                guard.ProcessRow(501, 700, 42, uid, 1, "/fake/body"),
+                guard.ProcessRow(502, 501, 77, uid, 1, "/fake/descendant"),
+            ],
+            [guard.ProcessRow(502, 1, 77, uid, 1, "/fake/descendant")],
+            [],
+        )
+    )
+    completions = iter((None, (0, 4096)))
+    lifeline = iter((False, False, True, True))
+    monkeypatch.setenv(guard.RESOURCE_GUARD_AUTH_FD_ENV, "5")
+    monkeypatch.setattr(guard, "_require_pipe_descriptor", lambda *_args: None)
+    monkeypatch.setattr(guard, "_close_descriptor", lambda _fd: None)
+    monkeypatch.setattr(guard.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(guard, "_process_rows", lambda: next(snapshots))
+    monkeypatch.setattr(
+        guard, "_wait4_nonblocking", lambda _child: next(completions)
+    )
+    monkeypatch.setattr(
+        guard, "_lifeline_closed", lambda *_args: next(lifeline)
+    )
+    monkeypatch.setattr(guard.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        guard,
+        "_write_wrapper_control",
+        lambda _fd, record: events.append(record),
+    )
+
+    status = guard._run_session_wrapper(
+        [
+            "--lifeline-fd",
+            "3",
+            "--control-fd",
+            "4",
+            "--auth-fd",
+            "5",
+            "--",
+            "/fake/body",
+        ]
+    )
+
+    assert status == 1
+    assert events == [
+        "body-spawned",
+        "READY 501",
+        "EXIT 0 1 0 0 4096",
+    ]
 
 
 def test_delayed_process_inspection_schedules_from_probe_completion(
@@ -598,12 +763,18 @@ def test_delayed_process_inspection_schedules_from_probe_completion(
     sample_interval_seconds = 0.04
     probe_delay_seconds = 0.06
     probe_windows: list[tuple[float, float]] = []
+    events: list[str] = []
+    _install_fake_session(
+        monkeypatch, events, polls_before_completion=20
+    )
 
     def delayed_process_rows() -> list[guard.ProcessRow]:
         started = time.monotonic()
         time.sleep(probe_delay_seconds)
         probe_windows.append((started, time.monotonic()))
-        return []
+        return [
+            guard.ProcessRow(501, 700, 42, os.getuid(), 1, "/bin/body")
+        ]
 
     monkeypatch.setattr(guard, "_process_rows", delayed_process_rows)
     monkeypatch.setattr(guard.sys, "platform", "linux")
@@ -615,7 +786,7 @@ def test_delayed_process_inspection_schedules_from_probe_completion(
     monkeypatch.setattr(guard, "_physical_footprint_bytes", unexpected_footprint)
 
     status = guard._run_guarded(
-        [sys.executable, "-c", "import time; time.sleep(0.4)"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         sample_interval_seconds=sample_interval_seconds,
@@ -635,64 +806,43 @@ def test_delayed_process_inspection_schedules_from_probe_completion(
     assert min(gaps_after_probe) >= sample_interval_seconds * 0.9
 
 
-def test_darwin_runtime_samples_never_request_a_global_inventory(
+def test_darwin_runtime_uses_observation_only_tree_snapshots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(
+        monkeypatch, events, polls_before_completion=2
+    )
     global_inspections = 0
-    scoped_inspections: list[int] = []
-    expected_identities: list[guard.DarwinProcessIdentity | None] = []
 
     def global_rows() -> list[guard.ProcessRow]:
         nonlocal global_inspections
         global_inspections += 1
-        if global_inspections > 2:
-            raise AssertionError("Darwin hot loop requested a global inventory")
-        return []
-
-    def capture_body(
-        process_group_id: int, wrapper_process_id: int
-    ) -> guard.DarwinProcessIdentity:
-        return _darwin_identity(
-            process_group_id,
-            process_group_id=process_group_id,
-            parent_id=wrapper_process_id,
-        )
-
-    def scoped_rows(
-        process_group_id: int,
-        *,
-        expected_body_identity: guard.DarwinProcessIdentity | None = None,
-    ) -> list[guard.ProcessRow]:
-        scoped_inspections.append(process_group_id)
-        expected_identities.append(expected_body_identity)
         return [
             guard.ProcessRow(
-                process_group_id,
-                1,
-                process_group_id,
+                501,
+                700,
+                42,
                 os.getuid(),
                 1024,
                 "/bin/worker",
-                2048,
             )
         ]
 
     monkeypatch.setattr(guard.sys, "platform", "darwin")
     monkeypatch.setattr(guard, "_process_rows", global_rows)
-    monkeypatch.setattr(guard, "_capture_darwin_body_identity", capture_body)
-    monkeypatch.setattr(guard, "_darwin_process_group_rows", scoped_rows)
     monkeypatch.setattr(
-        guard.subprocess,
-        "run",
+        guard,
+        "_darwin_process_group_rows",
         lambda *_args, **_options: (_ for _ in ()).throw(
-            AssertionError("Darwin runtime invoked /bin/ps")
+            AssertionError("cooperative runtime used process-group accounting")
         ),
     )
 
     status = guard._run_guarded(
-        [sys.executable, "-c", "import time; time.sleep(0.15)"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         sample_interval_seconds=0.01,
@@ -700,17 +850,22 @@ def test_darwin_runtime_samples_never_request_a_global_inventory(
     )
 
     assert status == 0
-    assert global_inspections == 2
-    assert len(scoped_inspections) >= 2
-    assert len(set(scoped_inspections)) == 1
-    assert all(identity is not None for identity in expected_identities)
+    assert global_inspections >= 3
+    assert "natural-completion" in events
 
 
-def test_sampling_failure_terminates_known_group_and_fails_closed(
+def test_sampling_failure_is_latched_until_fake_body_completes_naturally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(monkeypatch, events)
+    monkeypatch.setattr(
+        guard,
+        "_process_rows",
+        lambda: [guard.ProcessRow(501, 700, 42, os.getuid(), 1, "/bin/body")],
+    )
 
     def fail_sample(
         _pgid: int, _rows: object | None = None, **_options: object
@@ -719,7 +874,7 @@ def test_sampling_failure_terminates_known_group_and_fails_closed(
 
     monkeypatch.setattr(guard, "_sample_group", fail_sample)
     result = guard._run_guarded(
-        ["/bin/sleep", "30"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         sample_interval_seconds=0.01,
@@ -727,17 +882,20 @@ def test_sampling_failure_terminates_known_group_and_fails_closed(
 
     assert result == 1
     document = json.loads(summary.read_text(encoding="utf-8"))
-    assert document["exit_reason"] == "guard_error"
-    spawn = next(event for event in _events(jsonl) if event["event"] == "spawn")
-    _wait_for_process_group_exit(int(spawn["process_group_id"]))
+    assert document["exit_reason"] == "process_observation_failure"
+    assert "natural-completion" in events
+    assert events.index("natural-completion") < events.index("exit-record")
 
 
-def test_foreign_job_started_after_spawn_kills_only_owned_group_and_exits_74(
+def test_foreign_job_is_latched_until_fake_body_completes_naturally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(monkeypatch, events)
     uid = os.getuid()
+    owned = guard.ProcessRow(501, 700, 42, uid, 1, "/bin/body")
     foreign = guard.ProcessRow(
         2_000_000_000,
         1,
@@ -751,23 +909,12 @@ def test_foreign_job_started_after_spawn_kills_only_owned_group_and_exits_74(
     def process_rows() -> list[guard.ProcessRow]:
         nonlocal inspections
         inspections += 1
-        return [] if inspections == 1 else [foreign]
-
-    killed_groups: list[int] = []
-    kill_owned_group = guard._kill_owned_group_immediately
-
-    def record_kill(
-        process: subprocess.Popen[bytes], process_group_id: int
-    ) -> None:
-        killed_groups.append(process_group_id)
-        kill_owned_group(process, process_group_id)
+        return [] if inspections == 1 else [owned, foreign]
 
     monkeypatch.setattr(guard, "_process_rows", process_rows)
-    monkeypatch.setattr(guard.sys, "platform", "linux")
-    monkeypatch.setattr(guard, "_kill_owned_group_immediately", record_kill)
 
     status = guard._run_guarded(
-        ["/bin/sleep", "30"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         sample_interval_seconds=0.01,
@@ -782,19 +929,21 @@ def test_foreign_job_started_after_spawn_kills_only_owned_group_and_exits_74(
     assert status == guard.FOREIGN_JOB_EXIT_CODE
     assert document["exit_reason"] == "foreign_heavy_job"
     assert document["exit_status"] == guard.FOREIGN_JOB_EXIT_CODE
-    assert killed_groups == [owned_process_group_id]
     assert owned_process_group_id != foreign.process_group_id
     assert conflict["phase"] == "runtime"
     assert conflict["foreign_process_group_id"] == foreign.process_group_id
     assert conflict["owned_process_group_id"] == owned_process_group_id
-    _wait_for_process_group_exit(owned_process_group_id)
+    assert "natural-completion" in events
+    assert events.index("natural-completion") < events.index("exit-record")
 
 
-def test_runtime_foreign_inspection_timeout_terminates_owned_group_and_fails_closed(
+def test_runtime_inspection_timeout_is_latched_until_natural_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(monkeypatch, events)
     inspections = 0
 
     def process_rows() -> list[guard.ProcessRow]:
@@ -802,34 +951,25 @@ def test_runtime_foreign_inspection_timeout_terminates_owned_group_and_fails_clo
         inspections += 1
         if inspections == 1:
             return []
-        raise guard.GuardError("runtime process inspection timed out")
-
-    signalled_groups: list[int] = []
-    signal_process_group = guard._signal_process_group
-
-    def record_signal(process_group_id: int, signum: int) -> None:
-        signalled_groups.append(process_group_id)
-        signal_process_group(process_group_id, signum)
+        raise guard.GuardViolation(
+            "process_inspection_timeout",
+            "runtime process inspection timed out after natural completion",
+        )
 
     monkeypatch.setattr(guard, "_process_rows", process_rows)
-    monkeypatch.setattr(guard.sys, "platform", "linux")
-    monkeypatch.setattr(guard, "_signal_process_group", record_signal)
 
     status = guard._run_guarded(
-        ["/bin/sleep", "30"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         sample_interval_seconds=0.01,
     )
 
     document = json.loads(summary.read_text(encoding="utf-8"))
-    spawn = next(event for event in _events(jsonl) if event["event"] == "spawn")
-    owned_process_group_id = int(spawn["process_group_id"])
     assert status == 1
-    assert document["exit_reason"] == "guard_error"
-    assert signalled_groups
-    assert set(signalled_groups) == {owned_process_group_id}
-    _wait_for_process_group_exit(owned_process_group_id)
+    assert document["exit_reason"] == "process_inspection_timeout"
+    assert "natural-completion" in events
+    assert events.index("natural-completion") < events.index("exit-record")
 
 
 def test_foreign_job_at_final_success_gate_skips_finalize(
@@ -887,47 +1027,19 @@ def test_foreign_job_at_final_success_gate_skips_finalize(
     assert conflict["owned_process_group_id"] is None
 
 
-def test_memory_limit_path_stops_remeasures_then_kills(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    actions: list[object] = []
-
-    class FakeProcess:
-        pid = 111
-
-    monkeypatch.setattr(
-        guard,
-        "_signal_process_group",
-        lambda pgid, signum: actions.append(("signal", pgid, signum)),
-    )
-    monkeypatch.setattr(
-        guard,
-        "_kill_owned_group_immediately",
-        lambda _process, pgid: actions.append(("kill", pgid)),
-    )
-
-    def remeasure() -> guard.MemorySample:
-        actions.append("remeasure")
-        return guard.MemorySample(3, 2, 3, 1, "kernel")
-
-    sample = guard._stop_remeasure_then_kill_owned_group(
-        FakeProcess(), 222, remeasure
-    )
-
-    assert sample.memory_bytes == 3
-    assert actions == [
-        ("signal", 222, signal.SIGSTOP),
-        "remeasure",
-        ("kill", 222),
-    ]
-
-
-def test_memory_limit_terminates_owned_group_and_exits_75(
+def test_memory_limit_is_latched_until_fake_body_completes_naturally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert guard.MAX_MEMORY_BYTES == 2 * 1024 * 1024 * 1024
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(monkeypatch, events)
+    monkeypatch.setattr(
+        guard,
+        "_process_rows",
+        lambda: [guard.ProcessRow(501, 700, 42, os.getuid(), 1, "/bin/body")],
+    )
     monkeypatch.setattr(
         guard,
         "_sample_group",
@@ -935,20 +1047,8 @@ def test_memory_limit_terminates_owned_group_and_exits_75(
             2, 2, 0, 1, "rss"
         ),
     )
-    immediate_kills = 0
-    kill_immediately = guard._kill_owned_group_immediately
-
-    def record_immediate_kill(
-        process: subprocess.Popen[bytes], process_group_id: int
-    ) -> None:
-        nonlocal immediate_kills
-        immediate_kills += 1
-        kill_immediately(process, process_group_id)
-
-    monkeypatch.setattr(guard, "_kill_owned_group_immediately", record_immediate_kill)
-
     status = guard._run_guarded(
-        ["/bin/sleep", "30"],
+        ["/fake/body"],
         report_path=jsonl,
         summary_path=summary,
         memory_limit_bytes=1,
@@ -960,13 +1060,11 @@ def test_memory_limit_terminates_owned_group_and_exits_75(
     assert document["exit_reason"] == "memory_limit"
     assert document["exit_status"] == 75
     assert document["peak_memory_bytes"] == 2
-    assert document["kernel_peak_rss_bytes"] > 0
-    assert immediate_kills == 1
     assert any(
-        event["event"] == "memory_limit_remeasure" for event in _events(jsonl)
+        event["event"] == "memory_limit_observed" for event in _events(jsonl)
     )
-    spawn = next(event for event in _events(jsonl) if event["event"] == "spawn")
-    _wait_for_process_group_exit(int(spawn["process_group_id"]))
+    assert "natural-completion" in events
+    assert events.index("natural-completion") < events.index("exit-record")
 
 
 def test_wait4_rss_units_are_normalized_to_bytes(
@@ -1143,156 +1241,103 @@ def test_post_run_cleanup_failure_fails_closed(tmp_path: Path) -> None:
     assert document["post_run_cleanup_removed"] is None
 
 
-def test_signal_terminates_child_and_grandchild_and_emits_summary(tmp_path: Path) -> None:
-    jsonl = tmp_path / "resource.jsonl"
-    summary = tmp_path / "summary.json"
-    pids = tmp_path / "pids"
-    child_source = (
-        "import os, pathlib, subprocess, sys, time; "
-        "child=subprocess.Popen(['/bin/sleep','60']); "
-        "pathlib.Path(sys.argv[1]).write_text(f'{os.getpid()} {child.pid}\\n'); "
-        "time.sleep(60)"
-    )
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            str(GUARD_PATH),
-            "--jsonl",
-            str(jsonl),
-            "--summary",
-            str(summary),
-            "--",
-            sys.executable,
-            "-c",
-            child_source,
-            str(pids),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    _wait_for(pids)
-    child_pid, grandchild_pid = map(
-        int, pids.read_text(encoding="utf-8").split()
-    )
-
-    process.send_signal(signal.SIGTERM)
-    stdout, stderr = process.communicate(timeout=10)
-
-    assert stdout == ""
-    assert process.returncode == 128 + signal.SIGTERM, stderr
-    document = json.loads(summary.read_text(encoding="utf-8"))
-    assert document["exit_reason"] == "signal"
-    assert document["exit_status"] == 128 + signal.SIGTERM
-    _wait_for_process_group_exit(child_pid)
-    for pid in (child_pid, grandchild_pid):
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
-
-
-def test_supervisor_sigkill_triggers_lifeline_cleanup_and_holds_lock(
-    tmp_path: Path,
+def test_cancellation_is_latched_until_fake_body_completes_naturally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jsonl = tmp_path / "resource.jsonl"
     summary = tmp_path / "summary.json"
-    pids = tmp_path / "pids"
-    grandchild_source = (
-        "import signal,time; "
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "time.sleep(60)"
+    events: list[str] = []
+    _install_fake_session(monkeypatch, events)
+    monkeypatch.setattr(
+        guard,
+        "_process_rows",
+        lambda: [guard.ProcessRow(501, 700, 42, os.getuid(), 1, "/bin/body")],
     )
-    child_source = (
-        "import os,pathlib,signal,subprocess,sys,time; "
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        f"child=subprocess.Popen([sys.executable,'-c',{grandchild_source!r}]); "
-        "pathlib.Path(sys.argv[1]).write_text(f'{os.getpid()} {child.pid}\\n'); "
-        "time.sleep(60)"
-    )
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            str(GUARD_PATH),
-            "--jsonl",
-            str(jsonl),
-            "--summary",
-            str(summary),
-            "--",
-            sys.executable,
-            "-c",
-            child_source,
-            str(pids),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    _wait_for(pids)
-    child_pid, grandchild_pid = map(
-        int, pids.read_text(encoding="utf-8").split()
-    )
-    spawn = next(event for event in _events(jsonl) if event["event"] == "spawn")
-    wrapper_pid = int(spawn["wrapper_pid"])
-    assert child_pid == int(spawn["process_group_id"])
-    assert wrapper_pid != child_pid
-
-    try:
-        process.kill()
-        process.wait(timeout=5)
-        with pytest.raises(guard.LockUnavailable):
-            with guard._host_lock(
-                guard.HEAVY_JOB_LOCK_PATH, description="memory-heavy job"
-            ):
-                pass
-        _wait_for_process_group_exit(child_pid, timeout=10)
-        _wait_for_process_exit(wrapper_pid, timeout=10)
-        for pid in (child_pid, grandchild_pid):
-            with pytest.raises(ProcessLookupError):
-                os.kill(pid, 0)
-        with guard._host_lock(
-            guard.HEAVY_JOB_LOCK_PATH, description="memory-heavy job"
-        ):
-            pass
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
-        try:
-            os.killpg(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-
-def test_normal_completion_and_lingering_descendant_are_distinguished(
-    tmp_path: Path,
-) -> None:
-    completed_jsonl = tmp_path / "completed.jsonl"
-    completed_summary = tmp_path / "completed-summary.json"
-    assert (
-        guard._run_guarded(
-            ["/usr/bin/true"],
-            report_path=completed_jsonl,
-            summary_path=completed_summary,
-            sample_interval_seconds=0.01,
-        )
-        == 0
-    )
-    assert json.loads(completed_summary.read_text(encoding="utf-8"))[
-        "exit_reason"
-    ] == "completed"
-
-    lingering_jsonl = tmp_path / "lingering.jsonl"
-    lingering_summary = tmp_path / "lingering-summary.json"
     status = guard._run_guarded(
-        ["/bin/sh", "-c", "/bin/sleep 30 &"],
-        report_path=lingering_jsonl,
-        summary_path=lingering_summary,
+        ["/fake/body"],
+        report_path=jsonl,
+        summary_path=summary,
         sample_interval_seconds=0.01,
+        cancellation_requested=lambda: True,
     )
+
+    assert status == guard.CANCELLATION_EXIT_CODE
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    assert document["exit_reason"] == "cancellation"
+    assert document["exit_status"] == guard.CANCELLATION_EXIT_CODE
+    assert "natural-completion" in events
+    assert events.index("natural-completion") < events.index("exit-record")
+    assert sum(
+        event["event"] == "cancellation_observed" for event in _events(jsonl)
+    ) == 1
+
+
+def test_lifeline_loss_is_reported_only_after_fake_wrapper_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jsonl = tmp_path / "resource.jsonl"
+    summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(
+        monkeypatch,
+        events,
+        record="EXIT 0 1 0 0 0",
+        polls_before_completion=0,
+    )
+    monkeypatch.setattr(guard, "_process_rows", lambda: [])
+
+    status = guard._run_guarded(
+        ["/fake/body"],
+        report_path=jsonl,
+        summary_path=summary,
+    )
+
     assert status == 1
-    assert json.loads(lingering_summary.read_text(encoding="utf-8"))[
-        "exit_reason"
-    ] == "lingering_process_group"
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    assert document["exit_reason"] == "lifeline_lost"
+    assert events[:2] == ["natural-completion", "exit-record"]
+
+
+def test_control_output_failure_is_latched_after_fake_wrapper_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jsonl = tmp_path / "resource.jsonl"
+    summary = tmp_path / "summary.json"
+    events: list[str] = []
+    _install_fake_session(
+        monkeypatch,
+        events,
+        record="INVALID",
+        polls_before_completion=0,
+    )
+    monkeypatch.setattr(guard, "_process_rows", lambda: [])
+
+    status = guard._run_guarded(
+        ["/fake/body"],
+        report_path=jsonl,
+        summary_path=summary,
+    )
+
+    assert status == 1
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    assert document["exit_reason"] == "control_output_failure"
+    assert events[:2] == ["natural-completion", "exit-record"]
+
+
+def test_known_descendant_remains_owned_after_root_exits_until_natural_absence(
+) -> None:
+    uid = os.getuid()
+    known = {501, 502}
+    reparented = guard.ProcessRow(
+        502, 1, 77, uid, 1, "/bin/naturally-finishing-descendant"
+    )
+
+    assert guard._group_rows(
+        501, [reparented], known_owned_process_ids=known
+    ) == [reparented]
+    assert guard._group_rows(
+        501, [], known_owned_process_ids=known
+    ) == []
 
 
 def test_runner_self_wraps_and_defaults_to_one_thread() -> None:
@@ -1380,6 +1425,17 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     formal_sources.mkdir(parents=True)
     shutil.copy2(RUNNER_PATH, formal_scripts / RUNNER_PATH.name)
     shutil.copy2(GUARD_PATH, formal_scripts / GUARD_PATH.name)
+    (repo / "scripts" / "sumeragi_v2_release_process_policy.sh").write_text(
+        textwrap.dedent(
+            """\
+            release_gate_boundary() { :; }
+            require_external_cargo_target_dir() { :; }
+            require_external_release_artifact_root() { :; }
+            require_release_artifact_directory() { :; }
+            """
+        ),
+        encoding="utf-8",
+    )
 
     checker = formal_scripts / "check_sumeragi_v2_proof_ledger.py"
     checker.write_text(
@@ -1550,6 +1606,14 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     environment = os.environ.copy()
     environment["TLAPM_BIN"] = str(tlapm)
     environment["FIXTURE_EVENT_LOG"] = str(event_log)
+    evidence_dir = tmp_path / "formal-evidence"
+    evidence_dir.mkdir()
+    environment["SUMERAGI_V2_FORMAL_EVIDENCE_DIR"] = str(evidence_dir)
+    environment["CARGO_TARGET_DIR"] = str(tmp_path / "cargo-target")
+    environment["IROHA_RELEASE_ARTIFACT_ROOT"] = str(tmp_path / "artifacts")
+    environment["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        tmp_path / "cancel.json"
+    )
     environment.pop("SUMERAGI_TLAPS_THREADS", None)
     # The retired PID marker exactly matches the direct shell's parent, but it
     # is no longer accepted as authorization and therefore cannot skip wrapping.
@@ -1566,7 +1630,7 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    evidence = repo / "target" / "formal" / "sumeragi_v2"
+    evidence = evidence_dir
     proof_modules = (
         "FixtureFirstProof",
         "FixtureMiddleProof",
@@ -1594,8 +1658,7 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     expected_invocations.extend(
         (
             "--toolbox 1 2 --strict --nofp --threads 1 "
-            "--cache-dir ../../target/formal/sumeragi_v2/"
-            f"tlaps-cache/targets/{target_id} {provider}.tla"
+            f"--cache-dir {cache_root / 'targets' / target_id} {provider}.tla"
         )
         for target_id, provider in zip(target_ids, target_providers)
     )
@@ -1688,9 +1751,23 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     shutil.copy2(RUNNER_PATH, zero_scripts / RUNNER_PATH.name)
     shutil.copy2(GUARD_PATH, zero_scripts / GUARD_PATH.name)
     shutil.copy2(checker, zero_scripts / checker.name)
+    shutil.copy2(
+        repo / "scripts" / "sumeragi_v2_release_process_policy.sh",
+        zero_repo / "scripts" / "sumeragi_v2_release_process_policy.sh",
+    )
     zero_environment = environment.copy()
     zero_environment["FIXTURE_EVENT_LOG"] = str(tmp_path / "zero-runner-events")
     zero_environment["FIXTURE_TARGET_COUNT"] = "0"
+    zero_evidence = tmp_path / "zero-formal-evidence"
+    zero_evidence.mkdir()
+    zero_environment["SUMERAGI_V2_FORMAL_EVIDENCE_DIR"] = str(zero_evidence)
+    zero_environment["CARGO_TARGET_DIR"] = str(tmp_path / "zero-cargo-target")
+    zero_environment["IROHA_RELEASE_ARTIFACT_ROOT"] = str(
+        tmp_path / "zero-artifacts"
+    )
+    zero_environment["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        tmp_path / "zero-cancel.json"
+    )
     zero_result = subprocess.run(
         ["/bin/bash", str(zero_scripts / RUNNER_PATH.name)],
         cwd=zero_repo,

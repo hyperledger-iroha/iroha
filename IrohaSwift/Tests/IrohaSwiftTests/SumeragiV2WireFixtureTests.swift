@@ -5,6 +5,67 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
+private func nativeAmxTestCrc16(_ bytes: [UInt8]) -> UInt16 {
+    var crc = UInt16.max
+    for byte in bytes {
+        crc ^= UInt16(byte) << 8
+        for _ in 0..<8 {
+            crc = (crc & 0x8000) != 0 ? (crc &<< 1) ^ 0x1021 : crc &<< 1
+        }
+    }
+    return crc
+}
+
+func nativeAmxTestHash(_ seed: UInt8) -> String {
+    var bytes = [UInt8](repeating: seed, count: 32)
+    bytes[31] |= 1
+    let body = bytes.map { String(format: "%02X", $0) }.joined()
+    let checksum = nativeAmxTestCrc16(Array("hash:\(body)".utf8))
+    return "hash:\(body)#\(String(format: "%04X", checksum))"
+}
+
+func sumeragiV2TestHeightContext(epochEndHeight: UInt64 = 100) -> [String: Any] {
+    [
+        "epoch": 1,
+        "epoch_end_height": epochEndHeight,
+        "mode": ["mode": "permissioned", "details": NSNull()],
+        "epoch_seed": [UInt8](repeating: 0x42, count: 32),
+        "validator_count": 4,
+        "quorum": [
+            "min_signers": 3,
+            "total_power": 4,
+        ],
+    ]
+}
+
+func sumeragiV2TestLiveness() -> [String: Any] {
+    let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
+    return [
+        "generation": 2,
+        "prepare_quorums": [],
+        "commit_quorums": [],
+        "timeout_quorums": [],
+        "outbound_intents": [],
+        "work": [
+            "candidate": idle,
+            "body_recovery": idle,
+            "body_store": idle,
+            "validation": idle,
+            "application": idle,
+            "successor_height": idle,
+        ],
+        "queues": [],
+        "no_progress_age_ms": 19,
+        "ignore_counts": [],
+    ]
+}
+
+func duplicateSumeragiRootField(_ prefix: String, in payload: Data) -> Data {
+    var duplicate = Data(prefix.utf8)
+    duplicate.append(contentsOf: payload.dropFirst())
+    return duplicate
+}
+
 final class SumeragiV2WireFixtureTests: XCTestCase {
     func testExecutionCommitmentCarriesExactMandatoryMergeCarrierOption() throws {
         func hash(_ seed: UInt8) throws -> SumeragiV2Hash {

@@ -15,6 +15,30 @@ fi
 
 readonly repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
+
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  && -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  formal_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$formal_invocation_root/target" \
+    "$formal_invocation_root/artifacts"
+  export CARGO_TARGET_DIR="$formal_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$formal_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$formal_invocation_root/cancel-request.json"
+elif [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "formal release requires CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and IROHA_RELEASE_CANCEL_REQUEST_PATH together" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$repo_root"
+require_external_release_artifact_root "$repo_root"
+require_disjoint_release_roots "$repo_root"
+release_gate_boundary "formal-release:entry" || exit $?
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   JAVA_BIN="$(scripts/formal/resolve_java.sh "$JAVA_BIN")"
@@ -83,12 +107,24 @@ verify_identity() {
   fi
   if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
     python3 scripts/seal_workspace_source.py \
-      --verify --root "$repo_root" --writable target
+      --verify --root "$repo_root" --no-writable-paths
   fi
 }
 
-readonly evidence_root="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${repo_root}/target/sumeragi-v2-release/${source_manifest_sha256}/evidence/formal}"
+formal_work_root="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${IROHA_RELEASE_ARTIFACT_ROOT}/formal/sumeragi_v2}"
+if [[ "$formal_work_root" != /* ]]; then
+  echo "formal evidence root must be absolute" >&2
+  exit 2
+fi
+mkdir -p -m 0700 -- "$formal_work_root"
+formal_work_root="$(canonical_path "$formal_work_root")"
+require_release_artifact_directory "$formal_work_root"
+readonly formal_work_root
+export SUMERAGI_V2_FORMAL_EVIDENCE_DIR="$formal_work_root"
+
+readonly evidence_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${source_manifest_sha256}/evidence/formal"
 mkdir -p -- "$evidence_root"
+require_release_artifact_directory "$evidence_root"
 readonly evidence_lock="${evidence_root}/.formal-release.lock"
 if ! mkdir -- "$evidence_lock"; then
   echo "another strict formal release gate owns ${evidence_lock}" >&2
@@ -122,14 +158,14 @@ readonly tlaps_resource_summary_copy="${invocation_dir}/tlaps_resource_summary.j
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
 readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, all registered adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
 readonly source_ledger="formal/sumeragi_v2/proof_coverage.json"
-readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
-readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
-readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
-readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
-readonly source_production_trace_extraction_evidence="target/formal/sumeragi_v2/production_trace_extraction_evidence.json"
-readonly source_multilane_apalache_evidence="target/formal/sumeragi_v2/multilane_apalache_evidence.tsv"
-readonly source_tlaps_resource_jsonl="target/formal/sumeragi_v2/tlaps_resource.jsonl"
-readonly source_tlaps_resource_summary="target/formal/sumeragi_v2/tlaps_resource_summary.json"
+readonly source_evidence="${formal_work_root}/proof_evidence.json"
+readonly source_verus_evidence="${formal_work_root}/verus_evidence.json"
+readonly source_verus_log="${formal_work_root}/verus.log"
+readonly source_cross_tool_evidence="${formal_work_root}/cross_tool_evidence.json"
+readonly source_production_trace_extraction_evidence="${formal_work_root}/production_trace_extraction_evidence.json"
+readonly source_multilane_apalache_evidence="${formal_work_root}/multilane_apalache_evidence.tsv"
+readonly source_tlaps_resource_jsonl="${formal_work_root}/tlaps_resource.jsonl"
+readonly source_tlaps_resource_summary="${formal_work_root}/tlaps_resource_summary.json"
 cross_tool_obligations="$(
   python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
     --ledger "$source_ledger" \
@@ -138,6 +174,7 @@ cross_tool_obligations="$(
 readonly cross_tool_obligations
 
 verify_identity "before execution"
+release_gate_boundary "formal-release:before-formal-gates" || exit $?
 # Every copied artifact must be published by this invocation. Remove the exact
 # shared-target outputs first so a skipped producer cannot satisfy the release
 # checks with evidence left by an earlier run.
@@ -160,6 +197,7 @@ if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
   echo "strict formal release command failed (gate=${pipeline_status[0]}, tee=${pipeline_status[1]})" >&2
   exit 1
 fi
+release_gate_boundary "formal-release:after-formal-gates-natural-completion" || exit $?
 verify_identity "after execution"
 
 marker_count="$(grep -Fxc -- "$final_marker" "$gate_log" || true)"
@@ -302,6 +340,7 @@ production_trace_extraction_evidence_sha256="$(
   hash_file "$production_trace_extraction_evidence_copy"
 )"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
+release_gate_boundary "formal-release:before-completion-publication" || exit $?
 printf '%s\t%s\n' \
   schema_version 2 \
   head_commit "$head_commit" \
@@ -333,4 +372,5 @@ if [[ -n "${IROHA_FORMAL_COMPLETION_PATH_FILE:-}" ]]; then
   printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
   mv -- "$completion_path_tmp" "$IROHA_FORMAL_COMPLETION_PATH_FILE"
 fi
+release_gate_boundary "formal-release:after-completion-publication" || exit $?
 echo "strict Sumeragi v2 formal release gate passed; completion=${completion_attestation}" >&2

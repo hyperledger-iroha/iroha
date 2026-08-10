@@ -710,8 +710,14 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
         'node-version: "24"',
         "runs-on: macos-14",
+        "  mobile-parity:",
+        "  csharp-parity:",
+        "actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9",
+        "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
         "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
+        "bash ci/check_kagemusha_jvm_native_bridge.sh",
+        "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
 }
@@ -1318,6 +1324,59 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
     for marker in WORKFLOWS[relative]:
         if marker not in source:
             errors.append(f"{relative}: missing contract marker `{marker}`")
+
+    if relative.endswith("sorafs-orchestrator-sdk.yml"):
+        jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]
+        job_inventory = tuple(
+            re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs_source)
+        )
+        expected_job_inventory = (
+            "sdk-parity",
+            "mobile-parity",
+            "csharp-parity",
+        )
+        if job_inventory != expected_job_inventory:
+            errors.append(
+                f"{relative}: parity workflow job inventory must be exactly "
+                f"{expected_job_inventory}"
+            )
+        required_job_markers = {
+            "sdk-parity": (
+                "runs-on: macos-14",
+                'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
+                "bash ci/check_sorafs_python_native_sdk.sh",
+                "bash ci/sdk_sorafs_orchestrator.sh",
+            ),
+            "mobile-parity": (
+                "runs-on: ubuntu-latest",
+                'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
+                "actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9",
+                "cargo fetch --locked",
+                'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"',
+                'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"',
+                "bash ci/check_kagemusha_jvm_native_bridge.sh",
+            ),
+            "csharp-parity": (
+                "runs-on: ubuntu-24.04",
+                'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
+                "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
+                "cargo build --locked --release -p connect_norito_bridge",
+                "check_native_sdk_abi21_artifact.py record",
+                "check_native_sdk_abi21_artifact.py verify",
+                "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
+                "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
+            ),
+        }
+        for job_name, markers in required_job_markers.items():
+            job = _workflow_job(source, job_name)
+            if job is None:
+                errors.append(f"{relative}: missing `{job_name}` job")
+                continue
+            for marker in markers:
+                if marker not in job:
+                    errors.append(
+                        f"{relative}: `{job_name}` missing contract marker `{marker}`"
+                    )
 
     if relative.endswith("sorafs-cli-release.yml"):
         jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]

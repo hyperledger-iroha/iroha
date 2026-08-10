@@ -530,14 +530,6 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
         (
             "operator",
             "AsyncStrongTypeInvariant",
-            "  /\\ AsyncCandidateLifecycleSchedulerCoverageInvariant\n",
-            "",
-            "AsyncStrongTypeInvariant must include the exact recovery "
-            "execution premise",
-        ),
-        (
-            "operator",
-            "AsyncStrongTypeInvariant",
             "  /\\ AsyncOrdinaryIngressCarrierOwnershipInvariant\n",
             "",
             "AsyncStrongTypeInvariant must include the exact recovery "
@@ -1302,13 +1294,14 @@ def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
     assert "RuntimeProgressKinds" in ingress_mutation
 
 
-def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
+def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     relative_paths = (
         Path("scripts/formal/run_sumeragi_v2_harness.sh"),
         Path("scripts/formal/sumeragi_v2_harness.lock"),
+        Path("scripts/sumeragi_v2_release_process_policy.sh"),
         Path("scripts/run_sumeragi_v2_100k_chaos.sh"),
         Path(".github/workflows/nightly_sumeragi_formal.yml"),
     )
@@ -1324,56 +1317,48 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
     assert module._nightly_chaos_cold_cache_errors(tmp_path) == []
 
     harness = Path("scripts/formal/run_sumeragi_v2_harness.sh")
+    policy = Path("scripts/sumeragi_v2_release_process_policy.sh")
     launcher = Path("scripts/run_sumeragi_v2_100k_chaos.sh")
     workflow = Path(".github/workflows/nightly_sumeragi_formal.yml")
     mutations = (
         (
             harness,
-            "  export CARGO_NET_OFFLINE=false\n",
-            "  export CARGO_NET_OFFLINE=true\n",
-            "only --fetch may run online",
+            'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"\n',
+            "",
+            "must source the shared process policy exactly once",
         ),
         (
             harness,
-            "    run_cargo fetch --locked\n",
-            "    run_cargo fetch --locked --offline\n",
-            "guarded `run_cargo fetch --locked`",
+            "export CARGO_NET_OFFLINE=true\n",
+            "export CARGO_NET_OFFLINE=false\n",
+            "forbidden network-fetch mode",
+        ),
+        (
+            policy,
+            "ps -axo pid,etime,command",
+            "ps -axo pid,command",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            'executable == "rustfmt"',
+            'executable == "rustdoc"',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            'command cargo +1.93.1 "${pinned_arguments[@]}"',
+            'command cargo "${pinned_arguments[@]}"',
+            "shared process policy lacks exact required token",
         ),
         (
             harness,
-            "    ps -axo pid,etime,command\n",
-            "    ps -axo pid,command\n",
-            "exact `ps -axo pid,etime,command` snapshot",
-        ),
-        (
-            harness,
-            'run_cargo() {\n'
-            "  wait_for_external_cargo\n"
-            '  command cargo "$@"\n'
-            "}\n",
-            'run_cargo() {\n'
-            '  command cargo "$@"\n'
-            "}\n",
-            "exact wait_for_external_cargo/run_cargo wrapper",
-        ),
-        (
-            harness,
-            "  --*)\n"
-            '    echo "unknown harness mode: $1" >&2\n',
-            "  --escape)\n"
-            '    "$@"\n'
+            "  --unit)\n",
+            "  --fetch)\n"
+            "    run_cargo fetch --locked --offline\n"
             "    ;;\n"
-            "  --*)\n"
-            '    echo "unknown harness mode: $1" >&2\n',
-            "fixed-mode inventory is not exact",
-        ),
-        (
-            harness,
-            '    echo "positional harness commands are unsupported; '
-            'select one fixed mode" >&2\n'
-            "    exit 2\n",
-            '    "$@"\n',
-            "argument vector may be forwarded only",
+            "  --unit)\n",
+            "forbidden network-fetch mode",
         ),
         (
             harness,
@@ -1397,6 +1382,12 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         ),
         (
             harness,
+            "    if ((${#listed_unit_tests[@]} != 140)); then\n",
+            "    if ((${#listed_unit_tests[@]} != 139)); then\n",
+            "must seal exactly 140 runnable",
+        ),
+        (
+            harness,
             '    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"\n'
             '    ignored_test_list="$(\n'
             "      run_cargo test --locked --offline -p iroha_sumeragi_core \\\n"
@@ -1415,22 +1406,35 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         ),
         (
             workflow,
-            "      - name: Prefetch pinned standalone harness dependencies\n"
-            "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n",
-            "",
-            "exactly one cache, pinned prefetch, and source-attested gate",
+            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX",
+            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos-weakened.XXXXXX",
+            "lacks one fresh private target/artifact/cancel layout",
         ),
         (
             workflow,
-            "      - name: Prefetch pinned standalone harness dependencies\n"
+            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n"
+            "        run: bash scripts/run_sumeragi_v2_100k_chaos.sh\n",
+            "      - name: Reintroduce forbidden online prefetch\n"
             "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n"
             "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n"
             "        run: bash scripts/run_sumeragi_v2_100k_chaos.sh\n",
-            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n"
-            "        run: bash scripts/run_sumeragi_v2_100k_chaos.sh\n"
-            "      - name: Prefetch pinned standalone harness dependencies\n"
-            "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n",
-            "nightly --fetch must run after cache restore and before",
+            "retains forbidden online, timed, or in-source token",
+        ),
+        (
+            workflow,
+            "  sumeragi-v2-chaos-100k:\n    runs-on: ubuntu-latest\n",
+            "  sumeragi-v2-chaos-100k:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    timeout-minutes: 240\n",
+            "retains forbidden online, timed, or in-source token",
+        ),
+        (
+            workflow,
+            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n",
+            "      - name: Direct Cargo bypass\n"
+            "        run: cargo generate-lockfile\n"
+            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n",
+            "directly executes Cargo",
         ),
     )
     for relative, needle, replacement, expected_error in mutations:

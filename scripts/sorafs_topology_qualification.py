@@ -88,6 +88,7 @@ SIGNED_QUALIFICATION_ENVELOPE_FIELDS = frozenset(
         "deployment_id",
         "environment",
         "signer_identity",
+        "signer_backend",
         "signer_key_revision",
         "signer_key_fingerprint_hex",
         "signer_policy_digest_hex",
@@ -289,7 +290,7 @@ def _validate_qualification_payload(
         )
     if payload.get("runtime_handle_kinds") != [
         "monitoring",
-        "hsm",
+        "external_signer",
         "kms",
         "webauthn",
     ]:
@@ -473,6 +474,10 @@ def load_signed_topology_qualification_binding(
         errors.append(
             "signed topology qualification envelope signer_identity must match "
             "the trusted signer"
+        )
+    if envelope.get("signer_backend") != "software":
+        errors.append(
+            "signed topology qualification envelope signer_backend must be `software`"
         )
     envelope_key_revision = _positive_bounded_integer(
         envelope.get("signer_key_revision")

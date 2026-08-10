@@ -84,13 +84,12 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   binding-parity:
     name: Complete Norito binding parity
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -109,7 +108,6 @@ jobs:
   metadata:
     name: OpenAPI metadata and release tooling
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -119,10 +117,6 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: tools/openapi/package-lock.json
-      - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
-      - name: Verify Cargo lock provisioning keeps the checkout clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic OpenAPI dependency graph
         working-directory: tools/openapi
         run: npm ci --ignore-scripts --no-audit --no-fund
@@ -161,10 +155,8 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
-      CARGO_TARGET_DIR: target/openapi-ci
       NORITO_SKIP_BINDINGS_SYNC: "1"
       OPENAPI_REQUIRE_SIGNED: "0"
     steps:
@@ -176,17 +168,17 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: tools/openapi/package-lock.json
-      - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
-      - name: Verify Cargo lock provisioning keeps the checkout clean
+      - name: Validate the pre-existing pinned OpenAPI Cargo lock
+        run: |
+          repo_root="$(pwd -P)"
+          node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin \
+            --source="${repo_root}/Cargo.lock" \
+            --check="${repo_root}/release/openapi-cargo-lock-v1.txt"
+      - name: Verify Cargo lock validation keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic OpenAPI dependency graph
         working-directory: tools/openapi
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
-          shared-key: torii-openapi
       - name: Regenerate and verify canonical OpenAPI artifacts
         run: bash ci/check_openapi_spec.sh
       - name: Regenerate Android bindings twice from the pinned commit

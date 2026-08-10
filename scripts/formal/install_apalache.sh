@@ -10,13 +10,17 @@ if [[ "$version" != "$pinned_version" ]]; then
   echo "error: only pinned Apalache v${pinned_version} is supported" >&2
   exit 2
 fi
-root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
-install_root="${APALACHE_INSTALL_ROOT:-$root_dir/target/apalache/toolchains}"
-install_dir="$install_root/v$version"
+readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly INSTALL_ROOT="${APALACHE_INSTALL_ROOT:?APALACHE_INSTALL_ROOT must be an explicitly authorized external directory}"
+install_dir="$INSTALL_ROOT/v$version"
 archive_name="apalache-${version}.tgz"
 release_base="https://github.com/apalache-mc/apalache/releases/download/v${version}"
 archive_url="${release_base}/${archive_name}"
 checksums_url="${release_base}/sha256sum.txt"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+require_external_private_directory \
+  "$REPO_ROOT" "$INSTALL_ROOT" "Apalache install" || exit $?
 
 hash_file_cmd() {
   local file="$1"
@@ -76,7 +80,7 @@ if [[ ! -x "$src_dir/bin/apalache-mc" ]]; then
   exit 1
 fi
 
-mkdir -p "$install_root"
+mkdir -p "$INSTALL_ROOT"
 rm -rf "$install_dir"
 mkdir -p "$install_dir"
 cp -R "$src_dir"/. "$install_dir"/

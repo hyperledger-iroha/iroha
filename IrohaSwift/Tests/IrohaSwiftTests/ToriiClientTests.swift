@@ -72,61 +72,6 @@ final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-private func nativeAmxTestCrc16(_ bytes: [UInt8]) -> UInt16 {
-    var crc = UInt16.max
-    for byte in bytes {
-        crc ^= UInt16(byte) << 8
-        for _ in 0..<8 {
-            crc = (crc & 0x8000) != 0 ? (crc &<< 1) ^ 0x1021 : crc &<< 1
-        }
-    }
-    return crc
-}
-
-private func nativeAmxTestHash(_ seed: UInt8) -> String {
-    var bytes = [UInt8](repeating: seed, count: 32)
-    bytes[31] |= 1
-    let body = bytes.map { String(format: "%02X", $0) }.joined()
-    let checksum = nativeAmxTestCrc16(Array("hash:\(body)".utf8))
-    return "hash:\(body)#\(String(format: "%04X", checksum))"
-}
-
-private func sumeragiV2TestHeightContext(epochEndHeight: UInt64 = 100) -> [String: Any] {
-    [
-        "epoch": 1,
-        "epoch_end_height": epochEndHeight,
-        "mode": ["mode": "permissioned", "details": NSNull()],
-        "epoch_seed": [UInt8](repeating: 0x42, count: 32),
-        "validator_count": 4,
-        "quorum": [
-            "min_signers": 3,
-            "total_power": 4,
-        ],
-    ]
-}
-
-private func sumeragiV2TestLiveness() -> [String: Any] {
-    let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
-    return [
-        "generation": 2,
-        "prepare_quorums": [],
-        "commit_quorums": [],
-        "timeout_quorums": [],
-        "outbound_intents": [],
-        "work": [
-            "candidate": idle,
-            "body_recovery": idle,
-            "body_store": idle,
-            "validation": idle,
-            "application": idle,
-            "successor_height": idle,
-        ],
-        "queues": [],
-        "no_progress_age_ms": 19,
-        "ignore_counts": [],
-    ]
-}
-
 private func canonicalVerifierRecordArchive(
     seed: UInt8,
     verifierKeyLength: Int = 96
@@ -15683,19 +15628,20 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ],
             "liveness": sumeragiV2TestLiveness(),
         ])
-
+        var servedPayload = payload
+        var servedStatus = 200
+        var servedHeaders = ["Content-Type": "application/json"]
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/status")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(
                 url: request.url!,
-                statusCode: 200,
+                statusCode: servedStatus,
                 httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
+                headerFields: servedHeaders
             )!
-            return (response, payload)
+            return (response, servedPayload)
         }
-
         let snapshot = try await makeClient().getSumeragiStatus()
         XCTAssertEqual(snapshot.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
         XCTAssertEqual(snapshot.nodeFingerprint, nativeAmxTestHash(0xA1))
@@ -15734,6 +15680,35 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.heightContext.validatorCount, 4)
         XCTAssertEqual(snapshot.lastCommitQC?.certificate.phase, .commit)
         XCTAssertEqual(snapshot.liveness.generation, 2)
+
+        let invalidResponses: [(Data, Int, [String: String], String)] = [
+            (
+                duplicateSumeragiRootField(#"{"protocol_version":4,"#, in: payload),
+                200, ["Content-Type": "application/json"], "duplicate object keys"
+            ),
+            (Data([0xff]), 200, ["Content-Type": "application/json"], "UTF-8 JSON"),
+            (Data("{}".utf8), 200, ["Content-Type": "text/plain"], "Content-Type"),
+            (Data("{}".utf8), 503, ["Content-Type": "application/json"], "503"),
+            (
+                Data("{}".utf8), 200,
+                ["Content-Type": "application/json", "Content-Length": "1048577"], "1048576-byte limit"
+            ),
+            (
+                Data(repeating: 0x20, count: 1_048_577), 200,
+                ["Content-Type": "application/json"], "1048576-byte limit"
+            ),
+        ]
+        for (body, statusCode, headers, errorFragment) in invalidResponses {
+            servedPayload = body
+            servedStatus = statusCode
+            servedHeaders = headers
+            do {
+                _ = try await makeClient().getSumeragiStatus()
+                XCTFail("invalid status response must fail closed")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains(errorFragment))
+            }
+        }
     }
 
     func testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest() throws {
@@ -16241,6 +16216,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
     func testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync() async throws {
         let payload = try nativeAmxDiagnosticsPayload()
+        var servedPayload = payload
+        var servedHeaders = ["Content-Type": "application/json"]
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/diagnostics")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
@@ -16248,9 +16225,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 url: request.url!,
                 statusCode: 200,
                 httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
+                headerFields: servedHeaders
             )!
-            return (response, payload)
+            return (response, servedPayload)
         }
 
         let snapshot = try await makeClient().getSumeragiDiagnostics()
@@ -16258,6 +16235,29 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.txQueueCapacity, 64)
         XCTAssertEqual(snapshot.laneSettlementCommitments.count, 1)
         XCTAssertEqual(snapshot.laneRelayEnvelopes.count, 1)
+
+        let invalidResponses: [(Data, [String: String], String)] = [
+            (
+                duplicateSumeragiRootField(#"{"tx_queue_depth":2,"#, in: payload),
+                ["Content-Type": "application/json"], "duplicate object keys"
+            ),
+            (Data([0xff]), ["Content-Type": "application/json"], "UTF-8 JSON"),
+            (
+                Data("{}".utf8),
+                ["Content-Type": "application/json", "Content-Length": "16777217"],
+                "16777216-byte limit"
+            ),
+        ]
+        for (body, headers, errorFragment) in invalidResponses {
+            servedPayload = body
+            servedHeaders = headers
+            do {
+                _ = try await makeClient().getSumeragiDiagnostics()
+                XCTFail("invalid diagnostics response must fail closed")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains(errorFragment))
+            }
+        }
     }
 
     func testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence() throws {

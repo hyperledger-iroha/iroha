@@ -51,9 +51,7 @@ fn complete_certified_serve_episode_cannot_veto_pacemaker() {
                     CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
                         recovery.service_timeout_recovery_prefix()
                     }
-                    CertifiedServeBarrierLivenessAction::Pacemaker => {
-                        recovery.service_pacemaker()
-                    }
+                    CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
                 },
             )
             .expect("the selected-Serve suffix retains typed timeout recovery");
@@ -572,9 +570,9 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
     ));
     assert_eq!(backpressured.calls, ["prepare-exact"]);
 
-    let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(
-        RecordedPrepareOutcome::Service("Serve preparation failed"),
-    );
+    let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Service(
+        "Serve preparation failed",
+    ));
     assert!(matches!(
         authorize_decided_lane_recovery_drain(prepare(subject), &mut failed_prepare),
         DecidedLaneRecoveryDrainDecision::FailClosed(reason)
@@ -606,9 +604,7 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
     assert_eq!(
         commit_decided_lane_recovery_drain(
             DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Rejected(
-                    "durable negative staged".to_owned(),
-                ),
+                DecidedLaneRecoveryCurrentDrain::Rejected("durable negative staged".to_owned(),),
             ),
             &mut negative,
         )
@@ -778,8 +774,8 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
     ));
 
     let peer = context.roster[0].validator.clone();
-    let non_serve = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+    let non_serve = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+        wire::PayloadChunk {
             manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"wrong-version recovery chunk",
             )),
@@ -787,8 +783,8 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
             bytes: vec![0xA5],
             sender: 0,
             signature: vec![0x5A],
-        }),
-    );
+        },
+    ));
     let ordinary_non_serve =
         InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
     assert!(matches!(
@@ -849,11 +845,7 @@ fn height_ingress_bindings_fixture(
         ),
     );
     ingress
-        .configure_roster_for_context(
-            roster.iter().cloned(),
-            &context.chain_id,
-            context.da_layout,
-        )
+        .configure_roster_for_context(roster.iter().cloned(), &context.chain_id, context.da_layout)
         .expect("configure joint height ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
@@ -1063,9 +1055,9 @@ fn leader_wire_runtime_ingress_fixture() -> (
         proposer,
         subject,
         manifest,
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: Vec::new(),
     };
     proposal.signature = Signature::new(

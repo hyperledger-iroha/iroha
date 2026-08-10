@@ -11,7 +11,7 @@ readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly MULTILANE_CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly MULTILANE_MUTATION_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_mutations.sh"
 readonly INFLIGHT_FIRST_RELEASE_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh"
@@ -32,7 +32,7 @@ case "$(uname -s)-$(uname -m)" in
     exit 1
     ;;
 esac
-readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

@@ -33,10 +33,10 @@ import re
 import secrets
 import selectors
 import shutil
-import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Iterable
 
@@ -47,16 +47,17 @@ _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SAFE_PATH_RE = re.compile(r"/[A-Za-z0-9_./+:-]+")
 _RUNNER_ENV_RE = re.compile(r"[A-Z][A-Z0-9_]*")
 _RUNNER_TOOL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
-_RUNNER_ABORT_TERM_GRACE_SECONDS = 30
 _RUNNER_ENV_ALLOWLIST = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
+    "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
@@ -211,6 +212,10 @@ _DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
 _DIRECTORY_MODE = 0o700
 _TOOL_MODE = 0o500
 _DATA_MODE = 0o400
+_COOPERATIVE_CANCELLED_STATUS = 125
+_CANCELLATION_REQUEST_BYTES = (
+    b'{"reason":"operator-request","schema_version":1}\n'
+)
 
 
 class BootstrapError(RuntimeError):
@@ -639,46 +644,6 @@ def _publish_completion_marker(
                 pass
 
 
-def _abort(process: subprocess.Popen[bytes]) -> None:
-    """Stop the owned runner after nested guards have cleaned child sessions.
-
-    The TLAPS resource guard may spend several seconds terminating and reaping
-    its separately sessioned child group. Keep the outer runner alive long
-    enough for that cleanup before escalating to SIGKILL.
-    """
-
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        # Darwin reports EPERM for a process group containing only an unreaped
-        # zombie. No live member can receive a signal in that state.
-        try:
-            process.wait(timeout=0)
-        except subprocess.TimeoutExpired:
-            pass
-        return
-    deadline = time.monotonic() + _RUNNER_ABORT_TERM_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except (ProcessLookupError, PermissionError):
-            try:
-                process.wait(timeout=0)
-            except subprocess.TimeoutExpired:
-                pass
-            return
-        time.sleep(0.05)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        raise BootstrapError("owned release runner did not exit after SIGKILL")
-
-
 def _run_bounded(
     executable: Path,
     arguments: Iterable[str],
@@ -697,52 +662,115 @@ def _run_bounded(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
         )
     except OSError as error:
         raise BootstrapError(f"could not execute protected command {executable}") from error
     assert process.stdout is not None and process.stderr is not None
-    os.set_blocking(process.stdout.fileno(), False)
-    os.set_blocking(process.stderr.fileno(), False)
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    total = 0
+    # Bounds determine the eventual verdict; they never control the child.
+    # Retain only the capped prefix while draining both streams through EOF.
+    retained_output_bytes = 0
+    output_limit_exceeded = False
+    runtime_limit_exceeded = False
+    drain_errors: list[BaseException] = []
+    output_lock = threading.Lock()
+
+    def retain(label: str, chunk: bytes) -> None:
+        nonlocal retained_output_bytes, output_limit_exceeded
+        with output_lock:
+            retained_capacity = max(
+                maximum_output_bytes - retained_output_bytes, 0
+            )
+            retained = chunk[:retained_capacity]
+            buffers[label].extend(retained)
+            retained_output_bytes += len(retained)
+            if len(retained) != len(chunk):
+                output_limit_exceeded = True
+
+    def drain(label: str, stream: Any) -> None:
+        try:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    return
+                retain(label, chunk)
+        except BaseException as error:
+            drain_errors.append(error)
+
+    drain_specs = (
+        ("stdout", process.stdout),
+        ("stderr", process.stderr),
+    )
+    drain_threads = [
+        threading.Thread(
+            target=drain,
+            args=(label, stream),
+            name=f"bootstrap-{label}-drain",
+        )
+        for label, stream in drain_specs
+    ]
+    started_threads: list[threading.Thread] = []
+    supervision_error: BaseException | None = None
     deadline = time.monotonic() + timeout_seconds
     try:
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError
-            events = selector.select(min(remaining, 1.0))
-            for key, _ in events:
-                try:
-                    chunk = os.read(key.fileobj.fileno(), 64 * 1024)
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                total += len(chunk)
-                if total > maximum_output_bytes:
-                    raise BootstrapError("protected command exceeded its bounded output limit")
-                buffers[key.data].extend(chunk)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError
-        returncode = process.wait(timeout=remaining)
-    except TimeoutError as error:
-        _abort(process)
-        raise BootstrapError("protected command exceeded its bounded runtime") from error
-    except BaseException:
-        _abort(process)
-        raise
+        for thread in drain_threads:
+            thread.start()
+            started_threads.append(thread)
+        while process.poll() is None:
+            if time.monotonic() > deadline:
+                runtime_limit_exceeded = True
+            time.sleep(0.05)
+    except BaseException as error:
+        supervision_error = error
     finally:
-        selector.close()
-        process.stdout.close()
-        process.stderr.close()
-    return CommandResult(returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]))
+        missing_specs = drain_specs[len(started_threads) :]
+        if missing_specs:
+            # Thread creation failure is itself only an observer failure. Keep
+            # every still-unowned pipe open and drain it in this thread so the
+            # child remains free to reach natural completion.
+            fallback = selectors.DefaultSelector()
+            try:
+                for label, stream in missing_specs:
+                    os.set_blocking(stream.fileno(), False)
+                    fallback.register(stream, selectors.EVENT_READ, label)
+                while fallback.get_map():
+                    for key, _ in fallback.select(1.0):
+                        try:
+                            chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                        except BlockingIOError:
+                            continue
+                        if chunk:
+                            retain(key.data, chunk)
+                        else:
+                            fallback.unregister(key.fileobj)
+            except BaseException as error:
+                drain_errors.append(error)
+            finally:
+                fallback.close()
+        try:
+            # This is deliberately unbounded: neither a latched policy
+            # violation nor an observer exception authorizes child control.
+            returncode = process.wait()
+        finally:
+            for thread in started_threads:
+                thread.join()
+            process.stdout.close()
+            process.stderr.close()
+    if supervision_error is not None:
+        raise supervision_error
+    if time.monotonic() > deadline:
+        runtime_limit_exceeded = True
+    if len(started_threads) != len(drain_threads):
+        raise BootstrapError("protected command output drain could not start")
+    if drain_errors:
+        raise BootstrapError("protected command output drain failed") from drain_errors[0]
+    if runtime_limit_exceeded:
+        raise BootstrapError("protected command exceeded its bounded runtime")
+    if output_limit_exceeded:
+        raise BootstrapError("protected command exceeded its bounded output limit")
+    return CommandResult(
+        returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"])
+    )
 
 
 def _run_release_runner(
@@ -758,68 +786,28 @@ def _run_release_runner(
 
     The runner owns Cargo, rustc, validator, formal, chaos, and soak processes.
     Their in-scope operations have their own protocol and harness deadlines;
-    direct regular-file descriptors avoid relay backpressure. The runner starts
-    a private session so bootstrap interruption can terminate only that owned
-    process group, preventing incomplete formal jobs from surviving as orphans.
+    direct regular-file descriptors avoid relay backpressure. The bootstrap
+    leaves cancellation to the runner's cooperative gate boundaries and waits
+    for the in-flight runner to finish naturally.
     """
 
     argv = [str(executable), *arguments]
-    process: subprocess.Popen[bytes] | None = None
-    received_signal = 0
-
-    def interruption_error() -> BootstrapError:
-        return BootstrapError(
-            "release bootstrap interrupted by signal "
-            f"{signal.Signals(received_signal).name}"
-        )
-
-    def interrupted(signum: int, _frame: object) -> None:
-        nonlocal received_signal
-        if received_signal:
-            return
-        received_signal = signum
-        # Popen may already have forked the new session but not yet returned it
-        # to the assignment below. Do not unwind that constructor: once it
-        # returns, the recorded signal is raised from the cleanup-protected
-        # region with the exact process handle available to `_abort`.
-        if process is not None:
-            raise interruption_error()
-
-    watched_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
-    previous_handlers = {
-        signum: signal.getsignal(signum) for signum in watched_signals
-    }
-    for signum in watched_signals:
-        signal.signal(signum, interrupted)
     try:
-        try:
-            process = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_descriptor,
-                stderr=stderr_descriptor,
-                close_fds=True,
-                start_new_session=True,
-            )
-        except OSError as error:
-            if received_signal:
-                raise interruption_error() from error
-            raise RunnerLaunchError(
-                f"could not execute protected command {executable}"
-            ) from error
-        if received_signal:
-            raise interruption_error()
-        returncode = process.wait()
-        return CommandResult(returncode, b"", b"")
-    except BaseException:
-        if process is not None:
-            _abort(process)
-        raise
-    finally:
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_descriptor,
+            stderr=stderr_descriptor,
+            close_fds=True,
+        )
+    except OSError as error:
+        raise RunnerLaunchError(
+            f"could not execute protected command {executable}"
+        ) from error
+    returncode = process.wait()
+    return CommandResult(returncode, b"", b"")
 
 
 def _open_runner_log(directory_fd: int, name: str) -> int:
@@ -1548,6 +1536,8 @@ def _validate_terminal_release_evidence(
             "target_triple",
             "profile",
             "bundle_dir",
+            "artifact_root",
+            "cargo_target_root",
             "version_transcripts",
             "binaries",
         },
@@ -1573,34 +1563,30 @@ def _validate_terminal_release_evidence(
         or _PREBUILT_TRIPLE_RE.fullmatch(prebuilt["host_triple"]) is None
         or prebuilt["target_triple"] != prebuilt["host_triple"]
         or not isinstance(prebuilt["bundle_dir"], str)
+        or not isinstance(prebuilt["artifact_root"], str)
+        or not isinstance(prebuilt["cargo_target_root"], str)
     ):
         raise BootstrapError("terminal prebuilt binary bundle identity is not exact")
     prebuilt_root = _absolute_resolved_existing(
         Path(prebuilt["bundle_dir"]), "terminal prebuilt bundle directory"
     )
-    target_alias = release_root / "target"
-    try:
-        target_alias_metadata = target_alias.lstat()
-        workspace_target = target_alias.resolve(strict=True)
-        workspace_target_metadata = workspace_target.lstat()
-    except OSError as error:
-        raise BootstrapError("terminal prebuilt target authority is unavailable") from error
+    artifact_root = _absolute_resolved_existing(
+        Path(prebuilt["artifact_root"]), "terminal release artifact root"
+    )
+    cargo_target_root = _absolute_resolved_existing(
+        Path(prebuilt["cargo_target_root"]), "terminal release Cargo target root"
+    )
+    release_invocation_root = release_root.parent
     if (
-        not (
-            stat.S_ISDIR(target_alias_metadata.st_mode)
-            or stat.S_ISLNK(target_alias_metadata.st_mode)
-        )
-        or workspace_target != Path(os.path.abspath(workspace_target))
-        or stat.S_ISLNK(workspace_target_metadata.st_mode)
-        or not stat.S_ISDIR(workspace_target_metadata.st_mode)
-        or workspace_target_metadata.st_uid != os.getuid()
-        or (
-            not stat.S_ISLNK(target_alias_metadata.st_mode)
-            and workspace_target != target_alias
-        )
+        artifact_root != release_invocation_root / "output"
+        or cargo_target_root != release_invocation_root / "target"
+        or _inside(artifact_root, cargo_target_root)
+        or _inside(cargo_target_root, artifact_root)
+        or _inside(artifact_root, release_root)
+        or _inside(cargo_target_root, release_root)
         or prebuilt_root.parent
         != (
-            workspace_target
+            artifact_root
             / "sumeragi-v2-release"
             / receipt_identity["sealed_source_manifest_sha256"]
             / "programs"
@@ -1609,9 +1595,16 @@ def _validate_terminal_release_evidence(
     ):
         raise BootstrapError("terminal prebuilt bundle is outside the sealed invocation root")
     capture_directory(
-        workspace_target,
-        "terminal prebuilt workspace target",
-        containment_root=workspace_target,
+        artifact_root,
+        "terminal release artifact root",
+        containment_root=artifact_root,
+        expected_mode=_DIRECTORY_MODE,
+    )
+    capture_directory(
+        cargo_target_root,
+        "terminal release Cargo target root",
+        containment_root=cargo_target_root,
+        expected_mode=_DIRECTORY_MODE,
     )
     prebuilt_manifest_snapshot = capture_artifact(
         prebuilt["manifest"],
@@ -1620,7 +1613,7 @@ def _validate_terminal_release_evidence(
         expected_path=prebuilt_root / ".sumeragi-v2-prebuilt-binaries.tsv",
         maximum_bytes=32 * 1024,
         expected_mode=_DATA_MODE,
-        containment_root=workspace_target,
+        containment_root=artifact_root,
     )
     prebuilt_manifest_file = _read_file(
         prebuilt_manifest_snapshot.path,
@@ -1755,34 +1748,34 @@ def _validate_terminal_release_evidence(
             expected_path=prebuilt_root.joinpath(*relative.split("/")),
             maximum_bytes=2 * 1024 * 1024 * 1024,
             expected_mode=_TOOL_MODE,
-            containment_root=workspace_target,
+            containment_root=artifact_root,
         )
     require_inventory(
         prebuilt_root,
         {".sumeragi-v2-prebuilt-binaries.tsv", "release", "message-control"},
         "terminal prebuilt invocation directory",
-        containment_root=workspace_target,
+        containment_root=artifact_root,
         expected_mode=_TOOL_MODE,
     )
     require_inventory(
         prebuilt_root / "release",
         {"irohad", "iroha", "kagami"},
         "terminal prebuilt release directory",
-        containment_root=workspace_target,
+        containment_root=artifact_root,
         expected_mode=_TOOL_MODE,
     )
     require_inventory(
         prebuilt_root / "message-control",
         {"release"},
         "terminal prebuilt message-control directory",
-        containment_root=workspace_target,
+        containment_root=artifact_root,
         expected_mode=_TOOL_MODE,
     )
     require_inventory(
         prebuilt_root / "message-control" / "release",
         {"irohad"},
         "terminal prebuilt message-control release directory",
-        containment_root=workspace_target,
+        containment_root=artifact_root,
         expected_mode=_TOOL_MODE,
     )
 
@@ -2909,6 +2902,159 @@ def _parse_runner_environment(values: list[str]) -> dict[str, str]:
     return result
 
 
+def _cancellation_control_path(
+    environment: dict[str, str], candidate: Path
+) -> Path | None:
+    rendered = environment.get("IROHA_RELEASE_CANCEL_REQUEST_PATH")
+    if rendered is None:
+        return None
+    path = Path(rendered)
+    if (
+        not path.is_absolute()
+        or path != Path(os.path.abspath(path))
+        or _SAFE_PATH_RE.fullmatch(str(path)) is None
+        or os.pathsep in str(path)
+        or path.name in {"", ".", ".."}
+    ):
+        raise BootstrapError(
+            "cooperative cancellation path must be absolute, normalized, and shell-safe"
+        )
+    parent = _absolute_resolved_existing(
+        path.parent, "cooperative cancellation directory"
+    )
+    metadata = parent.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != _DIRECTORY_MODE
+    ):
+        raise BootstrapError(
+            "cooperative cancellation directory must be owner-owned with exact mode 0700"
+        )
+    path = parent / path.name
+    if _inside(path, candidate):
+        raise BootstrapError(
+            "cooperative cancellation path must be outside the candidate root"
+        )
+    return path
+
+
+def _read_cancellation_request(path: Path) -> FileSnapshot:
+    request = _read_file(
+        path,
+        "cooperative cancellation request",
+        maximum_bytes=len(_CANCELLATION_REQUEST_BYTES),
+    )
+    if (
+        request.data != _CANCELLATION_REQUEST_BYTES
+        or request.owner != os.getuid()
+        or request.nlink != 1
+        or request.mode & 0o077
+    ):
+        raise BootstrapError(
+            "cooperative cancellation request is not canonical, private, and owner-bound"
+        )
+    return request
+
+
+def _publish_cancellation_result(
+    *,
+    evidence: Path,
+    evidence_fd: int,
+    request_path: Path | None,
+    candidate: Path,
+    identity: dict[str, Any],
+    identity_snapshot: FileSnapshot,
+    bootstrap_marker: FileSnapshot,
+    runner_snapshot: FileSnapshot,
+    runner_logs: dict[str, LargeFileSnapshot],
+) -> FileSnapshot:
+    if request_path is None:
+        raise BootstrapError(
+            "runner returned cooperative cancellation without a bound request path"
+        )
+    for forbidden in (
+        evidence / "BOOTSTRAP_RELEASE_COMPLETED.json",
+        evidence / "release-runner" / "output" / "release" / "RELEASE_COMPLETED.json",
+    ):
+        if forbidden.exists() or forbidden.is_symlink():
+            raise BootstrapError(
+                "cooperative cancellation cannot coexist with release completion evidence"
+            )
+    request = _read_cancellation_request(request_path)
+    value = {
+        "schema_version": 1,
+        "result": "release-cancelled",
+        "reason": "operator-request",
+        "bootstrap_completion_sha256": bootstrap_marker.sha256,
+        "candidate_root": str(candidate),
+        "candidate_identity_sha256": identity_snapshot.sha256,
+        "candidate_commit_oid": identity["head_commit"],
+        "candidate_tree_oid": identity["head_tree"],
+        "request": {
+            "path": str(request.path),
+            "sha256": request.sha256,
+            "size_bytes": request.size,
+            "mode": f"{request.mode:04o}",
+            "owner_uid": request.owner,
+            "nlink": request.nlink,
+        },
+        "runner": {
+            "path": str(runner_snapshot.path),
+            "sha256": runner_snapshot.sha256,
+            "mode": f"{runner_snapshot.mode:04o}",
+            "exit_status": _COOPERATIVE_CANCELLED_STATUS,
+            "logs": {
+                label: {
+                    "path": str(snapshot.path),
+                    "sha256": snapshot.sha256,
+                    "size_bytes": snapshot.size,
+                    "mode": f"{snapshot.mode:04o}",
+                }
+                for label, snapshot in sorted(runner_logs.items())
+            },
+        },
+    }
+    cancelled = _publish_completion_marker(
+        evidence,
+        evidence_fd,
+        _canonical_json(value),
+        final_name="BOOTSTRAP_CANCELLED.json",
+    )
+    if (
+        cancelled.mode != _DATA_MODE
+        or cancelled.owner != os.getuid()
+        or cancelled.nlink != 1
+    ):
+        raise BootstrapError("external cancellation marker metadata is not exact")
+    _require_unchanged(
+        request,
+        "cooperative cancellation request",
+        maximum_bytes=len(_CANCELLATION_REQUEST_BYTES),
+    )
+    _require_unchanged(
+        bootstrap_marker,
+        "bootstrap completion marker",
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+    )
+    _require_unchanged(
+        identity_snapshot,
+        "candidate identity evidence",
+        maximum_bytes=_MAX_IDENTITY_BYTES,
+    )
+    _require_unchanged(
+        runner_snapshot,
+        "signed candidate release runner",
+        maximum_bytes=_MAX_HELPER_BYTES,
+    )
+    for label, snapshot in runner_logs.items():
+        _require_large_file_unchanged(
+            snapshot, f"cancelled release runner {label} log"
+        )
+    return cancelled
+
+
 def _require_nonwritable_ancestors(path: Path, label: str) -> None:
     for ancestor in (path.parent, *path.parent.parents):
         metadata = ancestor.lstat()
@@ -3169,6 +3315,9 @@ def bootstrap(args: argparse.Namespace) -> int:
         protected["runner_tool_manifest"], candidate
     )
     runner_extra_environment = _parse_runner_environment(args.runner_environment)
+    cancellation_request_path = _cancellation_control_path(
+        runner_extra_environment, candidate
+    )
 
     evidence, evidence_fd = _prepare_evidence_directory(args.evidence_dir, candidate)
     evidence_directory_stat = os.fstat(evidence_fd)
@@ -3600,6 +3749,30 @@ def bootstrap(args: argparse.Namespace) -> int:
                 f"post-run bootstrap evidence became unavailable: {error}"
             )
 
+        if runner_status == _COOPERATIVE_CANCELLED_STATUS:
+            if post_error is not None:
+                raise post_error
+            cancelled = _publish_cancellation_result(
+                evidence=evidence,
+                evidence_fd=evidence_fd,
+                request_path=cancellation_request_path,
+                candidate=candidate,
+                identity=identity,
+                identity_snapshot=identity_snapshot,
+                bootstrap_marker=marker,
+                runner_snapshot=runner_snapshot,
+                runner_logs=runner_logs,
+            )
+            success = True
+            try:
+                print(
+                    "Sumeragi v2 release cancelled cooperatively after natural "
+                    f"runner completion: {cancelled.path} sha256={cancelled.sha256}",
+                    file=sys.stderr,
+                )
+            except OSError:
+                pass
+            return _COOPERATIVE_CANCELLED_STATUS
         if runner_status != 0:
             if post_error is not None:
                 print(f"post-run bootstrap validation also failed: {post_error}", file=sys.stderr)

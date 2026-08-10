@@ -8,7 +8,7 @@ readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b2
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly RETAINED_PRODUCER_PROOF_MODULE="SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
 readonly RETAINED_PRODUCER_PROOF_SHA256="00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"

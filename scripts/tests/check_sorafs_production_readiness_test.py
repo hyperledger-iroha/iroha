@@ -88,7 +88,7 @@ TOPOLOGY_QUALIFICATION_SUMMARY = {
     "storage_provider_count": 2,
     "gateway_count": 2,
     "governance_dag_instance_count": 2,
-    "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+    "runtime_handle_kinds": ["monitoring", "external_signer", "kms", "webauthn"],
     "runtime_material_policy_valid": True,
     "signed_model_artifact_count": 1,
     "required_lane_slots": list(MODULE.DEFAULT_REQUIRED_GATES),

@@ -43,7 +43,8 @@ schema-closed, payload-free plan containing:
 - exactly two gateways with distinct region and administrator identities;
 - exactly two Governance DAG instances with distinct Kubo runtime handles and
   administrator identities;
-- distinct production runtime handles for monitoring, HSM, KMS, and WebAuthn;
+- distinct production runtime handles for monitoring, an authenticated external
+  signer, KMS, and WebAuthn;
 - between one and 64 signed model artifacts, each bound by a production
   identifier, positive revision, artifact digest, detached-signature digest,
   verified Ed25519 or ML-DSA-87 algorithm, and signer public-key fingerprint;
@@ -58,7 +59,8 @@ The schema is closed at every level. Validator rows contain `validator_id`,
 `provider_id` and `operator_id`. Gateway rows contain `gateway_id`, `region`,
 and `administrator_id`. Governance DAG rows contain `instance_id`,
 `kubo_handle`, and `administrator_id`. `runtime_handles` has exactly the
-`monitoring`, `hsm`, `kms`, and `webauthn` keys. `runtime_material_policy`
+`monitoring`, `external_signer`, `kms`, and `webauthn` keys.
+`runtime_material_policy`
 sets `configuration_contains_credentials=false`,
 `configuration_contains_private_material=false`, and
 `external_injection_required=true`. `signed_model_artifacts` contains no model
@@ -93,6 +95,14 @@ the SHA-256 of those exact summary bytes plus both manifest digests and the
 reviewed deployment context. Missing, substituted, or mismatched qualification
 input blocks the lane.
 
+The independently signed topology companion is also schema-closed. Its
+`signer_backend` is exactly `software`, its `signature_algorithm` remains
+exactly `ed25519`, and the signature covers both values together with the
+existing signer identity, positive key revision, public-key fingerprint, and
+policy digest. A missing backend, the retired `hsm` backend, or any other
+backend fails qualification even when its detached signature is otherwise
+valid.
+
 The same binding is signed inside the foundational prerequisite envelope,
 beside the ordered 17 lane-summary digests. The aggregate checker and runner
 also require the exact qualification summary and demand equality across the
@@ -106,20 +116,21 @@ The next local qualification attachment is the
 It binds partition, restart, rotation, failover, recovery, restore, rollback,
 and package-yank rehearsal artifacts to this exact topology. Its trusted
 summary digest and signer fingerprint are covered by the existing
-nine-prerequisite HSM envelope and independently reverified by the aggregate
-and replay runner. It remains outside both the 17-lane summary count and the
-fixed nine prerequisite IDs.
+nine-prerequisite external-software-signer envelope and independently
+reverified by the aggregate and replay runner. It remains outside both the
+17-lane summary count and the fixed nine prerequisite IDs.
 
 ## Remaining L1 work
 
 Configuration qualification does not provision or test infrastructure.
 Operators still must deploy the reviewed four-validator topology, exercise
 DA/RBC and recovery, bring up independently administered gateways and
-Governance DAG/Kubo instances, inject real HSM/KMS/WebAuthn dependencies from
-runtime-only secret stores, operate multiple storage providers, complete the
-1,000-stream and 24-hour soak exercises, and collect one valid fresh summary
-for every lane. L2 remains blocked until the external HSM signs the ordered
+Governance DAG/Kubo instances, inject isolated authenticated software-signing,
+KMS, and WebAuthn dependencies from runtime-only secret stores, operate
+multiple storage providers, complete the 1,000-stream and 24-hour soak
+exercises, and collect one valid fresh summary for every lane. L2 remains
+blocked until the trusted external software Ed25519 signer signs the ordered
 nine-prerequisite envelope and both aggregate replays return the exact ready
-counts. Until genuine deployment evidence exists, the honest readiness state is
-`recognized_summary_count=0` of 17, regardless of a successful configuration
-qualification.
+counts. Until genuine deployment evidence exists, the honest readiness state
+is `recognized_summary_count=0` of 17, regardless of a successful
+configuration qualification.

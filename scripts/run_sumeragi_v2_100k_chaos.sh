@@ -10,6 +10,36 @@ fi
 
 readonly repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
+
+release_root_input_count=0
+for release_root_name in \
+  CARGO_TARGET_DIR \
+  IROHA_RELEASE_ARTIFACT_ROOT \
+  IROHA_RELEASE_CANCEL_REQUEST_PATH; do
+  if [[ -n "${!release_root_name:-}" ]]; then
+    release_root_input_count=$((release_root_input_count + 1))
+  fi
+done
+if ((release_root_input_count != 0 && release_root_input_count != 3)); then
+  echo "CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and IROHA_RELEASE_CANCEL_REQUEST_PATH must be supplied all-or-none" >&2
+  exit 2
+fi
+if ((release_root_input_count == 0)); then
+  chaos_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-chaos-100k.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$chaos_invocation_root/target" \
+    "$chaos_invocation_root/artifacts"
+  export CARGO_TARGET_DIR="$chaos_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$chaos_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$chaos_invocation_root/cancel-request.json"
+fi
+require_external_cargo_target_dir "$repo_root"
+require_external_release_artifact_root "$repo_root"
+require_disjoint_release_roots "$repo_root"
+release_gate_boundary "chaos-100k:entry" || exit $?
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -48,6 +78,7 @@ if [[ -n "${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}" \
   echo "100,000-height chaos source manifest disagrees with the parent release" >&2
   exit 1
 fi
+export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
 
 verify_identity() {
   local checkpoint="$1"
@@ -65,12 +96,16 @@ verify_identity() {
   fi
   if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
     python3 scripts/seal_workspace_source.py \
-      --verify --root "$repo_root" --writable target
+      --verify --root "$repo_root" --no-writable-paths
   fi
 }
 
-readonly evidence_root="${SUMERAGI_V2_CHAOS_EVIDENCE_DIR:-${repo_root}/target/sumeragi-v2-release/${source_manifest_sha256}/evidence/chaos-100k}"
+evidence_root="${SUMERAGI_V2_CHAOS_EVIDENCE_DIR:-${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${source_manifest_sha256}/evidence/chaos-100k}"
+require_release_artifact_path "$evidence_root" || exit $?
 mkdir -p -- "$evidence_root"
+evidence_root="$(cd -- "$evidence_root" && pwd -P)"
+require_release_artifact_directory "$evidence_root" || exit $?
+readonly evidence_root
 readonly evidence_lock="${evidence_root}/.chaos-100k.lock"
 if ! mkdir -- "$evidence_lock"; then
   echo "another 100,000-height chaos gate owns ${evidence_lock}" >&2
@@ -108,11 +143,13 @@ printf '%s\t%s\n' \
   >"$invocation_attestation"
 
 verify_identity "before execution"
+release_gate_boundary "chaos-100k:harness:before" || exit $?
 set +e
 bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k \
   2>&1 | tee "$run_log"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "chaos-100k:harness:after" || exit $?
 if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
   echo "100,000-height chaos command failed (harness=${pipeline_status[0]}, tee=${pipeline_status[1]})" >&2
   exit 1
@@ -138,8 +175,7 @@ if [[ "$running_one" != 1 || "$passing_one" != 1 ]] \
 fi
 
 log_sha256="$(hash_file "$run_log")"
-completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
-printf '%s\t%s\n' \
+completion_body="$(printf '%s\t%s\n' \
   schema_version 2 \
   head_commit "$head_commit" \
   head_tree "$head_tree" \
@@ -171,17 +207,36 @@ printf '%s\t%s\n' \
   duplicate_interval 32 \
   under_quorum_interval 97 \
   certificate_source external_fixture \
-  log_sha256 "$log_sha256" \
-  >"$completion_tmp"
-mv -- "$completion_tmp" "$completion_attestation"
-if ! verify_identity "after completion attestation"; then
-  rm -f -- "$completion_attestation"
-  exit 1
-fi
-
+  log_sha256 "$log_sha256")"
+marker_publish_args=(
+  --output "$completion_attestation"
+  --maximum-bytes 131072
+)
 if [[ -n "${IROHA_CHAOS_COMPLETION_PATH_FILE:-}" ]]; then
-  completion_path_tmp="${IROHA_CHAOS_COMPLETION_PATH_FILE}.$$"
-  printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
-  mv -- "$completion_path_tmp" "$IROHA_CHAOS_COMPLETION_PATH_FILE"
+  completion_pointer_parent="${IROHA_CHAOS_COMPLETION_PATH_FILE%/*}"
+  require_release_artifact_path "$completion_pointer_parent" || exit $?
+  require_release_artifact_directory "$completion_pointer_parent" || exit $?
+  marker_publish_args+=(
+    --pointer "$IROHA_CHAOS_COMPLETION_PATH_FILE"
+  )
+fi
+verify_identity "immediately before completion publication"
+release_gate_boundary "chaos-100k:completion-publication:before" || exit $?
+printf '%s\n' "$completion_body" |
+  python3 -I -S "${repo_root}/scripts/publish_release_marker.py" \
+    "${marker_publish_args[@]}"
+publication_status=0
+release_gate_boundary "chaos-100k:completion-publication:after" \
+  || publication_status=$?
+if ((publication_status != 0)) \
+  || ! verify_identity "after completion publication"; then
+  rm -f -- "$completion_attestation"
+  if [[ -n "${IROHA_CHAOS_COMPLETION_PATH_FILE:-}" ]]; then
+    rm -f -- "$IROHA_CHAOS_COMPLETION_PATH_FILE"
+  fi
+  if ((publication_status != 0)); then
+    exit "$publication_status"
+  fi
+  exit 1
 fi
 echo "100,000-height chaos gate passed; completion=${completion_attestation}" >&2

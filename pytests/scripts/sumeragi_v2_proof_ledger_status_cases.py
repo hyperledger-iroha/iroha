@@ -1,5 +1,50 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+
+def test_checker_component_manifest_matches_lexical_execution() -> None:
+    """Every reviewed component must execute exactly once from the checker."""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(SCRIPT))
+    calls = []
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        if not isinstance(call.func, ast.Name):
+            continue
+        if call.func.id != "_execute_checker_component":
+            continue
+        assert len(call.args) == 1 and not call.keywords
+        calls.append(ast.literal_eval(call.args[0]))
+
+    module = load_checker()
+    manifest = tuple(module._CHECKER_COMPONENT_FILES)
+    assert len(calls) == len(set(calls))
+    assert sorted(calls) == sorted(manifest)
+
+
+def test_checker_components_cannot_shadow_reviewed_definitions() -> None:
+    """Reject late main definitions that silently replace component checks."""
+
+    owners: dict[str, list[str]] = {}
+    for path in checker_source_paths():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+            ):
+                continue
+            owners.setdefault(node.name, []).append(f"{path.name}:{node.lineno}")
+
+    duplicates = {
+        name: locations
+        for name, locations in owners.items()
+        if len(locations) != 1
+    }
+    assert duplicates == {}
+
 def test_indexed_chain_spec_cannot_manufacture_generation_budget(
     tmp_path: Path,
 ) -> None:

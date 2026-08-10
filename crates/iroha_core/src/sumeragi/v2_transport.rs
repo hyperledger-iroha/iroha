@@ -6,7 +6,7 @@
 //! authentication all complete before an adapter may act on the payload.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -16,6 +16,8 @@ use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
     peer::PeerId,
 };
+
+use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
 
 /// Kind of signed transport payload rejected during authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +70,7 @@ pub(crate) enum V2TransportError {
         /// Cryptographic parser or verifier diagnostic.
         reason: String,
     },
-    /// The caller-supplied quorum-certificate verifier rejected a request.
+    /// The fixed quorum-certificate verifier rejected a request.
     CertificateRejected(String),
     /// A certified body was not a canonical resultless proposal block.
     InvalidProposalBody(String),
@@ -317,16 +319,78 @@ pub(crate) fn authenticate_payload_chunk(
     Ok(AuthenticatedPayloadChunk { chunk })
 }
 
-/// Authenticate a certified-body request and its quorum certificate.
+/// Authenticate a certified-body request against the live adapter's frozen
+/// roster authority.
 ///
-/// The supplied callback is the production certificate verifier; structural QC
-/// validation alone is not treated as authentication.
+/// Unlike the test-only callback helper below, this production entry point
+/// cannot substitute caller-selected certificate semantics: the adapter's
+/// ordinary authenticated-ingress verifier must accept the carried QC.
 ///
 /// # Errors
 ///
 /// Returns an error when the request is malformed, its requester is not the
-/// authenticated outer peer, its signature is invalid, or `verify_qc` rejects
-/// the carried certificate.
+/// authenticated outer peer, its signature is invalid, or the live adapter
+/// rejects the carried certificate.
+pub(crate) fn authenticate_certified_body_request_with_live_adapter(
+    context: &wire::HeightContext,
+    request: wire::CertifiedBodyRequest,
+    authenticated_requester: &PeerId,
+    adapter: &SumeragiV2Adapter,
+) -> Result<AuthenticatedCertifiedBodyRequest, V2TransportError> {
+    validate_certified_body_request(context, &request, authenticated_requester)?;
+    adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(request.certificate.clone()),
+        ))
+        .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
+    Ok(authenticated_certified_body_request(request))
+}
+
+/// Authenticate a certified-body request against an immutable historical
+/// roster and its exact BLS proofs of possession.
+///
+/// The verifier is fixed by this function; callers can supply authority bytes
+/// but cannot replace cryptographic verification with an arbitrary callback.
+///
+/// # Errors
+///
+/// Returns an error when request authentication fails or the fixed historical
+/// QC verifier rejects the carried certificate.
+pub(crate) fn authenticate_certified_body_request_with_validator_pops(
+    context: &wire::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
+    request: wire::CertifiedBodyRequest,
+    authenticated_requester: &PeerId,
+) -> Result<AuthenticatedCertifiedBodyRequest, V2TransportError> {
+    validate_certified_body_request(context, &request, authenticated_requester)?;
+    verify_historical_quorum_certificate(context, proofs_of_possession, &request.certificate)
+        .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
+    Ok(authenticated_certified_body_request(request))
+}
+
+/// Authenticate a certified-body request against one already verified height.
+///
+/// # Errors
+///
+/// Returns an error when exact request authentication or fixed QC verification
+/// fails under `verified`.
+pub(crate) fn authenticate_certified_body_request_with_verified_height(
+    verified: &VerifiedHeightContext,
+    request: wire::CertifiedBodyRequest,
+    authenticated_requester: &PeerId,
+) -> Result<AuthenticatedCertifiedBodyRequest, V2TransportError> {
+    authenticate_certified_body_request_with_validator_pops(
+        verified.context(),
+        verified.proofs_of_possession(),
+        request,
+        authenticated_requester,
+    )
+}
+
+/// Test-only request mint supporting deliberately synthetic certificate
+/// policies. Production code must use one of the fixed verifier-backed entry
+/// points above.
+#[cfg(test)]
 pub(crate) fn authenticate_certified_body_request<VerifyQc, VerifyError>(
     context: &wire::HeightContext,
     request: wire::CertifiedBodyRequest,
@@ -337,14 +401,28 @@ where
     VerifyQc: FnOnce(&wire::HeightContext, &wire::QuorumCertificate) -> Result<(), VerifyError>,
     VerifyError: fmt::Display,
 {
-    request.validate(context)?;
-    authenticate_certified_body_request_identity(&request, authenticated_requester)?;
+    validate_certified_body_request(context, &request, authenticated_requester)?;
     verify_qc(context, &request.certificate)
         .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
-    Ok(AuthenticatedCertifiedBodyRequest {
+    Ok(authenticated_certified_body_request(request))
+}
+
+fn validate_certified_body_request(
+    context: &wire::HeightContext,
+    request: &wire::CertifiedBodyRequest,
+    authenticated_requester: &PeerId,
+) -> Result<(), V2TransportError> {
+    request.validate(context)?;
+    authenticate_certified_body_request_identity(request, authenticated_requester)
+}
+
+fn authenticated_certified_body_request(
+    request: wire::CertifiedBodyRequest,
+) -> AuthenticatedCertifiedBodyRequest {
+    AuthenticatedCertifiedBodyRequest {
         request_hash: HashOf::new(&request),
         request,
-    })
+    }
 }
 
 /// Authenticate a certified-body requester before loading historical context
@@ -444,6 +522,86 @@ pub(crate) enum CertifiedBodyResponseClaimDisposition {
     Coalesced,
 }
 
+/// Read-only state of the one volatile response occurrence for an exact
+/// outstanding certified-body request.
+///
+/// This preflight never acquires the slot. The serialized executor must still
+/// call [`OutstandingCertifiedBodyRequests::prepare_authenticated_response_claim`]
+/// after its runtime and service reservations have been planned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum CertifiedBodyResponseClaimPreflight {
+    /// No authenticated response currently owns the request family.
+    Vacant,
+    /// The byte-for-byte authenticated response already owns the family.
+    ExactRetransmission,
+}
+
+/// Borrow-bound response-family claim prepared before an external commit.
+///
+/// The exclusive tracker borrow prevents request retirement, cancellation, or
+/// another response claim between the read-only preflight and the infallible
+/// insertion/coalescence tail. Dropping this token performs no mutation. A
+/// future composite late-response transaction may therefore hold it across
+/// the exact queue CAS and call [`Self::commit`] only after that CAS succeeds.
+#[must_use = "dropping a prepared response claim leaves the family unchanged"]
+pub(crate) struct PreparedCertifiedBodyResponseClaim<'a> {
+    tracker: &'a mut OutstandingCertifiedBodyRequests,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    preflight: CertifiedBodyResponseClaimPreflight,
+}
+
+impl PreparedCertifiedBodyResponseClaim<'_> {
+    /// Return the exact read-only family state frozen by this borrow.
+    #[cfg(test)]
+    pub(crate) const fn preflight(&self) -> CertifiedBodyResponseClaimPreflight {
+        self.preflight
+    }
+
+    /// Return the exact signed request family frozen by this token.
+    #[cfg(test)]
+    pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.request_hash
+    }
+
+    /// Return the exact authenticated response occurrence frozen by this token.
+    #[cfg(test)]
+    pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        self.response_hash
+    }
+
+    /// Commit the already validated family claim without another lookup that
+    /// can reject. Any violated assertion is an internal fail-stop invariant,
+    /// never a retryable post-queue error.
+    fn commit(self) -> CertifiedBodyResponseClaimDisposition {
+        assert!(
+            self.tracker.requests.contains_key(&self.request_hash),
+            "prepared response claim retains its exact outstanding request"
+        );
+        match self.preflight {
+            CertifiedBodyResponseClaimPreflight::ExactRetransmission => {
+                assert_eq!(
+                    self.tracker.response_claims.get(&self.request_hash),
+                    Some(&self.response_hash),
+                    "prepared retransmission retains the exact family owner"
+                );
+                CertifiedBodyResponseClaimDisposition::Coalesced
+            }
+            CertifiedBodyResponseClaimPreflight::Vacant => {
+                let Entry::Vacant(slot) = self.tracker.response_claims.entry(self.request_hash)
+                else {
+                    panic!("exclusive prepared claim cannot overwrite a family owner")
+                };
+                slot.insert(self.response_hash);
+                assert!(self.tracker.response_claims.len() <= self.tracker.requests.len());
+                assert!(self.tracker.response_claims.len() <= self.tracker.capacity);
+                CertifiedBodyResponseClaimDisposition::Acquired
+            }
+        }
+    }
+}
+
 /// Preflighted insertion into both exact certified-request indexes.
 ///
 /// The tracker is serialized by its executor owner. Planning performs every
@@ -501,6 +659,33 @@ impl OutstandingCertifiedBodyRequests {
         self.requests.contains_key(&hash)
     }
 
+    /// Validate the complete request, logical-identity, and response-claim cut.
+    pub(crate) fn validate_exact_indexes(&self) -> bool {
+        self.capacity != 0
+            && self.requests.len() <= self.capacity
+            && self.requests.len() == self.identities.len()
+            && self.response_claims.len() <= self.requests.len()
+            && self.requests.iter().all(|(request_hash, authenticated)| {
+                authenticated.request_hash() == *request_hash
+                    && HashOf::new(authenticated.request()) == *request_hash
+                    && self
+                        .identities
+                        .get(&RequestIdentity::from(authenticated.request()))
+                        == Some(request_hash)
+            })
+            && self.identities.iter().all(|(identity, request_hash)| {
+                self.requests
+                    .get(request_hash)
+                    .is_some_and(|authenticated| {
+                        RequestIdentity::from(authenticated.request()) == *identity
+                    })
+            })
+            && self
+                .response_claims
+                .keys()
+                .all(|request_hash| self.requests.contains_key(request_hash))
+    }
+
     /// Exact sorted set of outstanding signed-request hashes.
     #[cfg(test)]
     pub(crate) fn hashes(&self) -> BTreeSet<HashOf<wire::CertifiedBodyRequest>> {
@@ -511,6 +696,14 @@ impl OutstandingCertifiedBodyRequests {
     #[cfg(test)]
     pub(crate) fn response_claim_count(&self) -> usize {
         self.response_claims.len()
+    }
+
+    /// Exact response occurrence currently owning one request family.
+    pub(crate) fn response_claim_hash(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Option<HashOf<wire::CertifiedBodyResponse>> {
+        self.response_claims.get(&request_hash).copied()
     }
 
     /// Validate one registration without changing either bounded index.
@@ -677,6 +870,59 @@ impl OutstandingCertifiedBodyRequests {
         Ok(AuthenticatedCertifiedBodyResponse { response })
     }
 
+    /// Check the one-response family without acquiring or replacing it.
+    ///
+    /// A vacant family and an exact retransmission remain eligible for the
+    /// executor's later transactional admission preflight. A different
+    /// authenticated response is rejected with
+    /// [`V2TransportError::ConflictingCertifiedBodyResponseClaim`].
+    pub(crate) fn preflight_authenticated_response_claim(
+        &self,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<CertifiedBodyResponseClaimPreflight, V2TransportError> {
+        let response = authenticated.response();
+        let request_hash = response.request_hash;
+        if !self.requests.contains_key(&request_hash) {
+            return Err(V2TransportError::UnsolicitedResponse(request_hash));
+        }
+        let incoming = HashOf::new(response);
+        match self.response_claims.get(&request_hash).copied() {
+            Some(claimed) if claimed == incoming => {
+                Ok(CertifiedBodyResponseClaimPreflight::ExactRetransmission)
+            }
+            Some(claimed) => Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
+                request: request_hash,
+                claimed,
+                incoming,
+            }),
+            None => Ok(CertifiedBodyResponseClaimPreflight::Vacant),
+        }
+    }
+
+    /// Freeze one authenticated response-family claim without changing it.
+    ///
+    /// The returned token owns the tracker's exclusive borrow. No safe caller
+    /// can invalidate its request or claim preflight before consuming it, and
+    /// dropping it is an exact stutter.
+    pub(crate) fn prepare_authenticated_response_claim<'a>(
+        &'a mut self,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<PreparedCertifiedBodyResponseClaim<'a>, V2TransportError> {
+        let response = authenticated.response();
+        let request_hash = response.request_hash;
+        let response_hash = HashOf::new(response);
+        if !self.validate_exact_indexes() {
+            return Err(V2TransportError::InconsistentRequestIndex(request_hash));
+        }
+        let preflight = self.preflight_authenticated_response_claim(authenticated)?;
+        Ok(PreparedCertifiedBodyResponseClaim {
+            tracker: self,
+            request_hash,
+            response_hash,
+            preflight,
+        })
+    }
+
     /// Claim the one physical response occurrence for a fully authenticated
     /// outstanding request.
     ///
@@ -689,29 +935,9 @@ impl OutstandingCertifiedBodyRequests {
         &mut self,
         authenticated: &AuthenticatedCertifiedBodyResponse,
     ) -> Result<CertifiedBodyResponseClaimDisposition, V2TransportError> {
-        let response = authenticated.response();
-        let request_hash = response.request_hash;
-        if !self.requests.contains_key(&request_hash) {
-            return Err(V2TransportError::UnsolicitedResponse(request_hash));
-        }
-        debug_assert!(self.response_claims.len() <= self.requests.len());
-        let incoming = HashOf::new(response);
-        match self.response_claims.get(&request_hash).copied() {
-            Some(claimed) if claimed == incoming => {
-                Ok(CertifiedBodyResponseClaimDisposition::Coalesced)
-            }
-            Some(claimed) => Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
-                request: request_hash,
-                claimed,
-                incoming,
-            }),
-            None => {
-                self.response_claims.insert(request_hash, incoming);
-                debug_assert!(self.response_claims.len() <= self.requests.len());
-                debug_assert!(self.response_claims.len() <= self.capacity);
-                Ok(CertifiedBodyResponseClaimDisposition::Acquired)
-            }
-        }
+        Ok(self
+            .prepare_authenticated_response_claim(authenticated)?
+            .commit())
     }
 }
 
@@ -928,8 +1154,9 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+    use tempfile::TempDir;
 
-    use crate::sumeragi::v2_chunks::encode_payload;
+    use crate::sumeragi::{v2_body_store::V2BodyStore, v2_chunks::encode_payload};
 
     use super::*;
 
@@ -995,10 +1222,16 @@ mod tests {
                 1_000,
                 round.view,
             );
-            let signature = SignatureOf::try_from_hash(validators[0].private_key(), header.hash())
-                .expect("sign transport fixture proposal");
-            let block =
-                SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+            let leader = context.leader(round.view);
+            let leader_index = usize::try_from(leader).expect("small fixture leader index");
+            let signature =
+                SignatureOf::try_from_hash(validators[leader_index].private_key(), header.hash())
+                    .expect("sign transport fixture proposal");
+            let block = SignedBlock::presigned(
+                BlockSignature::new(u64::from(leader), signature),
+                header,
+                Vec::new(),
+            );
             let body = block
                 .encode_wire()
                 .expect("encode transport fixture proposal");
@@ -1447,6 +1680,162 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_certified_fetch_body_is_durable_and_exactly_bound() {
+        let fixture = Fixture::new();
+        let request = fixture.signed_request();
+        let request_hash = HashOf::new(&request);
+        let response = fixture.signed_response(&request, 0);
+        let response_hash = HashOf::new(&response);
+        let manifest_hash = HashOf::new(&response.manifest);
+        let mut tracker =
+            OutstandingCertifiedBodyRequests::new(1).expect("one exact request family");
+        tracker
+            .register(
+                fixture
+                    .authenticate_request(request.clone())
+                    .expect("authenticate durable-body request"),
+            )
+            .expect("register durable-body request");
+        let authenticated = tracker
+            .authenticate_response(
+                &fixture.context,
+                response,
+                &Fixture::peer(&fixture.validators[0]),
+            )
+            .expect("authenticate durable-body response");
+
+        let directory = TempDir::new().expect("temporary durable-body directory");
+        let mut body_store = V2BodyStore::open(directory.path(), fixture.context.clone())
+            .expect("open durable-body store");
+        let receipt = body_store
+            .persist_authenticated_certified_fetch_response(&authenticated)
+            .expect("persist authenticated response body");
+        assert_eq!(receipt.request_hash(), request_hash);
+        assert_eq!(receipt.response_hash(), response_hash);
+        assert_eq!(receipt.durable_body().context_id(), fixture.context.id());
+        assert_eq!(receipt.durable_body().round(), fixture.manifest.round);
+        assert_eq!(receipt.durable_body().subject(), fixture.manifest.subject);
+        assert_eq!(receipt.durable_body().manifest_hash(), manifest_hash);
+
+        let repeated = body_store
+            .persist_authenticated_certified_fetch_response(&authenticated)
+            .expect("exact response repeat is idempotent");
+        assert_eq!(repeated, receipt);
+
+        // A second legitimate responder changes the authenticated transport
+        // occurrence, but cannot replace the hash-bound body-store frame. A
+        // genuinely different body under this same subject cannot pass
+        // response authentication without breaking the payload hash.
+        let other_response = fixture.signed_response(&request, 1);
+        let other_response_hash = HashOf::new(&other_response);
+        let other_authenticated = tracker
+            .authenticate_response(
+                &fixture.context,
+                other_response,
+                &Fixture::peer(&fixture.validators[1]),
+            )
+            .expect("authenticate second durable-body responder");
+        let other_receipt = body_store
+            .persist_authenticated_certified_fetch_response(&other_authenticated)
+            .expect("same exact body from another responder is idempotent");
+        assert_eq!(other_receipt.request_hash(), request_hash);
+        assert_eq!(other_receipt.response_hash(), other_response_hash);
+        assert_ne!(other_receipt.response_hash(), receipt.response_hash());
+        assert_eq!(other_receipt.durable_body(), receipt.durable_body());
+
+        let durable_body = receipt.durable_body().clone();
+        drop(body_store);
+        let reopened = V2BodyStore::open(directory.path(), fixture.context.clone())
+            .expect("reopen durable-body store");
+        let recovered = reopened
+            .receipt(fixture.manifest.round, fixture.manifest.subject)
+            .expect("recover exact durable body receipt");
+        assert_eq!(recovered, durable_body);
+        assert_eq!(
+            reopened
+                .load_canonical_wire(&recovered)
+                .expect("load recovered canonical body"),
+            fixture.body
+        );
+    }
+
+    #[test]
+    fn prepared_response_claim_is_drop_safe_and_commits_without_repreflight() {
+        let fixture = Fixture::new();
+        let request = fixture.signed_request();
+        let request_hash = HashOf::new(&request);
+        let response = fixture.signed_response(&request, 0);
+        let response_hash = HashOf::new(&response);
+        let responder = Fixture::peer(&fixture.validators[0]);
+        let mut tracker =
+            OutstandingCertifiedBodyRequests::new(1).expect("one exact request family");
+        tracker
+            .register(
+                fixture
+                    .authenticate_request(request)
+                    .expect("authenticate prepared-claim request"),
+            )
+            .expect("register prepared-claim request");
+        let authenticated = tracker
+            .authenticate_response(&fixture.context, response, &responder)
+            .expect("authenticate prepared-claim response");
+
+        let claims_before = tracker.response_claims.clone();
+        let prepared = tracker
+            .prepare_authenticated_response_claim(&authenticated)
+            .expect("vacant response family prepares");
+        assert_eq!(
+            prepared.preflight(),
+            CertifiedBodyResponseClaimPreflight::Vacant
+        );
+        assert_eq!(prepared.request_hash(), request_hash);
+        assert_eq!(prepared.response_hash(), response_hash);
+        drop(prepared);
+        assert_eq!(tracker.response_claims, claims_before);
+
+        let disposition = tracker
+            .prepare_authenticated_response_claim(&authenticated)
+            .expect("unchanged vacant family prepares again")
+            .commit();
+        assert_eq!(disposition, CertifiedBodyResponseClaimDisposition::Acquired);
+        assert_eq!(
+            tracker.response_claim_hash(request_hash),
+            Some(response_hash)
+        );
+
+        let retransmission = tracker
+            .prepare_authenticated_response_claim(&authenticated)
+            .expect("exact claimed response prepares as a retransmission");
+        assert_eq!(
+            retransmission.preflight(),
+            CertifiedBodyResponseClaimPreflight::ExactRetransmission
+        );
+        assert_eq!(
+            retransmission.commit(),
+            CertifiedBodyResponseClaimDisposition::Coalesced
+        );
+        assert_eq!(tracker.response_claim_count(), 1);
+        assert_eq!(
+            tracker.response_claim_hash(request_hash),
+            Some(response_hash)
+        );
+
+        let identity = RequestIdentity::from(tracker.requests[&request_hash].request());
+        let removed = tracker
+            .identities
+            .remove(&identity)
+            .expect("remove exact reverse request index for prepared-claim negative");
+        let claims_before = tracker.response_claims.clone();
+        assert!(matches!(
+            tracker.prepare_authenticated_response_claim(&authenticated),
+            Err(V2TransportError::InconsistentRequestIndex(hash)) if hash == request_hash
+        ));
+        assert_eq!(tracker.response_claims, claims_before);
+        tracker.identities.insert(identity, removed);
+        assert!(tracker.validate_exact_indexes());
+    }
+
+    #[test]
     fn response_claim_is_bounded_by_request_and_reopens_only_after_restart() {
         let fixture = Fixture::new();
         let request = fixture.signed_request();
@@ -1514,6 +1903,41 @@ mod tests {
             restarted.claim_authenticated_response(&after_restart),
             Err(V2TransportError::UnsolicitedResponse(hash)) if hash == request_hash
         ));
+    }
+
+    #[test]
+    fn certified_request_index_validation_rejects_missing_reverse_and_foreign_claim() {
+        let fixture = Fixture::new();
+        let request = fixture.signed_request();
+        let authenticated = fixture
+            .authenticate_request(request.clone())
+            .expect("authenticate exact request");
+        let mut tracker =
+            OutstandingCertifiedBodyRequests::new(2).expect("non-zero tracker capacity");
+        tracker
+            .register(authenticated)
+            .expect("register exact request");
+        assert!(tracker.validate_exact_indexes());
+
+        let identity = RequestIdentity::from(&request);
+        let request_hash = tracker
+            .identities
+            .remove(&identity)
+            .expect("remove exact reverse index for negative test");
+        assert!(!tracker.validate_exact_indexes());
+        tracker.identities.insert(identity, request_hash);
+        assert!(tracker.validate_exact_indexes());
+
+        let foreign_request =
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign request response-claim index"));
+        let foreign_response =
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign response response-claim index"));
+        tracker
+            .response_claims
+            .insert(foreign_request, foreign_response);
+        assert!(!tracker.validate_exact_indexes());
+        tracker.response_claims.remove(&foreign_request);
+        assert!(tracker.validate_exact_indexes());
     }
 
     #[test]

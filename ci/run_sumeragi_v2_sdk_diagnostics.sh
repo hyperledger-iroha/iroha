@@ -6,51 +6,12 @@ set -euo pipefail
 repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly source_paths=(
-  ci/run_sumeragi_v2_sdk_diagnostics.sh
-  ci/native_amx_v2_grouped_gradle_init.gradle
-  python/iroha_python/tests/client_sumeragi_v2_status_test.py
-  python/iroha_python/src/iroha_python/client.py
-  python/iroha_torii_client/tests/test_client.py
-  python/iroha_torii_client/client.py
-  javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js
-  javascript/iroha_js/test/toriiClient.test.js
-  javascript/iroha_js/src/toriiClient.js
-  javascript/iroha_js/scripts/build-dist.mjs
-  javascript/iroha_js/package.json
-  javascript/iroha_js/package-lock.json
-  IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift
-  IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
-  IrohaSwift/Package.swift
-  IrohaSwift/Package.resolved
-  kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModelsTest.kt
-  kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt
-  kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt
-  kotlin/core-jvm/build.gradle.kts
-  kotlin/settings.gradle.kts
-  kotlin/gradlew
-  kotlin/gradle/wrapper/gradle-wrapper.jar
-  kotlin/gradle/wrapper/gradle-wrapper.properties
-  java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModelsTests.java
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModels.java
-  java/iroha_android/core/build.gradle.kts
-  java/iroha_android/settings.gradle.kts
-  java/iroha_android/gradlew
-  java/iroha_android/gradle/wrapper/gradle-wrapper.jar
-  java/iroha_android/gradle/wrapper/gradle-wrapper.properties
-)
+readonly source_closure_resolver="${repo_root}/ci/resolve_sumeragi_v2_sdk_source_closure.py"
+readonly source_closure_manifest="${repo_root}/ci/sumeragi_v2_sdk_source_closure.json"
 
 usage() {
   echo "usage: $0 {python|javascript|swift|kotlin|java|--suite-source-manifest-sha256}" >&2
   exit 2
-}
-
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
 }
 
 require_regular_source() {
@@ -61,22 +22,21 @@ require_regular_source() {
   fi
 }
 
-for relative_path in "${source_paths[@]}"; do
-  require_regular_source "${repo_root}/${relative_path}"
-done
+require_regular_source "$source_closure_resolver"
+require_regular_source "$source_closure_manifest"
+
+readonly python_bin="${PYTHON_BIN:-python3}"
+if [[ -z "$python_bin" ]] || ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "A valid Python 3 interpreter is required for Sumeragi v2 SDK diagnostics (PYTHON_BIN=${python_bin})" >&2
+  exit 1
+fi
 
 suite_source_manifest_sha256="$(
-  {
-    for relative_path in "${source_paths[@]}"; do
-      printf '%s\t%s\n' \
-        "$relative_path" \
-        "$(sha256_file "${repo_root}/${relative_path}")"
-    done
-  } | if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  else
-    shasum -a 256 | awk '{print $1}'
-  fi
+  "$python_bin" "$source_closure_resolver" \
+    --root "$repo_root" \
+    --manifest "$source_closure_manifest" \
+    --suite "sumeragi-v2-sdk-diagnostics" \
+    --manifest-sha256
 )"
 if [[ ! "$suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "Sumeragi v2 SDK diagnostics suite-source manifest digest is invalid" >&2
@@ -99,12 +59,6 @@ case "$surface" in
     usage
     ;;
 esac
-
-readonly python_bin="${PYTHON_BIN:-python3}"
-if [[ -z "$python_bin" ]] || ! command -v "$python_bin" >/dev/null 2>&1; then
-  echo "A valid Python 3 interpreter is required for Sumeragi v2 SDK diagnostics (PYTHON_BIN=${python_bin})" >&2
-  exit 1
-fi
 
 readonly temporary_parent="${TMPDIR:-/tmp}"
 temporary_root="$(mktemp -d "${temporary_parent%/}/sumeragi-v2-sdk-diagnostics.XXXXXX")"
@@ -253,7 +207,7 @@ PY
 observed_test_count=0
 case "$surface" in
   python)
-    observed_test_count=114
+    observed_test_count=121
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Sumeragi diagnostics require Python >=3.10")'
     readonly python_path="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
@@ -283,7 +237,7 @@ case "$surface" in
       "${torii_test}::test_get_sumeragi_diagnostics_keeps_global_and_coordinator_views_independent"
       "${torii_test}::test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set"
       "${torii_test}::test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence"
-      "${torii_test}::test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict"
+      "${torii_test}::test_get_sumeragi_diagnostics_accepts_native_application_state_geometry"
       "${torii_test}::test_get_sumeragi_diagnostics_rejects_invalid_native_application_shapes"
       "${torii_test}::test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order"
       "${torii_test}::test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict"
@@ -400,7 +354,7 @@ if len(passed_cases) != expected or any("skipped" in line.lower() for line in li
 PY
     ;;
   kotlin)
-    observed_test_count=15
+    observed_test_count=26
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -416,14 +370,16 @@ PY
       --init-script "$gradle_init_path" \
       :core-jvm:test \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTest \
-      --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.getSumeragiDiagnosticsUsesDedicatedOperationalEndpoint
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTest \
+      --tests org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTest \
-      org.hyperledger.iroha.sdk.client.HttpClientTransportTest
+      org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTest \
+      org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=10
+    observed_test_count=24
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -438,10 +394,16 @@ PY
       --project-cache-dir "${temporary_root}/java-project-cache" \
       --init-script "$gradle_init_path" \
       :core:test \
-      --tests org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests
+      --tests org.hyperledger.iroha.android.client.SumeragiHttpTransportTests \
+      --tests org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests \
+      --tests org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsParsingTests \
+      --tests org.hyperledger.iroha.android.consensus.SumeragiStatusModelsTests
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
-      org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests
+      org.hyperledger.iroha.android.client.SumeragiHttpTransportTests \
+      org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests \
+      org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsParsingTests \
+      org.hyperledger.iroha.android.consensus.SumeragiStatusModelsTests
     ;;
 esac
 

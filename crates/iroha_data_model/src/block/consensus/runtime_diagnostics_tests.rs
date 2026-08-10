@@ -1,5 +1,99 @@
 // Runtime diagnostics fixtures and regression tests included in the parent test module.
 
+#[test]
+fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
+    let document = grouped_native_amx_fixture_document();
+    let receipt_group = document
+        .pointer("/golden/receipt_group")
+        .cloned()
+        .expect("fixture contains receipt group");
+    let commitment: LaneBlockCommitment = norito::json::from_value(receipt_group.clone())
+        .expect("fixture receipt group decodes");
+    commitment
+        .validate_native_amx_receipts()
+        .expect("Rust-owned grouped Native AMX fixture is structurally valid");
+    validate_grouped_native_amx_application_evidence(&document)
+        .expect("Rust-owned Native AMX application evidence is valid");
+
+    for receipt in &commitment.native_amx_receipts {
+        for leg in &receipt.legs {
+            assert!(
+                !leg.requires_mixed_role_anchor_validation(),
+                "golden grouped legs contain their exact current entrypoint"
+            );
+        }
+    }
+
+    for (path, label) in [
+        ("", "settlement commitment"),
+        ("/native_amx_receipts/0", "receipt"),
+        ("/native_amx_receipts/0/legs/0", "leg"),
+        (
+            "/native_amx_receipts/0/legs/0/participant_proposal",
+            "participant proposal",
+        ),
+        (
+            "/native_amx_receipts/0/legs/0/participant_proposal/descriptor",
+            "participant descriptor",
+        ),
+        (
+            "/native_amx_receipts/0/legs/0/participant_settlement",
+            "participant settlement",
+        ),
+        (
+            "/native_amx_receipts/0/legs/0/participant_settlement/receipts/0",
+            "participant settlement receipt",
+        ),
+        ("/native_amx_receipts/0/legs/0/prepare_qc", "attestation QC"),
+        (
+            "/native_amx_receipts/0/legs/0/prepare_qc/body",
+            "attestation body",
+        ),
+        (
+            "/native_amx_receipts/0/legs/0/prepare_qc/body/phase",
+            "attestation phase",
+        ),
+    ] {
+        let mut mutated = receipt_group.clone();
+        let target = if path.is_empty() {
+            mutated.as_object_mut()
+        } else {
+            mutated
+                .pointer_mut(path)
+                .and_then(norito::json::Value::as_object_mut)
+        }
+        .unwrap_or_else(|| panic!("fixture contains {label} object"));
+        target.insert(
+            "retired_native_amx_field".to_owned(),
+            norito::json::Value::Null,
+        );
+        assert!(
+            norito::json::from_value::<LaneBlockCommitment>(mutated).is_err(),
+            "unknown {label} fields must fail exact Native AMX JSON decoding"
+        );
+    }
+
+    let hint = LaneBlockProposalPayloadHintV1 {
+        proposal_height: 42,
+        proposal_view: 3,
+        proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"native-amx-payload-hint-unknown-field",
+        )),
+    };
+    let mut hint_json = norito::json::to_value(hint).expect("serialize payload hint");
+    hint_json
+        .as_object_mut()
+        .expect("payload hint is an object")
+        .insert(
+            "retired_native_amx_field".to_owned(),
+            norito::json::Value::Null,
+        );
+    assert!(
+        norito::json::from_value::<LaneBlockProposalPayloadHintV1>(hint_json).is_err(),
+        "unknown payload-hint fields must fail exact Native AMX JSON decoding"
+    );
+}
+
 fn npos_diagnostics() -> SumeragiNposDiagnostics {
     SumeragiNposDiagnostics {
         epoch_length_blocks: NonZeroU64::new(100).unwrap(),

@@ -3203,13 +3203,20 @@ def _retired_path_present(path: Path) -> bool:
 
 
 def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
-    """Pin the online prefetch/offline chaos boundary for a cold Cargo cache."""
+    """Pin the offline shared-policy chaos boundary for a cold Cargo cache."""
 
     harness_path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
     lock_path = repo_root / "scripts" / "formal" / "sumeragi_v2_harness.lock"
+    policy_path = repo_root / "scripts" / "sumeragi_v2_release_process_policy.sh"
     launcher_path = repo_root / "scripts" / "run_sumeragi_v2_100k_chaos.sh"
     workflow_path = repo_root / ".github" / "workflows" / "nightly_sumeragi_formal.yml"
-    required_paths = (harness_path, lock_path, launcher_path, workflow_path)
+    required_paths = (
+        harness_path,
+        lock_path,
+        policy_path,
+        launcher_path,
+        workflow_path,
+    )
     errors = [
         f"{path}: missing cold-cache chaos contract input"
         for path in required_paths
@@ -3219,6 +3226,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         return errors
 
     harness = harness_path.read_text(encoding="utf-8")
+    policy = policy_path.read_text(encoding="utf-8")
     lock_declaration = (
         'readonly HARNESS_LOCK="${REPO_ROOT}/scripts/formal/'
         'sumeragi_v2_harness.lock"'
@@ -3244,16 +3252,46 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
                 f"with {lock_path}"
             )
 
-    normalized_harness = " ".join(harness.split())
-    exact_network_mode = (
-        'if [[ "$1" == "--fetch" ]]; then export CARGO_NET_OFFLINE=false '
-        "else export CARGO_NET_OFFLINE=true fi"
+    expected_policy_source = (
+        'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"'
     )
-    if exact_network_mode not in normalized_harness:
+    if harness.count(expected_policy_source) != 1:
         errors.append(
-            f"{harness_path}: only --fetch may run online and every test mode "
-            "must force CARGO_NET_OFFLINE=true"
+            f"{harness_path}: harness must source the shared process policy exactly once"
         )
+    for local_definition in ("wait_for_external_cargo() {", "run_cargo() {"):
+        if local_definition in harness:
+            errors.append(
+                f"{harness_path}: harness must not shadow shared policy definition "
+                f"{local_definition!r}"
+            )
+    for token in (
+        "wait_for_external_cargo() {",
+        "run_cargo() {",
+        "ps -axo pid,etime,command",
+        'executable == "cargo"',
+        'executable == "rustc"',
+        'executable == "rustfmt"',
+        'pinned_arguments=(-j1 "$@")',
+        'command cargo +1.93.1 "${pinned_arguments[@]}"',
+    ):
+        if policy.count(token) != 1:
+            errors.append(
+                f"{policy_path}: shared process policy lacks exact required token {token!r}"
+            )
+    if harness.count("export CARGO_NET_OFFLINE=true") != 1:
+        errors.append(
+            f"{harness_path}: every fixed harness mode must inherit one forced "
+            "CARGO_NET_OFFLINE=true"
+        )
+    for forbidden_fetch in ("--fetch", "CARGO_NET_OFFLINE=false", "run_cargo fetch"):
+        if forbidden_fetch in harness:
+            errors.append(
+                f"{harness_path}: formal harness retains forbidden network-fetch "
+                f"mode {forbidden_fetch!r}"
+            )
+
+    normalized_harness = " ".join(harness.split())
     lock_validation_tokens = (
         '[[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK"',
         '"$(hash_file "$HARNESS_LOCK")" != "$HARNESS_LOCK_SHA256"',
@@ -3267,42 +3305,18 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             f"missing {missing_lock_validation}"
         )
 
-    wait_definition = "wait_for_external_cargo() {"
-    exact_process_snapshot = "    ps -axo pid,etime,command"
-    run_cargo_definition = (
-        'run_cargo() {\n'
-        "  wait_for_external_cargo\n"
-        '  command cargo "$@"\n'
-        "}"
-    )
-    if harness.count(wait_definition) != 1:
-        errors.append(
-            f"{harness_path}: harness must define exactly one Cargo/rustc "
-            "quiescence wait"
-        )
-    if harness.count(exact_process_snapshot) != 1:
-        errors.append(
-            f"{harness_path}: harness must execute the exact "
-            "`ps -axo pid,etime,command` snapshot"
-        )
-    if harness.count(run_cargo_definition) != 1:
-        errors.append(
-            f"{harness_path}: every harness Cargo command must use the exact "
-            "wait_for_external_cargo/run_cargo wrapper"
-        )
     direct_cargo_lines = [
         line
         for line in harness.splitlines()
         if re.match(r"^\s*(?:command\s+)?cargo(?:\s|$)", line)
     ]
-    if direct_cargo_lines != ['  command cargo "$@"']:
+    if direct_cargo_lines:
         errors.append(
             f"{harness_path}: direct Cargo execution bypasses run_cargo; "
             f"found {direct_cargo_lines}"
         )
     fixed_modes = set(re.findall(r"(?m)^  (--[a-z0-9-]+)\)$", harness))
     expected_fixed_modes = {
-        "--fetch",
         "--unit",
         "--fast-network",
         "--chaos-100k",
@@ -3323,11 +3337,6 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         errors.append(
             f"{harness_path}: formal harness retains arbitrary child-command "
             f"dispatch tokens {retained_dispatch_tokens}"
-        )
-    if harness.count('"$@"') != 1:
-        errors.append(
-            f"{harness_path}: the argument vector may be forwarded only by the "
-            "guarded run_cargo wrapper"
         )
     expected_verus_branch = """\
   --verus)
@@ -3363,36 +3372,42 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             "reviewed Verus and Clippy command branches"
         )
 
+    for index, line in enumerate(harness.splitlines()):
+        match = re.search(r"\brun_cargo\s+(build|test|run|clippy|verus|fetch)\b", line)
+        if match is None:
+            continue
+        logical = line
+        cursor = index
+        lines = harness.splitlines()
+        while logical.rstrip().endswith("\\") and cursor + 1 < len(lines):
+            cursor += 1
+            logical += " " + lines[cursor]
+        if "--locked" not in logical or "--offline" not in logical:
+            errors.append(
+                f"{harness_path}:{index + 1}: guarded Cargo command lacks "
+                "--locked --offline"
+            )
+
     lock_copy = harness.find('cp -- "$HARNESS_LOCK" Cargo.lock')
     case_start = harness.find('case "$1" in')
-    fetch_start = harness.find("  --fetch)", case_start)
-    unit_start = harness.find("  --unit)", fetch_start)
-    if not (0 <= lock_copy < case_start < fetch_start < unit_start):
+    unit_start = harness.find("  --unit)", case_start)
+    fast_network_start = harness.find("  --fast-network)", unit_start)
+    if not (0 <= lock_copy < case_start < unit_start < fast_network_start):
         errors.append(
             f"{harness_path}: the verified standalone lock must be copied "
-            "before dispatching --fetch or any offline test mode"
+            "before dispatching any offline fixed mode"
         )
-        fetch_branch = ""
+        unit_branch = ""
     else:
-        fetch_branch = harness[fetch_start:unit_start]
-    fetch_commands = re.findall(r"(?m)^\s*run_cargo fetch[^\n]*$", fetch_branch)
-    if fetch_commands != ["    run_cargo fetch --locked"]:
-        errors.append(
-            f"{harness_path}: --fetch must perform exactly one online "
-            f"guarded `run_cargo fetch --locked`; found {fetch_commands}"
-        )
-
-    chaos_start = harness.find("  --chaos-100k)", unit_start)
+        unit_branch = harness[unit_start:fast_network_start]
     unit_branch = (
-        ""
-        if unit_start < 0 or chaos_start < 0
-        else harness[unit_start:chaos_start]
+        unit_branch if unit_start >= 0 and fast_network_start >= 0 else ""
     )
     required_unit_inventory_tokens = (
-        "    if ((${#listed_unit_tests[@]} != 137)); then",
-        '      echo "expected exactly 137 Sumeragi v2 reducer unit tests" >&2',
+        "    if ((${#listed_unit_tests[@]} != 140)); then",
+        '      echo "expected exactly 140 Sumeragi v2 reducer unit tests" >&2',
         "    if ((${#listed_ignored_unit_tests[@]} != 0)); then",
-        '      echo "reducer unit gate requires all 137 tests to be runnable" >&2',
+        '      echo "reducer unit gate requires all 140 tests to be runnable" >&2',
     )
     missing_unit_inventory_tokens = [
         token
@@ -3401,10 +3416,11 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     ]
     if missing_unit_inventory_tokens:
         errors.append(
-            f"{harness_path}: --unit must seal exactly 137 runnable "
+            f"{harness_path}: --unit must seal exactly 140 runnable "
             "source-shared tests; missing or repeated "
             f"{missing_unit_inventory_tokens}"
         )
+    chaos_start = harness.find("  --chaos-100k)", fast_network_start)
     replay_start = harness.find("  --model-replay)", chaos_start)
     chaos_branch = (
         ""
@@ -3445,34 +3461,64 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         )
     else:
         job = job_match.group("body")
-        cache_marker = (
-            "- uses: Swatinem/rust-cache@"
-            "e18b497796c12c097a38f9edb9d0641fb99eee32"
+        for forbidden in (
+            "timeout-minutes:",
+            "cargo generate-lockfile",
+            "--fetch",
+            "CARGO_NET_OFFLINE=false",
+            "${{ github.workspace }}/target",
+            "target/sumeragi-v2-release",
+            "uses: Swatinem/rust-cache@",
+            "uses: actions-rust-lang/setup-rust-toolchain@",
+        ):
+            if forbidden in job:
+                errors.append(
+                    f"{workflow_path}: nightly chaos job retains forbidden "
+                    f"online, timed, or in-source token {forbidden!r}"
+                )
+        direct_workflow_cargo = [
+            line
+            for line in job.splitlines()
+            if re.match(r"^\s*(?:run:\s*)?(?:command\s+)?cargo(?:\s|$)", line)
+        ]
+        if direct_workflow_cargo:
+            errors.append(
+                f"{workflow_path}: nightly chaos job directly executes Cargo; "
+                f"found {direct_workflow_cargo}"
+            )
+        layout_tokens = (
+            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX",
+            'printf \'CARGO_TARGET_DIR=%s\\n\' "$invocation_root/target"',
+            'printf \'IROHA_RELEASE_ARTIFACT_ROOT=%s\\n\' "$invocation_root/artifacts"',
+            'printf \'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\\n\' "$invocation_root/cancel-request.json"',
+            'printf \'SUMERAGI_V2_CHAOS_EVIDENCE_DIR=%s\\n\' "$invocation_root/artifacts/chaos-100k"',
         )
-        fetch_marker = (
-            "run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch"
-        )
+        missing_layout_tokens = [
+            token for token in layout_tokens if job.count(token) != 1
+        ]
+        if missing_layout_tokens:
+            errors.append(
+                f"{workflow_path}: nightly chaos job lacks one fresh private "
+                f"target/artifact/cancel layout; missing {missing_layout_tokens}"
+            )
+        layout_marker = "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX"
         gate_marker = "run: bash scripts/run_sumeragi_v2_100k_chaos.sh"
         counts = {
-            "cache": job.count(cache_marker),
-            "fetch": job.count(fetch_marker),
+            "layout": job.count(layout_marker),
             "source_attested_gate": job.count(gate_marker),
         }
-        if counts != {"cache": 1, "fetch": 1, "source_attested_gate": 1}:
+        if counts != {"layout": 1, "source_attested_gate": 1}:
             errors.append(
                 f"{workflow_path}: nightly chaos job must contain exactly one "
-                f"cache, pinned prefetch, and source-attested gate; counts={counts}"
+                f"private layout and source-attested gate; counts={counts}"
             )
-        elif not (
-            job.index(cache_marker)
-            < job.index(fetch_marker)
-            < job.index(gate_marker)
-        ):
+        elif not job.index(layout_marker) < job.index(gate_marker):
             errors.append(
-                f"{workflow_path}: nightly --fetch must run after cache restore "
-                "and before the source-attested chaos gate"
+                f"{workflow_path}: nightly private layout must precede the "
+                "source-attested chaos gate"
             )
     return errors
+
 
 def _production_liveness_release_inventory_guard_errors(
     repo_root: Path = ROOT_DIR,

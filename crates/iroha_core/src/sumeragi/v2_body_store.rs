@@ -26,6 +26,7 @@ use super::{
     v2::RecoveredValidationAuthority,
     v2_apply::VerifiedRecoveredFinalitySubject,
     v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
+    v2_transport::AuthenticatedCertifiedBodyResponse,
 };
 use crate::kura::KuraV2CommitReceipt;
 
@@ -70,6 +71,39 @@ pub(crate) struct DurableBodyReceipt {
     frame_hash: Hash,
 }
 
+/// Durable proof that one fully authenticated certified-Fetch response's exact
+/// canonical body has crossed the local file-and-directory sync boundary.
+///
+/// This receipt deliberately retains the transport occurrence hashes without
+/// serializing them into the body store. The nested body receipt remains the
+/// sole authority for reloading the canonical bytes after restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct DurableCertifiedFetchBodyReceipt {
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    durable_body: DurableBodyReceipt,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl DurableCertifiedFetchBodyReceipt {
+    /// Hash of the exact authenticated request family served by the response.
+    pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.request_hash
+    }
+
+    /// Hash of the complete authenticated response, including its responder.
+    pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        self.response_hash
+    }
+
+    /// Durable receipt for the response's exact canonical body-store frame.
+    pub(crate) const fn durable_body(&self) -> &DurableBodyReceipt {
+        &self.durable_body
+    }
+}
+
 /// Non-forgeable acknowledgement that deterministic validation succeeded for
 /// the exact durable body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +112,120 @@ pub(crate) struct ValidatedBodyReceipt {
     durable: DurableBodyReceipt,
     execution_commitment: wire::ExecutionCommitment,
 }
+
+// DURABLE_BODY_VALIDATION_SURFACE_BEGIN
+/// Canonical volatile identity of a deterministic body rejection.
+///
+/// All non-sidecar validation failures currently drive the same
+/// `ValidationCompleted { valid: false }` reducer transition. Keeping one
+/// closed code prevents diagnostic formatting or unstable internal error
+/// variants from becoming physical lifecycle identity.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BodyValidationRejectionIdentity {
+    /// Deterministic validation rejected the exact durable body.
+    Rejected,
+}
+
+impl BodyValidationRejectionIdentity {
+    /// Return the domain-local bounded code used by volatile lifecycle digests.
+    pub(crate) const fn canonical_code(&self) -> u8 {
+        match self {
+            Self::Rejected => 0,
+        }
+    }
+}
+
+/// Scheduler-free result of validating one exact durable body.
+///
+/// The private payload keeps construction inside this storage boundary. In
+/// particular, every non-success result retains the same durable receipt that
+/// was checked before the validator ran, so a caller cannot accidentally
+/// rebind a diagnostic or merge-sidecar dependency to another proposal.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) struct DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody);
+
+#[derive(Debug, PartialEq, Eq)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum DurableBodyValidationOutcomeBody {
+    Validated(ValidatedBodyReceipt),
+    Rejected {
+        durable: DurableBodyReceipt,
+        identity: BodyValidationRejectionIdentity,
+        reason: String,
+    },
+    DeferredMergeSidecar {
+        durable: DurableBodyReceipt,
+        reference: CertifiedMergeLedgerReference,
+    },
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl DurableBodyValidationOutcome {
+    /// Exact durable body bound to this result.
+    pub(crate) const fn durable_body(&self) -> &DurableBodyReceipt {
+        match &self.0 {
+            DurableBodyValidationOutcomeBody::Validated(receipt) => receipt.durable(),
+            DurableBodyValidationOutcomeBody::Rejected { durable, .. }
+            | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { durable, .. } => durable,
+        }
+    }
+
+    /// Durable success receipt, when deterministic validation succeeded.
+    pub(crate) const fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
+        match &self.0 {
+            DurableBodyValidationOutcomeBody::Validated(receipt) => Some(receipt),
+            DurableBodyValidationOutcomeBody::Rejected { .. }
+            | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
+        }
+    }
+
+    /// Deterministic rejection diagnostic, when validation rejected the body.
+    pub(crate) fn rejection_reason(&self) -> Option<&str> {
+        match &self.0 {
+            DurableBodyValidationOutcomeBody::Rejected { reason, .. } => Some(reason),
+            DurableBodyValidationOutcomeBody::Validated(_)
+            | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
+        }
+    }
+
+    /// Canonical volatile identity of a deterministic rejection.
+    pub(crate) const fn rejection_identity(&self) -> Option<&BodyValidationRejectionIdentity> {
+        match &self.0 {
+            DurableBodyValidationOutcomeBody::Rejected { identity, .. } => Some(identity),
+            DurableBodyValidationOutcomeBody::Validated(_)
+            | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
+        }
+    }
+
+    /// Exact certified merge reference whose absence deferred validation.
+    pub(crate) const fn missing_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+        match &self.0 {
+            DurableBodyValidationOutcomeBody::DeferredMergeSidecar { reference, .. } => {
+                Some(reference)
+            }
+            DurableBodyValidationOutcomeBody::Validated(_)
+            | DurableBodyValidationOutcomeBody::Rejected { .. } => None,
+        }
+    }
+
+    /// Consume this closed result only when deterministic validation succeeded.
+    ///
+    /// A rejection or sidecar deferral is returned intact so the future typed
+    /// lifecycle transaction cannot accidentally discard or relabel it while
+    /// attempting the success-only Validate completion path.
+    pub(crate) fn into_validated_receipt(self) -> Result<ValidatedBodyReceipt, Self> {
+        match self.0 {
+            DurableBodyValidationOutcomeBody::Validated(receipt) => Ok(receipt),
+            body => Err(Self(body)),
+        }
+    }
+
+    fn into_body(self) -> DurableBodyValidationOutcomeBody {
+        self.0
+    }
+}
+// DURABLE_BODY_VALIDATION_SURFACE_END
 
 /// Completion minted only after an exact body task reaches durable storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,6 +328,14 @@ impl BodyValidationCompletion {
 /// Only a missing, compact-reference-bound merge sidecar is recoverable. Every
 /// other semantic error remains a terminal rejection of the exact body.
 pub(crate) trait BodyValidationError: std::fmt::Display {
+    /// Return the canonical reducer-level identity of a terminal rejection.
+    ///
+    /// Every current non-sidecar failure has identical `valid: false`
+    /// semantics, so the safe default is the one closed rejection identity.
+    fn rejection_identity(&self) -> BodyValidationRejectionIdentity {
+        BodyValidationRejectionIdentity::Rejected
+    }
+
     /// Return the exact missing sidecar reference when validation should defer.
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         None
@@ -689,6 +845,91 @@ impl V2BodyStore {
         })
     }
 
+    // DURABLE_BODY_VALIDATION_API_BEGIN
+    /// Execute deterministic validation against one exact durable body.
+    ///
+    /// The independently supplied manifest hash is checked against both the
+    /// receipt and the store's canonical manifest before the callback can run.
+    /// The complete checksummed frame is then reloaded, structurally validated,
+    /// and decoded.  A success result is minted only after its validation
+    /// marker has crossed the file-and-directory durability boundary.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn execute_durable_validation<F, E>(
+        &mut self,
+        durable: DurableBodyReceipt,
+        expected_manifest_hash: HashOf<wire::PayloadManifest>,
+        validator: F,
+    ) -> Result<DurableBodyValidationOutcome, V2BodyStoreError>
+    where
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        self.verify_receipt(&durable)?;
+        let key = (durable.round(), durable.subject());
+        let stored_manifest = self
+            .manifests
+            .get(&key)
+            .ok_or(V2BodyStoreError::ReceiptMismatch)?;
+        if durable.context_id() != self.context.id()
+            || durable.round().context_id != durable.context_id()
+            || durable.round().height != self.context.height
+            || stored_manifest.round != durable.round()
+            || stored_manifest.subject != durable.subject()
+            || durable.manifest_hash() != expected_manifest_hash
+            || HashOf::new(stored_manifest) != expected_manifest_hash
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+
+        let envelope = self.load_envelope(&durable)?;
+        if envelope.context_id != durable.context_id()
+            || envelope.round != durable.round()
+            || envelope.subject != durable.subject()
+            || &envelope.manifest != stored_manifest
+            || HashOf::new(&envelope.manifest) != expected_manifest_hash
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let block = decode_framed_signed_block(&envelope.canonical_wire)
+            .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
+
+        if let Some(validated) = self.validated.get(&key) {
+            if validated.durable() != &durable {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            return Ok(DurableBodyValidationOutcome(
+                DurableBodyValidationOutcomeBody::Validated(validated.clone()),
+            ));
+        }
+
+        match validator(&block) {
+            Ok(execution_commitment) => {
+                let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
+                Ok(DurableBodyValidationOutcome(
+                    DurableBodyValidationOutcomeBody::Validated(validated),
+                ))
+            }
+            Err(error) => {
+                if let Some(reference) = error.missing_certified_merge_sidecar() {
+                    return Ok(DurableBodyValidationOutcome(
+                        DurableBodyValidationOutcomeBody::DeferredMergeSidecar {
+                            durable,
+                            reference: reference.clone(),
+                        },
+                    ));
+                }
+                Ok(DurableBodyValidationOutcome(
+                    DurableBodyValidationOutcomeBody::Rejected {
+                        durable,
+                        identity: error.rejection_identity(),
+                        reason: error.to_string(),
+                    },
+                ))
+            }
+        }
+    }
+    // DURABLE_BODY_VALIDATION_API_END
+
     /// Execute deterministic validation against the exact durable task body.
     ///
     /// Filesystem loading, canonical decoding, and the validator callback all
@@ -714,36 +955,62 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-        let key = (task.round(), task.subject());
-        if let Some(validated) = self.validated.get(&key) {
-            if validated.durable() != task.durable_receipt() {
-                return Err(V2BodyStoreError::ReceiptMismatch);
+        let work_id = task.id();
+        let outcome = self.execute_durable_validation(
+            task.durable_receipt().clone(),
+            task.durable_receipt().manifest_hash(),
+            validator,
+        )?;
+        match outcome.into_body() {
+            DurableBodyValidationOutcomeBody::Validated(receipt) => {
+                Ok(BodyValidationCompletion::Validated { work_id, receipt })
             }
-            return Ok(BodyValidationCompletion::Validated {
-                work_id: task.id(),
-                receipt: validated.clone(),
-            });
-        }
-        let block = self.load(task.durable_receipt())?;
-        match validator(&block) {
-            Ok(execution_commitment) => Ok(BodyValidationCompletion::Validated {
-                work_id: task.id(),
-                receipt: self
-                    .persist_validated_receipt(task.durable_receipt(), execution_commitment)?,
-            }),
-            Err(error) => {
-                if let Some(reference) = error.missing_certified_merge_sidecar() {
-                    return Ok(BodyValidationCompletion::DeferredMergeSidecar {
-                        work_id: task.id(),
-                        reference: reference.clone(),
-                    });
-                }
-                Ok(BodyValidationCompletion::Rejected {
-                    work_id: task.id(),
-                    reason: error.to_string(),
-                })
+            DurableBodyValidationOutcomeBody::Rejected { reason, .. } => {
+                Ok(BodyValidationCompletion::Rejected { work_id, reason })
+            }
+            DurableBodyValidationOutcomeBody::DeferredMergeSidecar { reference, .. } => {
+                Ok(BodyValidationCompletion::DeferredMergeSidecar { work_id, reference })
             }
         }
+    }
+
+    /// Durably persist the exact body carried by an authenticated certified
+    /// Fetch response and bind its complete transport occurrence.
+    ///
+    /// The canonical [`Self::store`] path validates the response manifest and
+    /// body against this store's immutable context and returns only after a new
+    /// file and its directory entry have been synchronised. Exact repeats reuse
+    /// that already durable frame; a different body for the same round and
+    /// subject fails closed under the existing store contract.
+    // TODO: Move the blocking I/O to the bounded storage worker and consume
+    // this sealed receipt in the future composite Fetch-to-Store transaction.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn persist_authenticated_certified_fetch_response(
+        &mut self,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<DurableCertifiedFetchBodyReceipt, V2BodyStoreError> {
+        let response = authenticated.response();
+        let request_hash = response.request_hash;
+        let response_hash = HashOf::new(response);
+        let round = response.manifest.round;
+        let subject = response.manifest.subject;
+        let context_id = round.context_id;
+        let manifest_hash = HashOf::new(&response.manifest);
+        let durable_body = self.store(response.manifest.clone(), response.body.clone())?;
+
+        if durable_body.context_id() != context_id
+            || durable_body.round() != round
+            || durable_body.subject() != subject
+            || durable_body.manifest_hash() != manifest_hash
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+
+        Ok(DurableCertifiedFetchBodyReceipt {
+            request_hash,
+            response_hash,
+            durable_body,
+        })
     }
 
     /// Validate and durably store canonical `SignedBlockWire` bytes.
@@ -1401,7 +1668,7 @@ pub(crate) enum V2BodyStoreError {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, fs, num::NonZeroU64};
+    use std::{cell::Cell, fs, num::NonZeroU64, path::Path};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -1415,9 +1682,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, STORE_MAGIC,
-        STORE_VERSION, V2BodyStore, V2BodyStoreError, VALIDATED_MAGIC, ValidatedBodyMarker,
-        ValidatedBodyReceipt, write_validated_marker,
+        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError,
+        BodyValidationRejectionIdentity, STORE_MAGIC, STORE_VERSION, V2BodyStore, V2BodyStoreError,
+        VALIDATED_MAGIC, ValidatedBodyMarker, ValidatedBodyReceipt, write_validated_marker,
     };
 
     use crate::sumeragi::{
@@ -1593,6 +1860,32 @@ mod tests {
             .manifest()
             .clone();
         (canonical_wire, manifest)
+    }
+
+    fn durable_files_snapshot(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        fn visit(root: &Path, directory: &Path, files: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+            let mut entries = fs::read_dir(directory)
+                .expect("read body-store snapshot directory")
+                .map(|entry| entry.expect("read body-store snapshot entry").path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for path in entries {
+                if path.is_dir() {
+                    visit(root, &path, files);
+                } else {
+                    files.push((
+                        path.strip_prefix(root)
+                            .expect("snapshot entry belongs to root")
+                            .to_path_buf(),
+                        fs::read(&path).expect("read body-store snapshot file"),
+                    ));
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        visit(root, root, &mut files);
+        files
     }
 
     #[test]
@@ -2357,6 +2650,245 @@ mod tests {
                 .validated_path_for(receipt.round(), receipt.subject())
                 .exists()
         );
+    }
+
+    #[test]
+    fn durable_validation_persists_success_and_repeats_idempotently() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let receipt = store
+            .store(manifest, body)
+            .expect("persist exact candidate body");
+        let expected_manifest_hash = receipt.manifest_hash();
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+
+        let validated = store
+            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
+                Ok::<_, FixtureValidationError>(execution_commitment)
+            })
+            .expect("durable validation succeeds");
+        assert_eq!(validated.durable_body(), &receipt);
+        assert_eq!(
+            validated
+                .validated_receipt()
+                .map(ValidatedBodyReceipt::execution_commitment),
+            Some(execution_commitment)
+        );
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        let marker_before_repeat = fs::read(&marker_path)
+            .expect("success marker is durable before the outcome is returned");
+        let files_before_repeat = durable_files_snapshot(directory.path());
+
+        let validator_called = Cell::new(false);
+        let repeated = store
+            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
+                validator_called.set(true);
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "idempotent validation must not rerun the callback",
+                ))
+            })
+            .expect("repeat reuses the exact durable success");
+        assert!(!validator_called.get());
+        assert_eq!(repeated.durable_body(), &receipt);
+        assert_eq!(repeated.validated_receipt(), validated.validated_receipt());
+        assert_eq!(
+            fs::read(marker_path).expect("read repeated success marker"),
+            marker_before_repeat
+        );
+        assert_eq!(
+            durable_files_snapshot(directory.path()),
+            files_before_repeat
+        );
+        assert_eq!(
+            repeated
+                .into_validated_receipt()
+                .expect("success-only extraction accepts the durable validation")
+                .execution_commitment(),
+            execution_commitment
+        );
+    }
+
+    #[test]
+    fn durable_validation_binds_rejection_and_typed_deferral_to_the_exact_body() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let receipt = store
+            .store(manifest, body)
+            .expect("persist exact candidate body");
+        let expected_manifest_hash = receipt.manifest_hash();
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        let files_before = durable_files_snapshot(directory.path());
+
+        let rejected = store
+            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "candidate is invalid",
+                ))
+            })
+            .expect("return a closed rejection outcome");
+        assert_eq!(rejected.durable_body(), &receipt);
+        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
+        assert_eq!(
+            rejected.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+        assert!(rejected.validated_receipt().is_none());
+        assert!(rejected.missing_merge_sidecar().is_none());
+        assert!(!marker_path.exists());
+        assert_eq!(durable_files_snapshot(directory.path()), files_before);
+        let rejected = rejected
+            .into_validated_receipt()
+            .expect_err("rejection must remain intact on the success-only path");
+        assert_eq!(rejected.durable_body(), &receipt);
+        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
+        assert_eq!(
+            rejected.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+
+        let reference = missing_merge_reference(&receipt);
+        let deferred = store
+            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
+            })
+            .expect("return a reference-bound deferral outcome");
+        assert_eq!(deferred.durable_body(), &receipt);
+        assert_eq!(deferred.missing_merge_sidecar(), Some(&reference));
+        assert!(deferred.validated_receipt().is_none());
+        assert!(deferred.rejection_reason().is_none());
+        assert!(deferred.rejection_identity().is_none());
+        assert!(!marker_path.exists());
+        assert!(store.validated_recovery_catalog().is_empty());
+        assert_eq!(durable_files_snapshot(directory.path()), files_before);
+    }
+
+    #[test]
+    fn durable_validation_preflight_errors_preserve_store_state_byte_for_byte() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open exact store");
+        let receipt = store
+            .store(manifest, body)
+            .expect("persist exact candidate body");
+
+        let entries_before = store.entries.clone();
+        let manifests_before = store.manifests.clone();
+        let pending_before = store.pending_revalidation.clone();
+        let validated_before = store.validated.clone();
+        let files_before = durable_files_snapshot(directory.path());
+        let callback_called = Cell::new(false);
+        let wrong_expected = HashOf::<wire::PayloadManifest>::from_untyped_unchecked(Hash::new(
+            b"independently wrong expected manifest",
+        ));
+        let wrong_manifest = store.execute_durable_validation(
+            receipt.clone(),
+            wrong_expected,
+            |_| -> Result<wire::ExecutionCommitment, FixtureValidationError> {
+                callback_called.set(true);
+                unreachable!("manifest mismatch must precede the validator")
+            },
+        );
+        assert!(matches!(
+            wrong_manifest,
+            Err(V2BodyStoreError::ReceiptMismatch)
+        ));
+        assert!(!callback_called.get());
+        assert_eq!(store.entries, entries_before);
+        assert_eq!(store.manifests, manifests_before);
+        assert_eq!(store.pending_revalidation, pending_before);
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(durable_files_snapshot(directory.path()), files_before);
+
+        let foreign_directory = TempDir::new().expect("foreign temporary directory");
+        let mut foreign_context = context;
+        foreign_context.chain_id = "foreign-sumeragi-v2-body-store".into();
+        let (foreign_body, foreign_manifest) = body_and_manifest(&foreign_context, &keys, None);
+        let mut foreign_store = V2BodyStore::open(foreign_directory.path(), foreign_context)
+            .expect("open foreign store");
+        let foreign_receipt = foreign_store
+            .store(foreign_manifest, foreign_body)
+            .expect("persist foreign body");
+        let foreign_result = store.execute_durable_validation(
+            foreign_receipt.clone(),
+            foreign_receipt.manifest_hash(),
+            |_| -> Result<wire::ExecutionCommitment, FixtureValidationError> {
+                callback_called.set(true);
+                unreachable!("foreign receipt must precede the validator")
+            },
+        );
+        assert!(matches!(
+            foreign_result,
+            Err(V2BodyStoreError::ReceiptMismatch)
+        ));
+        assert!(!callback_called.get());
+        assert_eq!(store.entries, entries_before);
+        assert_eq!(store.manifests, manifests_before);
+        assert_eq!(store.pending_revalidation, pending_before);
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(durable_files_snapshot(directory.path()), files_before);
+    }
+
+    #[test]
+    fn durable_validation_surface_has_no_scheduler_identity_or_ordinal() {
+        let source = include_str!("v2_body_store.rs");
+        let section = |begin: &str, end: &str| {
+            source
+                .split_once(begin)
+                .expect("durable validation section begins")
+                .1
+                .split_once(end)
+                .expect("durable validation section ends")
+                .0
+        };
+        let surface = section(
+            "// DURABLE_BODY_VALIDATION_SURFACE_BEGIN",
+            "// DURABLE_BODY_VALIDATION_SURFACE_END",
+        );
+        let api = section(
+            "// DURABLE_BODY_VALIDATION_API_BEGIN",
+            "// DURABLE_BODY_VALIDATION_API_END",
+        );
+        let error_classification = source
+            .split("pub(crate) trait BodyValidationError")
+            .nth(1)
+            .expect("body validation error classification exists")
+            .split("pub(crate) enum BlockSignaturePolicy")
+            .next()
+            .expect("signature policy follows validation error classification");
+
+        for forbidden in [
+            "EffectWorkId",
+            "BodyValidationTask",
+            "RuntimeEffectOwnership",
+            "lifecycle_ordinal",
+            "work_id",
+        ] {
+            assert!(
+                !surface.contains(forbidden) && !api.contains(forbidden),
+                "new durable validation surface must not contain {forbidden}"
+            );
+        }
+        assert!(!surface.contains("Clone"));
+        assert!(
+            surface
+                .contains("struct DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody);")
+        );
+        assert!(surface.contains("enum DurableBodyValidationOutcomeBody"));
+        assert!(surface.contains("enum BodyValidationRejectionIdentity"));
+        assert!(surface.contains("identity: BodyValidationRejectionIdentity"));
+        assert!(surface.contains("pub(crate) const fn rejection_identity"));
+        assert!(api.contains("identity: error.rejection_identity()"));
+        assert!(error_classification.contains("fn rejection_identity(&self)"));
+        assert!(error_classification.contains("BodyValidationRejectionIdentity::Rejected"));
     }
 
     #[test]

@@ -216,7 +216,21 @@ impl MergeLedgerLog {
         &mut self,
         hash: HashOf<MergeLedgerEntry>,
     ) -> Result<Option<MergeLedgerEntry>> {
-        self.recover_failed_append_tail()?;
+        self.entry_by_hash_with_append_repair_policy(hash, true)
+    }
+
+    fn entry_by_hash_with_append_repair_policy(
+        &mut self,
+        hash: HashOf<MergeLedgerEntry>,
+        repair_append_tail: bool,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        if repair_append_tail {
+            self.recover_failed_append_tail()?;
+        } else if self.append_recovery_offset.is_some() {
+            return Err(Error::MergeCarrierConflict(
+                "merge ledger has an unresolved append tail".to_owned(),
+            ));
+        }
         #[cfg(test)]
         {
             self.indexed_lookups = self.indexed_lookups.saturating_add(1);

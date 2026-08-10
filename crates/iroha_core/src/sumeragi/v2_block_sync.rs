@@ -27,14 +27,18 @@ use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{ChainId, block::consensus_v2 as wire, peer::PeerId};
 use thiserror::Error;
 
+#[cfg(test)]
+use super::v2::verify_historical_quorum_certificate;
+#[cfg(test)]
+use super::v2_transport::authenticate_certified_body_request;
 use super::v2_transport::{
     AuthenticatedCertifiedBodyRequest, AuthenticatedCommitCertificateResponse,
-    OutstandingCommitCertificateRequests, V2TransportError, authenticate_certified_body_request,
-    authenticate_certified_body_request_identity, authenticate_commit_certificate_request,
-    authenticate_commit_certificate_request_identity,
+    OutstandingCommitCertificateRequests, V2TransportError,
+    authenticate_certified_body_request_identity,
+    authenticate_certified_body_request_with_validator_pops,
+    authenticate_commit_certificate_request, authenticate_commit_certificate_request_identity,
 };
 use super::{
-    v2::verify_historical_quorum_certificate,
     v2_chunks::encode_payload,
     v2_core::{
         CanonicalIdentityProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_PAYLOAD,
@@ -628,14 +632,13 @@ fn build_historical_body_response(
     };
     let context = &artifact.height_context;
     let proofs_of_possession = &artifact.validator_set_pops;
-    let authenticated: AuthenticatedCertifiedBodyRequest = authenticate_certified_body_request(
-        context,
-        request,
-        authenticated_requester,
-        |context, certificate| {
-            verify_historical_quorum_certificate(context, proofs_of_possession, certificate)
-        },
-    )?;
+    let authenticated: AuthenticatedCertifiedBodyRequest =
+        authenticate_certified_body_request_with_validator_pops(
+            context,
+            proofs_of_possession,
+            request,
+            authenticated_requester,
+        )?;
     let request = authenticated.request();
     if request.subject != artifact.subject {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });

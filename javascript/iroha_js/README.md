@@ -1734,7 +1734,7 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
+Sumeragi consensus status is the authoritative protocol-v4 reducer snapshot.
 Use the typed helper for operator or automation decisions: it rejects unsupported
 protocol versions, non-canonical frozen quorums, out-of-range leaders,
 inconsistent CommitQCs, and malformed reducer liveness state.
@@ -1813,6 +1813,14 @@ for (const application of typed.native_amx_participant_applications) {
 Use `getSumeragiStatus()` only when you explicitly need that unmodified JSON
 projection; it performs HTTP handling but deliberately leaves validation to the
 caller.
+
+`ToriiBrowserClient` ships the same separate typed methods. Browser builds use
+the shared bounded lossless parser rather than routing through the Node client:
+
+```js
+const status = await browserTorii.getSumeragiStatusTyped();
+const diagnostics = await browserTorii.getSumeragiDiagnosticsTyped();
+```
 
 ## Advanced Sumeragi Telemetry
 

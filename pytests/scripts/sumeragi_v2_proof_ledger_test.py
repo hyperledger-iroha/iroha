@@ -155,7 +155,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 22
+    assert len(filenames) == len(set(filenames)) == 25
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -163,7 +163,7 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
     """Reject a monolithic shadow of the release-inventory component."""
 
     component_name = "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
-    expected_provider = (component_name, 1)
+    expected_provider_name = component_name
 
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
         providers = [
@@ -173,7 +173,7 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name == "_production_liveness_release_inventory_errors"
         ]
-        if providers == [expected_provider]:
+        if len(providers) == 1 and providers[0][0] == expected_provider_name:
             return []
         return [
             "release-inventory checker provider must be unique and component-owned; "
@@ -194,10 +194,21 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
         for path, source in canonical_sources
     )
     errors = provider_errors(mutated_sources)
+    component_provider = next(
+        provider
+        for provider in [
+            (path.name, node.lineno)
+            for path, source in canonical_sources
+            for node in ast.parse(source, filename=str(path)).body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_production_liveness_release_inventory_errors"
+        ]
+        if provider[0] == expected_provider_name
+    )
     assert errors == [
         "release-inventory checker provider must be unique and component-owned; "
         f"found [({SCRIPT.name!r}, "
-        f"{len(canonical_sources[0][1].splitlines()) + 3}), {expected_provider!r}]"
+        f"{len(canonical_sources[0][1].splitlines()) + 3}), {component_provider!r}]"
     ]
 
 
@@ -559,79 +570,98 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
     return tmp_path / "formal" / "sumeragi_v2"
 
 
-def approve_timeout_vote_episode_fixture_seals(
-    module, repo_root: Path, formal_dir: Path
+def rebind_timeout_vote_episode_rust_item_seal(
+    module,
+    repo_root: Path,
+    relative: Path,
+    item_name: str,
 ) -> None:
-    """Bind test-local seals so mutations must fail their semantic contracts."""
+    """Rebind only the deliberately mutated timeout-episode Rust item."""
 
-    role_paths = {
-        "ingress": repo_root / "crates/iroha_core/src/sumeragi/mod.rs",
-        "runner": repo_root / "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "runtime": repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+    relative = Path(relative)
+    path = repo_root / relative
+    items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1, (relative, item_name)
+    digest = module._rust_item_token_sha256(items[0])
+    rebound: list[str] = []
+    role_relatives = {
+        "ingress": Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        "runner": Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        "runtime": Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
     }
     for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
         role, qualified_name = key.split("::", 1)
-        item_name = qualified_name.rsplit("::", 1)[-1]
-        source = role_paths[role].read_text(encoding="utf-8")
-        items = module.rust_items(source, item_name)
-        assert len(items) == 1, key
-        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = (
-            module._rust_item_token_sha256(items[0])
-        )
+        if (
+            role_relatives[role] == relative
+            and qualified_name.rsplit("::", 1)[-1] == item_name
+        ):
+            module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = digest
+            rebound.append(key)
 
-    regression_groups = (
+    for seals, group_relative in (
         (
             module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256,
-            role_paths["runtime"],
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
-            role_paths["ingress"],
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,
-            repo_root / "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         ),
-    )
-    for seals, path in regression_groups:
-        source = path.read_text(encoding="utf-8")
-        for name in seals:
-            items = module.rust_items(source, name)
-            assert len(items) == 1, name
-            seals[name] = module._rust_item_token_sha256(items[0])
+    ):
+        if group_relative == relative and item_name in seals:
+            seals[item_name] = digest
+            rebound.append(item_name)
+    assert rebound, (relative, item_name)
 
-    for filename, formal_seals in (
-        module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.items()
-    ):
-        formal_path = formal_dir / filename
-        formal_source = formal_path.read_text(encoding="utf-8")
-        for symbol in formal_seals:
-            extracted = module._top_level_operator_body(
-                formal_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            assert extracted is not None, symbol
-            body, _ = extracted
-            formal_seals[symbol] = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
-    for filename, theorem_seals in (
-        module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.items()
-    ):
-        formal_path = formal_dir / filename
-        formal_source = formal_path.read_text(encoding="utf-8")
-        for symbol in theorem_seals:
-            extracted = module._top_level_theorem_body(
-                formal_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            assert extracted is not None, symbol
-            body, _ = extracted
-            theorem_seals[symbol] = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
+
+def rebind_timeout_vote_episode_tla_operator_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode operator."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_operator_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
+
+
+def rebind_timeout_vote_episode_tla_theorem_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode theorem."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_theorem_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
 
 
 def copy_async_source_fidelity_fixture(
@@ -5150,6 +5180,56 @@ def _superseded_progress_witness_legacy_builder_mutations(
         )
 
 
+def test_body_service_runtime_step_source_seal_is_canonical() -> None:
+    """The body-service step seal binds both reviewed retry-latch expressions."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
+    )
+    step_seals = tuple(
+        seal
+        for seal in claim.source_item_seals
+        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        and seal.item == "step"
+    )
+    assert len(step_seals) == 1
+    step_seal = step_seals[0]
+    assert not step_seal.item_token_sha256.startswith("PENDING")
+    assert len(step_seal.required_expressions) == 2
+
+    source = (ROOT_DIR / step_seal.source).read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, step_seal.item)
+        if item.brace_context == step_seal.brace_context
+    )
+    assert len(items) == 1
+    observed_sha256 = module._rust_sealed_item_token_sha256(items[0])
+    assert step_seal.item_token_sha256 == observed_sha256
+
+    payload_claim = replace(claim, source_item_seals=(step_seal,))
+    assert module._cross_tool_source_item_seal_payload(
+        payload_claim,
+        root_dir=ROOT_DIR,
+    ) == [
+        {
+            "source": step_seal.source,
+            "item": step_seal.item,
+            "kind": step_seal.kind,
+            "brace_context": [list(header) for header in step_seal.brace_context],
+            "item_token_sha256": observed_sha256,
+            "required_expressions": [
+                module._normalized_rust_contract(expression)
+                for expression in step_seal.required_expressions
+            ],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_error"),
     (
@@ -6140,6 +6220,108 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
 
 
 @pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            """if self
+                        .exact_serve_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.exact_serve_predecessor_retry_attempted = true;
+                    }""",
+            """if self
+                        .exact_serve_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() > target)
+                    {
+                        self.exact_serve_predecessor_retry_attempted = true;
+                    }""",
+        ),
+        (
+            """if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
+                    }""",
+            """if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() > target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
+                    }""",
+        ),
+    ),
+)
+def test_body_service_retry_latches_survive_source_seal_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    """Body-service fairness binds both finite retry-unadmitted episodes."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
+    )
+    step_seals = tuple(
+        seal
+        for seal in claim.source_item_seals
+        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        and seal.item == "step"
+    )
+    assert len(step_seals) == 1
+    step_seal = step_seals[0]
+    assert len(step_seal.required_expressions) == 2
+    relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    context = (
+        (
+            "impl",
+            "<",
+            "D",
+            ":",
+            "RuntimeDriver",
+            ">",
+            "SerializedV2Runtime",
+            "<",
+            "D",
+            ">",
+        ),
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "step",
+        context,
+        old,
+        new,
+    )
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, "step")
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    live_seal = replace(
+        step_seal,
+        item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
+    )
+    live_claim = replace(claim, source_item_seals=(live_seal,))
+
+    with pytest.raises(ValueError, match="exact required expression"):
+        module._cross_tool_source_item_seal_payload(
+            live_claim,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
     (
         "claim_constant",
         "relative",
@@ -7096,6 +7278,104 @@ def test_reliable_flush_transitive_seals_reject_weakened_identity_helpers(
             )
 
 
+def test_terminal_application_runner_call_site_seal_is_canonical() -> None:
+    """The terminal-application gate binds the authoritative runner item."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant
+        == "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
+    )
+    authoritative_call_sites, linked_consumers = module._total_gate_call_sites(
+        claim.constant
+    )
+    assert linked_consumers == ()
+    assert claim.production_call_sites == authoritative_call_sites
+    assert len(authoritative_call_sites) == 1
+    call_site = authoritative_call_sites[0]
+    assert (
+        call_site.source,
+        call_site.item,
+        call_site.projection,
+        call_site.brace_context,
+    ) == (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "run_inner",
+        "terminal_application",
+        (),
+    )
+    assert call_site.item_token_sha256 == module._TOTAL_GATE_CALL_ITEM_SHA256[
+        "terminal_application"
+    ]
+    assert not call_site.item_token_sha256.startswith("PENDING")
+
+    source = (ROOT_DIR / call_site.source).read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, call_site.item)
+        if item.brace_context == call_site.brace_context
+    )
+    assert len(items) == 1
+    assert call_site.item_token_sha256 == module._rust_sealed_item_token_sha256(
+        items[0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            """(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE) => {
+        12u8
+    };""",
+            """(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE) => {
+        11u8
+    };""",
+            "must equal its unique production u8 constant",
+        ),
+        (
+            "    IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,\n",
+            "",
+            "arms must exactly equal the ordered compile-time production-tag assertion",
+        ),
+    ),
+)
+def test_refinement_tag_value_shared_macro_survives_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Shared tag arms remain tied to the exact production constants."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    source = path.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    mutated_source = path.read_text(encoding="utf-8")
+    items = module.rust_macro_items(mutated_source, "refinement_tag_value")
+    assert len(items) == 1
+    expected = ((
+        "refinement_tag_value",
+        module._rust_item_token_sha256(items[0]),
+    ),)
+
+    with pytest.raises(ValueError, match=expected_error):
+        module._shared_macro_payload(
+            mutated_source,
+            path=path,
+            expected=expected,
+            description="refinement-tag mutation",
+        )
+
+
 def test_terminal_application_without_successor_activation_claim_rejects_runner_mutations(
     tmp_path: Path,
 ) -> None:
@@ -7109,7 +7389,6 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         if claim.constant
         == "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
     )
-    claim = freeze_cross_tool_claim_call_sites(module, claim)
     assert claim.verified_kernel_source is not None
     paths = {
         *claim.production_sources,
@@ -7165,6 +7444,11 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         source = path.read_text(encoding="utf-8")
         assert source.count(old) == 1
         path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        mutated_claim = freeze_cross_tool_claim_call_sites(
+            module,
+            claim,
+            mutation_root,
+        )
         verus_evidence = {
             "sources": [
                 {
@@ -7178,13 +7462,13 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         }
         with pytest.raises(
             ValueError,
-            match=(
-                "authorization before|checked-gate seam|"
-                "reviewed item token seal"
-            ),
+                match=(
+                    "authorization before|checked-gate seam|direct boolean kernel|"
+                    "exact projection binding"
+                ),
         ):
             module._cross_tool_claim_payload(
-                claim,
+                mutated_claim,
                 verus_evidence=verus_evidence,
                 root_dir=mutation_root,
             )
@@ -9883,6 +10167,8 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             | AdapterEffect::Apply { .. } => Some(false),""",
             "closed retry policy must classify",
         ),
+        ("plan_body_pipeline_candidate_terminal", "SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)", "Ok(None)", "production EffectRuntime body-terminal plan delegation"),
+        ("commit_body_pipeline_candidate_terminals", "SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)", "Ok(())", "production EffectRuntime atomic body-terminal commit delegation"),
         (
             "retained_candidate_owners",
             "Some(existing) if existing != ownership => Err(",
@@ -10055,6 +10341,7 @@ def test_effect_capacity_production_source_fidelity_rejects_semantic_mutants(
     effects_path = repo_root / "crates/iroha_core/src/sumeragi/v2_effects.rs"
     source = effects_path.read_text(encoding="utf-8")
     items = module.rust_items(source, item_name)
+    if item_name in {"plan_body_pipeline_candidate_terminal", "commit_body_pipeline_candidate_terminals"}: items = [item for item in items if item.brace_context == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)]
     assert len(items) == 1
     item = items[0]
     assert item.source.count(old) == 1, (item_name, old)
@@ -10372,6 +10659,13 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "effect_candidate_semantic_binding",
             _RUNTIME_DRIVER_IMPL,
+            "production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())",
+            "Ok(production_adapter_effect_candidate_statement(effect).map(|(kind, statement)| RuntimeEffectCandidateSemantic { kind, semantic_identity: statement.semantic_identity(), statement: Some(statement) }))",
+            "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+        ),
+        (
+            "effect_candidate_semantic_binding",
+            _RUNTIME_DRIVER_IMPL,
             "if *round == proposal_round && *subject == decision_subject =>",
             "if *round == proposal_round || *subject == decision_subject =>",
             "durable Decision body recovery must reconstruct Commit authority only for the exact proposal round and subject",
@@ -10404,13 +10698,8 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "projection.push(parts.effect_count);",
             "candidate binding projection must independently commit the typed statement before its semantic hash",
         ),
-        (
-            "projection_parts",
-            _RUNTIME_BINDING_IMPL,
-            "candidate_statement: self.candidate_statement,",
-            "candidate_statement: None,",
-            "candidate binding validation must borrow every immutable projection field exactly once",
-        ),
+        ("projection_parts", _RUNTIME_BINDING_IMPL, "candidate_statement: self.candidate_statement,", "candidate_statement: None,", "candidate binding validation must borrow every immutable projection field exactly once"),
+        ("adopt_effect_ownership", (("impl", "RuntimeBodyCompletionOwnershipPlan"),), "RuntimeEffectOwnership::inherited(self.retained_owner.clone())", "RuntimeEffectOwnership::inherited(incoming.owner().clone())", "body-terminal adoption must rebind the exact candidate and positions under the immutable incumbent owner"),
         (
             "new",
             _RUNTIME_BINDING_IMPL,
@@ -10527,6 +10816,13 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
         ),
         (
+            "body_pipeline_completion_is_owned_by",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "let result = (plan.retained_owner.clone(), plan.effective_statement());",
+            "let result = (ownership.owner().clone(), ownership.candidate_semantic_statement());",
+            "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
+        ),
+        (
             "resolve_body_pipeline_completion_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
@@ -10535,6 +10831,7 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
                     if false && retained_owner != *ownership.owner() {""",
             "same or stale terminal retries must reject a foreign owner while an authority upgrade remains separately reviewed",
         ),
+        ("body_pipeline_candidate_terminal_ownership_plan", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "if !ownership.exactly_binds_adapter_effect(effect) {", "if false && !ownership.exactly_binds_adapter_effect(effect) {", "body-terminal lookup must select exactly one authorized live or deferred owner without committing it"),
         (
             "plan_body_pipeline_candidate_terminal",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
@@ -10561,6 +10858,7 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         Ok(())""",
             "body-terminal batch commit must revalidate every target, prepare atomically, and then commit the checked authorities",
         ),
+        ("commit_body_pipeline_candidate_terminal", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])", "Ok(())", "single body-terminal commit must delegate to the atomic batch boundary"),
         (
             "enqueue_body_pipeline_completion_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
@@ -10570,6 +10868,13 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             """self
             .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
             .is_none()""",
+            "owned body-completion retries must compare the incumbent before queue coalescence",
+        ),
+        (
+            "enqueue_body_pipeline_completion_with_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            ".body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?",
+            ".body_pipeline_completion_is_owned(tag, &evidence)?",
             "owned body-completion retries must compare the incumbent before queue coalescence",
         ),
         (
@@ -23046,7 +23351,7 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
         (
             "selected_serve_pacemaker",
-            "local_runner",
+            "timeout_vote_episode",
             "selected Serve must keep certificate escape inside",
         ),
         (
@@ -23076,16 +23381,16 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
     ),
 )
-def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
+def test_run_inner_semantics_survive_all_reviewed_alias_digest_refreshes(
     tmp_path: Path,
     mutation: str,
     checker_name: str,
     expected_error: str,
 ) -> None:
-    """Every pending run-loop alias retains an independent semantic mutation."""
+    """Every reviewed run-loop alias retains an independent semantic mutation."""
 
     module = load_checker()
-    formal_dir = local_runner_service_fixture(tmp_path, module)
+    formal_dir = reviewed_run_inner_fixture(tmp_path, module, checker_name)
     runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     if mutation == "reply_route_geometry":
         mutate_rust_item_source(
@@ -23210,25 +23515,11 @@ def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
     ] = digest
     module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["runner::run_inner"] = digest
     module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256["run_inner"] = digest
-    module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
     module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
-    if checker_name == "local_runner":
-        errors = module._local_runner_service_contract_source_fidelity_errors(
-            module.load_ledger(),
-            repo_root=tmp_path,
-            formal_dir=formal_dir,
-        )
-    elif checker_name == "retained_response":
-        errors = module._retained_response_escape_latch_source_fidelity_errors(
-            tmp_path
-        )
-    elif checker_name == "locked_body":
-        errors = module._locked_body_reproposal_source_fidelity_errors(
-            module.FORMAL_DIR, tmp_path
-        )
-    else:
-        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    errors = reviewed_run_inner_source_fidelity_errors(
+        module, tmp_path, formal_dir, checker_name
+    )
 
     assert any(expected_error in error for error in errors), errors
 
@@ -23317,7 +23608,7 @@ def test_classified_ingress_semantics_survive_all_pending_alias_digest_refreshes
     assert any(expected_error in error for error in errors), errors
 
 
-def test_drain_v2_ingress_semantics_survive_all_pending_alias_digest_refreshes(
+def test_drain_v2_ingress_semantics_survive_all_reviewed_alias_digest_refreshes(
     tmp_path: Path,
 ) -> None:
     """A refreshed drain seal still proves exact-Serve runtime suppression."""
@@ -23447,7 +23738,7 @@ def test_async_drain_three_mode_policy_mutations_fail_closed(
         ),
     ),
 )
-def test_rollover_finalized_outputs_semantics_survive_pending_digest_refresh(
+def test_rollover_finalized_outputs_semantics_survive_reviewed_digest_refresh(
     tmp_path: Path,
     old: str,
     new: str,
@@ -23969,7 +24260,6 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
 
     assert (
         module._timeout_vote_episode_source_fidelity_errors(
@@ -24001,6 +24291,30 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
     )
     with pytest.raises(PropagatedTimeoutEpisodeError):
         module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+
+def test_production_causal_fifo_source_fidelity_is_current() -> None:
+    """The canonical causal-FIFO aggregate accepts every declared seal."""
+
+    module = load_checker()
+    assert (
+        module._production_causal_fifo_source_fidelity_errors(
+            module.FORMAL_DIR
+        )
+        == []
+    )
+
+
+def test_retained_response_escape_latch_source_fidelity_is_current(
+    tmp_path: Path,
+) -> None:
+    """The retained-response run-loop alias matches the canonical source."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    assert module._retained_response_escape_latch_source_fidelity_errors(
+        tmp_path
+    ) == []
 
 
 @pytest.mark.parametrize(
@@ -24339,7 +24653,6 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
     assert (
         module._timeout_vote_episode_source_fidelity_errors(
             tmp_path, formal_dir
@@ -24354,7 +24667,12 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
         old,
         new,
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        relative,
+        item_name,
+    )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
@@ -24375,7 +24693,6 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
         "    CertifiedFenceEscape,\n",
         "",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -24457,7 +24774,12 @@ def test_timeout_vote_episode_runner_schedule_mutations(
         source = source.replace(before, under_claim, 1)
 
     runner.write_text(source, encoding="utf-8")
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        "run_inner",
+    )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
@@ -24962,7 +25284,12 @@ def test_timeout_vote_episode_formal_mutations_survive_digest_refresh(
         mutate_tla_operator(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_operator_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncNetwork.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -25633,7 +25960,12 @@ def test_timeout_vote_episode_theorem_mutations_survive_digest_refresh(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncNetwork.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -25750,7 +26082,12 @@ def test_timeout_recovery_operator_mutations_survive_digest_refresh(
         mutate_tla_operator(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_operator_seal(
+        module,
+        formal_dir,
+        filename,
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -25841,7 +26178,12 @@ def test_serve_producer_episode_bridge_mutations_survive_digest_refresh(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -25947,7 +26289,12 @@ def test_timeout_recovery_boundary_sequent_mutations_survive_digest_refresh(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -26057,7 +26404,12 @@ def test_timeout_recovery_boundary_chain_statements_fail_closed_after_refresh(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -26215,7 +26567,12 @@ def test_timeout_recovery_boundary_chain_dependencies_fail_closed_after_refresh(
         else delete_tla_theorem_token(source, symbol, old)
     )
     formal_path.write_text(mutated, encoding="utf-8")
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -26234,7 +26591,6 @@ def test_timeout_recovery_boundary_source_cannot_be_empty(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
     filename = "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
     (formal_dir / filename).write_text("", encoding="utf-8")
 
@@ -26448,7 +26804,12 @@ def test_timeout_vote_episode_adequate_leader_bridge_mutations(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        filename,
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -29729,6 +30090,106 @@ def test_serviced_candidate_production_contract_rejects_mutations(
 
 
 @pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "with_driver_and_lifecycle_ordinals",
+            """ingress
+            .install_dormant_local_fifo_reservations(dormant_local_fifo_reservations)
+            .map_err(|_| RuntimeConfigError::InvalidLifecycleOwnership)?;""",
+            "let _ = dormant_local_fifo_reservations;",
+            "restart must install dormant FIFO owners before startup successors",
+        ),
+        (
+            "step",
+            """self.finish_dispatched_step(
+            now,
+            effects,
+            effect_source,
+            effect_parent,
+            effect_parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )""",
+            """self.finish_dispatched_step(
+            now,
+            effects,
+            effect_source,
+            effect_parent,
+            None,
+            producer_handoff,
+            retained_deferred_ingress,
+        )""",
+            "runtime step must transfer the exact parent statement and handoff into shared completion",
+        ),
+        (
+            "minimum_runnable_lifecycle_ordinal",
+            "            if !evidence.validate_exact()\n",
+            "            if false && !evidence.validate_exact()\n",
+            "serviced-candidate runnable selection must admit only exact minted completion evidence into the least-owner minimum",
+        ),
+    ),
+)
+def test_serviced_candidate_reviewed_runtime_items_survive_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Reviewed V4 runtime seals cannot hide a semantic mutation."""
+
+    module = load_checker()
+    copy_serviced_candidate_production_fixture(tmp_path)
+    assert (
+        module._serviced_candidate_production_source_fidelity_errors(tmp_path)
+        == []
+    )
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    context = (
+        (
+            "impl",
+            "<",
+            "D",
+            ":",
+            "RuntimeDriver",
+            ">",
+            "SerializedV2Runtime",
+            "<",
+            "D",
+            ">",
+        ),
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        runtime_path,
+        item_name,
+        context,
+        old,
+        new,
+    )
+    source = runtime_path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     (
         "relative",
         "old",
@@ -29909,7 +30370,6 @@ def test_serviced_candidate_v4_semantics_survive_item_digest_refresh(
     digest = module._rust_item_token_sha256(items[0])
     getattr(module, digest_name)[digest_key] = digest
     if relative == Path("crates/iroha_core/src/sumeragi/v2_runner.rs"):
-        module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
         module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
     errors = module._serviced_candidate_production_source_fidelity_errors(
@@ -40789,10 +41249,6 @@ for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:
 del _proof_ledger_test_component
 
 
-# Preserve incoming tests changed after the lexical component split.
-
-
-
 def exact_output_production_fixture(tmp_path: Path) -> None:
     """Copy every production source consumed by the exact-output checker."""
 
@@ -40972,15 +41428,15 @@ def test_restored_productive_retry_mutations_survive_regression_digest_refresh(
     assert any(expected_error in error for error in errors), errors
 
 
-def rebind_same_round_expanded_source_seals(module, repo_root: Path) -> None:
-    """Rebind reviewed include-expanded sources and exercise their checker."""
+def rebind_changed_same_round_expanded_source_seal(
+    module, repo_root: Path
+) -> None:
+    """Rebind only the include-expanded source changed by one mutation."""
 
-    rebound_relatives = (
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-    )
-    for relative in rebound_relatives:
+    rebound_relatives: list[str] = []
+    for relative, expected_sha256 in (
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.items()
+    ):
         expansion_errors: list[str] = []
         _path, source = module._read_reviewed_rust_source(
             repo_root,
@@ -40989,9 +41445,13 @@ def rebind_same_round_expanded_source_seals(module, repo_root: Path) -> None:
             "same-round semantic kernel mutation fixture",
         )
         assert not expansion_errors, expansion_errors
-        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[relative] = (
-            hashlib.sha256(source.encode("utf-8")).hexdigest()
-        )
+        observed_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[relative] = (
+                observed_sha256
+            )
+            rebound_relatives.append(relative)
+    assert len(rebound_relatives) == 1, rebound_relatives
     errors = module._same_round_semantic_kernel_source_fidelity_errors(repo_root)
     assert not any(
         "same-round semantic kernel source must match exact reviewed SHA-256"
@@ -41033,6 +41493,16 @@ def rebind_same_round_expanded_source_seals(module, repo_root: Path) -> None:
             "    last_predecessor_episode_witness: bool,\n",
             "logical lifecycle, payload, carrier, bounded runtime turn, and last "
             "consumed predecessor witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
+            "V2IoCommandQueueState",
+            "struct",
+            "",
+            "V2IoCommandQueueState",
+            "    producer_episode_due: bool,\n",
+            "    producer_episode_due: u8,\n",
+            "distinct one-shot due and finite active producer-episode fields",
         ),
         (
             "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
@@ -41433,6 +41903,26 @@ def rebind_same_round_expanded_source_seals(module, repo_root: Path) -> None:
             "if disposition == CompletionDisposition::Rejected {",
             "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
         ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "Some((source_height, source_block_hash)),",
+            "None,",
+            "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            ".map_err(|reason| executor.external_service_failed(reason, self))?;",
+            ".map_err(|reason| executor.external_service_failed(reason, self));",
+            "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
+        ),
     ),
 )
 def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
@@ -41484,7 +41974,7 @@ def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
     getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
         mutated_items[0]
     )
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -41524,8 +42014,8 @@ def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
             "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
             "ExactServePredecessorCompletionEvidence::validate_exact",
             "validate_exact",
-            "            && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal\n",
-            "            && true\n",
+            "        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal\n",
+            "        self.lifecycle_ordinal > 0 && true\n",
             "completion evidence must reject zero or a mismatched integrity complement",
         ),
         (
@@ -41900,7 +42390,7 @@ def test_exact_serve_completion_provenance_survives_digest_refresh(
         seal_group = module._EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256
     assert len(mutated_items) == 1
     seal_group[seal_key] = module._rust_item_token_sha256(mutated_items[0])
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = module._exact_serve_runtime_episode_production_source_fidelity_errors(
         tmp_path
@@ -42122,7 +42612,7 @@ def test_exact_serve_boolean_projection_remains_test_only_after_digest_refresh(
     module._EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256[
         "older_lifecycle_predates_exact_serve"
     ] = module._rust_item_token_sha256(items[0])
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -42165,7 +42655,7 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
 
 """
     path.write_text(source.replace(marker, duplicate + marker, 1), encoding="utf-8")
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -42320,8 +42810,8 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
             "ProductionV2Services::certified_serve_predecessor_completion_evidence",
             "certified_serve_predecessor_completion_evidence",
             (("impl", "ProductionV2Services"),),
-            "                        current.min(ordinal)\n",
-            "                        current.max(ordinal)\n",
+            "                        Some(local_ordinal.map_or(ordinal, |current: u128| current.min(ordinal)));\n",
+            "                        Some(local_ordinal.map_or(ordinal, |current: u128| current.max(ordinal)));\n",
             "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
         ),
         (
@@ -42474,8 +42964,8 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
             "minimum_runnable_lifecycle_ordinal",
             "minimum_runnable_lifecycle_ordinal",
             (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
-            "                ordinal.min(lifecycle_ordinal)\n",
-            "                ordinal.max(lifecycle_ordinal)\n",
+            "                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));\n",
+            "                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.max(lifecycle_ordinal)));\n",
             "completion evidence must validate its integrity and shared-source mint",
         ),
         (
@@ -42528,8 +43018,8 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
             "exact_serve_predecessor_episode_witness",
             "exact_serve_predecessor_episode_witness",
             (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
-            "                || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal\n",
-            "                || evidence.lifecycle_ordinal() > serve_lifecycle_ordinal\n",
+            "            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal\n",
+            "            !evidence.validate_exact() || evidence.lifecycle_ordinal() > serve_lifecycle_ordinal\n",
             "completion evidence must be exact and strictly older than its immutable Serve target",
         ),
         (
@@ -42588,48 +43078,42 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
             "run_inner",
             "run_inner",
             (),
-            "                let completion_evidence = services\n"
-            "                    .certified_serve_predecessor_completion_evidence(\n"
-            "                        executor.remaining_completion_capacity() != 0,\n"
-            "                        serve_barrier.scheduler_ordinal(),\n"
-            "                    )\n"
-            "                    .map_err(V2RunnerError::Service)?;\n"
-            "                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(\n"
-            "                    Instant::now(),\n"
-            "                    serve_barrier.scheduler_ordinal(),\n"
-            "                    completion_evidence,\n"
-            "                )? {\n"
-            "                    let _ = services\n"
-            "                        .observe_certified_serve_predecessor_episode_witness(\n"
-            "                            serve_barrier,\n"
-            "                            witness,\n"
-            "                        )\n"
-            "                        .map_err(V2RunnerError::Service)?;\n"
-            "                }\n"
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n"
-            "                    .map_err(V2RunnerError::Service)?;\n",
-            "                let completion_evidence = services\n"
-            "                    .certified_serve_predecessor_completion_evidence(\n"
-            "                        executor.remaining_completion_capacity() != 0,\n"
-            "                        serve_barrier.scheduler_ordinal(),\n"
-            "                    )\n"
-            "                    .map_err(V2RunnerError::Service)?;\n"
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n"
-            "                    .map_err(V2RunnerError::Service)?;\n"
-            "                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(\n"
-            "                    Instant::now(),\n"
-            "                    serve_barrier.scheduler_ordinal(),\n"
-            "                    completion_evidence,\n"
-            "                )? {\n"
-            "                    let _ = services\n"
-            "                        .observe_certified_serve_predecessor_episode_witness(\n"
-            "                            serve_barrier,\n"
-            "                            witness,\n"
-            "                        )\n"
-            "                        .map_err(V2RunnerError::Service)?;\n"
-            "                }\n",
+            """                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(
+                    Instant::now(),
+                    serve_barrier.scheduler_ordinal(),
+                    completion_evidence,
+                )? {
+                    // A passive Fetch is intentionally absent from the
+                    // runnable-owner set. A completed strict predecessor is
+                    // projected without consuming it; its exact local ordinal
+                    // lets the runtime issue one newer episode witness before
+                    // the worker claims capacity and admits the completion.
+                    let _ = services
+                        .observe_certified_serve_predecessor_episode_witness(serve_barrier, witness)
+                        .map_err(V2RunnerError::Service)?;
+                }
+                let claimed_older_runtime_episode = services
+                    .claim_certified_serve_runtime_episode(serve_barrier)
+                    .map_err(V2RunnerError::Service)?;
+""",
+            """                let claimed_older_runtime_episode = services
+                    .claim_certified_serve_runtime_episode(serve_barrier)
+                    .map_err(V2RunnerError::Service)?;
+                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(
+                    Instant::now(),
+                    serve_barrier.scheduler_ordinal(),
+                    completion_evidence,
+                )? {
+                    // A passive Fetch is intentionally absent from the
+                    // runnable-owner set. A completed strict predecessor is
+                    // projected without consuming it; its exact local ordinal
+                    // lets the runtime issue one newer episode witness before
+                    // the worker claims capacity and admits the completion.
+                    let _ = services
+                        .observe_certified_serve_predecessor_episode_witness(serve_barrier, witness)
+                        .map_err(V2RunnerError::Service)?;
+                }
+""",
             "publish and consume a late predecessor witness before attempting to claim",
         ),
         (
@@ -42852,7 +43336,7 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
     assert len(mutated_items) == 1
     rebound_digest = module._rust_item_token_sha256(mutated_items[0])
     getattr(module, seal_group)[seal_key] = rebound_digest
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
     if relative == "crates/iroha_core/src/sumeragi/v2_runtime.rs":
         if item_name == "with_driver_and_lifecycle_ordinals":
             module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[
@@ -42875,14 +43359,10 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
                 "_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256",
                 "runner::run_inner",
             ),
-            ("_SERVICED_CANDIDATE_RUNNER_ITEM_SHA256", "run_inner"),
             ("_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256", "run_inner"),
             ("_LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256", "run_inner"),
         ):
             getattr(module, alias_group)[alias_key] = rebound_digest
-        module._TOTAL_GATE_CALL_ITEM_SHA256["terminal_application"] = (
-            rebound_digest
-        )
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -43011,16 +43491,10 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
             (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
-            "        let replenished = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            2,\n"
-            "        );\n",
-            "        let replenished = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            3,\n"
-            "        );\n",
+            "        let replenished =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
+            "        let replenished =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);\n",
             "witness regression must model the exact next producer episode",
         ),
         (
@@ -43028,16 +43502,10 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
             (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
-            "        let first = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            1,\n"
-            "            1,\n"
-            "        );\n",
-            "        let first = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            1,\n"
-            "        );\n",
+            "        let first =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);\n",
+            "        let first =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);\n",
             "witness regression must begin with exact predecessor one at episode one",
         ),
         (
@@ -43045,16 +43513,10 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
             (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
-            "        let conflicting = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            1,\n"
-            "        );\n",
-            "        let conflicting = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            2,\n"
-            "        );\n",
+            "        let conflicting =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);\n",
+            "        let conflicting =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
             "witness regression must model a same-episode exact-evidence conflict",
         ),
         (
@@ -43062,16 +43524,10 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
             (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
-            "        let skipped = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            3,\n"
-            "        );\n",
-            "        let skipped = ExactServePredecessorEpisodeWitness::for_test(\n"
-            "            barrier.scheduler_ordinal(),\n"
-            "            2,\n"
-            "            2,\n"
-            "        );\n",
+            "        let skipped =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);\n",
+            "        let skipped =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
             "witness regression must model a skipped producer episode",
         ),
         (
@@ -43354,7 +43810,7 @@ def test_exact_serve_runtime_episode_regressions_survive_item_digest_refresh(
     getattr(module, seal_group)[item_name] = module._rust_item_token_sha256(
         mutated_items[0]
     )
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -44598,7 +45054,7 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
     module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
         seal_key
     ] = module._rust_item_token_sha256(mutated_items[0])
-    rebind_same_round_expanded_source_seals(module, tmp_path)
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
         module.load_ledger(),

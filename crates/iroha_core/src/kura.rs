@@ -6012,6 +6012,24 @@ impl Kura {
     }
 
     #[cfg(unix)]
+    fn sidecar_file_metadata_unchanged_across_rename(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        // Renaming the bound object legitimately advances ctime. Preserve the
+        // exact-object, link-count, length, and content-mtime checks that detect
+        // replacement or concurrent writes across quarantine publication.
+        Self::sidecar_metadata_same_object(left, right)
+            && left.nlink() == 1
+            && right.nlink() == 1
+            && left.len() == right.len()
+            && left.mtime() == right.mtime()
+            && left.mtime_nsec() == right.mtime_nsec()
+    }
+
+    #[cfg(unix)]
     fn sidecar_directory_metadata_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
@@ -23017,35 +23035,6 @@ impl Kura {
             .is_some_and(|expected_hash| expected_hash == artifact.proposal_block_hash)
     }
 
-    fn lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        artifact: &LaneBlockArtifact,
-    ) -> bool {
-        let descriptor = &proposal.descriptor;
-        Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor)
-            && self
-                .read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
-                .is_some_and(|canonical| canonical == *artifact)
-            && self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
-    }
-
-    fn lane_block_application_receipt_has_hash_only_snapshot_anchor(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-    ) -> bool {
-        if artifact.application_block_height != artifact.artifact.ownership.proposal_height
-            || artifact.application_block_hash != artifact.artifact.proposal_block_hash
-        {
-            return false;
-        }
-        artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current
-            && self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
-                &artifact.proposal,
-                &artifact.artifact,
-            )
-    }
-
     fn lane_artifact_dir(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(LANE_ARTIFACTS_DIR_NAME)
     }
@@ -28403,21 +28392,20 @@ impl Kura {
         }
     }
 
-    fn autonomous_lifecycle_bootstrap_authority_locked(
+    fn validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
         entry: &LaneConfigEntry,
-        path: PathBuf,
-        bytes: Vec<u8>,
-        bootstrap: AutonomousLifecycleBootstrapV1,
-    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        path: &Path,
+        bootstrap: &AutonomousLifecycleBootstrapV1,
+    ) -> Result<()> {
         let process_record =
             self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
         Self::validate_autonomous_lifecycle_bootstrap_process_generation(
             &process_record,
-            &bootstrap,
+            bootstrap,
         )
-        .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
         let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
         let expected_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
@@ -28430,13 +28418,30 @@ impl Kura {
             || entry.dataspace_id != descriptor.dataspace_id
             || active_incarnation != descriptor.lane_incarnation
             || descriptor.proposal_height <= activation_height
-            || path != expected_path
+            || path != expected_path.as_path()
         {
             return Err(Self::invalid_lane_artifact_error(
-                path,
+                path.to_path_buf(),
                 "autonomous lifecycle bootstrap targets a stale route or incarnation",
             ));
         }
+        Ok(())
+    }
+
+    fn autonomous_lifecycle_bootstrap_authority_locked(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        entry: &LaneConfigEntry,
+        path: PathBuf,
+        bytes: Vec<u8>,
+        bootstrap: AutonomousLifecycleBootstrapV1,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        self.validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
+            process_generation,
+            entry,
+            &path,
+            &bootstrap,
+        )?;
         let stage = self.classify_autonomous_lifecycle_bootstrap_locked(entry, &bootstrap)?;
         Ok(AutonomousLifecycleBootstrapRecoveryAuthority {
             store_root: self.store_root.clone(),
@@ -28449,6 +28454,7 @@ impl Kura {
         })
     }
 
+    #[cfg(test)]
     fn refresh_autonomous_lifecycle_bootstrap_authority(
         &self,
         authority: AutonomousLifecycleBootstrapRecoveryAuthority,
@@ -28513,6 +28519,75 @@ impl Kura {
             bytes,
             bootstrap,
         )
+    }
+
+    fn revalidate_autonomous_lifecycle_bootstrap_for_completion(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    ) -> Result<AutonomousLifecycleBootstrapCompletionRevalidation> {
+        if authority.store_root != self.store_root {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap authority belongs to another Kura root",
+            ));
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
+        let already_terminal = self
+            .lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal);
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap authority path has no parent",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap disappeared before completion",
+                )
+            })?;
+        if bytes != authority.expected_bytes || Hash::new(&bytes) != authority.expected_bytes_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap changed after recovery authority was minted",
+            ));
+        }
+        let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?;
+        if bootstrap != authority.bootstrap {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap identity changed during recovery",
+            ));
+        }
+        let authority = self.autonomous_lifecycle_bootstrap_authority_locked(
+            &authority.process_generation,
+            &entry,
+            authority.path,
+            bytes,
+            bootstrap,
+        )?;
+        Ok(AutonomousLifecycleBootstrapCompletionRevalidation {
+            authority,
+            receipt_terminal: already_terminal,
+        })
     }
 
     /// Return every signed bootstrap for one active route in deterministic attempt order.
@@ -29027,7 +29102,9 @@ impl Kura {
         authorization: AutonomousLaneKuraActivationAuthorization<'queue>,
     ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'queue>> {
         let expected_stage = authority.stage;
-        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let authority = self
+            .revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?
+            .authority;
         if authority.stage != expected_stage {
             return Err(Self::invalid_lane_artifact_error(
                 authority.path,
@@ -29062,7 +29139,9 @@ impl Kura {
         authority: AutonomousLifecycleBootstrapRecoveryAuthority,
     ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'static>> {
         let expected_stage = authority.stage;
-        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let authority = self
+            .revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?
+            .authority;
         if authority.stage != expected_stage {
             return Err(Self::invalid_lane_artifact_error(
                 authority.path,
@@ -29161,7 +29240,9 @@ impl Kura {
         ),
     ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'static>> {
         let expected_stage = authority.stage;
-        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let authority = self
+            .revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?
+            .authority;
         if authority.stage != expected_stage {
             return Err(Self::invalid_lane_artifact_error(
                 authority.path,
@@ -29186,7 +29267,7 @@ impl Kura {
         &self,
         authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
         target: AutonomousLifecycleBootstrapRecoveryStage,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         self.durable_mutation_authorized()?;
         if authority.store_root != self.store_root {
             return Err(Self::invalid_lane_artifact_error(
@@ -29198,54 +29279,19 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let descriptor = &authority
-            .bootstrap
-            .body
-            .executable_payload
-            .origin_proposal
-            .descriptor;
+        let descriptor = &proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let bootstrap_parent = authority.path.parent().ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                authority.path.clone(),
-                "autonomous lifecycle bootstrap cursor authority has no parent",
-            )
-        })?;
         let _sidecar_guard = self.sidecar_lock.lock();
-        let bootstrap_bytes = self
-            .read_regular_sidecar_bytes(
-                &authority.path,
-                bootstrap_parent,
-                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    authority.path.clone(),
-                    "autonomous lifecycle bootstrap disappeared before cursor publication",
-                )
-            })?;
-        if bootstrap_bytes != authority.expected_bytes
-            || Hash::new(&bootstrap_bytes) != authority.expected_bytes_hash
-            || Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bootstrap_bytes)?
-                != authority.bootstrap
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path.clone(),
-                "autonomous lifecycle bootstrap changed before cursor publication",
-            ));
-        }
-        let current_stage =
-            self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &authority.bootstrap)?;
-        if current_stage != authority.stage {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path.clone(),
-                "autonomous lifecycle bootstrap stage changed before cursor publication",
-            ));
-        }
+        let current_stage = self.validate_signed_bootstrap_payload_persistence_locked(
+            authority,
+            &entry,
+            &authority.bootstrap.body.executable_payload,
+        )?;
         let (next, replacing_existing) = match (target, current_stage) {
             (
                 AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
@@ -29255,7 +29301,7 @@ impl Kura {
                 AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
                 AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
                 | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-            ) => return Ok(()),
+            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
             (
                 AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
                 AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
@@ -29263,7 +29309,7 @@ impl Kura {
             (
                 AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
                 AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-            ) => return Ok(()),
+            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
             (AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly, _)
             | (AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable, _)
             | (AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable, _)
@@ -29379,17 +29425,22 @@ impl Kura {
                 "autonomous lifecycle bootstrap cursor readback differs from the signed target",
             ));
         }
-        Ok(())
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     fn delete_completed_autonomous_lifecycle_bootstrap(
         &self,
         authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.durable_mutation_authorized()?;
         self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let receipt_terminal = self
+            .lane_block_application_receipt_available_under_prune_and_canonical_guards(
+                &authority.bootstrap.body.executable_payload.origin_proposal,
+            );
         let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &authority
             .bootstrap
@@ -29473,33 +29524,72 @@ impl Kura {
                 "autonomous lifecycle bootstrap remained after synced deletion",
             ));
         }
-        Ok(())
+        Ok(receipt_terminal)
+    }
+
+    fn consume_autonomous_lifecycle_bootstrap_completion_fence(
+        fence: AutonomousLifecycleBootstrapCompletionFence<'_>,
+    ) {
+        match fence {
+            AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization) => {
+                drop(authorization);
+            }
+            AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}
+            #[cfg(test)]
+            AutonomousLifecycleBootstrapCompletionFence::Test => {}
+        }
     }
 
     /// Complete the exact bootstrap stages while retaining its typed custody fence.
     pub(crate) fn complete_autonomous_lifecycle_bootstrap(
         &self,
         permit: AutonomousLifecycleBootstrapCompletionPermit<'_>,
-    ) -> Result<AutonomousLifecycleBootstrapCompletion> {
+    ) -> Result<AutonomousLifecycleBootstrapCompletionOutcome> {
         let AutonomousLifecycleBootstrapCompletionPermit { authority, fence } = permit;
-        let mut authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let revalidation =
+            self.revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?;
+        let mut authority = revalidation.authority;
+        let mut receipt_terminal = revalidation.receipt_terminal;
         let payload = authority.bootstrap.body.executable_payload.clone();
         let binding = authority.bootstrap.body.binding.clone();
         let current_generation = authority.process_generation.generation();
         let historical_generation = authority.bootstrap.body.process_generation;
-        self.persist_lane_executable_payload_impl(&payload, payload.chain_id_hash, payload.epoch)?;
-        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let payload_outcome = self.persist_lane_executable_payload_impl(
+            &payload,
+            payload.chain_id_hash,
+            payload.epoch,
+            LaneExecutablePayloadPersistenceMode::SignedBootstrap(&authority),
+        )?;
+        if payload_outcome != LaneBlockAuxiliaryPersistenceOutcome::Persisted {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "signed lifecycle bootstrap payload did not cross its durability boundary",
+            ));
+        }
+        let revalidation =
+            self.revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?;
+        authority = revalidation.authority;
+        receipt_terminal |= revalidation.receipt_terminal;
         if authority.stage == AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly {
             return Err(Self::invalid_lane_artifact_error(
                 authority.path,
                 "autonomous lifecycle bootstrap payload did not reach exact durable readback",
             ));
         }
-        self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+        let prepared_outcome = self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
             &authority,
             AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
         )?;
-        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if prepared_outcome != LaneBlockAuxiliaryPersistenceOutcome::Persisted {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "signed lifecycle bootstrap Prepared cursor did not reach durability",
+            ));
+        }
+        let revalidation =
+            self.revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?;
+        authority = revalidation.authority;
+        receipt_terminal |= revalidation.receipt_terminal;
         if !matches!(
             authority.stage,
             AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
@@ -29510,18 +29600,27 @@ impl Kura {
                 "autonomous lifecycle bootstrap Prepared cursor lacks exact readback",
             ));
         }
-        self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+        let live_outcome = self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
             &authority,
             AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
         )?;
-        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if live_outcome != LaneBlockAuxiliaryPersistenceOutcome::Persisted {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "signed lifecycle bootstrap Live cursor did not reach durability",
+            ));
+        }
+        let revalidation =
+            self.revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?;
+        authority = revalidation.authority;
+        receipt_terminal |= revalidation.receipt_terminal;
         if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable {
             return Err(Self::invalid_lane_artifact_error(
                 authority.path,
                 "autonomous lifecycle bootstrap Live cursor lacks exact readback",
             ));
         }
-        self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;
+        receipt_terminal |= self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;
         let cursor_read = self.read_autonomous_lifecycle_cursor(
             &payload,
             &binding,
@@ -29533,18 +29632,17 @@ impl Kura {
                 "autonomous lifecycle bootstrap completion returned a different Live cursor",
             ));
         }
-        match fence {
-            AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization) => {
-                drop(authorization);
-            }
-            AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}
-            #[cfg(test)]
-            AutonomousLifecycleBootstrapCompletionFence::Test => {}
+        receipt_terminal |= self.lane_block_application_receipt_available(&payload.origin_proposal);
+        Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);
+        if receipt_terminal {
+            return Ok(AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal);
         }
-        Ok(AutonomousLifecycleBootstrapCompletion {
-            cursor_read,
-            takeover_required: historical_generation != current_generation,
-        })
+        Ok(AutonomousLifecycleBootstrapCompletionOutcome::Completed(
+            AutonomousLifecycleBootstrapCompletion {
+                cursor_read,
+                takeover_required: historical_generation != current_generation,
+            },
+        ))
     }
 
     /// Read one exact lifecycle cursor and mint a single-use CAS lease.
@@ -30113,6 +30211,29 @@ impl Kura {
         expected_epoch: u64,
         pending_canonical_bytes: Option<u64>,
     ) -> Result<AutonomousLaneBlockDurableRecord> {
+        let view_state_mode = pending_canonical_bytes.map_or(
+            AutonomousLaneBlockViewStateReadMode::MainOnly,
+            |pending_canonical_bytes| AutonomousLaneBlockViewStateReadMode::Recover {
+                pending_canonical_bytes,
+            },
+        );
+        self.read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
+            entry,
+            pointer,
+            expected_chain_id_hash,
+            expected_epoch,
+            view_state_mode,
+        )
+    }
+
+    fn read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        view_state_mode: AutonomousLaneBlockViewStateReadMode,
+    ) -> Result<AutonomousLaneBlockDurableRecord> {
         if pointer.chain_id_hash != expected_chain_id_hash || pointer.epoch != expected_epoch {
             return Err(Self::invalid_lane_artifact_error(
                 Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -30172,7 +30293,7 @@ impl Kura {
         let retirement = match self.read_autonomous_lane_block_view_state_locked(
             &artifact.executable_payload,
             &view_state_path,
-            pending_canonical_bytes,
+            view_state_mode,
         )? {
             Some(state) => {
                 artifact.availability_certificate = state.availability_certificate;
@@ -30228,7 +30349,7 @@ impl Kura {
         &self,
         payload: &LaneExecutablePayloadV1,
         path: &Path,
-        pending_canonical_bytes: Option<u64>,
+        mode: AutonomousLaneBlockViewStateReadMode,
     ) -> Result<Option<AutonomousLaneBlockViewState>> {
         enum Candidate {
             Absent,
@@ -30308,9 +30429,16 @@ impl Kura {
             )
         };
         let main = load_candidate(path)?;
-        let recover =
-            pending_canonical_bytes.is_some() && self.durable_mutation_authorized().is_ok();
-        if !recover {
+        if mode == AutonomousLaneBlockViewStateReadMode::MainOnly {
+            return match main {
+                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Invalid(error) => Err(error),
+                Candidate::Absent => Ok(None),
+            };
+        }
+        if matches!(mode, AutonomousLaneBlockViewStateReadMode::Recover { .. })
+            && self.durable_mutation_authorized().is_err()
+        {
             return match main {
                 Candidate::Valid { state, .. } => Ok(Some(state)),
                 Candidate::Invalid(error) => Err(error),
@@ -30326,6 +30454,42 @@ impl Kura {
                 state.retirement.is_some(),
                 state.availability_certificate.is_some(),
             )
+        };
+        if mode == AutonomousLaneBlockViewStateReadMode::LatestReadOnly {
+            return match (main, temp) {
+                (
+                    Candidate::Valid {
+                        state: main_state,
+                        current: main_current,
+                    },
+                    Candidate::Valid {
+                        state: temp_state,
+                        current: temp_current,
+                    },
+                ) => Ok(Some(
+                    if recovery_rank(&temp_state, &temp_current)
+                        > recovery_rank(&main_state, &main_current)
+                    {
+                        temp_state
+                    } else {
+                        main_state
+                    },
+                )),
+                (Candidate::Invalid(_) | Candidate::Absent, Candidate::Valid { state, .. })
+                | (Candidate::Valid { state, .. }, Candidate::Invalid(_) | Candidate::Absent) => {
+                    Ok(Some(state))
+                }
+                (Candidate::Invalid(error), Candidate::Invalid(_))
+                | (Candidate::Invalid(error), Candidate::Absent)
+                | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
+                (Candidate::Absent, Candidate::Absent) => Ok(None),
+            };
+        }
+        let AutonomousLaneBlockViewStateReadMode::Recover {
+            pending_canonical_bytes,
+        } = mode
+        else {
+            unreachable!("main-only and read-only view-state modes returned above")
         };
         let promoted_state = match (&main, &temp) {
             (
@@ -30356,8 +30520,7 @@ impl Kura {
             let descriptor = &payload.origin_proposal.descriptor;
             let entry = self.lane_storage_entry(descriptor.lane_id)?;
             self.preflight_autonomous_view_state_recovery_promotion_locked(
-                pending_canonical_bytes
-                    .expect("enabled view-state recovery has a capacity snapshot"),
+                pending_canonical_bytes,
                 &entry,
                 descriptor.lane_block_height,
                 path,
@@ -32110,6 +32273,81 @@ impl Kura {
         Ok(())
     }
 
+    /// Prove that one signed lifecycle bootstrap still authorizes its exact
+    /// payload while all Kura mutation-ordering locks are held.
+    fn validate_signed_bootstrap_payload_persistence_locked(
+        &self,
+        authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryStage> {
+        if authority.store_root != self.store_root
+            || authority.bootstrap.body.executable_payload != *payload
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "signed lifecycle bootstrap does not authorize this exact Kura payload",
+            ));
+        }
+        self.validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
+            &authority.process_generation,
+            entry,
+            &authority.path,
+            &authority.bootstrap,
+        )?;
+        let parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "signed lifecycle bootstrap path has no parent",
+            )
+        })?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "signed lifecycle bootstrap disappeared before payload persistence",
+                )
+            })?;
+        if bytes != authority.expected_bytes
+            || Hash::new(&bytes) != authority.expected_bytes_hash
+            || Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?
+                != authority.bootstrap
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "signed lifecycle bootstrap changed before payload persistence",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let terminal_outcome_path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let terminal_outcome_parent = terminal_outcome_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                terminal_outcome_path.clone(),
+                "autonomous lifecycle terminal-outcome path has no parent",
+            )
+        })?;
+        if self
+            .regular_sidecar_metadata(&terminal_outcome_path, terminal_outcome_parent)?
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                terminal_outcome_path,
+                "signed lifecycle bootstrap cannot advance beside a terminal outcome",
+            ));
+        }
+        self.classify_autonomous_lifecycle_bootstrap_locked(entry, &authority.bootstrap)
+    }
+
     /// Persist a producer-authenticated, lane-owned executable payload.
     ///
     /// The first valid payload owns the `(lane incarnation, lane height)` slot.
@@ -32121,14 +32359,10 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-    ) -> Result<()> {
+        mode: LaneExecutablePayloadPersistenceMode<'_>,
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
         payload
             .validate(expected_chain_id_hash, expected_epoch)
             .map_err(|err| {
@@ -32143,6 +32377,21 @@ impl Kura {
                 "autonomous lane payload must originate at view zero",
             ));
         }
+        let already_terminal = self
+            .lane_block_application_receipt_available_under_prune_guard(&payload.origin_proposal);
+        let ordinary_writer = match mode {
+            LaneExecutablePayloadPersistenceMode::SignedBootstrap(_) => false,
+            #[cfg(test)]
+            LaneExecutablePayloadPersistenceMode::Ordinary => true,
+        };
+        if already_terminal && ordinary_writer {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &payload.origin_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -32158,9 +32407,17 @@ impl Kura {
                 "autonomous lane attempt path has no parent directory",
             ));
         };
-        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir))?;
-
         let _guard = self.sidecar_lock.lock();
+        match mode {
+            LaneExecutablePayloadPersistenceMode::SignedBootstrap(authority) => {
+                self.validate_signed_bootstrap_payload_persistence_locked(
+                    authority, &entry, payload,
+                )?;
+            }
+            #[cfg(test)]
+            LaneExecutablePayloadPersistenceMode::Ordinary => {}
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir))?;
         if let Some(existing_record) = self
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
@@ -32186,7 +32443,7 @@ impl Kura {
                     &entry,
                     &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
                 )?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
 
             if existing_record.retirement.is_none()
@@ -32237,7 +32494,7 @@ impl Kura {
                     &entry,
                     &pointer,
                 )?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
 
             if let Some(retirement) = existing_record.retirement.as_ref() {
@@ -32288,7 +32545,7 @@ impl Kura {
                     &entry,
                     &pointer,
                 )?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
             return Err(Self::invalid_lane_artifact_error(
                 attempt_path,
@@ -32319,7 +32576,7 @@ impl Kura {
             &entry,
             &pointer,
         )?;
-        Ok(())
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     /// Test-only access to the low-level autonomous payload writer. Production
@@ -32330,8 +32587,13 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-    ) -> Result<()> {
-        self.persist_lane_executable_payload_impl(payload, expected_chain_id_hash, expected_epoch)
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
+        self.persist_lane_executable_payload_impl(
+            payload,
+            expected_chain_id_hash,
+            expected_epoch,
+            LaneExecutablePayloadPersistenceMode::Ordinary,
+        )
     }
 
     /// Durably close one exact autonomous lane-height slot before releasing its reservations.
@@ -32833,8 +33095,49 @@ impl Kura {
     kura_autonomous_reservation_classifier_methods!();
     kura_historical_autonomous_recovery_methods!();
 
+    fn validate_lane_new_view_certificate_for_artifact(
+        artifact: &AutonomousLaneBlockArtifact,
+        durable_certificate: &DurableLaneBlockNewViewCertificateV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        slot_path: &Path,
+    ) -> Result<(LaneBlockProposalV1, LaneBlockProposalV1)> {
+        let current = Self::validate_autonomous_lane_block_artifact(
+            artifact,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(slot_path.to_path_buf(), message))?;
+        let target = crate::lane_consensus::retarget_lane_block_proposal_view(
+            &current,
+            durable_certificate.certificate.body.target_view,
+        )
+        .map_err(|err| {
+            Self::invalid_lane_artifact_error(
+                slot_path.to_path_buf(),
+                format!("invalid autonomous lane NewView target: {err}"),
+            )
+        })?;
+        crate::lane_consensus::validate_lane_block_new_view_transition(
+            &current,
+            &target,
+            &artifact.executable_payload,
+            durable_certificate,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|err| {
+            Self::invalid_lane_artifact_error(
+                slot_path.to_path_buf(),
+                format!("invalid autonomous lane NewView certificate: {err}"),
+            )
+        })?;
+        Ok((current, target))
+    }
+
     /// Append one fully authenticated, contiguous NewView certificate to a
-    /// durable lane-owned payload.
+    /// durable lane-owned payload, unless its immutable origin is already
+    /// durably applied.
     pub(crate) fn persist_lane_new_view_certificate(
         &self,
         lane_id: LaneId,
@@ -32842,11 +33145,62 @@ impl Kura {
         durable_certificate: DurableLaneBlockNewViewCertificateV1,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-    ) -> Result<LaneBlockProposalV1> {
+    ) -> Result<LaneBlockNewViewPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+
+        // Authenticate the requested transition against the logical winner of
+        // the stable main and crash-temp view states without promoting or
+        // deleting either file. This gives us the exact immutable origin needed
+        // for receipt lookup without letting a terminal NewView retry mutate
+        // retained auxiliary state. The prune lock then keeps the receipt
+        // boundary stable through the later write.
+        let terminal_proposal = {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entry = self.lane_storage_entry(lane_id)?;
+            let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                &entry,
+                &self.store_root,
+                lane_block_height,
+            );
+            let _guard = self.sidecar_lock.lock();
+            let record = self
+                .read_autonomous_lane_block_record_read_only_latest_locked(
+                    &entry,
+                    lane_id,
+                    lane_block_height,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        slot_path.clone(),
+                        "missing autonomous executable payload for NewView certificate",
+                    )
+                })?;
+            if record.retirement.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    record.view_state_path,
+                    "durably retired autonomous lane slot cannot accept NewView evidence",
+                ));
+            }
+            let _ = Self::validate_lane_new_view_certificate_for_artifact(
+                &record.artifact,
+                &durable_certificate,
+                expected_chain_id_hash,
+                expected_epoch,
+                &slot_path,
+            )?;
+            record.artifact.executable_payload.origin_proposal
+        };
+        if self.lane_block_application_receipt_available_under_prune_and_canonical_guards(
+            &terminal_proposal,
+        ) {
+            return Ok(LaneBlockNewViewPersistenceOutcome::AlreadyTerminal);
+        }
+
+        self.durable_mutation_authorized()?;
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -32885,36 +33239,13 @@ impl Kura {
             ));
         }
         let mut artifact = record.artifact;
-        let current = Self::validate_autonomous_lane_block_artifact(
+        let (current, target) = Self::validate_lane_new_view_certificate_for_artifact(
             &artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(slot_path.clone(), message))?;
-        let target = crate::lane_consensus::retarget_lane_block_proposal_view(
-            &current,
-            durable_certificate.certificate.body.target_view,
-        )
-        .map_err(|err| {
-            Self::invalid_lane_artifact_error(
-                slot_path.clone(),
-                format!("invalid autonomous lane NewView target: {err}"),
-            )
-        })?;
-        crate::lane_consensus::validate_lane_block_new_view_transition(
-            &current,
-            &target,
-            &artifact.executable_payload,
             &durable_certificate,
             expected_chain_id_hash,
             expected_epoch,
-        )
-        .map_err(|err| {
-            Self::invalid_lane_artifact_error(
-                slot_path.clone(),
-                format!("invalid autonomous lane NewView certificate: {err}"),
-            )
-        })?;
+            &slot_path,
+        )?;
         let checkpoint = DurableLaneBlockViewCheckpointV1 {
             source_proposal: current,
             target_proposal: target.clone(),
@@ -32948,7 +33279,7 @@ impl Kura {
             expected_chain_id_hash,
             expected_epoch,
         )?;
-        Ok(target)
+        Ok(LaneBlockNewViewPersistenceOutcome::Persisted(target))
     }
 
     /// Read and fully revalidate a lane-owned payload and all contiguous view proofs.
@@ -34211,6 +34542,40 @@ impl Kura {
         Ok(None)
     }
 
+    fn read_autonomous_lane_block_record_read_only_latest_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        if let Some(pointer) =
+            self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
+        {
+            if pointer.lane_id != lane_id {
+                return Err(Self::invalid_lane_artifact_error(
+                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                        entry,
+                        &self.store_root,
+                        lane_block_height,
+                    ),
+                    "autonomous lane latest attempt belongs to a different lane",
+                ));
+            }
+            return self
+                .read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
+                    entry,
+                    &pointer,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                    AutonomousLaneBlockViewStateReadMode::LatestReadOnly,
+                )
+                .map(Some);
+        }
+        Ok(None)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn read_autonomous_lane_block_attempt_record_locked(
         &self,
@@ -34449,6 +34814,7 @@ impl Kura {
                 if self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
                     &artifact.proposal,
                     &artifact.artifact,
+                    repair_missing_sidecar,
                 ) =>
             {
                 true
@@ -35010,6 +35376,7 @@ impl Kura {
         &self,
         block: &SignedBlock,
         require_post_apply_metadata: bool,
+        merge_association: NativeAmxMergeAssociation<'_>,
     ) -> Result<NativeAmxParticipantApplicationEvidencePlan> {
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
@@ -35032,14 +35399,6 @@ impl Kura {
                 "Native AMX application block is not canonical in Kura",
             ));
         }
-        let native_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
-                .map_err(|error| {
-                    Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        format!("Native AMX application manifest construction failed: {error}"),
-                    )
-                })?;
         let Some((_, finality, _)) =
             self.v2_finality_artifact_with_archive_under_prune_guard(application_block_height)?
         else {
@@ -35048,6 +35407,9 @@ impl Kura {
                 "Native AMX application block lacks durable v2 finality",
             ));
         };
+        let native_manifest = self.native_amx_manifest_for_committed_block(
+            block, merge_association, &finality,
+        )?;
         if finality.block_hash != application_block_hash
             || finality
                 .commit_qc
@@ -35166,13 +35528,13 @@ impl Kura {
     /// Publish and read back every Native AMX participant frontier before WSV
     /// can stage or commit the corresponding State transition.
     ///
-    /// This path intentionally authenticates only the durable canonical block
-    /// and v2 finality boundary. The WSV checkpoint/commit-manifest join does
-    /// not exist yet. Retention cleanup is forbidden until the post-WSV repair
-    /// pass validates that join.
+    /// Authenticate durable block/finality and the exact staged merge entry
+    /// against its already-committed association. The WSV join comes later, so
+    /// cleanup waits for the post-WSV repair to validate that join.
     pub(crate) fn prepublish_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<NativeAmxParticipantApplicationPrepublicationToken> {
         #[cfg(test)]
         if self
@@ -35188,7 +35550,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false,
+                block, false, NativeAmxMergeAssociation::Live(staged_merge_entry),
             )?;
         self.persist_native_amx_participant_application_evidence_under_publication_guard(
             block,
@@ -35273,20 +35635,19 @@ impl Kura {
     ///
     /// Every exact replicated frontier must occur once in the QC-authenticated
     /// carrier manifest. The complete carrier and every manifest leaf/proof are
-    /// authenticated while reconstructing `plan`; only marker-owned active
-    /// routes are then checked against current storage geometry and existing
-    /// manifest/receipt/latest-index files. Historical sibling leaves are never
-    /// interpreted as current storage work.
+    /// authenticated while reconstructing `plan`; only marker-owned routes are
+    /// checked against storage. Historical sibling leaves are not current work.
     pub(crate) fn preflight_native_amx_participant_application_evidence_repair(
         &self,
         block: &SignedBlock,
         markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+        planned_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
         let _publication_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::Startup(planned_merge_entry),
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -35300,8 +35661,7 @@ impl Kura {
 
     /// Repair every Native AMX participant route after fresh WSV application.
     ///
-    /// Fresh application owns every participant route in the just-committed
-    /// carrier, so it retains the whole-plan publication boundary. Startup
+    /// Fresh application owns the whole participant-route publication boundary. Startup
     /// recovery must instead use
     /// [`Self::repair_native_amx_participant_application_evidence_for_markers`]
     /// to avoid interpreting historical sibling leaves as current work.
@@ -35313,7 +35673,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let repaired = plan.artifacts.len();
         let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
@@ -35323,7 +35683,6 @@ impl Kura {
         )?;
         Ok(repaired)
     }
-
     /// Repair State-owned Native AMX evidence after WSV commit and metadata join.
     ///
     /// Startup repair requires and revalidates the exact checkpoint and commit
@@ -35339,7 +35698,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -38499,7 +38858,7 @@ impl Kura {
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
 
-    fn read_lane_block_application_receipt_without_sidecar_repair(
+    pub(crate) fn read_lane_block_application_receipt_without_sidecar_repair(
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
@@ -38521,6 +38880,62 @@ impl Kura {
             false,
         )?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
+    /// Read one exact durability-attested receipt while the caller holds
+    /// `prune_lock`. This path never repairs progress-sidecar artifacts.
+    fn read_exact_lane_block_application_receipt_under_prune_guard(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
+    }
+
+    /// Read one exact durability-attested receipt while the caller holds
+    /// `prune_lock` and `canonical_chain_lock`, in that order. This path never
+    /// repairs progress-sidecar artifacts or reacquires either outer lock.
+    fn read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let descriptor = &proposal.descriptor;
+        let artifact = self.read_active_lane_block_application_receipt_structural(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        )?;
+        if artifact.proposal != *proposal
+            || !self
+                .lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+                    &artifact,
+                    false,
+                )
+        {
+            return None;
+        }
+        let confirmed = self.read_active_lane_block_application_receipt_structural(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        )?;
+        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
+    fn lane_block_application_receipt_available_under_prune_guard(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.read_exact_lane_block_application_receipt_under_prune_guard(proposal)
+            .is_some()
+    }
+
+    fn lane_block_application_receipt_available_under_prune_and_canonical_guards(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
+            .is_some()
     }
 
     fn read_active_lane_block_application_receipt_structural(
@@ -38905,7 +39320,10 @@ impl Kura {
     ) -> bool {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(artifact)
+                self.lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                )
             }
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
@@ -38913,12 +39331,49 @@ impl Kura {
                     repair_missing_sidecars,
                 ),
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                self.lane_block_application_receipt_matches_merge_log(artifact)
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log(artifact)
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
+                        artifact,
+                    )
+                }
             }
         }
     }
 
     fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => {
+                self.lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                )
+            }
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
+                        artifact,
+                    )
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
+                        artifact,
+                    )
+                }
+            }
+        }
+    }
+
+    fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
         repair_missing_sidecars: bool,
@@ -38932,9 +39387,10 @@ impl Kura {
                     artifact,
                     repair_missing_sidecars,
                 ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                self.lane_block_application_receipt_matches_merge_log_under_prune_guard(artifact)
-            }
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
+                .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                    artifact,
+                ),
         }
     }
 
@@ -39280,13 +39736,17 @@ impl Kura {
     fn lane_block_application_receipt_matches_canonical_results(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecar: bool,
     ) -> bool {
         match self.recover_lane_block_application_receipt_artifact_without_sidecar_repair(
             &artifact.proposal,
         ) {
             Ok(expected) => expected == *artifact,
             Err(LaneBlockPayloadAvailability::MissingProposalBlock)
-                if self.lane_block_application_receipt_has_hash_only_snapshot_anchor(artifact) =>
+                if self.lane_block_application_receipt_has_hash_only_snapshot_anchor(
+                    artifact,
+                    repair_missing_sidecar,
+                ) =>
             {
                 true
             }
@@ -44453,7 +44913,7 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01_prune_capacity_support.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");

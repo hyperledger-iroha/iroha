@@ -5746,6 +5746,11 @@ export interface ToriiSumeragiV2BlockSubject {
   payload_hash: string;
 }
 
+export interface ToriiSumeragiV2MergeCarrierCommitment {
+  version: 1;
+  entry_hash: string;
+}
+
 export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
   post_state_root: string;
@@ -10288,8 +10293,14 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
-  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiStatus(
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
+  getSumeragiDiagnostics(
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
