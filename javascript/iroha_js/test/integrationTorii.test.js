@@ -8,6 +8,7 @@ import {
   ToriiClient,
   ToriiHttpError,
   IsoMessageTimeoutError,
+  LocalSigningContext,
   NetworkId,
   bootstrapConnectPreviewSession,
   extractToriiFeatureConfig,
@@ -30,6 +31,7 @@ import {
   isNonEmptyString,
   isPlainObject,
 } from "./integrationToriiProverReportAssertions.js";
+import { buildIntegrationGovernancePlainBallotPayload } from "./toriiClientGovernanceTests.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "";
@@ -277,9 +279,17 @@ test(
     }
 
     if (CONNECT_SESSION) {
-      const sessionOptions = JSON.parse(CONNECT_SESSION);
-      assert.ok(sessionOptions.sid, "connect session payload must provide sid");
-      const session = await client.createConnectSession(sessionOptions);
+      const rawSessionOptions = JSON.parse(CONNECT_SESSION);
+      for (const field of ["sid", "network_id", "app_pk", "nonce"]) {
+        assert.ok(rawSessionOptions[field], `connect session payload must provide ${field}`);
+      }
+      const session = await client.createConnectSession({
+        sid: rawSessionOptions.sid,
+        networkId: NetworkId.parse(rawSessionOptions.network_id),
+        appPublicKey: Buffer.from(rawSessionOptions.app_pk, "base64url"),
+        nonce: Buffer.from(rawSessionOptions.nonce, "base64url"),
+        node: rawSessionOptions.node ?? null,
+      });
       assert.ok(session?.wallet_uri ?? session?.walletUri, "connect session should return a wallet URI");
     }
   },
@@ -1611,8 +1621,9 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
-
+    const canonicalAuth = { accountId: AUTHORITY_ACCOUNT_ID, privateKey: Buffer.from(PRIVATE_KEY_HEX, "hex") };
     const attachmentPayload = Buffer.from(
       `iroha-js-attachment-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`,
       "utf8",
@@ -1622,6 +1633,7 @@ test(
     try {
       uploaded = await client.uploadAttachment(attachmentPayload, {
         contentType: "text/plain",
+        canonicalAuth,
       });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
@@ -1635,10 +1647,9 @@ test(
       throw error;
     }
     assertAttachmentMetadata(uploaded, "attachment upload metadata");
-
     let attachmentList;
     try {
-      attachmentList = await client.listAttachments();
+      attachmentList = await client.listAttachments({ canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1661,7 +1672,7 @@ test(
 
     let fetched;
     try {
-      fetched = await client.getAttachment(uploaded.id);
+      fetched = await client.getAttachment(uploaded.id, { canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1684,9 +1695,8 @@ test(
       attachmentPayload.toString("utf8"),
       "attachment payload should round-trip exactly",
     );
-
     try {
-      await client.deleteAttachment(uploaded.id);
+      await client.deleteAttachment(uploaded.id, { canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1699,7 +1709,7 @@ test(
       throw error;
     }
 
-    const deleted = await waitForAttachmentDeletion(client, uploaded.id);
+    const deleted = await waitForAttachmentDeletion(client, uploaded.id, canonicalAuth);
     if (!deleted) {
       t.diagnostic(
         `attachment ${uploaded.id} still retrievable after delete; retention policy may delay cleanup`,
@@ -3010,6 +3020,8 @@ test(
       timestamp: new Date().toISOString(),
     };
     const submission = await client.submitDaBlob({
+      networkId: NETWORK_ID,
+      owner: AUTHORITY_ACCOUNT_ID,
       payload: payloadBuffer,
       codec: "application/octet-stream",
       metadata,
@@ -3828,7 +3840,7 @@ test(
 );
 
 test(
-  "governance plain ballot submission (optional)",
+  "governance plain ballot draft (optional)",
   {
     timeout: 120_000,
   },
@@ -3847,7 +3859,10 @@ test(
     }
     let ballotPayload;
     try {
-      ballotPayload = buildGovernancePlainBallotPayload(GOVERNANCE_BALLOT_OPTIONS);
+      ballotPayload = buildIntegrationGovernancePlainBallotPayload(
+        GOVERNANCE_BALLOT_OPTIONS,
+        { defaultAuthority: AUTHORITY_ACCOUNT_ID, networkId: NETWORK_ID },
+      );
     } catch (error) {
       t.diagnostic(
         `invalid governance ballot payload from IROHA_TORII_INTEGRATION_GOV_BALLOT: ${
@@ -3866,11 +3881,17 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
 
     let response;
     try {
-      response = await client.governanceSubmitPlainBallot(ballotPayload);
+      response = await client.governanceSubmitPlainBallot(ballotPayload, {
+        canonicalAuth: {
+          accountId: ballotPayload.authority,
+          privateKey: decodePrivateKeyHex(PRIVATE_KEY_HEX),
+        },
+      });
     } catch (error) {
       if (shouldSkipGovernanceBallotEndpoints(error)) {
         t.diagnostic(
@@ -4909,10 +4930,10 @@ function shouldRetryDaManifestFetch(error) {
   return /404/.test(message) || /not\s+found/i.test(message);
 }
 
-async function waitForAttachmentDeletion(client, attachmentId, attempts = 3, delayMs = 500) {
+async function waitForAttachmentDeletion(client, attachmentId, canonicalAuth, attempts = 3, delayMs = 500) {
   for (let index = 0; index < attempts; index += 1) {
     try {
-      await client.getAttachment(attachmentId);
+      await client.getAttachment(attachmentId, { canonicalAuth });
     } catch (error) {
       if (isAttachmentNotFoundError(error) || isAttachmentEndpointUnavailable(error)) {
         return true;
@@ -5042,47 +5063,6 @@ function coerceNonNegativeInteger(value) {
     }
   }
   return null;
-}
-
-function buildGovernancePlainBallotPayload(overrides) {
-  if (!isPlainObject(overrides)) {
-    return null;
-  }
-  const referendumId = normalizeIntegrationString(overrides.referendumId);
-  if (!referendumId) {
-    return null;
-  }
-  const authority =
-    normalizeIntegrationString(overrides.authority) ?? AUTHORITY_ACCOUNT_ID;
-  const owner = normalizeIntegrationString(overrides.owner) ?? AUTHORITY_ACCOUNT_ID;
-  const chainId = normalizeIntegrationString(overrides.chainId) ?? CHAIN_ID;
-  const durationBlocksRaw = overrides.durationBlocks ?? 10;
-  const durationBlocks =
-    typeof durationBlocksRaw === "number"
-      ? durationBlocksRaw
-      : Number.parseInt(String(durationBlocksRaw), 10);
-  if (!Number.isFinite(durationBlocks) || durationBlocks <= 0) {
-    throw new Error("governance ballot durationBlocks must be a positive integer");
-  }
-  const amountRaw = overrides.amount ?? "1";
-  const amountText =
-    typeof amountRaw === "number" && Number.isFinite(amountRaw)
-      ? amountRaw.toString()
-      : normalizeIntegrationString(String(amountRaw));
-  if (!amountText) {
-    throw new Error("governance ballot amount must be a non-empty string or number");
-  }
-  const direction =
-    normalizeIntegrationString(overrides.direction ?? "Aye") ?? "Aye";
-  return {
-    authority,
-    chainId,
-    referendumId,
-    owner,
-    amount: amountText,
-    durationBlocks,
-    direction,
-  };
 }
 
 function buildIsoPacs008Fields(overrides) {

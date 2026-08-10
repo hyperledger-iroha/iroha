@@ -441,14 +441,12 @@ fn contract_test_app(
     state: Arc<State>,
     _kura: Arc<Kura>,
     queue: Arc<Queue>,
-    chain_id: iroha_data_model::ChainId,
     telemetry: iroha_torii::MaybeTelemetry,
 ) -> Router {
     Router::new()
         .route(
             "/v1/contracts/call",
             post({
-                let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -456,7 +454,6 @@ fn contract_test_app(
                     iroha_torii::ContractCallDto,
                 >| async move {
                     iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
                         queue.clone(),
                         state.clone(),
                         telemetry.clone(),
@@ -595,7 +592,6 @@ async fn contracts_call_enqueues_transaction() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1016,7 +1012,6 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1099,7 +1094,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1217,7 +1211,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1361,7 +1354,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1487,7 +1479,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1613,7 +1604,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1748,7 +1738,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -1877,7 +1866,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -2010,7 +1998,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 
@@ -2170,7 +2157,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         state.clone(),
         kura.clone(),
         queue.clone(),
-        chain_id.clone(),
         telemetry.clone(),
     );
 

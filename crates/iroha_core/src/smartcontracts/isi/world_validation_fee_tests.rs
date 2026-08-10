@@ -86,7 +86,9 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         .expect("seed lifecycle authority");
 
     let missing_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         41,
         DataSpaceId::UNIVERSAL,
@@ -106,7 +108,9 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     ));
 
     let existing_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         42,
         DataSpaceId::UNIVERSAL,

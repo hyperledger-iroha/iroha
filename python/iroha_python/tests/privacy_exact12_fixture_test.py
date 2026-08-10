@@ -58,6 +58,26 @@ def _compact(value: int) -> bytes:
     return bytes(output)
 
 
+def test_exact12_transaction_domain_requires_one_marked_network_id() -> None:
+    network_id = bytes.fromhex("a4" * 31 + "a5")
+    archive = struct.pack("<I", 0) + _compact(len(network_id)) + network_id
+    assert (
+        exact12_module._decode_network_transaction_domain_v1(archive, "transaction.domain")
+        == network_id
+    )
+
+    for retired_or_malformed in (
+        struct.pack("<I", 1),
+        struct.pack("<I", 0) + _compact(4) + b"test",
+        struct.pack("<I", 0) + _compact(32) + bytes(32),
+        struct.pack("<I", 0) + b"\xa0\x00" + network_id,
+    ):
+        with pytest.raises(PrivacyExact12FixtureErrorV1):
+            exact12_module._decode_network_transaction_domain_v1(
+                retired_or_malformed, "transaction.domain"
+            )
+
+
 def _read_compact(payload: bytes | bytearray, offset: int) -> tuple[int, int]:
     value = 0
     for used in range(10):

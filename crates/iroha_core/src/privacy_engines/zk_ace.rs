@@ -12,7 +12,7 @@
 //! not assert an additional quantum-random-oracle reduction for this STARK.
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     privacy::{
         PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyNullifierV1, PrivacyStatementV1,
     },
@@ -107,12 +107,12 @@ impl ZkAcePrivacyWitnessV1 {
     pub fn replay_nullifier_v1(
         &self,
         authorization_digest: &[u8; 32],
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> PrivacyNullifierV1 {
         PrivacyNullifierV1::new(derive_zk_ace_replay_nullifier(
             &self.replay_secret,
             authorization_digest,
-            chain_id,
+            network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         ))
@@ -230,7 +230,7 @@ fn project_air_relation_inputs_v1(
         &statement.destination,
         &statement.asset_definition_id,
         statement.amount,
-        &statement.context.chain_id,
+        &statement.context.network_id,
         ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
         statement.policy_digest.as_bytes(),
     )
@@ -239,7 +239,7 @@ fn project_air_relation_inputs_v1(
         statement.identity_commitment.into_bytes(),
         transfer_digest,
         authorization_digest,
-        statement.context.chain_id.clone(),
+        statement.context.network_id,
         statement.replay_nullifier.into_bytes(),
         statement.policy_digest.into_bytes(),
         statement.source.clone(),
@@ -256,7 +256,7 @@ fn validate_privacy_witness_relation(
 ) -> Result<(), ZkAceNativeErrorV1> {
     let statement = &public_inputs.statement;
     if witness.identity_commitment_v1() != statement.identity_commitment
-        || witness.replay_nullifier_v1(authorization_digest, &statement.context.chain_id)
+        || witness.replay_nullifier_v1(authorization_digest, &statement.context.network_id)
             != statement.replay_nullifier
     {
         return Err(ZkAceNativeErrorV1::WitnessRelationMismatch);
@@ -420,7 +420,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -531,7 +531,11 @@ mod tests {
             identity_blinding: [0x22; 32],
             replay_secret: [0x33; 32],
         };
-        let chain_id = ChainId::from("taira-privacy-zk-ace-test");
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x48; 32])
+        ));
         let identity_commitment = derive_zk_ace_identity_commitment(
             &witness.identity_root,
             &witness.identity_blinding,
@@ -539,7 +543,7 @@ mod tests {
         );
         let statement = ZkAcePqAuthorizationStatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id,
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x40; 32]),
                 parameter_id: PrivacyParameterIdV1::new([0x41; 32]),
@@ -565,7 +569,7 @@ mod tests {
         let replay_nullifier = derive_zk_ace_replay_nullifier(
             &witness.replay_secret,
             &authorization_digest,
-            &chain_id,
+            &network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );
@@ -739,7 +743,14 @@ mod tests {
             |value| value.genesis_hash[0] ^= 1,
             |value| value.statement.identity_commitment.0[0] ^= 1,
             |value| value.statement.context.transaction_intent_digest.0[0] ^= 1,
-            |value| value.statement.context.chain_id = ChainId::from("foreign"),
+            |value| {
+                value.statement.context.network_id =
+                    NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                        iroha_data_model::block::BlockHeader,
+                    >::from_untyped_unchecked(
+                        iroha_crypto::Hash::prehashed([0x49; 32])
+                    ))
+            },
             |value| value.statement.context.parameter_id.0[0] ^= 1,
             |value| value.statement.context.parameter_digest.0[0] ^= 1,
             |value| value.statement.context.verifier_digest.0[0] ^= 1,

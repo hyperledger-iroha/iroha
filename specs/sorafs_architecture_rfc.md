@@ -306,7 +306,8 @@ revalidates the root/chunk-plan/CAR commitments, immutable chunker geometry, pin
 metadata, aliases, and any embedded signatures, then derives the manifest
 digest and distinct content root CID before fees or state mutation. It also
 derives `submitted_epoch` from the executing block timestamp, charges checked
-global/per-account count and byte summaries, bounds lineage depth/fanout, and
+global/per-account retained-record counts and live-content byte summaries,
+bounds retained lineage depth/fanout, and
 writes authenticated expiry and lifecycle-status indexes. Direct ISI submission
 therefore has the same consensus checks as Torii ingress and cannot substitute
 a manifest digest, chunk-plan digest, root, profile, length, policy summary, or
@@ -318,7 +319,9 @@ epoch. Approval time is consensus-derived and governance authority comes from
 the verified threshold envelope, which any authenticated account may relay;
 retirement time is consensus-derived and only the recorded submitter may
 retire. Automatic expiry walks the authenticated ordered retention index at
-consensus time and releases the live charge transactionally. Finalized listing
+consensus time and releases live-content bytes transactionally while retaining
+the record-count and lineage-fanout charges for lifecycle evidence that remains
+in state. Finalized listing
 uses `PinManifestPageV1`, an exclusive digest-keyset page with row and encoded
 byte ceilings plus O(1) `charged_usage`; one exact bounded record is available
 through the digest query.

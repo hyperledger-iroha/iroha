@@ -3,7 +3,7 @@ fn persist_historical_atomic_temp_dependencies(kura: &Kura, payload: &LaneExecut
     let recovered = kura
         .recover_autonomous_lane_block_payload(
             &payload.origin_proposal,
-            payload.chain_id_hash,
+            payload.network_id,
             payload.epoch,
         )
         .expect("recover historical atomic-temp execution input");

@@ -1126,7 +1126,6 @@ fn generated_orderbook_operation_in_one_finalized_view(
             operation,
             sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionContextV1 {
                 network_id: *state.state.network_id_ref(),
-                chain_id: state.chain_id.as_ref().clone(),
                 policy_record,
                 book_revision: status.book_revision,
                 finalized_cursor,
@@ -1442,7 +1441,6 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             Ok(retained)
                 if retained.operation_id == delivery.operation_id
                     && retained.network_id == delivery.network_id
-                    && retained.chain_id == delivery.chain_id
                     && retained.authority == delivery.authority
                     && validate_orderbook_reconciliation_material_v1(&delivery, &retained)
                         .is_ok() =>
@@ -1455,13 +1453,9 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 continue;
             }
         };
-        if retained.network_id != *state.state.network_id_ref()
-            || retained.chain_id != *state.chain_id
-        {
+        if retained.network_id != *state.state.network_id_ref() {
             scan.deferred = scan.deferred.saturating_add(1);
-            warn!(
-                "durable native SoraFS orderbook delivery belongs to another network or business chain"
-            );
+            warn!("durable native SoraFS orderbook delivery belongs to another network");
             continue;
         }
 
@@ -1507,7 +1501,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             continue;
         };
         let semantics = reconcile_orderbook_semantics(
-            state.chain_id.as_ref(),
+            state.state.network_id_ref(),
             &delivery,
             &retained,
             &observation.snapshot,
@@ -1537,7 +1531,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             .as_ref()
             .map(|signer| signer.authority());
         let action = plan_orderbook_worker_action(
-            state.chain_id.as_ref(),
+            state.state.network_id_ref(),
             signer_authority.as_ref(),
             &delivery,
             envelope,
@@ -1766,7 +1760,6 @@ async fn sign_sorafs_orderbook_transaction(
 ) -> Option<(SignedTransaction, Vec<u8>)> {
     if signer.authority() != request.authority
         || request.network_id != *state.state.network_id_ref()
-        || request.chain_id != *state.chain_id
     {
         return None;
     }

@@ -25,6 +25,7 @@ import {
   verifyEd25519,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
+  deriveConfidentialNullifierV2,
   generateSm2KeyPair,
   deriveSm2KeyPairFromSeed,
   loadSm2KeyPair,
@@ -38,6 +39,7 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
+import { NetworkId } from "../src/networkId.js";
 import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import { __resetNativeStateForTests } from "../src/native.js";
@@ -577,6 +579,36 @@ test("deriveConfidentialKeyset delegates to native binding when available", () =
     assert.deepEqual(keyset.skSpend, expected.sk_spend);
     assert.equal(keyset.nkHex, expected.nk.toString("hex"));
   });
+});
+
+test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
+  const firstNetworkId = NetworkId.fromBytes(Buffer.alloc(32, 0x11));
+  const secondNetworkId = NetworkId.fromBytes(Buffer.alloc(32, 0x13));
+  const calls = [];
+  const binding = {
+    deriveConfidentialNullifierV2: (...args) => {
+      calls.push(args);
+      return Buffer.alloc(32, 0x61);
+    },
+  };
+  const input = {
+    assetDefinitionId: "xor#sora",
+    spendKey: Buffer.alloc(32, 0x21),
+    rhoHex: "31".repeat(32),
+  };
+
+  withNativeBinding(binding, () => {
+    deriveConfidentialNullifierV2({ ...input, networkId: firstNetworkId });
+    deriveConfidentialNullifierV2({ ...input, networkId: secondNetworkId });
+    assert.throws(
+      () => deriveConfidentialNullifierV2({ ...input, networkId: "sora" }),
+      /networkId must be a NetworkId/u,
+    );
+  });
+
+  assert.deepEqual(calls[0][0], Buffer.from(firstNetworkId.toBytes()));
+  assert.deepEqual(calls[1][0], Buffer.from(secondNetworkId.toBytes()));
+  assert.notDeepEqual(calls[0][0], calls[1][0]);
 });
 
 test("buildKaigiRosterJoinProof delegates to native binding", () => {

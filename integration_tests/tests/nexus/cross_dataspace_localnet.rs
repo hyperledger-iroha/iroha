@@ -69,7 +69,7 @@ use iroha_config_base::WithOrigin;
 use iroha_core::{
     da::proof_policy_bundle,
     kura::Kura,
-    merge::{MergeLedgerCandidate, merge_network_id_digest, merge_qc_message_digest},
+    merge::{MergeLedgerCandidate, merge_qc_message_digest},
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
@@ -4569,7 +4569,7 @@ fn validate_autoscale_drain_certificate(
         "lane-3 drain certificate contains an unsupported layout version"
     );
     ensure!(
-        intent.chain_id_digest == merge_network_id_digest(network_id),
+        intent.network_id == *network_id,
         "lane-3 drain intent is bound to another network"
     );
     ensure!(
@@ -4817,7 +4817,7 @@ fn validate_autoscale_merge_qc(
     let qc = &entry.merge_qc;
     ensure!(qc.epoch_id == entry.epoch_id, "merge QC epoch mismatch");
     ensure!(
-        qc.chain_id_digest == merge_network_id_digest(network_id),
+        qc.network_id == *network_id,
         "merge QC is bound to another network"
     );
     ensure!(

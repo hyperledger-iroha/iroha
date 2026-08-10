@@ -1,10 +1,14 @@
 // Focused adversarial coverage for terminal settlement/publication fencing.
 
 #[test]
-fn terminal_handoff_identity_is_chain_and_destination_bound() {
+fn terminal_handoff_identity_is_network_and_destination_bound() {
     let outcome_digest = [0x62; 32];
+    let network_a = test_network_id();
+    let network_b = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"moderation-genesis-b")),
+    );
     let first = terminal_handoff_id(
-        &ChainId::from("moderation-chain-a"),
+        &network_a,
         ModerationTerminalHandoffKindV1::Settlement,
         "case-1",
         "round-1",
@@ -13,7 +17,7 @@ fn terminal_handoff_identity_is_chain_and_destination_bound() {
     assert_eq!(
         first,
         terminal_handoff_id(
-            &ChainId::from("moderation-chain-a"),
+            &network_a,
             ModerationTerminalHandoffKindV1::Settlement,
             "case-1",
             "round-1",
@@ -23,7 +27,7 @@ fn terminal_handoff_identity_is_chain_and_destination_bound() {
     assert_ne!(
         first,
         terminal_handoff_id(
-            &ChainId::from("moderation-chain-b"),
+            &network_b,
             ModerationTerminalHandoffKindV1::Settlement,
             "case-1",
             "round-1",
@@ -33,7 +37,7 @@ fn terminal_handoff_identity_is_chain_and_destination_bound() {
     assert_ne!(
         first,
         terminal_handoff_id(
-            &ChainId::from("moderation-chain-a"),
+            &network_a,
             ModerationTerminalHandoffKindV1::Publication,
             "case-1",
             "round-1",
@@ -55,8 +59,9 @@ fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
         sink,
     )
     .expect("initially qualified handoff");
-    let handoff = ModerationTerminalHandoffV1 {
-        handoff_id: [0x61; 32],
+    let mut handoff = ModerationTerminalHandoffV1 {
+        handoff_id: [0; 32],
+        network_id: test_network_id(),
         kind: ModerationTerminalHandoffKindV1::Settlement,
         case_id: "case-1".to_owned(),
         round_id: "round-1".to_owned(),
@@ -82,6 +87,7 @@ fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
             ),
         },
     };
+    handoff.handoff_id = handoff.canonical_id();
 
     assert_eq!(
         qualified.deliver(&handoff),
@@ -190,7 +196,7 @@ fn cold_terminal_handoff_rebuild_requires_exact_retained_event() {
 }
 
 #[test]
-fn checkpoint_and_pending_terminal_handoff_are_chain_fenced() {
+fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {
     let temp = tempfile::tempdir().expect("tempdir");
     let governance = account(99);
     let finalized = finalized_case_snapshot(
@@ -204,7 +210,7 @@ fn checkpoint_and_pending_terminal_handoff_are_chain_fenced() {
     let settlement = Arc::new(MockHandoffSink::default());
     let publication = Arc::new(MockHandoffSink::default());
     let checkpoint_store = Arc::new(MockCheckpointStore::default());
-    let checkpoint = config(&temp, "terminal-chain-fence.norito");
+    let checkpoint = config(&temp, "terminal-network-fence.norito");
     let runtime_deps = || ModerationOrchestratorDepsV1 {
         checkpoint_store: checkpoint_store.clone(),
         submitter: submitter.clone(),
@@ -232,7 +238,9 @@ fn checkpoint_and_pending_terminal_handoff_are_chain_fenced() {
     let mut transplanted =
         decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(&original, limits)
             .expect("decode checkpoint");
-    transplanted.chain_id = "different-moderation-chain".to_owned();
+    transplanted.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"different-moderation-genesis")),
+    );
     std::fs::write(
         &checkpoint.checkpoint_path,
         norito::to_bytes(&transplanted).expect("encode transplanted checkpoint"),
@@ -241,7 +249,7 @@ fn checkpoint_and_pending_terminal_handoff_are_chain_fenced() {
     assert!(matches!(
         ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps()),
         Err(ModerationOrchestratorError::CheckpointCorrupt(message))
-            if message.contains("chain binding")
+            if message.contains("network binding")
     ));
 
     let mut substituted =

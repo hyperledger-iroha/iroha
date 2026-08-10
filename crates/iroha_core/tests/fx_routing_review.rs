@@ -389,7 +389,9 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     let fixture = fixture(None);
     let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         0,
         CONTRACT_DATASPACE,

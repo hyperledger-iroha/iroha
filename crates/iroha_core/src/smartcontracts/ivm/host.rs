@@ -154,12 +154,13 @@ const AXT_PROOF_CACHE_REJECT: &str = "reject";
 // contracts address the unscoped suffix and must not address another contract's
 // physical namespace directly.
 //
-// Keep these lists in sync with the native key constructors in `state.rs` and
-// `tx.rs`. Entries either include their delimiter or name a canonical root;
-// matching reserves only the exact root and `_`/`/` descendants so similarly
-// named user keys remain available.
+// Keep these lists in sync with the native key constructors in `state.rs`,
+// `tx.rs`, and `da/quota.rs`. Entries either include their delimiter or name a
+// canonical root; matching reserves only the exact root and `_`/`/` descendants
+// so similarly named user keys remain available.
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
+    "da_ingest_quota_v1/",
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
@@ -1722,7 +1723,9 @@ mod durable_state_merge_tests {
     #[test]
     fn scoped_path_and_scan_reject_physical_length_overflow_before_state_access() {
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             703,
             DataSpaceId::UNIVERSAL,
@@ -4169,10 +4172,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    /// Set chain id for VRF binding. When set, the underlying `DefaultHost` will
-    /// enforce and use this chain id for VRF prehashing.
+    /// Set the human-readable chain label returned by the chain-id sysvar.
     pub fn set_chain_id(&mut self, chain: &iroha_data_model::ChainId) {
-        // Mutably set chain id in the underlying DefaultHost (no reset of other state)
         self.default
             .set_chain_id_bytes(chain.to_string().into_bytes());
         self.chain_id_bytes = chain.to_string().into_bytes();
@@ -4357,14 +4358,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_authorizations.clear();
     }
 
-    /// Set the chain id for ZK domain binding.
+    /// Set the human-readable chain label returned by the chain-id sysvar.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id_bytes = chain_id;
         self.default.set_chain_id_bytes(self.chain_id_bytes.clone());
     }
 
-    /// Set the exact genesis-derived security domain used by AXT signatures.
+    /// Set the exact genesis-derived security domain used by signatures and VRF proofs.
     pub fn set_network_id(&mut self, network_id: NetworkId) {
+        self.default.set_network_id(network_id);
         self.network_id = Some(network_id);
     }
 
@@ -6500,7 +6502,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
 
         self.axt_timing = timing;
-        self.network_id = Some(*state.network_id());
+        self.set_network_id(*state.network_id());
         self.axt_replay_ledger = Arc::new(replay_ledger);
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
         self.axt_issuer_keys = Arc::new(issuer_keys);
@@ -12573,7 +12575,9 @@ mod pointer_abi_tests {
     fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -12812,7 +12816,9 @@ seiyaku ReadOnlyBinding {
     fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -12985,7 +12991,9 @@ seiyaku ReadOnlyBinding {
         host.queue_instruction(attempted.clone());
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             49,
             DataSpaceId::UNIVERSAL,
@@ -13044,7 +13052,9 @@ seiyaku ReadOnlyBinding {
     fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             48,
             DataSpaceId::UNIVERSAL,
@@ -13110,7 +13120,9 @@ seiyaku ReadOnlyBinding {
     fn prevalidated_runtime_binding_captures_exact_root_authorization() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -13321,7 +13333,9 @@ seiyaku PrivilegedBinding {
     fn contract_runtime_state_rejects_manifest_free_vm_image() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -15428,7 +15442,9 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &host.authority,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15459,7 +15475,9 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &host.authority,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15485,7 +15503,9 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_reject_direct_binding_syscalls_before_metering() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             211,
             DataSpaceId::UNIVERSAL,
@@ -15545,7 +15565,9 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_cannot_smuggle_binding_mutations_through_opaque_syscall() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             212,
             DataSpaceId::UNIVERSAL,
@@ -16622,7 +16644,9 @@ seiyaku PrivilegedBinding {
         let caller = fixture_account("alice");
         let owner = fixture_account("bob");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &caller,
             91,
             DataSpaceId::UNIVERSAL,
@@ -20131,7 +20155,9 @@ seiyaku DedicatedQueryContract {
     fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
         let authority = host.authority.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -23924,7 +23950,9 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             404,
             DataSpaceId::UNIVERSAL,
@@ -27592,6 +27620,8 @@ seiyaku DurableOwner {
         for key in [
             "sc",
             "sc/0123456789abcdef/counter",
+            "da_ingest_quota_v1",
+            "da_ingest_quota_v1/authority/deadbeef",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -27634,6 +27664,7 @@ seiyaku DurableOwner {
         }
         for key in [
             "scatter/counter",
+            "da_ingest_quota_v1x",
             "merge_lane_frontier_v1x",
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",
@@ -27667,7 +27698,9 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             178,
             DataSpaceId::UNIVERSAL,
@@ -27739,7 +27772,9 @@ seiyaku DurableOwner {
             .expect("frontier marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             177,
             DataSpaceId::UNIVERSAL,
@@ -28055,7 +28090,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             701,
             DataSpaceId::UNIVERSAL,
@@ -28159,7 +28196,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             702,
             DataSpaceId::UNIVERSAL,
@@ -28287,7 +28326,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -28483,7 +28524,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -28621,7 +28664,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0x51a7e,
             DataSpaceId::UNIVERSAL,
@@ -29072,7 +29117,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             203,
             DataSpaceId::UNIVERSAL,
@@ -29128,7 +29175,9 @@ seiyaku DurableOwner {
             &norito::to_bytes(&expected).expect("encode state value"),
         );
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -29184,7 +29233,9 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             46,
             DataSpaceId::UNIVERSAL,
@@ -29252,7 +29303,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             146,
             DataSpaceId::UNIVERSAL,
@@ -29363,7 +29416,9 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -29458,7 +29513,9 @@ seiyaku DurableOwner {
         let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             45,
             DataSpaceId::UNIVERSAL,
@@ -29530,7 +29587,9 @@ seiyaku DurableOwner {
         let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         let contract_a = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -29560,7 +29619,9 @@ seiyaku DurableOwner {
         );
 
         let contract_b = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -29655,7 +29716,9 @@ seiyaku DurableOwner {
             CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,

@@ -4979,23 +4979,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn publish_manifest_records_dataspace() {
-        let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(99);
-        let plan = state
-            .plan_publish_space_manifest(&mut rng)
-            .expect("manifest plan builds");
-        assert_eq!(plan.label, "publish_space_directory_manifest");
-        assert!(
-            state
-                .space_directory_manifests
-                .values()
-                .any(|spaces| spaces.contains(&DataSpaceId::UNIVERSAL)),
-            "dataspace should be recorded as published"
-        );
-    }
-
     include!("instructions_tail_tests.rs");
 }

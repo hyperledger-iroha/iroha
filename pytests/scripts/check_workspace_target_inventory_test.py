@@ -21,6 +21,15 @@ def test_repository_target_inventory() -> None:
     assert TARGET_INVENTORY.check_metadata(metadata) == []
 
 
+def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    target = ("iroha_data_model", "musubi_fixtures")
+
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 114
+    assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
 def test_rejects_default_tool_and_retired_alias() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     modified = copy.deepcopy(metadata)
@@ -64,3 +73,19 @@ def test_rejects_removed_developer_tool() -> None:
     errors = TARGET_INVENTORY.check_metadata(modified)
 
     assert any("declared binary count" in error for error in errors)
+
+
+def test_rejects_retired_irohad_daemon_alias() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    modified = copy.deepcopy(metadata)
+    package = next(
+        package for package in modified["packages"] if package["name"] == "irohad"
+    )
+    daemon = next(target for target in package["targets"] if target["name"] == "iroha3d")
+    daemon["name"] = "irohad"
+
+    errors = TARGET_INVENTORY.check_metadata(modified)
+
+    assert any("shipping binaries no longer enabled by default" in error for error in errors)
+    assert any("non-shipping binaries enabled by default" in error for error in errors)
+    assert any("retired compatibility binaries are declared" in error for error in errors)

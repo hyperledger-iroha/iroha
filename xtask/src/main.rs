@@ -15096,8 +15096,8 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     Ok((kind, path))
 }
 
-const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC fixtures and their Android/Python/Swift mirrors under the selected output root.";
-const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors under the selected output root.";
+const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 
 fn print_usage() {
     eprintln!("xtask usage:");

@@ -5,7 +5,7 @@ fn finalize_startup_committed_canonical_carriers(
     state: &State,
     queue: &Queue,
     kura: &Kura,
-    chain_hash: Hash,
+    network_id: NetworkId,
     authorized_commit_groups: Vec<(
         Vec<crate::queue::LaneQueueReservationKeyV2>,
         AutonomousLaneQueueCarrierCleanupAuthorization,
@@ -51,7 +51,7 @@ fn finalize_startup_committed_canonical_carriers(
             invalid("startup source-outcome publication lost its committed merge entry")
         })?;
         let authenticated =
-            authenticate_committed_canonical_carrier(state, kura, &entry, chain_hash)?;
+            authenticate_committed_canonical_carrier(state, kura, &entry, network_id)?;
         if authenticated.reference.entry_hash != entry_hash
             || carrier_heights
                 .insert(authenticated.carrier_height, entry_hash)

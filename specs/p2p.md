@@ -630,7 +630,7 @@ acquire this reply deadline.
   4,294,967,295 bytes. The deterministic runtime/configuration ceiling is
   2,147,483,643 encrypted-body bytes: with the four-byte prefix, the contiguous
   stream buffer remains within `i32::MAX` on both 32-bit and 64-bit hosts.
-  Startup and `irohad --check-config` reject larger values before binding any
+  Startup and `iroha3d --check-config` reject larger values before binding any
   listener. Before materializing an outbound frame, the sender performs an
   exact counting Norito pass and rejects an oversized result; it then checks
   generic AEAD expansion, the `u32` conversion, and prefix-inclusive queue

@@ -1146,7 +1146,7 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
     public init(
         canonicalNorito: Data,
         expectedRegistrationId: Data,
-        expectedNetworkId: NetworkId? = nil,
+        expectedNetworkId: NetworkId,
         expectedAuthority: String? = nil,
         expectedTransactionHash: Data? = nil
     ) throws {
@@ -1160,7 +1160,7 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
         guard inspected.registrationId == expectedRegistrationId else {
             throw KagemushaDeviceAttestationSignedTransactionError.registrationIdMismatch
         }
-        if let expectedNetworkId, inspected.networkId != expectedNetworkId {
+        if inspected.networkId != expectedNetworkId {
             throw KagemushaDeviceAttestationSignedTransactionError.networkIdMismatch
         }
         if let expectedAuthority, inspected.authority != expectedAuthority {

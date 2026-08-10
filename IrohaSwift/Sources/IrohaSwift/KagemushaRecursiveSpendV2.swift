@@ -893,20 +893,19 @@ public struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
 }
 
 public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
-    public let chainID: String
+    public let networkID: NetworkId
     public let assetDefinitionID: String
     public let noteCommitment: Data
     public let spendNullifier: Data
     public let amount: KagemushaScaledAmount
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         assetDefinitionID: String,
         noteCommitment: Data,
         spendNullifier: Data,
         amount: KagemushaScaledAmount
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
@@ -921,7 +920,7 @@ public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
         guard noteCommitment != spendNullifier else {
             throw KagemushaRecursiveSpendError.invalidField("spendNullifier")
         }
-        self.chainID = chainID
+        self.networkID = networkID
         self.assetDefinitionID = assetDefinitionID
         self.noteCommitment = Data(noteCommitment)
         self.spendNullifier = Data(spendNullifier)
@@ -1082,23 +1081,22 @@ public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
 }
 
 public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
-    public let chainID: String
+    public let networkID: NetworkId
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
     public let requestID: Data
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         assetDefinitionID: String,
         amount: KagemushaScaledAmount,
         requestID: Data
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
         try KagemushaRecursiveSpend.requireNonzeroFixed32(requestID, field: "requestID")
-        self.chainID = chainID
+        self.networkID = networkID
         self.assetDefinitionID = assetDefinitionID
         self.amount = amount
         self.requestID = Data(requestID)
@@ -1139,7 +1137,7 @@ public struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
         request: KagemushaRecipientOutputDerivationRequest,
         opening: KagemushaNoteOpening
     ) throws {
-        guard recipientOutput.chainID == request.chainID,
+        guard recipientOutput.networkID == request.networkID,
               recipientOutput.assetDefinitionID == request.assetDefinitionID,
               recipientOutput.amount == request.amount,
               !senderOutputProverMaterial.isEmpty,
@@ -1304,7 +1302,7 @@ public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable 
 }
 
 public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendable {
-    public let chainID: String
+    public let networkID: NetworkId
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
     public let recipient: String
@@ -1320,7 +1318,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
     public let senderOutputProverMaterial: Data
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         assetDefinitionID: String,
         amount: KagemushaScaledAmount,
         recipient: String,
@@ -1333,7 +1331,6 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         recipientOutput: KagemushaSpendableNoteDescriptor,
         senderOutputProverMaterial: Data
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
@@ -1354,14 +1351,14 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
               expiresAtMilliseconds > issuedAtMilliseconds,
               expiresAtMilliseconds - issuedAtMilliseconds
                 <= KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds,
-              recipientOutput.chainID == chainID,
+              recipientOutput.networkID == networkID,
               recipientOutput.assetDefinitionID == assetDefinitionID,
               recipientOutput.amount == amount,
               !senderOutputProverMaterial.isEmpty,
               senderOutputProverMaterial.count <= 4 * 1024 else {
             throw KagemushaRecursiveSpendError.invalidField("recipientRequest")
         }
-        self.chainID = chainID
+        self.networkID = networkID
         self.assetDefinitionID = assetDefinitionID
         self.amount = amount
         self.recipient = recipient
@@ -1888,7 +1885,7 @@ public struct KagemushaTopUpFinalityProofArchive: Equatable, Sendable {
 /// Content-addressed validator-roster trust artifact prefetched while online.
 ///
 /// The artifact is opaque to application code. Native verification validates
-/// its exact authenticated SHA-256, chain id, activation windows, ordered BLS
+/// its exact authenticated SHA-256, network id, activation windows, ordered BLS
 /// keys, PoPs, and generation.
 public struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
     public let noritoArchive: Data

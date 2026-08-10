@@ -6100,7 +6100,9 @@ pub mod tests {
         let deployer_keypair = checked_random_tx_keypair();
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -11287,7 +11289,9 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11329,14 +11333,18 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -11440,7 +11448,9 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11856,7 +11866,9 @@ pub mod tests {
         state.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,
@@ -12271,7 +12283,7 @@ pub mod tests {
                 )),
                 ownership,
             ),
-            autonomous_chain_id_hash: None,
+            autonomous_network_id: None,
             autonomous_epoch: None,
             autonomous_payload_hash: None,
             entrypoints,

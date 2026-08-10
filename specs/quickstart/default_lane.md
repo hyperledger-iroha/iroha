@@ -13,7 +13,7 @@
 
 ## Prerequisites
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
+- A Sora/Nexus build of `irohad` (run with `iroha3d --sora --config ...`).
 - Access to the configuration repository so you can edit `nexus.*` sections.
 - `iroha_cli` configured to talk to the target cluster.
 - `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
@@ -110,7 +110,7 @@ client-signed deployment transaction.
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
-irohad --sora --config "${IROHA_CONFIG}"
+iroha3d --sora --config "${IROHA_CONFIG}"
 ```
 
 The node logs the derived routing policy during startup. Any validation errors

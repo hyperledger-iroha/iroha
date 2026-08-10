@@ -692,7 +692,7 @@ fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinali
 
 fn musubi_fault_provider_attestations(
     client: &Client,
-    genesis_hash: [u8; 32],
+    _genesis_hash: [u8; 32],
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
     order_id: ReplicationOrderId,
@@ -704,8 +704,7 @@ fn musubi_fault_provider_attestations(
             let payload = MusubiProviderBundleVerificationPayloadV1 {
                 version: MUSUBI_REGISTRY_VERSION_V1,
                 binding: MusubiProviderBundleVerificationBindingV1 {
-                    chain_id: client.chain.clone(),
-                    genesis_block_hash: genesis_hash,
+                    network_id: client.network_id,
                     provider_id: provider,
                     completed_by: client.account.clone(),
                     completion_authority: musubi_fault_completion_authority(
@@ -978,7 +977,7 @@ fn musubi_fault_snapshot_and_time(
 
 fn musubi_fault_staging_receipt(
     client: &Client,
-    genesis_block_hash: [u8; 32],
+    _genesis_block_hash: [u8; 32],
     latest_time_ms: u64,
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
@@ -987,8 +986,7 @@ fn musubi_fault_staging_receipt(
     let payload = MusubiSeedIngressReceiptPayloadV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
         binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: client.chain.clone(),
-            genesis_block_hash,
+            network_id: client.network_id,
             publisher: client.account.clone(),
             ingress_broker: client.account.clone(),
             seed_provider: musubi_fault_provider(),

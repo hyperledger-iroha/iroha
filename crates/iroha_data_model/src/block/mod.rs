@@ -1811,6 +1811,7 @@ mod tests {
         block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
@@ -1843,6 +1844,31 @@ mod tests {
         crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
         ))
+    }
+
+    fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+        let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
+            .expect("valid deterministic block pin-intent key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: test_network_id(),
+            owner: crate::account::AccountId::new(key_pair.public_key().clone()),
+            lane_id: lane,
+            epoch,
+            sequence,
+            payload_hash: BlobDigest::new([0xDF; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xE0; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(
+                key_pair.private_key(),
+                &authorization.signing_digest(),
+            )
+            .expect("sign deterministic block pin-intent authorization"),
+        });
+        authorization
     }
 
     fn sample_da_bundle() -> DaCommitmentBundle {
@@ -1969,7 +1995,7 @@ mod tests {
                 1,
                 1,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge-only-parent")),
-                Hash::new(b"merge-only-chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&validators),
                 validators,
@@ -2014,7 +2040,9 @@ mod tests {
         );
         let envelope = AutonomousLanePayloadEnvelopeV1 {
             version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-            chain_id_hash: Hash::new(b"autonomous-only-chain"),
+            network_id: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"autonomous-only-genesis"),
+            )),
             epoch: 4,
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
@@ -2491,6 +2519,7 @@ mod tests {
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
+            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         block.set_da_pin_intents(Some(bundle));
@@ -3168,6 +3197,7 @@ mod tests {
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
+            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         let expected = bundle

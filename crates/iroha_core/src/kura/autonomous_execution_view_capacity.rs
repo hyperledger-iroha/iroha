@@ -57,9 +57,12 @@ impl Kura {
     pub fn persist_lane_block_execution_input(
         &self,
         recovered: &RecoveredLaneBlockPayload,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.lane_block_application_receipt_available_under_prune_guard(&recovered.proposal) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
@@ -76,12 +79,17 @@ impl Kura {
         &self,
         recovered: &RecoveredLaneBlockPayload,
         pending_canonical_bytes: u64,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         self.ensure_prune_recovery_not_required()?;
+        if self.lane_block_application_receipt_available_under_prune_and_canonical_guards(
+            &recovered.proposal,
+        ) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
         let verified = self
             .recover_lane_block_execution_input_source(
                 &recovered.proposal,
-                recovered.autonomous_chain_id_hash,
+                recovered.autonomous_network_id,
                 recovered.autonomous_epoch,
                 recovered.autonomous_payload_hash,
                 false,
@@ -100,17 +108,17 @@ impl Kura {
         }
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
         let execution_input_authorization = match (
-            artifact.autonomous_chain_id_hash,
+            artifact.autonomous_network_id,
             artifact.autonomous_epoch,
             artifact.autonomous_payload_hash,
         ) {
-            (Some(chain_id_hash), Some(epoch), Some(payload_hash)) => {
+            (Some(network_id), Some(epoch), Some(payload_hash)) => {
                 let descriptor = &artifact.proposal.descriptor;
                 let autonomous = self
                     .read_autonomous_lane_block_artifact_with_recovery_policy(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                         false,
                     )
@@ -148,7 +156,8 @@ impl Kura {
             &artifact,
             execution_input_authorization,
             pending_canonical_bytes,
-        )
+        )?;
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     fn write_lane_block_execution_input_artifact(
@@ -165,7 +174,7 @@ impl Kura {
         })?;
         let autonomous_input = matches!(
             (
-                artifact.autonomous_chain_id_hash,
+                artifact.autonomous_network_id,
                 artifact.autonomous_epoch,
                 artifact.autonomous_payload_hash,
             ),

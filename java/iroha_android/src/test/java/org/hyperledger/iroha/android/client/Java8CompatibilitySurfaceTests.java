@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.privacy.PrivacyConfidentialWitness;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
 
 public final class Java8CompatibilitySurfaceTests {
@@ -206,7 +207,7 @@ public final class Java8CompatibilitySurfaceTests {
 
     final PrivacyConfidentialWitness.WitnessV1 witness =
         new PrivacyConfidentialWitness.WitnessV1(
-            "fc56984b-2be7-431d-840e-21514d1883f0",
+            TestNetworkIds.canonical(),
             "xor#universal",
             repeatedByte(0x11),
             Collections.singletonList(repeatedByte(0x10)),

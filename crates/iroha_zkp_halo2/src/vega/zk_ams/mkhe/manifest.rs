@@ -10,6 +10,7 @@ use super::{
     phase23::{
         zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
     },
+    receipt_capability_audit::zk_ams_mkhe_receipt_capability_audit_v1,
     resource::{ZkAmsMkheResourceCertificateV1, derive_resource_certificate_v1},
     security::{
         ZkAmsMkheSecurityCandidateV1, ZkAmsMkheSecurityCertificateV1, derive_security_candidate_v1,
@@ -207,6 +208,12 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub active_exact_binding_audit_digest: [u8; 32],
     /// Digest of the exact split-decryption resource and transport evidence.
     pub decryption_resource_evidence_digest: [u8; 32],
+    /// Digest of the exact verified-receipt capability graph and open handoffs.
+    pub receipt_capability_audit_digest: [u8; 32],
+    /// Exact open verified-receipt handoff bit set.
+    pub receipt_capability_blocker_mask: u16,
+    /// True only when every mandatory verified-receipt handoff closes together.
+    pub receipt_capability_release_available: bool,
     /// Release-size execution KAT digest; zero means absent.
     pub release_kat_digest: [u8; 32],
 }
@@ -232,6 +239,10 @@ pub struct ZkAmsMkheReadinessV1 {
     pub packing_gate: bool,
     /// Sparse A/B/C and Phase II/III orchestration are complete.
     pub phase23_gate: bool,
+    /// Every operational path consumes the required opaque verified receipts.
+    pub receipt_capability_gate: bool,
+    /// Exact open verified-receipt handoff bit set; readiness requires zero.
+    pub receipt_capability_blocker_mask: u16,
     /// A full release-parameter KAT completed and matches its governed digest.
     pub release_kat_gate: bool,
 }
@@ -249,6 +260,8 @@ impl ZkAmsMkheReadinessV1 {
             && self.decryption_share_gate
             && self.packing_gate
             && self.phase23_gate
+            && self.receipt_capability_gate
+            && self.receipt_capability_blocker_mask == 0
             && self.release_kat_gate
     }
 }
@@ -395,6 +408,8 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
     let security_certificate = zk_ams_mkhe_security_certificate_v1()?;
     let active_exact_binding = exact_binding_release_state_v1(&profile)?;
     let decryption = zk_ams_mkhe_decryption_resource_evidence_v1()?;
+    let receipt_capability = zk_ams_mkhe_receipt_capability_audit_v1();
+    receipt_capability.validate()?;
     let sampled_eta = i16::from(profile.error_eta);
     if modulus_bits != ZK_AMS_MKHE_CIPHERTEXT_MODULUS_BITS_V1
         || profile.error_eta != 2
@@ -460,6 +475,9 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         phase23_equation_certificate_digest: zk_ams_phase23_equation_certificate_digest_v1(),
         active_exact_binding_audit_digest: active_exact_binding.audit_digest,
         decryption_resource_evidence_digest: decryption.evidence_digest,
+        receipt_capability_audit_digest: receipt_capability.digest,
+        receipt_capability_blocker_mask: receipt_capability.blocker_mask,
+        receipt_capability_release_available: receipt_capability.release_available,
         release_kat_digest: [0; 32],
     })
 }
@@ -521,6 +539,9 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     frame.extend_from_slice(&manifest.phase23_equation_certificate_digest);
     frame.extend_from_slice(&manifest.active_exact_binding_audit_digest);
     frame.extend_from_slice(&manifest.decryption_resource_evidence_digest);
+    frame.extend_from_slice(&manifest.receipt_capability_audit_digest);
+    frame.extend_from_slice(&manifest.receipt_capability_blocker_mask.to_be_bytes());
+    frame.push(manifest.receipt_capability_release_available.into());
     frame.extend_from_slice(&manifest.release_kat_digest);
     keccak256(&frame)
 }
@@ -535,9 +556,17 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
     let security = zk_ams_mkhe_security_certificate_v1()?;
     let active_exact_binding = exact_binding_release_state_v1(&release_profile_v1())?;
     let decryption = zk_ams_mkhe_decryption_resource_evidence_v1()?;
+    let receipt_capability = zk_ams_mkhe_receipt_capability_audit_v1();
+    receipt_capability.validate()?;
     let active_exact_binding_gate = active_exact_binding.release_available
         && active_exact_binding.blocker_mask == 0
         && active_exact_binding.audit_digest != [0; 32];
+    let receipt_capability_gate = receipt_capability.release_available
+        && receipt_capability.blocker_mask == 0
+        && receipt_capability.digest != [0; 32]
+        && manifest.receipt_capability_release_available
+        && manifest.receipt_capability_blocker_mask == 0
+        && manifest.receipt_capability_audit_digest == receipt_capability.digest;
     Ok(ZkAmsMkheReadinessV1 {
         parameter_gate: true,
         security_gate: security.security_parameters_digest()
@@ -592,6 +621,8 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
         phase23_gate: phase23.is_complete()
             && manifest.phase23_equation_certificate_digest
                 == zk_ams_phase23_equation_certificate_digest_v1(),
+        receipt_capability_gate,
+        receipt_capability_blocker_mask: receipt_capability.blocker_mask,
         release_kat_gate: manifest.release_kat_digest != [0; 32],
     })
 }
@@ -612,8 +643,10 @@ pub fn zk_ams_mkhe_readiness_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         readiness.decryption_share_gate.into(),
         readiness.packing_gate.into(),
         readiness.phase23_gate.into(),
-        readiness.release_kat_gate.into(),
+        readiness.receipt_capability_gate.into(),
     ]);
+    frame.extend_from_slice(&readiness.receipt_capability_blocker_mask.to_be_bytes());
+    frame.push(readiness.release_kat_gate.into());
     Ok(keccak256(&frame))
 }
 
@@ -777,6 +810,18 @@ mod tests {
                 decryption_resource_evidence_digest: [0; 32],
                 ..manifest
             },
+            ZkAmsMkheReleaseManifestV1 {
+                receipt_capability_audit_digest: [0; 32],
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                receipt_capability_blocker_mask: 0,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                receipt_capability_release_available: true,
+                ..manifest
+            },
         ] {
             assert_ne!(release_manifest_digest_v1(changed), manifest_digest);
         }
@@ -845,8 +890,31 @@ mod tests {
         assert_ne!(active.audit_digest, [0; 32]);
         assert!(!active.split_decryption_wide_relation_certified);
         assert!(!active.release_available);
-        assert!(decryption.split_transport_ready);
+        assert!(!decryption.split_transport_ready);
         assert!(!readiness.malicious_party_gate);
         assert!(!readiness.decryption_share_gate);
+    }
+
+    #[test]
+    fn receipt_capability_blockers_are_manifest_bound_and_fail_readiness_closed() {
+        let audit = zk_ams_mkhe_receipt_capability_audit_v1();
+        audit
+            .validate()
+            .expect("receipt capability audit validates");
+        let manifest = zk_ams_mkhe_release_manifest_v1().expect("release manifest");
+        let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
+
+        assert_eq!(audit.blocker_mask, 0xff);
+        assert!(!audit.release_available);
+        assert_eq!(manifest.receipt_capability_audit_digest, audit.digest);
+        assert_eq!(manifest.receipt_capability_blocker_mask, 0xff);
+        assert!(!manifest.receipt_capability_release_available);
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0xff);
+        assert!(!readiness.receipt_capability_gate);
+        assert!(!readiness.is_ready());
+        assert_eq!(
+            require_release_ready_v1(),
+            Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
+        );
     }
 }

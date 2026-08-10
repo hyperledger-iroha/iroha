@@ -16,7 +16,7 @@ categories = ["cryptography::cryptocurrencies"]
 [workspace.metadata]
 docker_bins = [
     "iroha",
-    "irohad",
+    "iroha3d",
     "sorafs_governance_dag",
     "kagami",
     "attachment_sanitizer",

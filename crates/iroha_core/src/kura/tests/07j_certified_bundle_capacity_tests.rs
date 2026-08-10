@@ -1,5 +1,5 @@
 struct PreparedAutonomousCertification {
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     epoch: u64,
     session: crate::lane_consensus::CommittedLaneBlockSession,
     signer_pops: BTreeMap<PublicKey, Vec<u8>>,
@@ -27,13 +27,13 @@ fn prepare_autonomous_certification_for_capacity_payload(
     let descriptor = &payload.origin_proposal.descriptor;
     let lane_id = descriptor.lane_id;
     let lane_block_height = descriptor.lane_block_height;
-    let chain_id_hash = payload.chain_id_hash;
+    let network_id = payload.network_id;
     let epoch = payload.epoch;
     install_autonomous_lane_marker_for_kura(kura, lane_config, payload);
-    kura.persist_lane_executable_payload(payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(payload, network_id, epoch)
         .expect("persist composite-capacity payload");
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover composite-capacity input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("persist composite-capacity input");
@@ -43,7 +43,7 @@ fn prepare_autonomous_certification_for_capacity_payload(
         lane_id,
         lane_block_height,
         availability.clone(),
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("persist composite-capacity READY evidence");
@@ -56,7 +56,7 @@ fn prepare_autonomous_certification_for_capacity_payload(
         kura.durable_autonomous_lane_merge_source_under_prune_guard(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             Some(&artifact),
             false,
@@ -73,7 +73,7 @@ fn prepare_autonomous_certification_for_capacity_payload(
             .expect("construct exact composite byte plan")
     };
     PreparedAutonomousCertification {
-        chain_id_hash,
+        network_id,
         epoch,
         session,
         signer_pops,
@@ -265,7 +265,7 @@ fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            fixture.prepared.chain_id_hash,
+            fixture.prepared.network_id,
             fixture.prepared.epoch,
         )
         .expect("authorized reset publishes an exact durable bundle"),
@@ -432,7 +432,7 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
         0
     );
     let published = kura
-        .durable_autonomous_lane_merge_source(lane_id, 1, prepared.chain_id_hash, prepared.epoch)
+        .durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch)
         .expect("exact bundle is merge eligible");
     assert_eq!(published, prepared.source);
     let completed_tree = snapshot_regular_test_tree(temp_dir.path());
@@ -638,7 +638,7 @@ fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("durable bundle remains exact after rebuild"),
@@ -700,7 +700,7 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("repaired bundle source is exact"),
@@ -750,7 +750,7 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("certified append repair source is exact"),
@@ -828,7 +828,7 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("authenticated build repair source is exact"),

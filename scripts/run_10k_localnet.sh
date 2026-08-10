@@ -254,7 +254,7 @@ CLI_BIN="${target_root}/${PROFILE}/$(bin_name "iroha")"
 DEPLOY_ENV=()
 if [[ "${AUTO_SKIP_BUILD}" == true ]] \
   && profile_binary_exists "${target_root}" "${PROFILE}" "kagami" \
-  && profile_binary_exists "${target_root}" "${PROFILE}" "irohad" \
+  && profile_binary_exists "${target_root}" "${PROFILE}" "iroha3d" \
   && profile_binary_exists "${target_root}" "${PROFILE}" "iroha"; then
   DEPLOY_ENV+=(SKIP_TOOL_BUILD=true)
 fi

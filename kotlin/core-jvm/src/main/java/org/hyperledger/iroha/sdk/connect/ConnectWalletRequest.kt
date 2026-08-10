@@ -4,6 +4,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URLDecoder
 import java.util.Locale
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 
 /** Parsed wallet-role request from an `iroha://connect?...` deep link. */
@@ -12,13 +13,19 @@ class ConnectWalletRequest private constructor(
     sessionId: ByteArray,
     @JvmField val token: String,
     @JvmField val relayToken: String,
-    @JvmField val chainId: String?,
+    @JvmField val networkId: NetworkId,
+    appPublicKey: ByteArray,
+    nonce: ByteArray,
     @JvmField val baseUri: URI,
     @JvmField val webSocketUri: URI,
 ) {
     private val _sessionId: ByteArray = sessionId.copyOf()
+    private val _appPublicKey: ByteArray = appPublicKey.copyOf()
+    private val _nonce: ByteArray = nonce.copyOf()
 
     fun sessionId(): ByteArray = _sessionId.clone()
+    fun appPublicKey(): ByteArray = _appPublicKey.clone()
+    fun nonce(): ByteArray = _nonce.clone()
 
     /** Stable short fingerprint used by UI/testing to correlate sessions without exposing full tokens. */
     fun sessionFingerprintHex(): String {
@@ -36,6 +43,7 @@ class ConnectWalletRequest private constructor(
         private const val HOST = "connect"
         private const val LAUNCH_HOST = "wc"
         private const val SID_LENGTH = 32
+        private val SID_DOMAIN = "iroha-connect|sid|".toByteArray(Charsets.UTF_8)
 
         @JvmStatic
         @Throws(ConnectProtocolException::class)
@@ -54,7 +62,7 @@ class ConnectWalletRequest private constructor(
             if (sid.isNullOrBlank()) {
                 throw ConnectProtocolException("Missing required query parameter: sid")
             }
-            val sessionId = decodeBase64Url(sid)
+            val sessionId = decodeBase64Url(sid, "sid")
             if (sessionId.size != SID_LENGTH) {
                 throw ConnectProtocolException("Connect sid must decode to 32 bytes")
             }
@@ -76,11 +84,49 @@ class ConnectWalletRequest private constructor(
                 throw ConnectProtocolException("Missing required query parameter: relay")
             }
 
-            val chainId = trimToNull(firstPresent(query, "chain_id"))
+            if (query.containsKey("chain_id")) {
+                throw ConnectProtocolException("chain_id is retired; provide exact network_id")
+            }
+            val networkIdLiteral = trimToNull(firstPresent(query, "network_id"))
+                ?: throw ConnectProtocolException("Missing required query parameter: network_id")
+            val networkId = try {
+                NetworkId.parse(networkIdLiteral)
+            } catch (ex: IllegalArgumentException) {
+                throw ConnectProtocolException("Connect network_id is not canonical", ex)
+            }
+            val appPublicKey = decodeBase64Url(
+                trimToNull(firstPresent(query, "app_pk"))
+                    ?: throw ConnectProtocolException("Missing required query parameter: app_pk"),
+                "app_pk",
+            )
+            val nonce = decodeBase64Url(
+                trimToNull(firstPresent(query, "nonce"))
+                    ?: throw ConnectProtocolException("Missing required query parameter: nonce"),
+                "nonce",
+            )
+            if (appPublicKey.size != 32 || nonce.size != 16) {
+                throw ConnectProtocolException("Connect app_pk and nonce must decode to 32 and 16 bytes")
+            }
+            val expectedSid = Blake2b.digest256(
+                SID_DOMAIN + networkId.bytes() + appPublicKey + nonce,
+            )
+            if (!sessionId.contentEquals(expectedSid)) {
+                throw ConnectProtocolException("Connect sid does not match network_id, app_pk, and nonce")
+            }
             val base = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri)
             val wsUri = buildWalletWebSocketUri(base, sid)
 
-            return ConnectWalletRequest(sid, sessionId, token, relayToken, chainId, base, wsUri)
+            return ConnectWalletRequest(
+                sid,
+                sessionId,
+                token,
+                relayToken,
+                networkId,
+                appPublicKey,
+                nonce,
+                base,
+                wsUri,
+            )
         }
 
         @JvmStatic
@@ -166,16 +212,21 @@ class ConnectWalletRequest private constructor(
             URLDecoder.decode(value, "UTF-8")
 
         @Throws(ConnectProtocolException::class)
-        private fun decodeBase64Url(value: String): ByteArray {
+        private fun decodeBase64Url(value: String, field: String): ByteArray {
             try {
                 var normalized = value.replace('-', '+').replace('_', '/')
                 val remainder = normalized.length % 4
                 if (remainder != 0) {
                     normalized += "=".repeat(4 - remainder)
                 }
-                return java.util.Base64.getDecoder().decode(normalized)
+                val decoded = java.util.Base64.getDecoder().decode(normalized)
+                val canonical = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(decoded)
+                if (canonical != value) {
+                    throw ConnectProtocolException("Connect $field must use canonical base64url without padding")
+                }
+                return decoded
             } catch (ex: IllegalArgumentException) {
-                throw ConnectProtocolException("Connect sid is not valid base64url", ex)
+                throw ConnectProtocolException("Connect $field is not valid base64url", ex)
             }
         }
 

@@ -12,7 +12,7 @@ use std::{
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     events::data::sorafs::SorafsModerationLedgerEvent,
     metadata::Metadata,
     prelude::Json,
@@ -260,10 +260,6 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
 
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         &self.strict_ingress_provider
-    }
-
-    fn chain_id(&self) -> ChainId {
-        ChainId::from("moderation-orchestrator-test")
     }
 
     fn network_id(&self) -> iroha_data_model::NetworkId {
@@ -554,10 +550,6 @@ impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
         self.inner.strict_ingress_provider()
     }
 
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
-    }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         self.inner.network_id()
     }
@@ -666,10 +658,6 @@ impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
         self.inner.strict_ingress_provider()
     }
 
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
-    }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         self.inner.network_id()
     }
@@ -723,10 +711,6 @@ impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
 
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.strict_ingress_provider()
-    }
-
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
     }
 
     fn network_id(&self) -> iroha_data_model::NetworkId {
@@ -1625,7 +1609,6 @@ fn config(temp: &TempDir, name: &str) -> ModerationOrchestratorConfigV1 {
 
 fn provider_test_request() -> ModerationTransactionRequestV1 {
     ModerationTransactionRequestV1::new(
-        ChainId::from("moderation-orchestrator-test"),
         test_network_id(),
         1,
         account(41),
@@ -1903,7 +1886,7 @@ fn seed_ready_operation_without_delivery(
     orchestrator.reconcile().expect("initial reconciliation");
     let action_digest = action.action_digest().expect("action digest");
     let operation_id = action
-        .operation_id(&orchestrator.chain_id, &authority)
+        .operation_id(&orchestrator.network_id, &authority)
         .expect("operation id");
     let mut state = orchestrator.state.lock().expect("orchestrator state");
     state.operations.push(StoredOperationV1 {
@@ -1989,9 +1972,8 @@ fn retained_envelope(
     let [entry] = state.outbox.as_slice() else {
         panic!("one retained moderation envelope");
     };
-    let request =
-        moderation_transaction_request(&orchestrator.chain_id, orchestrator.network_id, entry)
-            .expect("retained transaction request");
+    let request = moderation_transaction_request(&orchestrator.network_id, entry)
+        .expect("retained transaction request");
     let signed = moderation_signed_transaction(entry).expect("retained signed transaction");
     let transaction = signed
         .decode_for_request(&request)

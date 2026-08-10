@@ -41,6 +41,8 @@ fn native_body_recovery_adapter_with_kura(
         iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
         iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
         iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+        std::time::Duration::from_millis(10),
+        std::time::Duration::from_secs(1),
         iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
         iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
         iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
@@ -469,7 +471,6 @@ fn grouped_native_candidate_fixture(
         Arc::clone(&kura),
         None,
         None,
-        state.chain_id.clone(),
         block_cadence,
         authority,
         events_sender,
@@ -978,6 +979,7 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
         .preflight_native_amx_participant_application_evidence_repair(
             &fixture.carrier,
             &[drifted_marker],
+            None,
         )
         .expect_err("a drifted State marker must not select carrier evidence");
     assert!(
@@ -995,5 +997,677 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
         ),
         Some(receipt),
         "failed marker preflight must leave the repaired receipt unchanged"
+    );
+}
+
+struct MergeNativeProjectionFixture {
+    block: SignedBlock,
+    entry: iroha_data_model::merge::MergeLedgerEntry,
+    source_ids: Vec<[u8; Hash::LENGTH]>,
+    routes: Vec<(LaneId, DataSpaceId)>,
+}
+
+fn merge_native_projection_lane_qc(
+    proposal: &LaneBlockProposalV1,
+    phase: CertPhase,
+) -> LaneBlockQcV1 {
+    let descriptor = &proposal.descriptor;
+    LaneBlockQcV1 {
+        body: proposal.vote_body(phase),
+        validator_set_hash_version: descriptor.validator_set_hash_version,
+        validator_set_hash: descriptor.validator_set_hash,
+        validator_set: descriptor.validator_set.clone(),
+        signers_bitmap: vec![1],
+        bls_aggregate_signature: vec![0xA5; 96],
+        payload_availability_qc: None,
+    }
+}
+
+fn merge_native_projection_execution(
+    entrypoints: Vec<TransactionEntrypoint>,
+    results: Vec<iroha_data_model::transaction::signed::TransactionResult>,
+    receipts: Vec<NativeAmxReceipt>,
+) -> iroha_data_model::merge::MergeLaneExecution {
+    let coordinator_proposal = receipts[0]
+        .legs
+        .iter()
+        .find_map(|leg| {
+            matches!(
+                crate::native_amx::native_amx_participant_application_role(&receipts[0], leg),
+                Ok(crate::native_amx::NativeAmxParticipantApplicationRole::Coordinator)
+            )
+            .then(|| leg.participant_proposal.clone())
+        })
+        .unwrap_or_else(|| {
+            receipts[0]
+                .legs
+                .last()
+                .expect("merge projection fixture coordinator-shaped leg")
+                .participant_proposal
+                .clone()
+        });
+    let source_bundle = b"Native AMX merge projection source".to_vec();
+    let mut settlement = receipts[0]
+        .legs
+        .last()
+        .expect("merge projection fixture coordinator settlement")
+        .participant_settlement
+        .clone();
+    settlement.native_amx_receipts = receipts.clone();
+    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+        .expect("hash merge projection fixture settlement");
+    iroha_data_model::merge::MergeLaneExecution {
+        source_bundle_hash: Hash::new(&source_bundle),
+        source_bundle,
+        proposal: coordinator_proposal.clone(),
+        origin_proposal: coordinator_proposal.clone(),
+        prepare_qc: merge_native_projection_lane_qc(&coordinator_proposal, CertPhase::Prepare),
+        commit_qc: merge_native_projection_lane_qc(&coordinator_proposal, CertPhase::Commit),
+        signer_proofs: Vec::new(),
+        autonomous_network_id: receipts[0].network_id,
+        autonomous_epoch: 3,
+        autonomous_payload_hash: Hash::new(b"Native AMX merge projection payload"),
+        entrypoint_hashes: entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect(),
+        entrypoints,
+        reservation_keys: vec![Vec::new(); receipts.len()],
+        routing_plans: vec![Vec::new(); receipts.len()],
+        native_amx_receipts: receipts.into_iter().map(Some).collect(),
+        result_hashes: results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect(),
+        results,
+        settlement_commitment: settlement,
+        settlement_hash,
+    }
+}
+
+fn merge_native_projection_batch(
+    execution: iroha_data_model::merge::MergeLaneExecution,
+    application_block_header: &BlockHeader,
+    parent_hash: HashOf<BlockHeader>,
+) -> iroha_data_model::merge::MergeExecutionBatch {
+    let lanes = vec![execution];
+    let base_state_height = application_block_header.height().get() - 1;
+    let base_state_hash = parent_hash;
+    let execution_root = crate::merge::merge_execution_root(&lanes);
+    let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
+        .expect("merge projection fixture entrypoint root");
+    let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)
+        .expect("merge projection fixture result root");
+    let write_set_root = Hash::new(b"Native AMX merge projection write set");
+    let mut batch = iroha_data_model::merge::MergeExecutionBatch {
+        version: 1,
+        base_state_height,
+        base_state_hash,
+        application_block_header: application_block_header.clone(),
+        entrypoint_count: u64::try_from(lanes[0].entrypoints.len())
+            .expect("merge projection fixture entrypoint count fits u64"),
+        lanes,
+        entrypoint_merkle_root,
+        result_merkle_root,
+        execution_root,
+        application_write_set_root: Hash::new(b"Native AMX merge projection application write set"),
+        write_set_root,
+        expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+            base_state_height,
+            base_state_hash,
+            write_set_root,
+        ),
+        batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+    batch
+}
+
+fn merge_native_projection_entry_and_carrier(
+    batch: iroha_data_model::merge::MergeExecutionBatch,
+    application_block_header: BlockHeader,
+    parent_hash: HashOf<BlockHeader>,
+) -> (SignedBlock, iroha_data_model::merge::MergeLedgerEntry) {
+    let application_height = application_block_header.height().get();
+    let carrier_key = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
+        .expect("merge projection carrier key");
+    let validator_set = vec![PeerId::new(carrier_key.public_key().clone())];
+    let entry = iroha_data_model::merge::MergeLedgerEntry {
+        version: iroha_data_model::merge::MergeLedgerEntry::VERSION,
+        epoch_id: 3,
+        lane_catalog_hash: Hash::new(b"Native AMX merge projection lane catalog"),
+        active_lanes: Vec::new(),
+        incarnation_root: Hash::new(b"Native AMX merge projection incarnations"),
+        activation_root: Hash::new(b"Native AMX merge projection activations"),
+        lane_snapshots: Vec::new(),
+        global_state_root: Hash::new(b"Native AMX merge projection global state"),
+        merge_qc: iroha_data_model::merge::MergeQuorumCertificate::new(
+            application_block_header.view_change_index(),
+            3,
+            application_height,
+            parent_hash,
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"Native AMX merge projection chain"),
+            )),
+            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            HashOf::new(&validator_set),
+            validator_set,
+            vec![1],
+            Vec::new(),
+            vec![0xA5; 96],
+            Hash::new(b"Native AMX merge projection QC"),
+        ),
+        execution_batch: Some(batch),
+        lane_drain_certificates: Vec::new(),
+        queue_plan_admissions: Vec::new(),
+    };
+    let signature =
+        SignatureOf::try_from_hash(carrier_key.private_key(), application_block_header.hash())
+            .expect("sign merge projection carrier");
+    let mut block = SignedBlock::presigned(
+        BlockSignature::new(0, signature),
+        application_block_header,
+        Vec::new(),
+    );
+    block.set_execution_context(Some(
+        BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(
+            iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry),
+        ),
+    ));
+    (block, entry)
+}
+
+fn merge_native_projection_fixture(
+    mutate_receipts: impl FnOnce(&mut [NativeAmxReceipt]),
+) -> MergeNativeProjectionFixture {
+    let ordinary_block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
+    let ordinary_manifest =
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+            &ordinary_block,
+        )
+        .expect("ordinary Native projection fixture manifest");
+    let routes = ordinary_manifest
+        .entries()
+        .iter()
+        .map(|entry| (entry.leaf.lane_id, entry.leaf.dataspace_id))
+        .collect::<Vec<_>>();
+    let entrypoints = ordinary_block
+        .external_entrypoints_cloned()
+        .collect::<Vec<_>>();
+    let results = ordinary_block.results().cloned().collect::<Vec<_>>();
+    let mut receipts = ordinary_block
+        .execution_context()
+        .expect("ordinary Native projection execution context")
+        .external
+        .iter()
+        .map(|context| {
+            context
+                .native_amx_receipt
+                .clone()
+                .expect("ordinary Native projection receipt")
+        })
+        .collect::<Vec<_>>();
+    let source_ids = receipts
+        .iter()
+        .map(|receipt| receipt.source_id)
+        .collect::<Vec<_>>();
+    mutate_receipts(&mut receipts);
+    let execution = merge_native_projection_execution(entrypoints, results, receipts);
+    let application_height = ordinary_block.header().height().get();
+    let parent_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"Native AMX merge projection carrier parent"));
+    let application_block_header = BlockHeader::new(
+        NonZeroU64::new(application_height).expect("non-zero projection fixture height"),
+        Some(parent_hash),
+        None,
+        None,
+        application_height,
+        ordinary_block.header().view_change_index(),
+    );
+    let batch = merge_native_projection_batch(execution, &application_block_header, parent_hash);
+    let (block, entry) =
+        merge_native_projection_entry_and_carrier(batch, application_block_header, parent_hash);
+    MergeNativeProjectionFixture {
+        block,
+        entry,
+        source_ids,
+        routes,
+    }
+}
+
+fn merge_native_projection_rebind_single_source_participant(
+    leg: &mut NativeAmxLegRecordV2,
+    entrypoint_index: u64,
+    source_id: [u8; Hash::LENGTH],
+    participant_height: u64,
+    predecessor_descriptor_hash: Option<Hash>,
+) {
+    let entrypoint_hash = leg.prepare_qc.body.tx_entrypoint_hash;
+    let predecessor_height = participant_height
+        .checked_sub(1)
+        .expect("merge projection participant height is non-zero");
+    let descriptor = &mut leg.participant_proposal.descriptor;
+    descriptor.previous_lane_block_height = predecessor_height;
+    descriptor.previous_lane_block_descriptor_hash = predecessor_descriptor_hash;
+    descriptor.lane_block_height = participant_height;
+    descriptor.accepted_candidate_indices = vec![entrypoint_index];
+    descriptor.accepted_transaction_hashes = vec![Hash::from(entrypoint_hash)];
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
+
+    leg.participant_settlement.block_height = participant_height;
+    leg.participant_settlement
+        .receipts
+        .retain(|receipt| receipt.source_id == source_id);
+    assert_eq!(leg.participant_settlement.receipts.len(), 1);
+    leg.participant_settlement.tx_count = 1;
+    leg.participant_settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+            .expect("hash single-source merge projection settlement");
+
+    let descriptor = &leg.participant_proposal.descriptor;
+    let participant_lane_id = descriptor.lane_id;
+    let participant_dataspace_id = descriptor.dataspace_id;
+    let participant_incarnation = descriptor.lane_incarnation;
+    let participant_view = descriptor.lane_block_view;
+    let proposal_hash = leg.participant_proposal.proposal_hash;
+    let settlement_commitment = Hash::from(leg.participant_settlement_hash);
+    for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
+        body.source_id = source_id;
+        body.tx_entrypoint_hash = entrypoint_hash;
+        body.participant_lane_id = participant_lane_id;
+        body.participant_dataspace_id = participant_dataspace_id;
+        body.participant_lane_incarnation = participant_incarnation;
+        body.participant_previous_block_height = predecessor_height;
+        body.participant_previous_block_descriptor_hash = predecessor_descriptor_hash;
+        body.participant_lane_block_height = participant_height;
+        body.participant_lane_block_view = participant_view;
+        body.participant_proposal_hash = proposal_hash;
+        body.participant_settlement_commitment = settlement_commitment;
+    }
+}
+
+fn merge_native_projection_split_participant_heights(
+    receipts: &mut [NativeAmxReceipt],
+    second_height_delta: u64,
+) {
+    assert_eq!(receipts.len(), 2);
+    let coordinator_route = (receipts[0].lane_id, receipts[0].dataspace_id);
+    let participant = receipts[0]
+        .legs
+        .iter()
+        .find(|leg| (leg.lane_id, leg.dataspace_id) != coordinator_route)
+        .expect("merge projection separate participant leg");
+    let route = (participant.lane_id, participant.dataspace_id);
+    let first_height = participant
+        .participant_proposal
+        .descriptor
+        .lane_block_height;
+    let first_predecessor_hash = participant
+        .participant_proposal
+        .descriptor
+        .previous_lane_block_descriptor_hash;
+    let second_height = first_height
+        .checked_add(second_height_delta)
+        .expect("participant height fits u64");
+
+    for receipt in receipts.iter_mut() {
+        let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
+        receipt.legs.retain(|leg| {
+            let leg_route = (leg.lane_id, leg.dataspace_id);
+            leg_route == route || leg_route == coordinator_route
+        });
+    }
+
+    let (first, second) = receipts.split_at_mut(1);
+    let first_receipt = &mut first[0];
+    let first_source_id = first_receipt.source_id;
+    let first_leg = first_receipt
+        .legs
+        .iter_mut()
+        .find(|leg| (leg.lane_id, leg.dataspace_id) == route)
+        .expect("first-height participant leg");
+    merge_native_projection_rebind_single_source_participant(
+        first_leg,
+        0,
+        first_source_id,
+        first_height,
+        first_predecessor_hash,
+    );
+    let first_descriptor_hash = first_leg.participant_proposal.descriptor.descriptor_hash;
+
+    let second_receipt = &mut second[0];
+    let second_source_id = second_receipt.source_id;
+    let second_leg = second_receipt
+        .legs
+        .iter_mut()
+        .find(|leg| (leg.lane_id, leg.dataspace_id) == route)
+        .expect("second-height participant leg");
+    merge_native_projection_rebind_single_source_participant(
+        second_leg,
+        1,
+        second_source_id,
+        second_height,
+        Some(first_descriptor_hash),
+    );
+}
+
+#[test]
+fn native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order() {
+    let fixture = merge_native_projection_fixture(|_| {});
+    assert!(
+        fixture
+            .block
+            .execution_context()
+            .expect("merge carrier execution context")
+            .external
+            .is_empty(),
+        "the merge carrier must not duplicate certified external contexts"
+    );
+    assert_eq!(
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+            &fixture.block,
+        )
+        .expect("ordinary-only projection of autonomous carrier")
+        .count(),
+        0,
+        "autonomous receipts must come only from the exact certified merge entry"
+    );
+    let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect("project finality-bound merge receipts");
+    assert_eq!(manifest.count(), 2);
+    assert_eq!(
+        manifest
+            .entries()
+            .iter()
+            .map(|entry| (entry.leaf.lane_id, entry.leaf.dataspace_id))
+            .collect::<Vec<_>>(),
+        fixture.routes
+    );
+    for entry in manifest.entries() {
+        assert_eq!(
+            entry
+                .leaf
+                .members
+                .iter()
+                .map(|member| (member.entrypoint_index, member.source_id))
+                .collect::<Vec<_>>(),
+            vec![(0, fixture.source_ids[0]), (1, fixture.source_ids[1])],
+            "lane/entrypoint order must be retained while identical routes are grouped"
+        );
+    }
+
+    let markers = crate::state::State::native_amx_participant_frontier_markers_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect("derive State frontiers from the canonical merge manifest");
+    assert_eq!(markers.len(), manifest.entries().len());
+    for (marker, entry) in markers.iter().zip(manifest.entries()) {
+        let leaf = &entry.leaf;
+        assert_eq!(marker.lane_id, leaf.lane_id);
+        assert_eq!(marker.dataspace_id, leaf.dataspace_id);
+        assert_eq!(marker.lane_incarnation, leaf.lane_incarnation);
+        assert_eq!(marker.lane_block_height, leaf.participant_height);
+        assert_eq!(marker.participant_proposal_hash, leaf.proposal_hash);
+        assert_eq!(marker.participant_settlement_hash, leaf.settlement_hash);
+        assert_eq!(
+            marker.source_count,
+            u64::try_from(leaf.members.len()).expect("fixture member count fits u64")
+        );
+    }
+}
+
+#[test]
+fn native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier() {
+    for second_height_delta in [1_u64, 2_u64] {
+        let fixture = merge_native_projection_fixture(|receipts| {
+            merge_native_projection_split_participant_heights(receipts, second_height_delta);
+        });
+        let error = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            &fixture.block,
+            Some(&fixture.entry),
+        )
+        .expect_err("one carrier must not publish two heights for one participant route");
+        assert_eq!(
+            error,
+            "Native AMX participant route carries more than one height in one application block"
+        );
+    }
+}
+
+#[test]
+fn native_amx_merge_projection_rejects_same_height_participant_identity_conflict() {
+    let fixture = merge_native_projection_fixture(|receipts| {
+        let coordinator_lane_id = receipts[0].lane_id;
+        let coordinator_dataspace_id = receipts[0].dataspace_id;
+        let participant = receipts[0]
+            .legs
+            .iter()
+            .find(|leg| {
+                leg.lane_id != coordinator_lane_id || leg.dataspace_id != coordinator_dataspace_id
+            })
+            .expect("merge projection separate participant leg");
+        let participant_lane_id = participant.lane_id;
+        let participant_dataspace_id = participant.dataspace_id;
+        let participant_incarnation = participant.participant_proposal.descriptor.lane_incarnation;
+        let participant_height = participant
+            .participant_proposal
+            .descriptor
+            .lane_block_height;
+
+        {
+            let leg = receipts[1]
+                .legs
+                .iter_mut()
+                .find(|leg| {
+                    leg.lane_id == participant_lane_id
+                        && leg.dataspace_id == participant_dataspace_id
+                })
+                .expect("conflicting same-height participant leg");
+            assert_eq!(
+                leg.participant_proposal.descriptor.lane_incarnation,
+                participant_incarnation
+            );
+            assert_eq!(
+                leg.participant_proposal.descriptor.lane_block_height,
+                participant_height
+            );
+            let descriptor = &mut leg.participant_proposal.descriptor;
+            descriptor.lane_block_view = descriptor
+                .lane_block_view
+                .checked_add(1)
+                .expect("participant view fits u64");
+            descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+            leg.participant_proposal.proposal_hash =
+                leg.participant_proposal.computed_proposal_hash();
+            let participant_view = leg.participant_proposal.descriptor.lane_block_view;
+            let proposal_hash = leg.participant_proposal.proposal_hash;
+            for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
+                body.participant_lane_block_view = participant_view;
+                body.participant_proposal_hash = proposal_hash;
+            }
+        }
+        let leg = receipts[1]
+            .legs
+            .iter()
+            .find(|leg| {
+                leg.lane_id == participant_lane_id && leg.dataspace_id == participant_dataspace_id
+            })
+            .expect("drifted separate participant leg");
+        assert_eq!(
+            crate::native_amx::native_amx_participant_application_role(&receipts[1], leg),
+            Ok(crate::native_amx::NativeAmxParticipantApplicationRole::SeparateParticipant)
+        );
+    });
+    let error = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect_err("same-height participant identity drift must fail closed");
+    assert!(
+        error.contains("participant route carries conflicting proposal/control claims"),
+        "{error}"
+    );
+}
+
+#[test]
+fn native_amx_merge_projection_excludes_coordinator_only_receipts() {
+    let fixture = merge_native_projection_fixture(|receipts| {
+        for receipt in receipts {
+            let lane_id = receipt.lane_id;
+            let dataspace_id = receipt.dataspace_id;
+            receipt
+                .legs
+                .retain(|leg| leg.lane_id == lane_id && leg.dataspace_id == dataspace_id);
+        }
+    });
+    let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect("coordinator-only merge projection");
+    assert_eq!(manifest.count(), 0);
+    assert!(
+        crate::state::State::native_amx_participant_frontier_markers_and_merge_entry(
+            &fixture.block,
+            Some(&fixture.entry),
+        )
+        .expect("coordinator-only State projection")
+        .is_empty()
+    );
+}
+
+#[test]
+fn native_amx_merge_projection_rejects_same_route_identity_conflict() {
+    let fixture = merge_native_projection_fixture(|receipts| {
+        let receipt = &mut receipts[0];
+        let lane_id = receipt.lane_id;
+        let dataspace_id = receipt.dataspace_id;
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| leg.lane_id == lane_id && leg.dataspace_id == dataspace_id)
+            .expect("merge projection coordinator leg");
+        leg.participant_proposal.descriptor.lane_incarnation =
+            Hash::new(b"conflicting merge coordinator incarnation");
+        leg.participant_proposal.descriptor.descriptor_hash = leg
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
+        leg.participant_settlement.lane_incarnation =
+            leg.participant_proposal.descriptor.lane_incarnation;
+        leg.participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+                .expect("hash conflicting merge coordinator settlement");
+        for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
+            body.participant_lane_incarnation =
+                leg.participant_proposal.descriptor.lane_incarnation;
+            body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
+            body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+        }
+    });
+    let error = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect_err("same-route identity drift must fail closed");
+    assert!(
+        error.contains("same-route leg differs from the coordinator identity"),
+        "{error}"
+    );
+}
+
+#[test]
+fn native_amx_merge_projection_rejects_duplicate_group_source() {
+    let fixture = merge_native_projection_fixture(|receipts| {
+        let duplicate_source_id = receipts[0].source_id;
+        receipts[1].source_id = duplicate_source_id;
+        for leg in &mut receipts[1].legs {
+            leg.prepare_qc.body.source_id = duplicate_source_id;
+            leg.commit_qc.body.source_id = duplicate_source_id;
+        }
+    });
+    let error = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect_err("duplicate participant source must fail closed");
+    assert!(error.contains("repeats a source transaction"), "{error}");
+}
+
+#[test]
+fn native_amx_merge_projection_matches_decoded_replay_entry() {
+    let fixture = merge_native_projection_fixture(|_| {});
+    let encoded = norito::to_bytes(&fixture.entry).expect("encode durable merge entry");
+    let recovered =
+        norito::decode_from_bytes::<iroha_data_model::merge::MergeLedgerEntry>(&encoded)
+            .expect("decode durable merge entry");
+    let live = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&fixture.entry),
+    )
+    .expect("live merge projection");
+    let restarted = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &fixture.block,
+        Some(&recovered),
+    )
+    .expect("recovered merge projection");
+    let ordinary_only =
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+            &fixture.block,
+        )
+        .expect("ordinary-only replay projection");
+    let witness = crate::sumeragi::consensus::ExecWitness {
+        reads: Vec::new(),
+        writes: Vec::new(),
+        fastpq_transcripts: Vec::new(),
+        fastpq_batches: Vec::new(),
+    };
+    let lane_finality_manifest =
+        crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(&fixture.block)
+            .expect("merge replay lane-finality manifest");
+    let live_commitment = crate::sumeragi::exec::execution_commitment_from_validated_block(
+        &witness,
+        &live,
+        &lane_finality_manifest,
+        &fixture.block,
+    )
+    .expect("live merge replay commitment");
+    let restarted_commitment = crate::sumeragi::exec::execution_commitment_from_validated_block(
+        &witness,
+        &restarted,
+        &lane_finality_manifest,
+        &fixture.block,
+    )
+    .expect("decoded merge replay commitment");
+    let ordinary_only_commitment =
+        crate::sumeragi::exec::execution_commitment_from_validated_block(
+            &witness,
+            &ordinary_only,
+            &lane_finality_manifest,
+            &fixture.block,
+        )
+        .expect("ordinary-only merge replay commitment");
+    assert_eq!(ordinary_only.count(), 0);
+    assert_ne!(restarted.root(), ordinary_only.root());
+    assert_eq!(restarted_commitment, live_commitment);
+    assert_ne!(ordinary_only_commitment, live_commitment);
+    assert_eq!(restarted.root(), live.root());
+    assert_eq!(restarted.count(), live.count());
+    assert_eq!(
+        restarted
+            .entries()
+            .iter()
+            .map(|entry| entry.leaf.clone())
+            .collect::<Vec<_>>(),
+        live.entries()
+            .iter()
+            .map(|entry| entry.leaf.clone())
+            .collect::<Vec<_>>()
     );
 }

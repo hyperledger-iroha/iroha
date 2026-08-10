@@ -40,7 +40,7 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "-p",
         "irohad",
         "--bin",
-        "irohad",
+        "iroha3d",
         "--timings",
     ),
     "cli": (

@@ -31,6 +31,10 @@ import { createNoritoGovernanceInstructionBoundary } from "./noritoGovernanceBou
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
+  PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
+  validatePrivacyExact12NetworkBindingsV1,
+} from "./privacyExact12Network.js";
+import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
   isPortableVerifyingKeyIdField,
@@ -194,17 +198,6 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze(
   "unsignedTransactionPayloadNorito",
   "signedTransactionVersionedNorito",
   "signedTransactionHash",
-]);
-const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
-  "chain",
-  "authority",
-  "creation_time_ms",
-  "instructions",
-  "time_to_live_ms",
-  "nonce",
-  "fee_payment",
-  "metadata",
-  "attachments",
 ]);
 const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "protocol_id",
@@ -2139,6 +2132,13 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     row.unsignedTransactionPayloadNorito,
     `${context}.unsignedTransactionPayloadNorito`,
   );
+  validatePrivacyExact12NetworkBindingsV1({
+    statementTag: statement.tag,
+    statementContent: statement.content,
+    projectionDomain: projectionFields.domain,
+    unsignedDomain: unsignedFields.domain,
+    context,
+  });
   for (const field of PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1) {
     if (field !== "instructions" && !projectionFields[field].equals(unsignedFields[field])) {
       throw new TypeError(

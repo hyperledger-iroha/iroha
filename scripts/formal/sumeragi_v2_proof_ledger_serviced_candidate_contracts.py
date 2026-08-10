@@ -349,10 +349,19 @@ def _serviced_candidate_production_source_fidelity_errors(
         "minimum_active_lifecycle_ordinal_excluding": (
             "minimum_active_lifecycle_ordinal_excluding"
         ),
+        "minimum_runnable_lifecycle_ordinal": (
+            "minimum_runnable_lifecycle_ordinal"
+        ),
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),
         "step": "step",
+        "finish_dispatched_step": "finish_dispatched_step",
+        "try_step_pacemaker_escape": "try_step_pacemaker_escape",
+        "dispatch_one_pacemaker_progress": (
+            "dispatch_one_pacemaker_progress"
+        ),
+        "step_recovery": "step_recovery",
         "dispatch_one_fence_dependency": "dispatch_one_fence_dependency",
         "dispatch_one_adapter_deferred": "dispatch_one_adapter_deferred",
     }
@@ -965,6 +974,66 @@ if let Some(admission) = input.admission
     require_item_sequence(
         "adapter",
         adapter_items,
+        "record_serviced_candidate",
+        """
+let consumes_volatile_dormant_body = matches!(
+    &reservation.change,
+    ProducerReservationChange::ClaimedDormant
+) && token.identity().stage()
+    == ServicedCandidateStage::BodyAvailable as u8;
+""",
+        "a restored stage-7 BodyAvailable handoff must be distinguished from durable local replay",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "record_serviced_candidate",
+        """
+durable_store_terminal: durable_terminal_retirement && !consumes_volatile_dormant_body,
+durable_terminal_evidence: durable_terminal_evidence && !consumes_volatile_dormant_body,
+""",
+        "a claimed dormant stage-7 handoff may retain neither a durable terminal nor durable terminal evidence",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "record_serviced_candidate",
+        """
+ProducerReservationChange::Unchanged
+| ProducerReservationChange::Inserted
+| ProducerReservationChange::ClaimedDormant => None,
+""",
+        "a claimed dormant stage-7 handoff must not restore an unrelated durable predecessor",
+    )
+    require_item_order(
+        "adapter",
+        adapter_items,
+        "record_serviced_candidate",
+        (
+            "let consumes_volatile_dormant_body = matches!",
+            "let pending = PendingProducerHandoff",
+            "self.pending_producer_handoffs.insert(address, pending)",
+        ),
+        "stage-7 volatility must be classified before the pending handoff policy is published",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "producer_handoff_evidence",
+        """
+Ok(if has_concrete_successor {
+    ProducerContinuationHandoffEvidence::ConcreteSuccessor
+} else if pending.durable_terminal_evidence {
+    ProducerContinuationHandoffEvidence::DurableTerminal
+} else {
+    ProducerContinuationHandoffEvidence::VolatileTerminal
+})
+""",
+        "an empty stage-7 handoff with suppressed durable evidence must classify as volatile",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
         "acknowledge_producer_handoff",
         """
 if pending.token != token || !token.matches_reserved(&record) {
@@ -991,6 +1060,125 @@ if evidence == ProducerContinuationHandoffEvidence::VolatileTerminal
 """,
         "durable terminal evidence may not be weakened to volatile",
     )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "acknowledge_producer_handoff",
+        """
+match pending.durable_previous.clone() {
+    Some(previous) => {
+        self.durable_producer_continuations
+            .insert(address, previous);
+    }
+    None => {
+        self.durable_producer_continuations.remove(&address);
+    }
+}
+if let Err(error) = self.persist_producer_lifecycles() {
+""",
+        "volatile acknowledgement must remove and persist the claimed dormant producer reservation",
+    )
+    require_item_order(
+        "adapter",
+        adapter_items,
+        "acknowledge_producer_handoff",
+        (
+            "self.terminalize_producer_continuation(Some(address))",
+            "if pending.durable_store_terminal",
+            "match pending.durable_previous.clone()",
+            "if let Err(error) = self.persist_producer_lifecycles()",
+            "self.pending_producer_handoffs.remove(&address)",
+            "self.restored_dormant_producer_continuations.remove(&address)",
+        ),
+        "acknowledgement must retain the process terminal, persist durable stage-7 removal, and only then clear handoff metadata",
+    )
+
+    restored_stage_seven = _require_rust_item(
+        paths["adapter"],
+        sources["adapter"],
+        "restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_does_not_resurrect",
+        errors,
+    )
+    _require_rust_item_context(
+        paths["adapter"],
+        restored_stage_seven,
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "mod",
+                "tests",
+            ),
+        ),
+        "restored stage-7 BodyAvailable second-restart regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        restored_stage_seven,
+        """
+assert!(
+    !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address),
+    "the service handoff removes the restart-stable stage-7 record"
+);
+""",
+        "the stage-7 regression must observe durable removal immediately after acknowledgement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        restored_stage_seven,
+        """
+assert!(
+    restarted_again.producer_continuations.is_empty()
+        && restarted_again.durable_producer_continuations.is_empty()
+        && restarted_again
+            .restored_dormant_producer_continuations
+            .is_empty(),
+    "the serviced old stage cannot resurrect on a second restart"
+);
+""",
+        "the stage-7 regression must prove that a second restart has no producer owner to reopen",
+        errors,
+    )
+    if restored_stage_seven is not None:
+        stage_seven_tokens = rust_code_tokens(restored_stage_seven.body)
+        stage_seven_sequences = (
+            "!runtime.driver().durable_producer_continuations.contains_key(&restored_address)",
+            "drop(runtime.into_driver())",
+            "let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(",
+            "restarted_again.producer_continuations.is_empty() && restarted_again.durable_producer_continuations.is_empty()",
+        )
+        stage_seven_positions = [
+            _token_sequence_positions(
+                stage_seven_tokens,
+                rust_code_tokens(sequence),
+            )
+            for sequence in stage_seven_sequences
+        ]
+        if any(len(found) != 1 for found in stage_seven_positions) or any(
+            left[0] >= right[0]
+            for left, right in zip(
+                stage_seven_positions,
+                stage_seven_positions[1:],
+            )
+            if left and right
+        ):
+            errors.append(
+                f"{paths['adapter']}:{restored_stage_seven.line}: restored "
+                "stage-7 regression must observe durable removal before "
+                "dropping the first restart, then prove absence after the "
+                "second restart"
+            )
     require_item_order(
         "adapter",
         adapter_items,
@@ -1056,10 +1244,20 @@ self.dormant_local_fifo_reservations
         runtime_items,
         "oldest_active_lifecycle_ordinal",
         """
-self.dormant_local_fifo_reservations.iter().try_fold(
-    command_minimum,
+for reservation in &self.dormant_local_fifo_reservations {
+    if reservation.admission_ordinal == 0
+        || !self
+            .lifecycle_ordinals
+            .recognizes_minted(reservation.admission_ordinal)
+            .map_err(|_| EnqueueError::FailClosed)?
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+}
+Ok(command_minimum)
 """,
-        "dormant Local owners must participate in global minimum selection",
+        "dormant Local owners must consume capacity and retain exact minted "
+        "identity without becoming runnable global minima before materialization",
     )
     require_item_sequence(
         "runtime",
@@ -1100,17 +1298,22 @@ if !allow_reserved_body_alias
         ),
         "restart must install dormant FIFO owners before startup successors",
     )
-    require_item_order(
+    require_item_sequence(
         "runtime",
         runtime_items,
         "step",
-        (
-            "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
-            "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
-            "token.identity().causal_lifecycle_key() != effect_parent.causal_origin().lifecycle_key",
-            "self.driver.acknowledge_producer_handoff(token, evidence)",
-        ),
-        "runtime must retain successors and verify parent identity before acknowledgement",
+        """
+self.finish_dispatched_step(
+    now,
+    effects,
+    effect_source,
+    effect_parent,
+    effect_parent_statement,
+    producer_handoff,
+    retained_deferred_ingress,
+)
+""",
+        "runtime step must transfer the exact parent statement and handoff into shared completion",
     )
     require_item_order(
         "runtime",

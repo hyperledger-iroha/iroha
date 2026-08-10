@@ -58,7 +58,7 @@ def fake_plan_layout(tmp_path: Path) -> tuple[Path, list[Path], list[Path], list
     """Create a four-peer canonical layout without starting processes."""
 
     base = tmp_path / "taira"
-    binary = base / "bin" / "irohad"
+    binary = base / "bin" / "iroha3d"
     write_file(binary, "#!/bin/sh\nexit 0\n", 0o700)
     runner = base / "run-canonical.sh"
     write_file(runner, "#!/bin/zsh\nexit 0\n", 0o700)
@@ -90,7 +90,7 @@ def render_fake_plan(
     """Render a complete sealed plan from a synthetic legacy process tree."""
 
     base, configs, storage, _pid_files = fake_plan_layout(tmp_path)
-    binary = (base / "bin" / "irohad").resolve()
+    binary = (base / "bin" / "iroha3d").resolve()
     controller = migration.ProcessIdentity(
         pid=900,
         ppid=1,
@@ -138,7 +138,7 @@ def stat_sealed_supervisor_fixture(
 ) -> tuple[object, Path, Path]:
     """Create runtime paths and arguments carrying a complete binary stat seal."""
 
-    binary = Path("/usr/bin/true") if trusted_binary else tmp_path / "irohad"
+    binary = Path("/usr/bin/true") if trusted_binary else tmp_path / "iroha3d"
     config = tmp_path / "peer.toml"
     workdir = tmp_path / "canonical" / "taira-validator-1"
     storage = tmp_path / "storage" / "peer0"
@@ -345,7 +345,7 @@ def test_runtime_writable_binary_is_not_eligible_for_fast_stat_seal(
 ) -> None:
     """The migration retains full hashing when a runtime user can swap the path."""
 
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     write_file(binary, "#!/bin/sh\nexit 0\n", 0o700)
     assert migration.binary_supports_fast_stat_seal(binary) is False
 
@@ -396,7 +396,7 @@ def test_legacy_controller_guard_accepts_only_named_approved_runner(
 def test_peer_command_guard_rejects_extra_or_changed_arguments() -> None:
     """PID reuse or a changed config cannot pass an approximate command match."""
 
-    binary = Path("/srv/taira/bin/irohad")
+    binary = Path("/srv/taira/bin/iroha3d")
     config = Path("/srv/taira/peer0.toml")
     exact = migration.ProcessIdentity(
         pid=101,
@@ -440,7 +440,7 @@ def test_supervisor_guards_working_directory_and_storage_independently(
 ) -> None:
     """Preserving the legacy cwd does not weaken the separate storage-inode seal."""
 
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     config = tmp_path / "peer.toml"
     workdir = tmp_path / "canonical" / "taira-validator-1"
     storage = tmp_path / "storage" / "peer0"
@@ -564,7 +564,7 @@ def test_supervisor_refuses_partial_binary_stat_seal(tmp_path: Path) -> None:
 
     cli = [
         "--binary",
-        "/tmp/irohad",
+        "/tmp/iroha3d",
         "--binary-sha256",
         "0" * 64,
         "--binary-device",

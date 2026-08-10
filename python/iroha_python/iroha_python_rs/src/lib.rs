@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 
+mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
 mod privacy_capability_manifest;
@@ -40,10 +41,9 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
-    PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
+    Signature, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
-    kex::{KeyExchangeScheme, X25519Sha256},
     mldsa65_parse_signature,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
@@ -176,6 +176,7 @@ use pyo3::{
     wrap_pyfunction,
 };
 use rand_core_06::{OsRng as OsRng06, RngCore as _};
+use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
     fetch_plan::chunk_fetch_plan_from_json,
@@ -232,7 +233,7 @@ use sorafs_orchestrator::{
 };
 use tokio::runtime::Runtime;
 use url::{Host, Url};
-use x25519_dalek::StaticSecret;
+use zeroize::Zeroizing;
 
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
 const ERR_EXPECTED_ED25519: &str = "expected Ed25519 key material";
@@ -1490,10 +1491,11 @@ fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV
             })?
             .extract::<Vec<u8>>()?;
             let app_pk = fixed_array::<32>(&pk_bytes, "app_public_key")?;
-            let chain_id = dict_require(payload, "chain_id", || {
-                PyValueError::new_err("open.chain_id is required")
+            let network_id = *dict_require(payload, "network_id", || {
+                PyValueError::new_err("open.network_id is required")
             })?
-            .extract::<String>()?;
+            .extract::<PyRef<'_, PyNetworkId>>()?
+            .as_inner();
             let metadata = {
                 let value = payload.get_item("metadata")?;
                 parse_app_metadata(value)?
@@ -1505,7 +1507,7 @@ fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV
             Ok(ConnectControlV1::Open {
                 app_pk,
                 app_meta: metadata,
-                constraints: Constraints { chain_id },
+                constraints: Constraints { network_id },
                 permissions,
             })
         }
@@ -1919,7 +1921,15 @@ fn encode_frame_kind(py: Python<'_>, kind: &FrameKind) -> PyResult<Py<PyDict>> {
                     mapping.set_item("control_type", "Open")?;
                     let fields = PyDict::new(py);
                     fields.set_item("app_public_key", PyBytes::new(py, app_pk))?;
-                    fields.set_item("chain_id", &constraints.chain_id)?;
+                    fields.set_item(
+                        "network_id",
+                        Py::new(
+                            py,
+                            PyNetworkId {
+                                inner: constraints.network_id,
+                            },
+                        )?,
+                    )?;
                     fields.set_item("metadata", encode_app_meta_dict(py, app_meta))?;
                     fields.set_item("permissions", encode_permissions_dict(py, permissions))?;
                     mapping.set_item("fields", fields)?;
@@ -5708,7 +5718,7 @@ fn confidential_unshield_proof_v3_py_dict(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     tree_commitments,
@@ -5722,7 +5732,7 @@ fn confidential_unshield_proof_v3_py_dict(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     tree_commitments: &Bound<'_, PyAny>,
@@ -5733,7 +5743,6 @@ fn build_confidential_transfer_proof_v2_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -5755,7 +5764,7 @@ fn build_confidential_transfer_proof_v2_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &tree_commitments,
@@ -5771,7 +5780,7 @@ fn build_confidential_transfer_proof_v2_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2_with_paths", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     input_paths,
@@ -5785,7 +5794,7 @@ fn build_confidential_transfer_proof_v2_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_with_paths_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     input_paths: &Bound<'_, PyAny>,
@@ -5796,7 +5805,6 @@ fn build_confidential_transfer_proof_v2_with_paths_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -5818,7 +5826,7 @@ fn build_confidential_transfer_proof_v2_with_paths_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2_with_paths(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &input_paths,
@@ -5947,7 +5955,7 @@ fn derive_confidential_note_v2_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     tree_commitments,
@@ -5962,7 +5970,7 @@ fn derive_confidential_note_v2_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     tree_commitments: &Bound<'_, PyAny>,
@@ -5974,7 +5982,6 @@ fn build_confidential_unshield_proof_v3_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -5997,7 +6004,7 @@ fn build_confidential_unshield_proof_v3_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &tree_commitments,
@@ -6014,7 +6021,7 @@ fn build_confidential_unshield_proof_v3_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3_with_paths", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     input_paths,
@@ -6029,7 +6036,7 @@ fn build_confidential_unshield_proof_v3_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_with_paths_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     input_paths: &Bound<'_, PyAny>,
@@ -6041,7 +6048,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -6064,7 +6070,7 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3_with_paths(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &input_paths,
@@ -6080,74 +6086,38 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "generate_connect_keypair")]
-/// Generate an X25519 keypair for Connect.
-fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let scheme = X25519Sha256::new();
-    let (public, secret) = scheme.try_keypair(KeyGenOption::Random).map_err(|err| {
-        PyRuntimeError::new_err(format!("failed to generate X25519 keypair: {err}"))
-    })?;
-    let public_bytes = Py::from(PyBytes::new(py, public.as_bytes()));
-    let private_bytes = Py::from(PyBytes::new(py, secret.to_bytes().as_ref()));
-    Ok((private_bytes, public_bytes))
-}
-
-#[pyfunction]
-#[pyo3(name = "connect_public_key_from_private")]
-/// Derive the public key corresponding to an X25519 private key.
-fn connect_public_key_from_private_py(py: Python<'_>, private_key: &[u8]) -> PyResult<Py<PyBytes>> {
-    let secret_bytes = fixed_array::<32>(private_key, "private_key")?;
-    let scheme = X25519Sha256::new();
-    let static_secret = StaticSecret::from(secret_bytes);
-    let (public, _) = scheme.keypair(KeyGenOption::FromPrivateKey(static_secret));
-    Ok(Py::from(PyBytes::new(py, public.as_bytes())))
-}
-
-#[pyfunction]
-#[pyo3(name = "derive_connect_direction_keys")]
-/// Derive per-direction ChaCha20-Poly1305 keys from X25519 session material.
-fn derive_connect_direction_keys_py(
-    py: Python<'_>,
-    local_private_key: &[u8],
-    peer_public_key: &[u8],
-    sid: &[u8],
-) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let local_sk = fixed_array::<32>(local_private_key, "local_private_key")?;
-    let peer_pk = fixed_array::<32>(peer_public_key, "peer_public_key")?;
-    let sid_arr = fixed_array::<32>(sid, "sid")?;
-    let (k_app, k_wallet) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid_arr)
-        .map_err(|err| PyValueError::new_err(format!("x25519 derive keys failed: {err}")))?;
-    let app_bytes = Py::from(PyBytes::new(py, &k_app));
-    let wallet_bytes = Py::from(PyBytes::new(py, &k_wallet));
-    Ok((app_bytes, wallet_bytes))
-}
-
-#[pyfunction]
 #[pyo3(name = "build_connect_approve_preimage")]
 /// Build the canonical approval preimage for wallet signatures.
 fn build_connect_approve_preimage_py(
     py: Python<'_>,
+    network_id: &PyNetworkId,
     sid: &[u8],
     app_public_key: &[u8],
     wallet_public_key: &[u8],
     account_id: &str,
     permissions: Option<&Bound<'_, PyAny>>,
     proof: Option<&Bound<'_, PyAny>>,
+    relay_auth: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let sid_arr = fixed_array::<32>(sid, "sid")?;
     let app_pk = fixed_array::<32>(app_public_key, "app_public_key")?;
     let wallet_pk = fixed_array::<32>(wallet_public_key, "wallet_public_key")?;
+    let relay_auth = fixed_array::<32>(relay_auth, "relay_auth")?;
 
     let permissions_parsed = parse_permissions(permissions.cloned(), "permissions")?;
     let proof_parsed = parse_sign_in_proof(proof.cloned())?;
 
     let preimage = connect_sdk::build_approve_preimage(
+        &Constraints {
+            network_id: *network_id.as_inner(),
+        },
         &sid_arr,
         &app_pk,
         &wallet_pk,
         account_id,
         permissions_parsed.as_ref(),
         proof_parsed.as_ref(),
+        &relay_auth,
     );
     Ok(Py::from(PyBytes::new(py, &preimage)))
 }
@@ -11633,14 +11603,6 @@ impl TransactionBuilder {
         let context = self.privacy_action_transaction_context_v1();
         crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
             network_id: context.network_id,
-            // The retained privacy transcript schema still carries a `ChainId`-shaped
-            // field. Derive that internal value injectively from the exact NetworkId;
-            // callers cannot supply a label or a second security-domain value.
-            chain_id: ChainId::try_from(format!(
-                "network-{}",
-                hex_encode(context.network_id.as_bytes())
-            ))
-            .expect("NetworkId hex is a canonical internal privacy transcript label"),
             authority: context.authority,
             creation_time: context.creation_time,
             time_to_live: context.time_to_live,
@@ -13715,14 +13677,159 @@ fn canonical_signed_transaction_hash_v1_py(
     Ok(Py::from(PyBytes::new(py, &hash)))
 }
 
+const PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1: &[u8] =
+    b"iroha.taira.privacy_action_driver_seed.v1\0";
+
+fn privacy_exact12_action_driver_signing_seed_v1(
+    candidate_binding_sha256: [u8; 32],
+    request_id: [u8; 32],
+) -> Zeroizing<[u8; 32]> {
+    let mut hash = Sha256::new();
+    hash.update(PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1);
+    hash.update(candidate_binding_sha256);
+    hash.update(request_id);
+    hash.update([0]);
+    let mut seed = Zeroizing::new(hash.finalize().into());
+    if seed.iter().all(|byte| *byte == 0) {
+        seed[0] = 1;
+    }
+    seed
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_privacy_exact12_action_driver_transaction_context_v1")]
+/// Authenticate one action-driver transaction and enforce its complete public request context.
+#[allow(clippy::too_many_arguments)]
+fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+    candidate_binding_sha256: &[u8],
+    request_id: &[u8],
+    expected_network_id: &PyNetworkId,
+    expected_creation_time_millis: u64,
+    expected_ttl_millis: u64,
+    expected_nonce: u32,
+) -> PyResult<Py<PyDict>> {
+    let candidate_binding_sha256 =
+        fixed_array::<32>(candidate_binding_sha256, "candidate_binding_sha256")?;
+    let request_id = fixed_array::<32>(request_id, "request_id")?;
+    if candidate_binding_sha256 == [0; 32] || request_id == [0; 32] {
+        return Err(PyValueError::new_err(
+            "candidate_binding_sha256 and request_id must be nonzero",
+        ));
+    }
+    let expected_nonce = NonZeroU32::new(expected_nonce)
+        .ok_or_else(|| PyValueError::new_err("expected_nonce must be nonzero"))?;
+    if expected_creation_time_millis == 0 || expected_ttl_millis == 0 {
+        return Err(PyValueError::new_err(
+            "expected transaction time fields must be nonzero",
+        ));
+    }
+
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    if signed.network_id() != Some(&expected_network_id.inner) {
+        return Err(PyValueError::new_err(
+            "signed transaction does not match the expected NetworkId",
+        ));
+    }
+
+    let signing_seed =
+        privacy_exact12_action_driver_signing_seed_v1(candidate_binding_sha256, request_id);
+    let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, signing_seed.as_ref())
+        .map_err(|_| PyRuntimeError::new_err("could not derive the expected action-driver key"))?;
+    let expected_public_key = PublicKey::from(private_key);
+    let expected_authority = AccountId::new(expected_public_key.clone());
+    if signed.authority() != &expected_authority {
+        return Err(PyValueError::new_err(
+            "signed transaction authority does not match candidate and request",
+        ));
+    }
+    if signed.creation_time().as_millis() != u128::from(expected_creation_time_millis)
+        || signed.time_to_live().map(|ttl| ttl.as_millis()) != Some(u128::from(expected_ttl_millis))
+        || signed.nonce() != Some(expected_nonce)
+    {
+        return Err(PyValueError::new_err(
+            "signed transaction time or nonce differs from the exact request",
+        ));
+    }
+    if !matches!(
+        signed.fee_payment_intent(),
+        FeePaymentIntent::Authority(payment)
+            if payment.charge_limits.is_empty() && payment.gas_limit.is_none()
+    ) {
+        return Err(PyValueError::new_err(
+            "signed transaction fee intent is not the empty authority-paid qualification intent",
+        ));
+    }
+    if !signed.metadata().is_empty() {
+        return Err(PyValueError::new_err(
+            "signed transaction metadata is not the empty qualification metadata",
+        ));
+    }
+    if signed.multisig_signatures().is_some() {
+        return Err(PyValueError::new_err(
+            "signed action-driver transaction must use one direct authority signature",
+        ));
+    }
+
+    let (intent, submission) = signed
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "signed transaction has an invalid privacy transaction-intent binding",
+            )
+        })?
+        .ok_or_else(|| PyValueError::new_err("signed transaction has no direct privacy action"))?;
+    let statement_context = submission.envelope.statement.context();
+    if statement_context.network_id != expected_network_id.inner
+        || statement_context.action_index != 0
+        || statement_context.transaction_intent_digest != intent
+    {
+        return Err(PyValueError::new_err(
+            "signed privacy statement context differs from the exact transaction context",
+        ));
+    }
+
+    let (_, expected_public_key_bytes) =
+        public_key_to_bytes(&expected_public_key, "action-driver public key")?;
+    let transaction_hash = signed.hash();
+    let result = PyDict::new(py);
+    result.set_item(
+        "transaction_hash",
+        PyBytes::new(py, transaction_hash.as_ref()),
+    )?;
+    result.set_item(
+        "network_id",
+        PyBytes::new(py, expected_network_id.inner.as_bytes()),
+    )?;
+    result.set_item(
+        "statement_network_id",
+        PyBytes::new(py, statement_context.network_id.as_bytes()),
+    )?;
+    result.set_item("statement_action_index", statement_context.action_index)?;
+    result.set_item("authority", expected_authority.to_string())?;
+    result.set_item(
+        "authority_public_key",
+        PyBytes::new(py, expected_public_key_bytes),
+    )?;
+    result.set_item("creation_time_millis", expected_creation_time_millis)?;
+    result.set_item("ttl_millis", expected_ttl_millis)?;
+    result.set_item("nonce", expected_nonce.get())?;
+    result.set_item("fee_payment", "authority-empty-v1")?;
+    result.set_item("metadata", "empty-v1")?;
+    Ok(result.unbind())
+}
+
 #[pyfunction]
 #[pyo3(name = "privacy_vega_device_authentication_digest_v1")]
 /// Derive `H_dev` for an already prepared, explicit nonzero transaction intent.
 #[allow(clippy::too_many_arguments)]
 fn privacy_vega_device_authentication_digest_v1_py(
     py: Python<'_>,
-    chain_id: &str,
-    canonical_genesis_hash: &[u8],
+    network_id: &PyNetworkId,
     transaction_intent_digest: &[u8],
     issuer_id: &[u8],
     issuer_record_epoch: u64,
@@ -13735,10 +13842,6 @@ fn privacy_vega_device_authentication_digest_v1_py(
     reader_challenge: &[u8],
     session_transcript_digest: &[u8],
 ) -> PyResult<Py<PyBytes>> {
-    require_non_blank_unpadded(chain_id, "chain_id")?;
-    let chain_id = parse_chain_id(chain_id)?;
-    let canonical_genesis_hash =
-        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
     let transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(
         python_nonzero_privacy_digest_v1(transaction_intent_digest, "transaction_intent_digest")?,
     );
@@ -13760,7 +13863,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
     )?;
     let statement = python_vega_statement_v1(
         PrivacyStatementContextV1 {
-            chain_id,
+            network_id: network_id.inner,
             action_index: 0,
             transaction_intent_digest,
             parameter_id: profile.parameter_id,
@@ -13769,7 +13872,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
             statement_schema_digest: profile.statement_schema_digest,
             engine_manifest_digest: profile.engine_manifest_digest,
         },
-        canonical_genesis_hash,
+        *network_id.inner.as_bytes(),
         issuer_id,
         issuer_record_epoch,
         issuer_record_digest,
@@ -14042,6 +14145,11 @@ fn inspect_signed_privacy_jindo_action_v1_py(
         submitted_versioned_transaction_bytes,
     )?;
     result.set_item("polynomial_count", polynomial_count)?;
+    result.set_item("availability", "available-experimental")?;
+    result.set_item(
+        "limitations",
+        PyList::new(py, ["MissingDistributionWideKnowledgeSoundnessEvidence"])?,
+    )?;
     Ok(result.unbind())
 }
 
@@ -15341,6 +15449,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        inspect_privacy_exact12_action_driver_transaction_context_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         privacy_vega_device_authentication_digest_v1_py,
         module
     )?)?;
@@ -15418,12 +15530,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sm2_fixture_from_seed_py, module)?)?;
     module.add_function(wrap_pyfunction!(encode_connect_frame_py, module)?)?;
     module.add_function(wrap_pyfunction!(decode_connect_frame_py, module)?)?;
-    module.add_function(wrap_pyfunction!(generate_connect_keypair_py, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        connect_public_key_from_private_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(derive_connect_direction_keys_py, module)?)?;
+    connect_key_bindings::register(module)?;
     module.add_function(wrap_pyfunction!(build_connect_approve_preimage_py, module)?)?;
     module.add_function(wrap_pyfunction!(seal_connect_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(open_connect_payload_py, module)?)?;

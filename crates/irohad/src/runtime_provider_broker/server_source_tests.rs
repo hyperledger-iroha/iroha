@@ -1443,6 +1443,7 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
     // itself compatible with the expected rejection.
     let request = make_handshake_request(
         "server-test-chain",
+        server_test_network_id(),
         vec![signer_binding_for_server()],
         [0xC7; 32],
     )
@@ -1466,7 +1467,7 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
         match BrokerSession::connect(
             &policy,
             "server-test-chain",
-            None,
+            server_test_network_id(),
             vec![signer_binding_for_server()],
         ) {
             Ok((session, _)) => break session,
@@ -2057,7 +2058,11 @@ fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
     let request = make_operation_request([0x91; 32], 1, binding, [0x92; 32], 28, payload)
         .expect("construct retired operation request");
     assert_eq!(
-        validate_operation_request_for_session(&request, "server-test-chain", None),
+        validate_operation_request_for_session(
+            &request,
+            "server-test-chain",
+            &server_test_network_id()
+        ),
         Err(BrokerError::BindingMismatch)
     );
 }
@@ -2292,7 +2297,7 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         .expect("observe exact stream-token gateway backend");
     let state = BrokerServerStateV1 {
         chain_id: "server-test-chain".to_owned(),
-        network_id: None,
+        network_id: server_test_network_id(),
         catalog: vec![binding.clone()],
         observations: vec![observation.clone()],
         backends,

@@ -454,13 +454,16 @@ mod tests {
         sync::Arc,
     };
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
         block::{BlockHeader, builder::BlockBuilder},
         da::{
             commitment::DaCommitmentLocation,
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
-            types::StorageTicketId,
+            types::{BlobDigest, StorageTicketId},
         },
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
@@ -470,6 +473,30 @@ mod tests {
 
     use super::*;
 
+    fn sample_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+        let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+            .expect("valid deterministic DA query key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32])),
+            ),
+            owner: AccountId::new(key_pair.public_key().clone()),
+            lane_id: lane,
+            epoch,
+            sequence,
+            payload_hash: BlobDigest::new([0xD7; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xD8; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic DA query authorization"),
+        });
+        authorization
+    }
+
     fn sample_intent(lane: u32, epoch: u64, sequence: u64) -> DaPinIntent {
         DaPinIntent::new(
             LaneId::new(lane),
@@ -477,6 +504,7 @@ mod tests {
             sequence,
             StorageTicketId::new([lane as u8; 32]),
             ManifestDigest::new([sequence as u8; 32]),
+            sample_authorization(LaneId::new(lane), epoch, sequence),
         )
     }
 
@@ -729,6 +757,7 @@ mod tests {
                         sequence,
                         StorageTicketId::new(ticket),
                         ManifestDigest::new(manifest),
+                        sample_authorization(LaneId::new(1), 1, sequence),
                     ),
                     location: DaCommitmentLocation {
                         block_height: 1,

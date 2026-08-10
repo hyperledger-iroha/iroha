@@ -118,6 +118,179 @@ fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
 }
 
 #[test]
+fn soracloud_commands_require_exact_account_authentication_and_honest_effects() {
+    let commands = application_api::ROUTES
+        .iter()
+        .filter(|route| {
+            route.method() == HttpMethod::Post
+                && route
+                    .stable_route_id()
+                    .starts_with("application.soracloud_")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands.len(),
+        41,
+        "every SoraCloud POST must be classified"
+    );
+
+    for route in commands {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate the exact body before decoding it",
+            route.stable_route_id()
+        );
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedAccount,
+            "{} must admit only an on-ledger account",
+            route.stable_route_id()
+        );
+        let expected_effect = match route.stable_route_id() {
+            "application.soracloud_ciphertext_query_post" => RouteEffect::ReadOnly,
+            "application.soracloud_model_upload_private_execute_post" => {
+                RouteEffect::ExpensiveCompute
+            }
+            _ => RouteEffect::Mutation,
+        };
+        assert_eq!(
+            route.effect(),
+            expected_effect,
+            "{} advertises the wrong strongest effect",
+            route.stable_route_id()
+        );
+    }
+}
+
+#[test]
+fn zk_attachment_tenant_routes_are_account_authenticated_before_storage_access() {
+    for route in [
+        runtime_governance::ZK_ATTACHMENTS_GET,
+        runtime_governance::ZK_ATTACHMENTS_POST,
+        runtime_governance::ZK_ATTACHMENT_GET,
+        runtime_governance::ZK_ATTACHMENT_DELETE,
+        runtime_governance::ZK_ATTACHMENTS_COUNT,
+    ] {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate the tenant account",
+            route.stable_route_id()
+        );
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedAccount,
+            "{} must reject anonymous storage access",
+            route.stable_route_id()
+        );
+    }
+    assert_eq!(
+        runtime_governance::ZK_ATTACHMENTS_POST.effect(),
+        RouteEffect::Mutation
+    );
+    assert_eq!(
+        runtime_governance::ZK_ATTACHMENT_DELETE.effect(),
+        RouteEffect::Mutation
+    );
+}
+
+#[test]
+fn zk_compute_routes_require_exact_account_authentication() {
+    for route in [
+        runtime_governance::ZK_IVM_DERIVE,
+        runtime_governance::ZK_IVM_PROVE,
+        runtime_governance::ZK_VERIFY_BATCH,
+    ] {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate before bounded compute",
+            route.stable_route_id()
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+    }
+}
+
+#[test]
+fn state_backed_runtime_and_governance_routes_require_exact_account_authentication() {
+    let routes = [
+        runtime_governance::ZK_ROOTS,
+        runtime_governance::ZK_MERKLE_PATH,
+        runtime_governance::ZK_VOTE_TALLY,
+        runtime_governance::RUNTIME_ABI_ACTIVE,
+        runtime_governance::RUNTIME_METRICS,
+        runtime_governance::NODE_CAPABILITIES,
+        runtime_governance::PRIVACY_CAPABILITIES,
+        runtime_governance::NODE_PROJECTION_CHECKPOINT,
+        runtime_governance::MINISTRY_AGENDA_DRAFT,
+        runtime_governance::MINISTRY_AGENDA_GET,
+        runtime_governance::GOV_PROPOSE_DEPLOY,
+        runtime_governance::GOV_PROPOSE_SCCP,
+        runtime_governance::GOV_CAPABILITIES,
+        runtime_governance::GOV_CITIZEN_DRAFT,
+        runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        runtime_governance::VALIDATION_FEE_PROPOSALS,
+        runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
+        runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,
+        runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
+        runtime_governance::GOV_PROPOSAL_GET,
+        runtime_governance::GOV_LOCKS_GET,
+        runtime_governance::GOV_REFERENDUM_GET,
+        runtime_governance::GOV_TALLY_GET,
+        runtime_governance::GOV_PROTECTED_GET,
+        runtime_governance::GOV_UNLOCK_STATS,
+        runtime_governance::GOV_CONTRACT_GET,
+        runtime_governance::GOV_ENACT,
+        runtime_governance::GOV_COUNCIL_CURRENT,
+        runtime_governance::GOV_CITIZENS_COUNT,
+        runtime_governance::GOV_CITIZEN_STATUS,
+    ];
+    for route in routes {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate the exact network request before state access",
+            route.stable_route_id()
+        );
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedAccount,
+            "{} must admit only a verified on-ledger account",
+            route.stable_route_id()
+        );
+        assert_eq!(route.path_normalization(), PathNormalization::Strict);
+        assert!(
+            !route.path().ends_with('/'),
+            "{} must not expose a redirectable trailing-slash alias",
+            route.stable_route_id()
+        );
+    }
+
+    for route in [
+        runtime_governance::ZK_ROOTS,
+        runtime_governance::ZK_MERKLE_PATH,
+        runtime_governance::RUNTIME_METRICS,
+        runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
+        runtime_governance::GOV_LOCKS_GET,
+        runtime_governance::GOV_TALLY_GET,
+    ] {
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+    }
+
+    for route in [
+        runtime_governance::RUNTIME_ABI_HASH,
+        runtime_governance::GOV_FINALIZE,
+    ] {
+        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        assert_eq!(route.admission(), AdmissionPolicy::Public);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+    }
+}
+
+#[test]
 fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
     let routes = [
         application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,

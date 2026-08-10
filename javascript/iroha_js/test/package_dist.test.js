@@ -353,11 +353,10 @@ test("package dist exposes strict CancelAssetLock V1 construction", () => {
   );
 });
 
-test("package dist rejects unmarked Iroha hashes in validation-fee ledger bindings", () => {
+test("package dist requires a typed NetworkId in validation-fee ledger bindings", () => {
   const binding = {
     schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
-    chainId: "iroha3-nexus",
-    genesisHash: "12".repeat(32),
+    networkId: Buffer.from("13".repeat(32), "hex"),
     policyChainGenesisHash: "35".repeat(32),
     checkpoint: {
       height: 100,
@@ -366,7 +365,7 @@ test("package dist rejects unmarked Iroha hashes in validation-fee ledger bindin
   };
   assert.throws(
     () => packageExports.normalizeValidationFeeLedgerBindingV1(binding),
-    /canonical Iroha hash marker/u,
+    /must be a NetworkId/u,
   );
 });
 

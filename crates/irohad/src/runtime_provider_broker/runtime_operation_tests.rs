@@ -642,7 +642,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_operation_request_for_session(
             &admitted_request,
             "server-test-chain",
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Ok(())
     );
@@ -650,15 +650,10 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_operation_request_for_session(
             &admitted_request,
             "server-test-chain",
-            Some(&test_network_id(0x16)),
+            &test_network_id(0x16),
         ),
         Err(BrokerError::BindingMismatch)
     );
-    assert_eq!(
-        validate_operation_request_for_session(&admitted_request, "server-test-chain", None,),
-        Err(BrokerError::BindingMismatch)
-    );
-
     let mut substituted_instruction =
         provider_ingest_completion_test_instruction(signer_owner.clone());
     substituted_instruction.expected_assignment_revision += 1;
@@ -706,7 +701,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_operation_request_for_session(
             &substituted_request,
             "server-test-chain",
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -722,7 +717,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         ensure_provider_ingest_completion_payload(
             &exact_payload,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Ok(())
     );
@@ -737,12 +732,8 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         ensure_provider_ingest_completion_payload(
             &cross_network_payload,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
-        Err(BrokerError::BindingMismatch)
-    );
-    assert_eq!(
-        ensure_provider_ingest_completion_payload(&exact_payload, &context, None),
         Err(BrokerError::BindingMismatch)
     );
     let genesis_payload = iroha_data_model::transaction::TransactionBuilder::new_genesis(
@@ -755,7 +746,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         ensure_provider_ingest_completion_payload(
             &genesis_payload,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -778,11 +769,7 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
 
     let payload = provider_ingest_completion_test_payload(owner);
     assert_eq!(
-        ensure_provider_ingest_completion_payload(
-            &payload,
-            &context,
-            Some(&server_test_network_id()),
-        ),
+        ensure_provider_ingest_completion_payload(&payload, &context, &server_test_network_id(),),
         Ok(())
     );
 
@@ -794,7 +781,7 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
         ensure_provider_ingest_completion_payload(
             &payload,
             &substituted,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -818,11 +805,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
     let context = provider_ingest_completion_test_context(owner.clone());
     let exact = provider_ingest_completion_test_payload(owner.clone());
     assert_eq!(
-        ensure_provider_ingest_completion_payload(
-            &exact,
-            &context,
-            Some(&server_test_network_id()),
-        ),
+        ensure_provider_ingest_completion_payload(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
 
@@ -837,7 +820,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &other_executable,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -859,7 +842,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_instruction,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -878,11 +861,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(
-            &batch,
-            &context,
-            Some(&server_test_network_id()),
-        ),
+        ensure_provider_ingest_completion_payload(&batch, &context, &server_test_network_id(),),
         Err(BrokerError::Rejected)
     );
 
@@ -904,7 +883,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &extra_instruction,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -929,7 +908,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_payload_owner,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -947,7 +926,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_authority,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -965,7 +944,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_policy,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -983,7 +962,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_anchor,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -1005,7 +984,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_assignment_revision,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -1041,7 +1020,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
             ensure_provider_ingest_completion_payload(
                 &payload,
                 &context,
-                Some(&server_test_network_id()),
+                &server_test_network_id(),
             ),
             Err(BrokerError::Rejected)
         );
@@ -1059,11 +1038,7 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         .try_sign(keypair.private_key())
         .expect("sign exact provider-ingest completion");
     assert_eq!(
-        ensure_provider_ingest_completion_transaction(
-            &exact,
-            &context,
-            Some(&server_test_network_id()),
-        ),
+        ensure_provider_ingest_completion_transaction(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
 
@@ -1084,7 +1059,7 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         ensure_provider_ingest_completion_transaction(
             &attached,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -1097,7 +1072,7 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         ensure_provider_ingest_completion_transaction(
             &multisig,
             &context,
-            Some(&server_test_network_id()),
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -1357,9 +1332,13 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     });
 
     let binding = signer_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let publisher_peer_id = binding
         .governance_dag_publisher_peer_id
         .clone()
@@ -1701,9 +1680,13 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
     });
 
     let binding = signer_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let publisher_peer_id = binding
         .governance_dag_publisher_peer_id
         .clone()
@@ -1766,9 +1749,13 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
     });
 
     let binding = checkpoint_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let store = GovernanceDagBrokerCheckpointStore {
         session,
         binding,
@@ -1811,6 +1798,7 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
         response.observations[0].binding = response.requested_catalog[0].clone();
         let transcript = ServerTranscriptFieldsV1 {
             chain_id: response.chain_id.clone(),
+            network_id: response.network_id,
             requested_catalog: response.requested_catalog.clone(),
             client_nonce: response.client_nonce,
             catalog_digest: response.catalog_digest,
@@ -1823,7 +1811,12 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
         send_handshake(&mut stream, &response);
     });
     assert!(matches!(
-        BrokerSession::connect(&policy, "test-chain", None, vec![signer_binding()]),
+        BrokerSession::connect(
+            &policy,
+            "test-chain",
+            server_test_network_id(),
+            vec![signer_binding()],
+        ),
         Err(BrokerError::BindingMismatch)
     ));
     server.join().expect("join fake broker");

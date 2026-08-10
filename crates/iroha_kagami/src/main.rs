@@ -400,6 +400,32 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_taira_base_genesis_rejects_pre_genesis_release_inputs() {
+        let base = "kagami kagemusha prepare-taira-testnet-base-genesis-v4 \
+             --genesis ./genesis.json \
+             --genesis-authority genesis-authority \
+             --command-authority command-authority \
+             --output ./base-genesis.json";
+        assert!(parse(base).is_ok());
+        assert!(
+            parse(&format!("{base} --release-bundle ./release")).is_err(),
+            "a NetworkId-bound release must not be accepted before genesis is signed"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha prepare-taira-testnet-bootstrap-v4 \
+                 --genesis ./genesis.json \
+                 --release-bundle ./release \
+                 --genesis-authority genesis-authority \
+                 --command-authority command-authority \
+                 --output ./genesis.json"
+            )
+            .is_err(),
+            "the self-referential pre-genesis release command must remain retired"
+        );
+    }
+
+    #[test]
     fn docker_accepts_valid_flags() {
         assert!(
             parse(

@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
+import { networkIdBytes } from "./networkId.js";
 
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
@@ -225,10 +226,12 @@ function normalizeConnectProtocol(value, name = "protocol") {
   return normalized.endsWith(":") ? normalized.slice(0, -1) : normalized;
 }
 
-function buildConnectUri(sidBase64Url, chainId, node, role, token = null) {
+function buildConnectUri(sidBase64Url, networkId, appPublicKey, nonce, node, role, token = null) {
   const params = new URLSearchParams({
     sid: sidBase64Url,
-    chain_id: chainId,
+    network_id: networkId.toString(),
+    app_pk: toBase64Url(appPublicKey),
+    nonce: toBase64Url(nonce),
     v: CONNECT_URI_VERSION,
     role: normalizeConnectRole(role),
   });
@@ -256,7 +259,8 @@ export function createConnectSessionPreview(options = {}) {
   if (!options || typeof options !== "object") {
     throw new TypeError("options must be an object");
   }
-  const chainId = requireNonEmptyString(options.chainId, "chainId");
+  const networkId = options.networkId;
+  const exactNetworkId = networkIdBytes(networkId, "networkId");
   const node =
     options.node === undefined || options.node === null
       ? null
@@ -280,13 +284,13 @@ export function createConnectSessionPreview(options = {}) {
   if (nonce.length !== 16) {
     throw new RangeError(`nonce must be 16 bytes (received ${nonce.length})`);
   }
-  const sidBytes = blake2b(concatBytes(SID_PREFIX, encoder.encode(chainId), publicKey, nonce), {
+  const sidBytes = blake2b(concatBytes(SID_PREFIX, exactNetworkId, publicKey, nonce), {
     dkLen: 32,
   });
   const sidBase64Url = toBase64Url(sidBytes);
   const toriiBaseUrl = node || baseUrlFromLocation();
   return {
-    chainId,
+    networkId,
     node,
     sidBytes,
     sidBase64Url,
@@ -295,8 +299,8 @@ export function createConnectSessionPreview(options = {}) {
       publicKey,
       privateKey,
     },
-    walletUri: buildConnectUri(sidBase64Url, chainId, node, "wallet"),
-    appUri: buildConnectUri(sidBase64Url, chainId, node, "app"),
+    walletUri: buildConnectUri(sidBase64Url, networkId, publicKey, nonce, node, "wallet"),
+    appUri: buildConnectUri(sidBase64Url, networkId, publicKey, nonce, node, "app"),
     wsUrl: buildConnectWebSocketUrl(toriiBaseUrl, sidBase64Url, "app"),
     createdAt: Date.now(),
   };
@@ -310,7 +314,17 @@ function getFetch(fetchImpl) {
   return resolved;
 }
 
-export async function registerConnectSession(baseUrl, sid, options = {}) {
+export async function registerConnectSession(baseUrl, preview, options = {}) {
+  const normalized = normalizePreviewInput(preview);
+  const payload = {
+    sid: toBase64Url(normalized.sidBytes),
+    network_id: normalized.networkId.toString(),
+    app_pk: toBase64Url(normalized.appKeyPair.publicKey),
+    nonce: toBase64Url(normalized.nonce),
+  };
+  if (options.node !== undefined && options.node !== null) {
+    payload.node = requireNonEmptyString(options.node, "node");
+  }
   const response = await getFetch(options.fetchImpl)(
     new URL("/v1/connect/session", `${requireNonEmptyString(baseUrl, "baseUrl")}/`),
     {
@@ -319,18 +333,23 @@ export async function registerConnectSession(baseUrl, sid, options = {}) {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify(
-        options.node === undefined || options.node === null
-          ? { sid: requireNonEmptyString(sid, "sid") }
-          : { sid: requireNonEmptyString(sid, "sid"), node: requireNonEmptyString(options.node, "node") },
-      ),
+      body: JSON.stringify(payload),
     },
   );
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
     throw new Error(`${response.status} ${response.statusText}: ${message || "unable to create connect session"}`);
   }
-  return response.json();
+  const session = await response.json();
+  if (
+    session.sid !== payload.sid
+    || session.network_id !== payload.network_id
+    || session.app_pk !== payload.app_pk
+    || session.nonce !== payload.nonce
+  ) {
+    throw new Error("Torii substituted the canonical Connect session identity");
+  }
+  return session;
 }
 
 export async function deleteConnectSession(baseUrl, sid, options = {}) {
@@ -660,11 +679,11 @@ function encodePermissions(permissions) {
   );
 }
 
-function encodeOpenControl({ appPublicKey, chainId, appMeta, permissions }) {
+function encodeOpenControl({ appPublicKey, networkId, appMeta, permissions }) {
   const body = encodeNoritoStruct([
     toUint8Array(appPublicKey, "appPublicKey"),
     encodeAppMeta(appMeta),
-    encodeNoritoStruct([encodeNoritoString(chainId)]),
+    encodeNoritoStruct([networkIdBytes(networkId, "networkId")]),
     encodePermissions(permissions),
   ]);
   return concatBytes(u32ToBytes(CONTROL_OPEN), u64ToBytes(body.length), body);
@@ -1109,6 +1128,21 @@ function isNoritoNoneOption(bytes) {
   return bytes.length === 4 && readU32(bytes, 0, "option.tag") === 0;
 }
 
+function unwrapNoritoOption(bytes, context) {
+  if (isNoritoNoneOption(bytes)) {
+    return null;
+  }
+  if (bytes[0] !== 1) {
+    throw new Error(`${context} has an invalid option tag`);
+  }
+  const state = { offset: 1 };
+  const value = readLengthPrefixedSlice(bytes, state, context);
+  if (state.offset !== bytes.length) {
+    throw new Error(`${context} has trailing bytes`);
+  }
+  return value;
+}
+
 function accountEd25519PublicKey(accountId) {
   const address = AccountAddress.fromI105(accountId);
   const controller = address._controller;
@@ -1142,16 +1176,27 @@ function requireValidEd25519Signature(signature, message, publicKey) {
 }
 
 function buildApprovalPreimage(preview, control, relayToken) {
-  if (!isNoritoNoneOption(control.permissions) || !isNoritoNoneOption(control.proof)) {
-    throw new Error("Connect approval verification does not support permission/proof payloads yet");
-  }
-  return concatBytes(
+  const permissions = unwrapNoritoOption(control.permissions, "approve.permissions");
+  const proof = unwrapNoritoOption(control.proof, "approve.proof");
+  const constraints = encodeNoritoStruct([networkIdBytes(preview.networkId, "preview.networkId")]);
+  const fields = [
     taggedApproveField("domain", APPROVE_DOMAIN),
+    taggedApproveField("network_id", networkIdBytes(preview.networkId, "preview.networkId")),
+    taggedApproveField("constraints", blake2b(constraints, { dkLen: 32 })),
     taggedApproveField("sid", preview.sidBytes),
     taggedApproveField("app_pk", preview.appKeyPair.publicKey),
     taggedApproveField("wallet_pk", control.walletPublicKey),
     taggedApproveField("account_id", encoder.encode(control.accountId)),
-    taggedApproveField("relay_auth", relayAuthHash(preview.sidBytes, relayToken)),
+  ];
+  if (permissions !== null) {
+    fields.push(taggedApproveField("permissions", blake2b(permissions, { dkLen: 32 })));
+  }
+  if (proof !== null) {
+    fields.push(taggedApproveField("proof", blake2b(proof, { dkLen: 32 })));
+  }
+  fields.push(taggedApproveField("relay_auth", relayAuthHash(preview.sidBytes, relayToken)));
+  return concatBytes(
+    ...fields,
   );
 }
 
@@ -1249,9 +1294,15 @@ function normalizePreviewInput(preview) {
   if (publicKey.length !== 32 || privateKey.length !== 32) {
     throw new RangeError("preview.appKeyPair must contain 32-byte X25519 keys");
   }
+  networkIdBytes(preview.networkId, "preview.networkId");
+  const nonce = toUint8Array(preview.nonce, "preview.nonce");
+  if (nonce.length !== 16) {
+    throw new RangeError(`preview.nonce must be 16 bytes (received ${nonce.length})`);
+  }
   return {
     sidBytes,
-    chainId: requireNonEmptyString(preview.chainId, "preview.chainId"),
+    networkId: preview.networkId,
+    nonce,
     appKeyPair: {
       publicKey,
       privateKey,
@@ -1524,7 +1575,7 @@ export function createConnectAppSession(options = {}) {
       sendControl(
         encodeOpenControl({
           appPublicKey: preview.appKeyPair.publicKey,
-          chainId: preview.chainId,
+          networkId: preview.networkId,
           appMeta: options.appMeta ?? null,
           permissions: options.permissions ?? null,
         }),

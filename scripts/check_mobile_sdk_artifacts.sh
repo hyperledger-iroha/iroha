@@ -928,7 +928,6 @@ check_bridge_source_contract() {
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
   local privacy_protocol="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
   local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
-  local canonical_abi_source="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
@@ -959,7 +958,7 @@ expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
 try:
     header_text = open(header_path, "r", encoding="utf-8").read()
-    canonical_abi_text = open(canonical_abi_path, "r", encoding="utf-8").read()
+    canonical_abi_text = open(protocol_path, "r", encoding="utf-8").read()
 except OSError:
     header_text = canonical_abi_text = ""
 
@@ -1055,16 +1054,16 @@ def code_matches(pattern):
 errors = []
 abi_aliases = code_matches(re.compile(
     r"(?m)^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
-    r"(PRIVACY_BRIDGE_ABI_VERSION_V1);$",
+    r"([^;\n]+);$",
 ))
 header_abis = re.findall(
     r"^#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
-    open(header_path, "r", encoding="utf-8").read(),
+    header_text,
     re.MULTILINE,
 )
 protocol_abis = re.findall(
     r"^pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = ([0-9]+);$",
-    open(protocol_path, "r", encoding="utf-8").read(),
+    canonical_abi_text,
     re.MULTILINE,
 )
 export_pattern = re.compile(
@@ -1224,7 +1223,7 @@ if lab_present:
 actual = set(all_export_counts) - set(lab_export_counts)
 if (
     len(abi_aliases) != 1
-    or abi_aliases[0].group(1) != "PRIVACY_BRIDGE_ABI_VERSION_V1"
+    or abi_aliases[0].group(1).strip() != "PRIVACY_BRIDGE_ABI_VERSION_V1"
     or header_abis != ["22"]
     or protocol_abis != header_abis
 ):

@@ -40,7 +40,7 @@ fn bls_batch_fixture_uses_checked_bls_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
 
-fn mk_state_with_bls_batch() -> (State, ChainId, NetworkId, AccountId, KeyPair) {
+fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     // Seed world with an account
@@ -50,8 +50,8 @@ fn mk_state_with_bls_batch() -> (State, ChainId, NetworkId, AccountId, KeyPair) 
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain = ChainId::from("chain");
-    let mut state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
@@ -67,7 +67,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, NetworkId, AccountId, KeyPair) 
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg);
-    (state, chain, network_id, account_id, kp)
+    (state, network_id, account_id, kp)
 }
 
 fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
@@ -168,7 +168,7 @@ fn push_single_tx_with_context(
 
 #[test]
 fn bls_batch_block_validates_with_pop() {
-    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
+    let (state, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
@@ -184,7 +184,6 @@ fn bls_batch_block_validates_with_pop() {
     ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &account,
         &TimeSource::new_system(),
         &mut state_block,
@@ -195,7 +194,7 @@ fn bls_batch_block_validates_with_pop() {
 
 #[test]
 fn bls_batch_block_validates_without_pop_fallback() {
-    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
+    let (state, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, false);
     let height = nonzero!(2_u64);
@@ -212,7 +211,6 @@ fn bls_batch_block_validates_without_pop_fallback() {
     ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &account,
         &TimeSource::new_system(),
         &mut state_block,
@@ -223,7 +221,7 @@ fn bls_batch_block_validates_without_pop_fallback() {
 
 #[test]
 fn bls_batch_block_rejects_missing_proof_policy_hash() {
-    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
+    let (state, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
@@ -237,7 +235,6 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let err = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &account,
         &TimeSource::new_system(),
         &mut state_block,

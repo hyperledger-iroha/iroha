@@ -212,6 +212,13 @@ The separate `sorafs_node::hedging_billing_service` and supervised
 `irohad::sorafs_hedging_billing_runtime` now implement the local committed
 service pipeline. The bounded finalized-query and consensus-journal-verifier
 interfaces ingest contiguous typed event pages and authenticated period closes.
+The service policy and every finalized page or close, journal commitment,
+replay identity, checkpoint or compacted archive, signed statement,
+acknowledgement, epoch witness, and hedge intent carry the mandatory
+genesis-derived `NetworkId`. Digest and signature preimages bind its exact raw
+bytes; a human-readable chain label is display-only and is never accepted as a
+security domain or compatibility fallback. Stock `irohad` derives the runtime
+identity from mandatory `genesis.expected_hash` before opening durable state.
 The durable projector deterministically derives open accruals, per-account
 governed statements, aggregate XOR exposure, and never-automatic hedge intents;
 it retains exact finalized cursors, replay receipts, delivery state, dead

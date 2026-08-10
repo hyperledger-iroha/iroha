@@ -1336,7 +1336,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 837 named tests
+Before network startup, the executable wrapper inventories 845 named tests
 across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1442,7 +1442,7 @@ restart selector with its two distinct raw/coalesced crash boundaries and
 restoring two implemented certified-ingress regressions adds three real rows,
 bringing the inventory to the 829-test checkpoint. Autonomous-lifecycle
 terminal-outcome and startup-recovery coverage plus final source reconciliation
-bring the current inventory to 837 tests across 39 modules.
+bring the current inventory to 845 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 86 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1517,7 +1517,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`.
+`08987916d9ea4fad6bc48cbd483f702766c69b057ff4cc2a099a586f8561eeff`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1562,7 +1562,7 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-eight modules or eighty-five legs. The
+geometry tests as part of those thirty-eight modules or eighty-six legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1693,7 +1693,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 86 pre-network legs and the exact
-837-test inventory, the pinned harness lock and resolved toolchain, the formal
+845-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

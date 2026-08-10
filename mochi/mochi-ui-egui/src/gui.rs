@@ -926,7 +926,7 @@ fn print_cli_usage() {
     println!("  --enable-nexus               Enable Nexus/multi-lane features.");
     println!("  --disable-nexus              Disable Nexus/multi-lane features.");
     println!("  --nexus-lane-count <count>   Override nexus.lane_count in generated configs.");
-    println!("  --irohad <path>              Override the irohad binary path.");
+    println!("  --irohad <path>              Override the iroha3d binary path.");
     println!("  --kagami <path>              Override the kagami binary path.");
     println!("  --iroha-cli <path>           Override the iroha_cli binary path.");
     println!("  --build-binaries             Auto-build missing binaries via cargo.");
@@ -6322,7 +6322,7 @@ impl MochiApp {
                                     "Auto-build missing binaries (cargo build)",
                                 );
                                 ui.small(
-                                    "When enabled, MOCHI may run `cargo build` to build missing `irohad`, `kagami`, and `iroha_cli` binaries.",
+                                    "When enabled, MOCHI may run `cargo build` to build missing `iroha3d`, `kagami`, and `iroha` binaries.",
                                 );
                                 ui.add_space(6.0);
                                 ui.checkbox(

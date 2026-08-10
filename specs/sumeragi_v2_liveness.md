@@ -647,7 +647,7 @@ The encrypted body itself must also fit the wire prefix, whose inclusive body
 ceiling is `u32::MAX`. Production uses the stricter architecture-independent
 `network.max_frame_bytes` ceiling of 2,147,483,643 bytes so the four-byte prefix
 plus body fits a contiguous `i32::MAX`-byte buffer on both 32-bit and 64-bit
-hosts. Both `irohad --check-config` and normal startup reject a larger
+hosts. Both `iroha3d --check-config` and normal startup reject a larger
 configured value before listener binding, and the sender independently derives
 the encrypted length with checked arithmetic and a checked `u32` conversion
 before encryption or frame allocation. Queue-charge arithmetic returns an
@@ -1263,7 +1263,7 @@ Replacing one obsolete restart selector with its two raw/coalesced
 crash boundaries and restoring two implemented certified-ingress regressions
 brings the inventory to the 829-test checkpoint. Autonomous-lifecycle
 terminal-outcome and startup-recovery coverage plus final source reconciliation
-bring the current source-bound inventory to 837 exact tests across
+bring the current source-bound inventory to 845 exact tests across
 39 modules and 86 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1272,7 +1272,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`.
+`08987916d9ea4fad6bc48cbd483f702766c69b057ff4cc2a099a586f8561eeff`.
 Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 525 TSV lines and has SHA-256
 `bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
@@ -1531,7 +1531,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 837-test inventory is a mechanically checked
+The current 845-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1721,7 +1721,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 837 exact production
+Before those longer scenarios, the PR gate inventories 845 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 524-test
 focus inventory. The
@@ -1877,7 +1877,7 @@ owning module and one leg overall. Replacing one obsolete restart selector with 
 crash boundaries and restoring two implemented certified-ingress regressions
 then produces the 829-test checkpoint. Autonomous-lifecycle terminal-outcome
 and startup-recovery coverage plus final source reconciliation bring the
-current inventory to 837 tests across 39 modules and 86 legs. The rollover slice covers
+current inventory to 845 tests across 39 modules and 86 legs. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1917,7 +1917,8 @@ source-sealed pre-network corridor remain required before release evidence may
 be promoted.
 
 The same pre-network gate inventories and executes four exact, non-ignored
-Taira release-profile validators plus the Rust summary-JSON schema contract.
+Taira release-profile validators, the Rust summary-JSON schema contract, and
+the strict all-validator restart/catch-up contract: six Taira contracts total.
 It then requires exactly 39 passing mocked soak launcher/evidence tests. Those
 tests reject profile drift, zero-test success, concurrent evidence ownership,
 source or artifact mismatch, malformed JSON, weakened acceptance bounds,
@@ -2056,6 +2057,7 @@ candidate the parent must later reject. An atomic lock gives
 that source root exactly one soak-evidence writer; a hard-killed run leaves the
 lock for explicit operator inspection. Before any real matrix, the release
 gate inventories and executes the five exact Rust release-profile/schema tests
+plus the strict all-validator restart/catch-up test,
 and requires all 39 mocked soak launcher/evidence adversaries to pass. The soak
 runner then inventories the exact ignored test and accepts Cargo output only
 when exactly one test ran and passed with networking required. The seed matrix
@@ -2161,7 +2163,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 86 pre-network corridor legs and
-their exact 837-test production inventory, the separate 524-test G-UNIT
+their exact 845-test production inventory, the separate 524-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

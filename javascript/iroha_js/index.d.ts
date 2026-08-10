@@ -19,10 +19,10 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** Exact immutable genesis-header hash used as an ordinary transaction domain. */
+/** Exact immutable genesis-header hash used as an ordinary transaction domain.
+ * Runtime construction is restricted to the canonical factories below. */
 export class NetworkId {
   private constructor();
-  private readonly __networkIdBrand: never;
   static readonly BYTE_LENGTH: 32;
   static parse(literal: string): NetworkId;
   static fromBytes(value: ArrayBuffer | ArrayBufferView): NetworkId;
@@ -4120,6 +4120,7 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
   localSigningContext?: LocalSigningContext;
+  canonicalRequestAuth?: CanonicalRequestAuth;
   allowInsecure?: boolean;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
@@ -4257,6 +4258,9 @@ export interface ConnectStatusSnapshot {
 
 export interface ConnectSessionResponse {
   sid: string;
+  network_id: NetworkId;
+  app_pk: string;
+  nonce: string;
   wallet_uri: string;
   app_uri: string;
   token_app: string;
@@ -4279,7 +4283,7 @@ export interface ConnectKeyPair {
 }
 
 export interface ConnectSessionPreviewOptions {
-  chainId: string;
+  networkId: NetworkId;
   node?: string | null;
   nonce?: BinaryLike | null;
   appKeyPair?: {
@@ -4289,7 +4293,7 @@ export interface ConnectSessionPreviewOptions {
 }
 
 export interface ConnectSessionPreview {
-  chainId: string;
+  networkId: NetworkId;
   node: string | null;
   sidBytes: Buffer;
   sidBase64Url: string;
@@ -4300,7 +4304,7 @@ export interface ConnectSessionPreview {
 }
 
 export function generateConnectSid(options: {
-  chainId: string;
+  networkId: NetworkId;
   appPublicKey: BinaryLike;
   nonce?: BinaryLike | null;
 }): ConnectSidResult;
@@ -4693,7 +4697,7 @@ export type ToriiNativeAmxTransactionEntrypointHash = string & {
 export interface ToriiNativeAmxAttestationBody {
   round: ToriiSumeragiV2ConsensusRound;
   epoch: ToriiU64;
-  chain_id_hash: string;
+  network_id: string;
   source_id: ToriiNativeAmxSourceId;
   tx_entrypoint_hash: ToriiNativeAmxTransactionEntrypointHash;
   plan_digest: string;
@@ -4772,7 +4776,7 @@ export interface ToriiNativeAmxLeg {
 export interface ToriiNativeAmxReceipt {
   version: 2;
   source_id: ToriiNativeAmxSourceId;
-  chain_id_hash: string;
+  network_id: string;
   plan_digest: string;
   lane_id: number;
   dataspace_id: ToriiU64;
@@ -5145,7 +5149,7 @@ export interface ToriiGovernanceDeployContractProposalRequest {
 
 export interface ToriiGovernancePlainBallotRequest {
   authority: string;
-  chainId: string;
+  networkId: NetworkId;
   referendumId: string;
   owner: string;
   amount: QuantityInput;
@@ -5169,7 +5173,7 @@ export type ToriiGovernanceParliamentDecision =
 
 export interface ToriiGovernanceParliamentBallotRequest {
   authority: string;
-  chainId: string;
+  networkId: NetworkId;
   proposalId: string;
   body: ToriiGovernanceParliamentBody;
   decision: ToriiGovernanceParliamentDecision;
@@ -5177,7 +5181,7 @@ export interface ToriiGovernanceParliamentBallotRequest {
 
 export interface ToriiGovernanceZkBallotV1Request {
   authority: string;
-  chainId: string;
+  networkId: NetworkId;
   electionId: string;
   backend: string;
   envelope: BinaryLike | string;
@@ -5202,7 +5206,7 @@ export interface ToriiGovernanceBallotProof {
 
 export interface ToriiGovernanceZkBallotProofRequest {
   authority: string;
-  chainId: string;
+  networkId: NetworkId;
   electionId: string;
   ballot: ToriiGovernanceBallotProof;
 }
@@ -5745,6 +5749,11 @@ export interface ToriiSumeragiV2BlockSubject {
   parent_block_hash: string | null;
   block_hash: string;
   payload_hash: string;
+}
+
+export interface ToriiSumeragiV2MergeCarrierCommitment {
+  version: 1;
+  entry_hash: string;
 }
 
 export interface ToriiSumeragiV2ExecutionCommitment {
@@ -6805,9 +6814,10 @@ export interface TransactionPayloadDraftResult {
   payloadBytes: Buffer;
   payloadHash: Buffer;
 }
-
 /** Input for applying a returned quote to the exact draft and signing it. */
 export interface QuotedTransactionPayloadSigningInput {
+  /** Application-pinned exact NetworkId expected in the quoted payload. */
+  networkId: NetworkId;
   payload: Record<string, unknown> | TransactionPayloadDraftResult;
   quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
@@ -6909,11 +6919,10 @@ export interface IvmProvedTransactionPayloadDraftResult
   attachment: Record<string, unknown>;
   attachmentJson: string;
 }
-
 export interface QuotedIvmProvedTransactionPayloadSigningInput {
-  payload:
-    | Record<string, unknown>
-    | IvmProvedTransactionPayloadDraftResult;
+  /** Application-pinned exact NetworkId expected in the quoted payload. */
+  networkId: NetworkId;
+  payload: Record<string, unknown> | IvmProvedTransactionPayloadDraftResult;
   attachment?: object | string;
   quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
@@ -8567,6 +8576,10 @@ export type DaIngestMetadataMapValue =
 
 export interface DaIngestRequestInput {
   payload: ArrayBufferView | ArrayBuffer | Buffer | string;
+  /** Exact genesis-derived network identity signed into the request. */
+  networkId: NetworkId;
+  /** Canonical I105 account whose consensus DA quota is charged. */
+  owner: string;
   laneId?: number;
   epoch?: number;
   sequence?: number;
@@ -8599,7 +8612,7 @@ export interface DaIngestRequestInput {
   compression?: "Identity" | "Gzip" | "Deflate" | "Zstd";
   noritoManifest?: ArrayBufferView | ArrayBuffer | Buffer | string;
   clientBlobId?: ArrayBufferView | ArrayBuffer | Buffer | string;
-  submitterPublicKey?: string;
+  signerPublicKey?: string;
   privateKey?: ArrayBufferView | ArrayBuffer | Buffer | string;
   privateKeyHex?: string;
   signatureHex?: string;
@@ -8646,7 +8659,8 @@ export interface DaIngestReceipt {
 
 export interface DaIngestArtifacts {
   clientBlobIdHex: string;
-  submitterPublicKey: string;
+  payloadHashHex: string;
+  signerPublicKey: string;
   signatureHex: string;
   signingDigestHex: string;
   payloadLength: number;
@@ -9579,20 +9593,15 @@ export interface EndKaigiTransactionInput {
 
 export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
-  rhoHex?: string;
-  rho?: BinaryLike;
+  rhoHex: string;
   diversifierHex: string;
-  leafIndex?: number;
-  leaf_index?: number;
+  leafIndex: number;
 }
 
 export interface ConfidentialTransferProofOutputV2 {
   amount: NumericLike;
-  rhoHex?: string;
-  rho?: BinaryLike;
-  ownerTagHex?: string;
-  owner_tag_hex?: string;
-  ownerTag?: BinaryLike;
+  rhoHex: string;
+  ownerTagHex: string;
 }
 
 export interface ConfidentialTransferProofResultV2 {
@@ -9604,8 +9613,7 @@ export interface ConfidentialTransferProofResultV2 {
 
 export interface ConfidentialUnshieldProofOutputV3 {
   amount: NumericLike;
-  rhoHex?: string;
-  rho?: BinaryLike;
+  rhoHex: string;
 }
 
 export interface ConfidentialUnshieldProofResultV2 {
@@ -9976,6 +9984,8 @@ export interface InstructionBuilders {
 
 export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
+  /** Exact genesis-derived network identity required by canonical-auth methods. */
+  networkId?: NetworkId;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: NumericLike;
   config?: {
@@ -10184,6 +10194,7 @@ export interface ToriiBrowserContractDeploymentStateResponse {
 
 export interface CanonicalJsonRequestSignerInput {
   message: Buffer;
+  networkId: NetworkId;
   messageBase64: string;
   method: string;
   path: string;
@@ -10192,7 +10203,6 @@ export interface CanonicalJsonRequestSignerInput {
   timestampMs: number;
   nonce: string;
 }
-
 export type CanonicalJsonRequestSignature =
   | Buffer
   | Uint8Array
@@ -10263,7 +10273,7 @@ export declare class ToriiBrowserClient {
     options: ToriiBrowserSubmitTransactionAndWaitOptions,
   ): Promise<ToriiPipelineTransactionStatus>;
   getNodeCapabilities(
-    options?: ToriiBrowserRequestOptions,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiBrowserNodeCapabilities>;
   getContractDeploymentState(
     request: ToriiBrowserContractDeploymentStateRequest,
@@ -10459,8 +10469,10 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
-  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiStatus(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
+  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -10481,8 +10493,7 @@ export interface ValidationFeeCheckpointV1 {
 
 export interface ValidationFeeLedgerBindingV1 {
   readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
-  readonly chainId: string;
-  readonly genesisHash: string;
+  readonly networkId: NetworkId;
   readonly policyChainGenesisHash: string;
   readonly checkpoint: ValidationFeeCheckpointV1;
 }
@@ -10494,8 +10505,7 @@ export interface NormalizedValidationFeeCheckpointV1 {
 
 export interface NormalizedValidationFeeLedgerBindingV1 {
   readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
-  readonly chainId: string;
-  readonly genesisHash: string;
+  readonly networkId: NetworkId;
   readonly policyChainGenesisHash: string;
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
 }
@@ -10584,8 +10594,7 @@ export interface ValidationFeeVerifiedCurrentPolicyV1 {
 export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly schema: "iroha.validation_fee.verified_policy_projection.v1";
   readonly version: 1;
-  readonly chain_id: string;
-  readonly genesis_hash: string;
+  readonly network_id: string;
   readonly policy_chain_genesis_hash: string;
   readonly registry_hash: string;
   readonly head_policy_version: bigint;
@@ -10809,16 +10818,20 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   uploadAttachment(
     data: ArrayBufferView | ArrayBuffer | string,
-    options: { contentType: string },
+    options: { contentType: string; signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiAttachmentMetadata>;
-  listAttachments(options?: {
+  listAttachments(options: {
     signal?: AbortSignal;
+    canonicalAuth: CanonicalRequestAuth;
   }): Promise<ReadonlyArray<ToriiAttachmentMetadata>>;
   getAttachment(
     attachmentId: string,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<{ data: Buffer; contentType: string | null }>;
-  deleteAttachment(attachmentId: string): Promise<void>;
+  deleteAttachment(
+    attachmentId: string,
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
+  ): Promise<void>;
   listVerifyingKeys(options?: ToriiVerifyingKeyListOptions): Promise<unknown>;
   listVerifyingKeysTyped(
     options?: ToriiVerifyingKeyListOptions,
@@ -10874,15 +10887,16 @@ export declare class ToriiClient {
   ): Promise<FeeQuoteResponse>;
   getValidationFeeCurrentPolicyProofPage(
     binding: ValidationFeeLedgerBindingV1,
-    checkpoint?: ValidationFeeCheckpointV1 | null,
-    options?: { signal?: AbortSignal },
+    checkpoint: ValidationFeeCheckpointV1 | null,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ValidationFeeCurrentPolicyProofPageV1>;
   catchUpValidationFeeCurrentPolicyProof(
     binding: ValidationFeeLedgerBindingV1,
-    options?: {
+    options: {
       checkpoint?: ValidationFeeCheckpointV1;
       maxPages?: number;
       signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
     },
   ): Promise<ValidationFeePolicyProofCatchUpV1>;
   listIdentifierPolicies(options?: {
@@ -11204,9 +11218,7 @@ export declare class ToriiClient {
   getNetworkTimeStatus(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiNetworkTimeStatus>;
-  getNodeCapabilities(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiNodeCapabilities>;
+  getNodeCapabilities(options: RequiredCanonicalRequestOptions): Promise<ToriiNodeCapabilities>;
   getSccpCapabilities(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSccpCapabilities>;
@@ -11262,15 +11274,11 @@ export declare class ToriiClient {
     payload: ToriiBridgeMessageSubmitPayload,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSccpBridgeSubmitResponse>;
-  getRuntimeAbiActive(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiRuntimeAbiActiveResponse>;
+  getRuntimeAbiActive(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeAbiActiveResponse>;
   getRuntimeAbiHash(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeAbiHashResponse>;
-  getRuntimeMetrics(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiRuntimeMetrics>;
+  getRuntimeMetrics(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeMetrics>;
   listRuntimeUpgrades(options?: {
     signal?: AbortSignal;
   }): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
@@ -11368,52 +11376,46 @@ export declare class ToriiClient {
   ): Promise<SnsNameRecord>;
   getGovernanceProposal(
     proposalId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<Record<string, unknown> | null>;
   getGovernanceProposalTyped(
     proposalId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceProposalResult>;
   getGovernanceReferendum(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<Record<string, unknown> | null>;
   getGovernanceReferendumTyped(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceReferendumResult>;
   getGovernanceTally(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<Record<string, unknown> | null>;
   getGovernanceTallyTyped(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceTallyResult>;
   getGovernanceLocks(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<Record<string, unknown> | null>;
   getGovernanceLocksTyped(
     referendumId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceLocksResult>;
-  getGovernanceUnlockStats(options?: {
-    signal?: AbortSignal;
-  }): Promise<Record<string, unknown> | null>;
-  getGovernanceUnlockStatsTyped(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiGovernanceUnlockStats>;
-  getGovernanceCouncilCurrent(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiGovernanceCouncilCurrentResponse>;
+  getGovernanceUnlockStats(options: RequiredCanonicalRequestOptions): Promise<Record<string, unknown> | null>;
+  getGovernanceUnlockStatsTyped(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceUnlockStats>;
+  getGovernanceCouncilCurrent(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceCouncilCurrentResponse>;
   draftMinistryAgendaProposal(
     payload: MinistryAgendaProposalDraftRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<MinistryAgendaProposalDraftResponse>;
   getMinistryAgendaProposal(
     proposalId: string,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<MinistryAgendaProposalGetResponse>;
   governanceFinalizeReferendum(
     payload: ToriiGovernanceFinalizeRequest,
@@ -11425,39 +11427,37 @@ export declare class ToriiClient {
   ): Promise<ToriiGovernanceDraftResponse>;
   governanceEnactProposal(
     payload: ToriiGovernanceEnactRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceDraftResponse | null>;
   governanceEnactProposalTyped(
     payload: ToriiGovernanceEnactRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceDraftResponse>;
   governanceProposeDeployContract(
     payload: ToriiGovernanceDeployContractProposalRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceDraftResponse>;
   governanceSubmitPlainBallot(
     payload: ToriiGovernancePlainBallotRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitParliamentBallot(
     payload: ToriiGovernanceParliamentBallotRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitZkBallotV1(
     payload: ToriiGovernanceZkBallotV1Request,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitZkBallotProofV1(
     payload: ToriiGovernanceZkBallotProofRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceBallotResponse>;
   setProtectedNamespaces(
     namespaces: string | string[],
     options?: { signal?: AbortSignal },
   ): Promise<ToriiProtectedNamespacesApplyResponse>;
-  getProtectedNamespaces(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiProtectedNamespacesGetResponse>;
+  getProtectedNamespaces(options: RequiredCanonicalRequestOptions): Promise<ToriiProtectedNamespacesGetResponse>;
   getSumeragiStatus(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, unknown>>;
@@ -11630,6 +11630,9 @@ export declare class ToriiClient {
   getConnectStatus(): Promise<ConnectStatusSnapshot | null>;
   createConnectSession(input: {
     sid: string;
+    networkId: NetworkId;
+    appPublicKey: Uint8Array;
+    nonce: Uint8Array;
     node?: string | null;
   }): Promise<ConnectSessionResponse>;
   deleteConnectSession(input: {
@@ -11693,7 +11696,7 @@ export declare class ToriiClient {
   ): Promise<ContractCallSimulateResponse>;
   deriveIvmProved(
     request: ZkIvmExecutionRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ZkIvmDeriveResponse>;
   startIvmProve(
     request: ZkIvmExecutionRequest,
@@ -12021,7 +12024,7 @@ export function deriveConfidentialNoteV2(input: {
 }): { commitment: Buffer; commitmentHex: string };
 
 export function deriveConfidentialNullifierV2(input: {
-  chainId: string;
+  networkId: NetworkId;
   assetDefinitionId: string;
   spendKey: ArrayBufferView | ArrayBuffer | Buffer;
   rhoHex?: string;
@@ -12455,6 +12458,7 @@ export function hashInstructionBatch(
 ): string | Buffer;
 
 export function resignSignedTransaction(
+  networkId: NetworkId,
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
@@ -12724,27 +12728,27 @@ export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildConfidentialTransferProofV2(input: {
-  chainId: string;
+  networkId: NetworkId;
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
   inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
   outputs: ReadonlyArray<ConfidentialTransferProofOutputV2>;
   rootHintHex: string;
-  verifyingKey: Record<string, unknown>;
+  verifyingKey: ToriiVerifyingKeyDetail;
 }): ConfidentialTransferProofResultV2;
 export function buildConfidentialUnshieldProofV2(input: {
-  chainId: string;
+  networkId: NetworkId;
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
   inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
   publicAmount: NumericLike;
   rootHintHex: string;
-  verifyingKey: Record<string, unknown>;
+  verifyingKey: ToriiVerifyingKeyDetail;
 }): ConfidentialUnshieldProofResultV2;
 export function buildConfidentialUnshieldProofV3(input: {
-  chainId: string;
+  networkId: NetworkId;
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
@@ -12752,7 +12756,7 @@ export function buildConfidentialUnshieldProofV3(input: {
   outputs?: ReadonlyArray<ConfidentialUnshieldProofOutputV3>;
   publicAmount: NumericLike;
   rootHintHex: string;
-  verifyingKey: Record<string, unknown>;
+  verifyingKey: ToriiVerifyingKeyDetail;
 }): ConfidentialUnshieldProofResultV3;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput & FeePaymentRequired,
@@ -12827,8 +12831,13 @@ export function submitSignedTransaction(
     waitForCommit?: boolean;
     pollIntervalMs?: number;
     timeoutMs?: number;
-    privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
-  },
+  } & (
+    | { privateKey?: undefined; networkId?: undefined }
+    | {
+        networkId: NetworkId;
+        privateKey: ArrayBufferView | ArrayBuffer | Buffer;
+      }
+  ),
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 
 export function submitTransactionEntrypoint(

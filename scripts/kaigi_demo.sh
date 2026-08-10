@@ -7,7 +7,7 @@ RUN_DIR="${RUN_DIR:-$ROOT/target/kaigi-demo}"
 GENESIS_CLEAN="$RUN_DIR/genesis.cleaned.json"
 GENESIS_NRT="$RUN_DIR/genesis.nrt"
 SUMMARY_JSON="$RUN_DIR/kaigi_summary.json"
-NODE_LOG="$RUN_DIR/irohad.log"
+NODE_LOG="$RUN_DIR/iroha3d.log"
 SPOOL_DIR="$ROOT/storage/streaming/soranet_routes"
 
 log() {
@@ -82,9 +82,9 @@ KAGAMI_OUTPUT="$(
 )"
 printf '%s\n' "$KAGAMI_OUTPUT" >&2
 
-log "launching irohad (logs: $NODE_LOG)"
+log "launching iroha3d (logs: $NODE_LOG)"
 IROHA_GENESIS__FILE="$GENESIS_NRT" \
-  cargo run -q -p irohad -- \
+  cargo run -q -p irohad --bin iroha3d -- \
   --sora \
   --config defaults/nexus/config.toml \
   --genesis-manifest-json defaults/nexus/genesis.json \
@@ -94,7 +94,7 @@ NODE_PID=$!
 log "waiting for Torii at $TORII_URL/status"
 for _ in $(seq 1 120); do
   if ! pid_is_own_background_job "$NODE_PID" || ! pid_is_running "$NODE_PID"; then
-    log "irohad exited before Torii became ready (see $NODE_LOG)"
+    log "iroha3d exited before Torii became ready (see $NODE_LOG)"
     exit 1
   fi
   if curl -sf "$TORII_URL/status" >/dev/null 2>&1; then

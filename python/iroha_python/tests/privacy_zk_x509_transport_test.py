@@ -9,7 +9,14 @@ import pytest
 import iroha_python
 import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
-from iroha_python import NetworkId, SorafsAliasPolicy, TransactionConfig, TransactionDraft
+from iroha_python import (
+    AccountAddress,
+    NetworkId,
+    SorafsAliasPolicy,
+    ToriiCanonicalRequestAuth,
+    TransactionConfig,
+    TransactionDraft,
+)
 from iroha_python.client import LocalSigningContext, ToriiClient
 
 X509_PROTOCOL = "iroha-zk-x509-stark-p256-v0"
@@ -17,6 +24,15 @@ SIGNED_X509_WIRE = b"canonical-signed-x509-wire"
 SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
+CANONICAL_AUTH = ToriiCanonicalRequestAuth(
+    network_id=NETWORK_ID.literal,
+    account_id=AccountAddress.from_account(
+        domain="wonderland", public_key=bytes([0x11]) * 32
+    ).to_i105(0x02F1),
+    signer=lambda _message: bytes([0x44]) * 64,
+    timestamp_ms=4_102_444_801_000,
+    nonce="privacy-capability-test",
+)
 
 
 class _FakeCrypto:
@@ -119,19 +135,28 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
         content=b"canonical-exact12-manifest",
         text="",
     )
-    requests: list[tuple[str, str, object]] = []
+    requests: list[tuple[str, str, object, object, object]] = []
 
     def request(method: str, path: str, **kwargs: object) -> object:
-        requests.append((method, path, kwargs.get("headers")))
+        requests.append(
+            (
+                method,
+                path,
+                kwargs.get("headers"),
+                kwargs.get("allow_retry"),
+                kwargs.get("allow_redirects"),
+            )
+        )
         return response
 
     monkeypatch.setattr(client, "_request", request)
-    manifest = client.privacy_capabilities_v1()
+    manifest = client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
 
     assert isinstance(manifest, _FakeManifest)
-    assert requests == [
-        ("GET", "/v1/privacy/capabilities", {"Accept": "application/x-norito"})
-    ]
+    assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
+    assert requests[0][2]["Accept"] == "application/x-norito"
+    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH.account_id
+    assert requests[0][3:] == (False, False)
     assert events == ["decode-capabilities"]
 
 
@@ -148,7 +173,7 @@ def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
     monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ValueError, match="application/x-norito"):
-        client.privacy_capabilities_v1()
+        client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
     assert events == []
 
 
@@ -314,7 +339,8 @@ def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(
     client, fake_crypto, events = _client_with_crypto(monkeypatch)
     capability_calls = 0
 
-    def capabilities() -> _FakeManifest:
+    def capabilities(*, canonical_auth: object) -> _FakeManifest:
+        assert canonical_auth is CANONICAL_AUTH
         nonlocal capability_calls
         capability_calls += 1
         events.append("capabilities")
@@ -333,6 +359,7 @@ def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(
     envelope, result = (
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
+            canonical_auth=CANONICAL_AUTH,
             canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             wait=False,
         )
@@ -350,7 +377,8 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
 ) -> None:
     client, fake_crypto, events = _client_with_crypto(monkeypatch)
 
-    def capabilities() -> _FakeManifest:
+    def capabilities(*, canonical_auth: object) -> _FakeManifest:
+        assert canonical_auth is CANONICAL_AUTH
         events.append("capabilities")
         return _FakeManifest()
 
@@ -376,6 +404,7 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
     envelope, result = (
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
+            canonical_auth=CANONICAL_AUTH,
             canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             interval=0.25,
             timeout=5.0,
@@ -402,7 +431,7 @@ def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
     monkeypatch.setattr(
         client,
         "privacy_capabilities_v1",
-        lambda: pytest.fail("wrong protocol reached capability fetch"),
+        lambda **_kwargs: pytest.fail("wrong protocol reached capability fetch"),
     )
     monkeypatch.setattr(
         client,
@@ -413,6 +442,7 @@ def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
     with pytest.raises(ValueError, match="wrong privacy protocol"):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_OTHER_WIRE,
+            canonical_auth=CANONICAL_AUTH,
             canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             wait=False,
         )
@@ -436,7 +466,7 @@ def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
     monkeypatch.setattr(
         client,
         "privacy_capabilities_v1",
-        lambda: _FakeManifest(message),
+        lambda **_kwargs: _FakeManifest(message),
     )
     monkeypatch.setattr(
         client,
@@ -447,6 +477,7 @@ def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
     with pytest.raises(RuntimeError, match=message):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
+            canonical_auth=CANONICAL_AUTH,
             canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             wait=False,
         )
@@ -472,7 +503,7 @@ def test_x509_transport_fails_closed_for_unavailable_or_inactive_capability(
     monkeypatch.setattr(
         client,
         "privacy_capabilities_v1",
-        lambda: _FakeManifest(message),
+        lambda **_kwargs: _FakeManifest(message),
     )
     monkeypatch.setattr(
         client,
@@ -483,6 +514,7 @@ def test_x509_transport_fails_closed_for_unavailable_or_inactive_capability(
     with pytest.raises(RuntimeError, match=message):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
+            canonical_auth=CANONICAL_AUTH,
             canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             wait=False,
         )

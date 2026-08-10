@@ -20,7 +20,9 @@ use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
     phase23_encrypted::{
-        ZkAmsPhase23MapKindV1, ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23SparseMapV1,
+        ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23MapKindV1,
+        ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23SparseMapV1,
         require_release_relation_maps_v1, validate_materialized_accumulators_v1,
         validate_sparse_map_v1, zk_ams_phase23_release_maps_v1,
     },
@@ -120,12 +122,7 @@ impl ZkAmsPhase3TerminalContextV1 {
 pub fn zk_ams_phase3_ordered_public_inputs_digest_v1(
     strict_public_inputs: &[Vec<[u8; 32]>],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    if strict_public_inputs.is_empty()
-        || strict_public_inputs.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
-        || strict_public_inputs.iter().any(Vec::is_empty)
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
+    preflight_governed_rows(strict_public_inputs)?;
     let scalar_count = strict_public_inputs
         .iter()
         .try_fold(0_usize, |total, inputs| {
@@ -133,13 +130,24 @@ pub fn zk_ams_phase3_ordered_public_inputs_digest_v1(
                 .checked_add(inputs.len())
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         })?;
-    let mut frame = Vec::with_capacity(
-        PHASE3_ORDERED_PUBLIC_INPUTS_DOMAIN_V1.len()
-            + 8
-            + scalar_count
+    let row_framing_bytes = strict_public_inputs
+        .len()
+        .checked_mul(8)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let frame_len = PHASE3_ORDERED_PUBLIC_INPUTS_DOMAIN_V1
+        .len()
+        .checked_add(4)
+        .and_then(|length| length.checked_add(row_framing_bytes))
+        .and_then(|length| {
+            scalar_count
                 .checked_mul(32)
-                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-    );
+                .and_then(|bytes| length.checked_add(bytes))
+        })
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     frame.extend_from_slice(PHASE3_ORDERED_PUBLIC_INPUTS_DOMAIN_V1);
     frame.extend_from_slice(&usize_to_u32(strict_public_inputs.len())?.to_be_bytes());
     for (index, inputs) in strict_public_inputs.iter().enumerate() {
@@ -190,13 +198,15 @@ impl ZkAmsPhase3BatchAnchorV1 {
         public_inputs: Vec<[u8; 32]>,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         validate_terminal_context(context)?;
+        preflight_batch_anchor_lengths(
+            witness_commitment.len(),
+            error_commitment.len(),
+            public_inputs.len(),
+        )?;
         commitment_from_wire(&witness_commitment)?;
         commitment_from_wire(&error_commitment)?;
         let relaxation = Scalar::from_be_bytes_exact(relaxation)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-        if public_inputs.is_empty() {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
         let public_inputs = public_inputs
             .into_iter()
             .map(|input| {
@@ -214,7 +224,7 @@ impl ZkAmsPhase3BatchAnchorV1 {
             public_inputs,
             digest: [0; 32],
         };
-        anchor.digest = batch_anchor_digest(&anchor);
+        anchor.digest = batch_anchor_digest(&anchor)?;
         Ok(anchor)
     }
 }
@@ -268,7 +278,7 @@ impl ZkAmsPhase3GovernedBatchV1 {
             strict_public_inputs,
             digest: [0; 32],
         };
-        batch.digest = governed_batch_digest(&batch);
+        batch.digest = governed_batch_digest(&batch)?;
         Ok(batch)
     }
 }
@@ -304,13 +314,15 @@ impl ZkAmsPhase3FoldHistoryV1 {
         cross_term_commitments: Vec<Vec<VegaPointWireV1>>,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         validate_terminal_context(context)?;
-        if mask.context_digest != context.digest
-            || mask.digest == [0; 32]
-            || mask.digest != batch_anchor_digest(&mask)
-            || strict_witness_commitments.is_empty()
-            || strict_witness_commitments.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
-            || strict_witness_commitments.len() != cross_term_commitments.len()
-        {
+        preflight_fold_history_lengths(
+            &mask,
+            &strict_witness_commitments,
+            &cross_term_commitments,
+        )?;
+        if mask.context_digest != context.digest || mask.digest == [0; 32] {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        if mask.digest != batch_anchor_digest(&mask)? {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
         for commitment in strict_witness_commitments
@@ -327,7 +339,7 @@ impl ZkAmsPhase3FoldHistoryV1 {
             cross_term_commitments,
             digest: [0; 32],
         };
-        history.digest = fold_history_digest(&history);
+        history.digest = fold_history_digest(&history)?;
         Ok(history)
     }
 }
@@ -516,6 +528,9 @@ std::thread_local! {
     static TERMINAL_RELAXED_WITNESS_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
+    static TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
 #[cfg(test)]
@@ -530,6 +545,24 @@ fn terminal_relaxed_witness_zeroized_drop_count_v1() -> usize {
     TERMINAL_RELAXED_WITNESS_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn terminal_structured_digest_entry_count_v1() -> usize {
+    TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn reset_terminal_structured_digest_entry_count_v1() {
+    let _ = TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1.try_with(|entries| entries.set(0));
+}
+
+#[cfg(test)]
+fn note_terminal_structured_digest_entry_v1() {
+    let _ = TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1
+        .try_with(|entries| entries.set(entries.get().saturating_add(1)));
 }
 
 impl ZeroizingTerminalScalarVecV1 {
@@ -764,7 +797,9 @@ fn prove_terminal_inner(
         1,
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-    if fold_history_digest_from_proof(context, &history_proof)? != fold_history.digest {
+    if fold_history_digest_from_proof(context, &history_proof, &profile.shape)?
+        != fold_history.digest
+    {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let encoded = super::super::encode_zk_ams_admission_relation_wire_v1(history_proof)
@@ -832,7 +867,7 @@ fn verify_terminal_inner(
     if terminal != batch_anchor_instance {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    let fold_history_digest = fold_history_digest_from_proof(context, &relation)?;
+    let fold_history_digest = fold_history_digest_from_proof(context, &relation, &profile.shape)?;
     let proof_digest = terminal_proof_bytes_digest(proof_bytes);
     let composition_context_digest = keccak256(&context_frame);
     terminal_receipt(
@@ -990,62 +1025,181 @@ fn batch_anchor_from_instance(
             .collect(),
         digest: [0; 32],
     };
-    anchor.digest = batch_anchor_digest(&anchor);
+    anchor.digest = batch_anchor_digest(&anchor)?;
     Ok(anchor)
 }
 
-fn batch_anchor_digest(anchor: &ZkAmsPhase3BatchAnchorV1) -> [u8; 32] {
+fn preflight_governed_rows<T>(rows: &[Vec<T>]) -> Result<(), ZkAmsMkheErrorV1> {
+    if rows.is_empty()
+        || rows.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
+        || rows.iter().any(|row| {
+            row.is_empty() || row.len() > super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1
+        })
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn preflight_batch_anchor_lengths(
+    witness_commitment_points: usize,
+    error_commitment_points: usize,
+    public_inputs: usize,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if witness_commitment_points == 0
+        || witness_commitment_points > ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1
+        || error_commitment_points == 0
+        || error_commitment_points > ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
+        || public_inputs == 0
+        || public_inputs > super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn preflight_batch_anchor_release_maxima(
+    anchor: &ZkAmsPhase3BatchAnchorV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    preflight_batch_anchor_lengths(
+        anchor.witness_commitment.len(),
+        anchor.error_commitment.len(),
+        anchor.public_inputs.len(),
+    )
+}
+
+fn preflight_batch_anchor_shape(
+    anchor: &ZkAmsPhase3BatchAnchorV1,
+    shape: &Shape,
+    commitment_columns: usize,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    preflight_batch_anchor_release_maxima(anchor)?;
+    let witness_rows = commitment_rows(shape.variable_count(), commitment_columns)?;
+    let error_rows = commitment_rows(shape.constraint_count(), commitment_columns)?;
+    if anchor.witness_commitment.len() != witness_rows
+        || anchor.error_commitment.len() != error_rows
+        || anchor.public_inputs.len() != shape.public_input_count()
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn preflight_fold_history_lengths(
+    mask: &ZkAmsPhase3BatchAnchorV1,
+    strict_witness_commitments: &[Vec<VegaPointWireV1>],
+    cross_term_commitments: &[Vec<VegaPointWireV1>],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    preflight_batch_anchor_release_maxima(mask)?;
+    if strict_witness_commitments.is_empty()
+        || strict_witness_commitments.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
+        || strict_witness_commitments.len() != cross_term_commitments.len()
+        || strict_witness_commitments
+            .iter()
+            .any(|commitment| commitment.len() != mask.witness_commitment.len())
+        || cross_term_commitments
+            .iter()
+            .any(|commitment| commitment.len() != mask.error_commitment.len())
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn preflight_fold_history_shape(
+    history: &ZkAmsPhase3FoldHistoryV1,
+    shape: &Shape,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    preflight_fold_history_lengths(
+        &history.mask,
+        &history.strict_witness_commitments,
+        &history.cross_term_commitments,
+    )?;
+    preflight_batch_anchor_shape(&history.mask, shape, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+}
+
+fn batch_anchor_digest(anchor: &ZkAmsPhase3BatchAnchorV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    preflight_batch_anchor_release_maxima(anchor)?;
+    #[cfg(test)]
+    note_terminal_structured_digest_entry_v1();
     let mut candidate = anchor.clone();
     candidate.digest = [0; 32];
     let encoded = norito::codec::encode_adaptive(&candidate);
-    let mut frame = Vec::with_capacity(PHASE3_BATCH_ANCHOR_DOMAIN_V1.len() + encoded.len());
+    let frame_len = PHASE3_BATCH_ANCHOR_DOMAIN_V1
+        .len()
+        .checked_add(encoded.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     frame.extend_from_slice(PHASE3_BATCH_ANCHOR_DOMAIN_V1);
     frame.extend_from_slice(&encoded);
-    keccak256(&frame)
+    Ok(keccak256(&frame))
 }
 
-fn governed_batch_digest(batch: &ZkAmsPhase3GovernedBatchV1) -> [u8; 32] {
+fn governed_batch_digest(batch: &ZkAmsPhase3GovernedBatchV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    preflight_governed_rows(&batch.strict_public_inputs)?;
+    #[cfg(test)]
+    note_terminal_structured_digest_entry_v1();
     let mut candidate = batch.clone();
     candidate.digest = [0; 32];
     let encoded = norito::codec::encode_adaptive(&candidate);
-    let mut frame = Vec::with_capacity(PHASE3_GOVERNED_BATCH_DOMAIN_V1.len() + encoded.len());
+    let frame_len = PHASE3_GOVERNED_BATCH_DOMAIN_V1
+        .len()
+        .checked_add(encoded.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     frame.extend_from_slice(PHASE3_GOVERNED_BATCH_DOMAIN_V1);
     frame.extend_from_slice(&encoded);
-    keccak256(&frame)
+    Ok(keccak256(&frame))
 }
 
-fn fold_history_digest(history: &ZkAmsPhase3FoldHistoryV1) -> [u8; 32] {
+fn fold_history_digest(history: &ZkAmsPhase3FoldHistoryV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    preflight_fold_history_lengths(
+        &history.mask,
+        &history.strict_witness_commitments,
+        &history.cross_term_commitments,
+    )?;
+    #[cfg(test)]
+    note_terminal_structured_digest_entry_v1();
     let mut candidate = history.clone();
     candidate.digest = [0; 32];
     let encoded = norito::codec::encode_adaptive(&candidate);
-    let mut frame = Vec::with_capacity(PHASE3_FOLD_HISTORY_DOMAIN_V1.len() + encoded.len());
+    let frame_len = PHASE3_FOLD_HISTORY_DOMAIN_V1
+        .len()
+        .checked_add(encoded.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     frame.extend_from_slice(PHASE3_FOLD_HISTORY_DOMAIN_V1);
     frame.extend_from_slice(&encoded);
-    keccak256(&frame)
+    Ok(keccak256(&frame))
 }
 
 fn validate_governed_batch_fields(
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
 ) -> Result<Vec<Vec<Scalar>>, ZkAmsMkheErrorV1> {
+    preflight_governed_rows(&governed_batch.strict_public_inputs)?;
     if governed_batch.version != PHASE3_TERMINAL_VERSION_V1
         || governed_batch.context_digest != context.digest
         || governed_batch.digest == [0; 32]
-        || governed_batch.digest != governed_batch_digest(governed_batch)
-        || governed_batch.strict_public_inputs.is_empty()
-        || governed_batch.strict_public_inputs.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
     {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    if governed_batch.digest != governed_batch_digest(governed_batch)? {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let strict_public_inputs = governed_batch
         .strict_public_inputs
         .iter()
-        .map(|inputs| {
-            if inputs.is_empty() {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
-            scalars_from_wire(inputs)
-        })
+        .map(|inputs| scalars_from_wire(inputs))
         .collect::<Result<Vec<_>, _>>()?;
     let encoded_inputs = strict_public_inputs
         .iter()
@@ -1070,14 +1224,15 @@ fn validate_governed_batch(
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
     shape: &Shape,
 ) -> Result<Vec<Vec<Scalar>>, ZkAmsMkheErrorV1> {
-    let strict_public_inputs = validate_governed_batch_fields(context, governed_batch)?;
-    if strict_public_inputs
+    preflight_governed_rows(&governed_batch.strict_public_inputs)?;
+    if governed_batch
+        .strict_public_inputs
         .iter()
         .any(|inputs| inputs.len() != shape.public_input_count())
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    Ok(strict_public_inputs)
+    validate_governed_batch_fields(context, governed_batch)
 }
 
 fn fold_history_to_protocol(
@@ -1088,13 +1243,16 @@ fn fold_history_to_protocol(
 ) -> Result<(RelaxedInstance, Vec<Instance>, Vec<NovaNifs>), ZkAmsMkheErrorV1> {
     let strict_public_inputs = validate_governed_batch(context, governed_batch, shape)?;
     let count = strict_public_inputs.len();
+    preflight_fold_history_shape(history, shape)?;
     if history.version != PHASE3_TERMINAL_VERSION_V1
         || history.context_digest != context.digest
         || history.digest == [0; 32]
-        || history.digest != fold_history_digest(history)
         || history.strict_witness_commitments.len() != count
         || history.cross_term_commitments.len() != count
     {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    if history.digest != fold_history_digest(history)? {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let mask = batch_anchor_to_instance(
@@ -1103,20 +1261,11 @@ fn fold_history_to_protocol(
         shape,
         MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
     )?;
-    let witness_rows =
-        commitment_rows(shape.variable_count(), MASKED_RELAXED_COMMITMENT_COLUMNS_V1)?;
-    let error_rows = commitment_rows(
-        shape.constraint_count(),
-        MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
-    )?;
     let strict_instances = history
         .strict_witness_commitments
         .iter()
         .zip(strict_public_inputs)
         .map(|(commitment, public_inputs)| {
-            if commitment.len() != witness_rows {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
             Ok(Instance {
                 witness_commitment: commitment_from_wire(commitment)?,
                 public_inputs,
@@ -1127,9 +1276,6 @@ fn fold_history_to_protocol(
         .cross_term_commitments
         .iter()
         .map(|commitment| {
-            if commitment.len() != error_rows {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
             Ok(NovaNifs {
                 cross_term_commitment: commitment_from_wire(commitment)?,
             })
@@ -1138,18 +1284,50 @@ fn fold_history_to_protocol(
     Ok((mask, strict_instances, folds))
 }
 
-fn fold_history_digest_from_proof(
-    context: ZkAmsPhase3TerminalContextV1,
+fn preflight_fold_history_proof_shape(
     proof: &MaskedRelaxedProofWireV1,
-) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    shape: &Shape,
+) -> Result<(), ZkAmsMkheErrorV1> {
     let count = usize::from(proof.strict_instance_count);
+    let witness_rows =
+        commitment_rows(shape.variable_count(), MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+    let error_rows = commitment_rows(
+        shape.constraint_count(),
+        MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+    )
+    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
     if count == 0
         || count > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
+        || witness_rows > ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1
+        || error_rows > ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
+        || shape.public_input_count() == 0
+        || shape.public_input_count() > super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1
+        || proof.mask_witness_commitment.points.len() != witness_rows
+        || proof.mask_error_commitment.points.len() != error_rows
+        || proof.mask_public_inputs.len() != shape.public_input_count()
         || proof.strict_witness_commitments.len() != count
         || proof.cross_term_commitments.len() != count
+        || proof
+            .strict_witness_commitments
+            .iter()
+            .any(|commitment| commitment.points.len() != witness_rows)
+        || proof
+            .cross_term_commitments
+            .iter()
+            .any(|commitment| commitment.points.len() != error_rows)
     {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
+    Ok(())
+}
+
+fn fold_history_digest_from_proof(
+    context: ZkAmsPhase3TerminalContextV1,
+    proof: &MaskedRelaxedProofWireV1,
+    shape: &Shape,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    preflight_fold_history_proof_shape(proof, shape)?;
     let mut mask = ZkAmsPhase3BatchAnchorV1 {
         version: PHASE3_TERMINAL_VERSION_V1,
         context_digest: context.digest,
@@ -1159,7 +1337,7 @@ fn fold_history_digest_from_proof(
         public_inputs: proof.mask_public_inputs.clone(),
         digest: [0; 32],
     };
-    mask.digest = batch_anchor_digest(&mask);
+    mask.digest = batch_anchor_digest(&mask)?;
     let mut history = ZkAmsPhase3FoldHistoryV1 {
         version: PHASE3_TERMINAL_VERSION_V1,
         context_digest: context.digest,
@@ -1176,7 +1354,7 @@ fn fold_history_digest_from_proof(
             .collect(),
         digest: [0; 32],
     };
-    history.digest = fold_history_digest(&history);
+    history.digest = fold_history_digest(&history)?;
     Ok(history.digest)
 }
 
@@ -1186,16 +1364,14 @@ fn batch_anchor_to_instance(
     shape: &Shape,
     commitment_columns: usize,
 ) -> Result<RelaxedInstance, ZkAmsMkheErrorV1> {
-    let witness_rows = commitment_rows(shape.variable_count(), commitment_columns)?;
-    let error_rows = commitment_rows(shape.constraint_count(), commitment_columns)?;
+    preflight_batch_anchor_shape(anchor, shape, commitment_columns)?;
     if anchor.version != PHASE3_TERMINAL_VERSION_V1
         || anchor.context_digest != context.digest
         || anchor.digest == [0; 32]
-        || anchor.digest != batch_anchor_digest(anchor)
-        || anchor.witness_commitment.len() != witness_rows
-        || anchor.error_commitment.len() != error_rows
-        || anchor.public_inputs.len() != shape.public_input_count()
     {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    if anchor.digest != batch_anchor_digest(anchor)? {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let public_inputs = scalars_from_wire(&anchor.public_inputs)?;
@@ -1781,19 +1957,19 @@ mod tests {
 
     fn reseal_anchor(mut anchor: ZkAmsPhase3BatchAnchorV1) -> ZkAmsPhase3BatchAnchorV1 {
         anchor.digest = [0; 32];
-        anchor.digest = batch_anchor_digest(&anchor);
+        anchor.digest = batch_anchor_digest(&anchor).expect("bounded anchor digest");
         anchor
     }
 
     fn reseal_history(mut history: ZkAmsPhase3FoldHistoryV1) -> ZkAmsPhase3FoldHistoryV1 {
         history.digest = [0; 32];
-        history.digest = fold_history_digest(&history);
+        history.digest = fold_history_digest(&history).expect("bounded fold-history digest");
         history
     }
 
     fn reseal_governed(mut governed: ZkAmsPhase3GovernedBatchV1) -> ZkAmsPhase3GovernedBatchV1 {
         governed.digest = [0; 32];
-        governed.digest = governed_batch_digest(&governed);
+        governed.digest = governed_batch_digest(&governed).expect("bounded governed digest");
         governed
     }
 
@@ -2007,7 +2183,7 @@ mod tests {
             "the proof contains exactly the two governed folds"
         );
         assert_eq!(
-            fold_history_digest_from_proof(fixture.context, &relation).unwrap(),
+            fold_history_digest_from_proof(fixture.context, &relation, &fixture.shape).unwrap(),
             fixture.history.digest
         );
         assert_eq!(receipt.context_digest(), fixture.context.digest);
@@ -2524,6 +2700,118 @@ mod tests {
     }
 
     #[test]
+    fn hostile_nested_dimensions_fail_before_structured_digest_clone_entry() {
+        let fixture = fixture();
+        let scalar = fixture.governed.strict_public_inputs[0][0];
+        let witness_point = fixture.history.strict_witness_commitments[0][0];
+        let error_point = fixture.history.cross_term_commitments[0][0];
+
+        let mut governed = fixture.governed.clone();
+        governed.strict_public_inputs[0] =
+            vec![scalar; super::super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1 + 1];
+        reset_terminal_structured_digest_entry_count_v1();
+        assert!(governed_batch_digest(&governed).is_err());
+        assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
+
+        let mut governed = fixture.governed.clone();
+        governed.strict_public_inputs =
+            vec![vec![scalar]; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1];
+        reset_terminal_structured_digest_entry_count_v1();
+        assert!(governed_batch_digest(&governed).is_err());
+        assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
+
+        for mutation in 0..3 {
+            let mut anchor = fixture.output.batch_anchor.clone();
+            match mutation {
+                0 => {
+                    anchor.public_inputs =
+                        vec![scalar; super::super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1 + 1];
+                }
+                1 => {
+                    anchor.witness_commitment =
+                        vec![witness_point; ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1 + 1];
+                }
+                2 => {
+                    anchor.error_commitment =
+                        vec![error_point; ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1 + 1];
+                }
+                _ => unreachable!(),
+            }
+            reset_terminal_structured_digest_entry_count_v1();
+            assert!(batch_anchor_digest(&anchor).is_err());
+            assert_eq!(
+                terminal_structured_digest_entry_count_v1(),
+                0,
+                "oversized anchor mutation {mutation} entered digest cloning"
+            );
+        }
+
+        for mutation in 0..3 {
+            let mut history = fixture.history.clone();
+            match mutation {
+                0 => {
+                    history.strict_witness_commitments =
+                        vec![vec![witness_point]; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1];
+                    history.cross_term_commitments =
+                        vec![vec![error_point]; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1];
+                }
+                1 => {
+                    history.strict_witness_commitments[0] =
+                        vec![witness_point; ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1 + 1];
+                }
+                2 => {
+                    history.cross_term_commitments[0] =
+                        vec![error_point; ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1 + 1];
+                }
+                _ => unreachable!(),
+            }
+            reset_terminal_structured_digest_entry_count_v1();
+            assert!(fold_history_digest(&history).is_err());
+            assert_eq!(
+                terminal_structured_digest_entry_count_v1(),
+                0,
+                "oversized fold-history mutation {mutation} entered digest cloning"
+            );
+        }
+
+        let mut bounded_wrong_anchor = fixture.output.batch_anchor.clone();
+        bounded_wrong_anchor.witness_commitment.push(witness_point);
+        reset_terminal_structured_digest_entry_count_v1();
+        assert!(
+            batch_anchor_to_instance(
+                &bounded_wrong_anchor,
+                fixture.context,
+                &fixture.shape,
+                MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+            )
+            .is_err()
+        );
+        assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
+
+        let mut bounded_wrong_governed = fixture.governed.clone();
+        bounded_wrong_governed.strict_public_inputs[0].push(scalar);
+        reset_terminal_structured_digest_entry_count_v1();
+        assert!(
+            validate_governed_batch(fixture.context, &bounded_wrong_governed, &fixture.shape,)
+                .is_err()
+        );
+        assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
+
+        let mut relation = super::super::super::decode_zk_ams_admission_relation_wire_v1(
+            fixture.governed.strict_public_inputs.len(),
+            &fixture.output.proof_bytes,
+        )
+        .expect("bounded standard admission proof");
+        relation.strict_witness_commitments[0].points =
+            vec![witness_point; ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1 + 1];
+        reset_terminal_structured_digest_entry_count_v1();
+        assert!(
+            fold_history_digest_from_proof(fixture.context, &relation, &fixture.shape).is_err()
+        );
+        assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
+    }
+
+    #[test]
     fn count_map_and_constructor_boundaries_fail_closed() {
         let fixture = fixture();
         assert!(zk_ams_phase3_ordered_public_inputs_digest_v1(&[]).is_err());
@@ -2533,6 +2821,21 @@ mod tests {
         );
         assert!(zk_ams_phase3_ordered_public_inputs_digest_v1(&[Vec::new()]).is_err());
         assert!(zk_ams_phase3_ordered_public_inputs_digest_v1(&[vec![[0xff; 32]]]).is_err());
+        assert!(
+            zk_ams_phase3_ordered_public_inputs_digest_v1(&[vec![
+                s(1).to_be_bytes();
+                super::super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1
+            ]])
+            .is_ok()
+        );
+        assert!(
+            zk_ams_phase3_ordered_public_inputs_digest_v1(&[vec![
+                s(1).to_be_bytes();
+                super::super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1
+                    + 1
+            ]])
+            .is_err()
+        );
 
         let mut missing = fixture.history.clone();
         missing.cross_term_commitments.pop();

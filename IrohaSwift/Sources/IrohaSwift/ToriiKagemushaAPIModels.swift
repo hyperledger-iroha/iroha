@@ -72,18 +72,13 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
     public let trustedCheckpointHeight: UInt64
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         recipient: String,
         chainDiscriminant: UInt16,
         receiverDeviceID: String,
         assetDefinitionID: String,
         trustedCheckpointHeight: UInt64
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(
-            chainID,
-            field: "lineageQuery.chainID",
-            maximum: 256
-        )
         _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
             recipient,
             field: "lineageQuery.recipient",
@@ -98,7 +93,7 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
               let archive = try NoritoNativeBridge.shared
                   .kagemushaRecipientLineageQueryCreateV2(
                       chainDiscriminant: chainDiscriminant,
-                      chainID: Data(chainID.utf8),
+                      networkID: networkID,
                       recipient: Data(recipient.utf8),
                       receiverDeviceID: Data(receiverDeviceID.utf8),
                       assetDefinitionID: Data(assetDefinitionID.utf8),
@@ -464,6 +459,8 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
 public struct KagemushaTopUpAnchor: Equatable, Sendable {
     private let archive: Data
     private let anchorDigest: Data
+    /// Exact genesis-derived network identity authenticated by the anchor.
+    public let networkId: NetworkId
     /// Operation identity authenticated by the finalized anchor.
     public let operationId: String
     /// Transaction hash authenticated by the finalized anchor.
@@ -487,6 +484,7 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
         )
         self.archive = Data(wireValue.noritoArchive)
         self.anchorDigest = Data(wireValue.anchorDigest)
+        self.networkId = wireValue.networkID
         self.operationId = wireValue.topUpOperationID.hexLowercased()
         self.finalizedTransactionHash = wireValue.finalizedTransactionHash.hexLowercased()
         self.finalizedBlockHeight = wireValue.finalizedHeight

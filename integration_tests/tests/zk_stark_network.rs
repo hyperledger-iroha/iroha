@@ -34,7 +34,7 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message, signature_header_value,
+    canonical_network_request_signature_message, signature_header_value,
 };
 use reqwest::{Client as HttpClient, StatusCode};
 
@@ -201,7 +201,14 @@ fn add_canonical_prove_headers(
         NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     let uri = signing_uri(url)?;
-    let message = canonical_request_signature_message(&method, &uri, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &method,
+        &uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
         .header(HEADER_ACCOUNT, client.account.to_string())

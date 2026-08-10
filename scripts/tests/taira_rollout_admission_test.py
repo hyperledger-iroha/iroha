@@ -1,3 +1,12 @@
+"""Post-provisioning archive validation tests.
+
+Production entry points are unconditionally closed by the controller-origin
+authority barrier.  This module replaces only that barrier so the independent
+archive, signature, mutation, and TOCTOU checks behind the trust boundary keep
+their focused coverage.  The production barrier itself is exercised without
+replacement in ``taira_privacy_protocol_provenance_gate_test.py``.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +50,22 @@ SUBSTITUTE_PUBLIC_KEY = bytes.fromhex(
     "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00"
 )
 SOURCE_DATE_EPOCH = 1_700_000_000
+
+
+@pytest.fixture(autouse=True)
+def _exercise_checks_behind_unprovisioned_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_evidence,
+        "require_controller_origin_authority_provisioned",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        linux_authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
 
 
 ReceiptMutation = Callable[[dict[str, object]], None]

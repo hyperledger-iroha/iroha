@@ -82,7 +82,7 @@ def valid_manifest() -> dict:
         ],
         "runtime_handles": {
             "monitoring": "monitoring-prod-fleet",
-            "hsm": "hsm-prod-release",
+            "external_signer": "external-signer-prod-release",
             "kms": "kms-prod-envelope",
             "webauthn": "webauthn-prod-operators",
         },
@@ -141,6 +141,12 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     assert summary["storage_provider_count"] == 2
     assert summary["gateway_count"] == 2
     assert summary["governance_dag_instance_count"] == 2
+    assert summary["runtime_handle_kinds"] == [
+        "monitoring",
+        "external_signer",
+        "kms",
+        "webauthn",
+    ]
     assert summary["signed_model_artifact_count"] == 1
     assert summary["recognized_lane_slot_count"] == 17
     assert summary["required_lane_slots"] == list(MODULE.DEFAULT_REQUIRED_GATES)
@@ -225,7 +231,14 @@ def test_schema_complete_production_topology_example_qualifies() -> None:
             "Governance DAG administrator identities must be unique",
         ),
         (
-            lambda payload: payload["runtime_handles"].pop("hsm"),
+            lambda payload: payload["runtime_handles"].pop("external_signer"),
+            "runtime_handles fields must match the schema-closed contract",
+        ),
+        (
+            lambda payload: (
+                payload["runtime_handles"].pop("external_signer"),
+                payload["runtime_handles"].update(hsm="hsm-prod-release"),
+            ),
             "runtime_handles fields must match the schema-closed contract",
         ),
         (
@@ -236,13 +249,13 @@ def test_schema_complete_production_topology_example_qualifies() -> None:
         ),
         (
             lambda payload: payload["runtime_handles"].update(
-                hsm="mockhsm-prod-release"
+                external_signer="mock-external-signer-prod-release"
             ),
-            "runtime_handles.hsm must be a canonical production runtime handle",
+            "runtime_handles.external_signer must be a canonical production runtime handle",
         ),
         (
             lambda payload: payload["runtime_handles"].update(
-                webauthn="hsm-prod-release"
+                webauthn="external-signer-prod-release"
             ),
             "runtime handles must be distinct",
         ),

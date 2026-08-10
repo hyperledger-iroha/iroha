@@ -76,8 +76,7 @@ fn exact_release_snapshot_binds_home_and_universal_finalized_views() {
         index_revision: 3,
     };
     let exact = MusubiExactReleaseSnapshotV1 {
-        chain_id: ChainId::from("musubi-publish-test"),
-        genesis_hash: [0x72; 32],
+        network_id: test_network_id(0x73),
         snapshot: snapshot(),
         home_release,
         universal_release,
@@ -418,8 +417,7 @@ fn archive_retention_decisions_are_bounded_and_fail_closed() {
         .expect("published archives remain retained even without a healthy location");
     assert!(referenced.must_retain());
     let page = MusubiArchiveRetentionPageV1 {
-        chain_id: ChainId::from("retention-model-test"),
-        genesis_hash: [0xE7; 32],
+        network_id: test_network_id(0xE7),
         items: vec![referenced],
         snapshot: snapshot(),
         finalized_time_ms: 1_700_000_000_000,
@@ -883,8 +881,7 @@ fn page_and_cursor_bounds_are_enforced() {
                 cursor: None,
             },
         },
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         items: Vec::new(),
         next_cursor: None,
         snapshot: snapshot(),
@@ -894,7 +891,7 @@ fn page_and_cursor_bounds_are_enforced() {
         .expect("resolver page has authoritative lock identity");
     assert!(
         MusubiResolverIndexPageV1 {
-            genesis_hash: [0; 32],
+            network_id: test_network_id(8),
             ..resolver_page
         }
         .validate()
@@ -909,8 +906,7 @@ fn page_and_cursor_bounds_are_enforced() {
                 cursor: None,
             },
         },
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         namespace_binding: MusubiNamespaceBindingV1 {
             namespace: "sora".parse().expect("namespace"),
             home_dataspace: DataSpaceId::new(7),
@@ -926,7 +922,7 @@ fn page_and_cursor_bounds_are_enforced() {
         .expect("directory page has authoritative lock identity");
     assert!(
         MusubiOrderedPackagePageV1 {
-            genesis_hash: [0; 32],
+            network_id: test_network_id(8),
             ..directory_page
         }
         .validate()
@@ -967,8 +963,7 @@ fn empty_response_pages_retain_their_exact_query_identity() {
     };
     let resolver = MusubiResolverIndexPageV1 {
         query: resolver_query.clone(),
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         items: Vec::new(),
         next_cursor: None,
         snapshot: snapshot(),
@@ -1016,8 +1011,7 @@ fn empty_response_pages_retain_their_exact_query_identity() {
     };
     let directory = MusubiOrderedPackagePageV1 {
         query: prefix_query.clone(),
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         namespace_binding: MusubiNamespaceBindingV1 {
             namespace: "sora".parse().expect("namespace"),
             home_dataspace: DataSpaceId::new(7),
@@ -1145,8 +1139,7 @@ fn resolver_next_cursor_may_bind_a_nonempty_byte_budgeted_short_page() {
     };
     let page = MusubiResolverIndexPageV1 {
         query: query.clone(),
-        chain_id: ChainId::from("musubi-resolver-page-test"),
-        genesis_hash: [0x52; 32],
+        network_id: test_network_id(0x53),
         items: vec![row],
         next_cursor: Some(cursor.clone()),
         snapshot,

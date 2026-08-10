@@ -59,6 +59,32 @@ external = true
 provenance = "checked-in public API facade; legacy generator requires repair before regeneration"
 
 [[generated]]
+name = "musubi-v1-signed-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/musubi/instructions_v1.json",
+  "fixtures/musubi/sdk_v1.json",
+]
+generator = "CARGO_TARGET_DIR=\"${IROHA_MUSUBI_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute non-symbolic private external Cargo target directory}\" python3 scripts/write_musubi_fixtures.py --output-root \"${IROHA_MUSUBI_FIXTURE_OUTPUT_ROOT:?set an existing absolute non-symbolic empty private external staging root}\""
+generator_sources = [
+  "crates/iroha_data_model/Cargo.toml",
+  "crates/iroha_data_model/src/bin/musubi_fixture_values.rs",
+  "crates/iroha_data_model/src/bin/musubi_fixtures.rs",
+  "crates/iroha_data_model/src/bin/musubi_sdk_fixture_values.rs",
+  "scripts/check_musubi_fixtures.py",
+  "scripts/write_musubi_fixtures.py",
+]
+inputs = [
+  "crates/iroha_data_model/src/id.rs",
+  "crates/iroha_data_model/src/isi/mod.rs",
+  "crates/iroha_data_model/src/isi/musubi.rs",
+  "crates/iroha_data_model/src/musubi.rs",
+  "crates/iroha_data_model/src/musubi/query_models.rs",
+  "crates/iroha_data_model/src/sorafs/pin_registry.rs",
+]
+check = "CARGO_TARGET_DIR=\"${IROHA_MUSUBI_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute non-symbolic private external Cargo target directory}\" python3 scripts/check_musubi_fixtures.py"
+
+[[generated]]
 name = "openapi-cargo-lock-pin"
 kind = "file"
 outputs = ["release/openapi-cargo-lock-v1.txt"]
@@ -82,9 +108,13 @@ outputs = [
   "artifacts/openapi/versions/current/manifest.json",
   "artifacts/openapi/versions.json",
 ]
-generator = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- openapi --output-root artifacts/openapi --unsigned-manifest && node tools/openapi/scripts/sync-openapi.mjs --version=current --latest --allow-unsigned --output-dir=artifacts/openapi"
+generator = "cp -R \"$PWD/artifacts/openapi/.\" \"${IROHA_OPENAPI_STAGE:?set an existing absolute private /private/tmp <run>/artifacts/<stage> directory}/\" && IROHA_RELEASE_ARTIFACT_ROOT=\"${IROHA_OPENAPI_STAGE%/*}\" IROHA_RELEASE_CANCEL_REQUEST_PATH=\"${IROHA_OPENAPI_STAGE%/*/*}/cancel-request.json\" bash ci/run_openapi_generator.sh --output-dir \"${IROHA_OPENAPI_STAGE}\" --unsigned-manifest && node tools/openapi/scripts/sync-openapi.mjs --version=current --latest --allow-unsigned --output-dir=\"${IROHA_OPENAPI_STAGE}\""
 generator_sources = [
+  "ci/check_openapi_spec.sh",
+  "ci/run_openapi_generator.sh",
   "crates/iroha_torii/src/openapi.rs",
+  "scripts/seal_workspace_source.py",
+  "scripts/sumeragi_v2_release_process_policy.sh",
   "tools/openapi/scripts/check-openapi-signatures.mjs",
   "tools/openapi/scripts/lib/openapi-manifest-v2.mjs",
   "tools/openapi/scripts/lib/openapi-provenance.mjs",
@@ -371,11 +401,15 @@ inputs = [
   "crates/**",
   "vendor/**",
 ]
-# The generator resolves the exact transitive local-package closure from tracked
-# Cargo manifests and binds its path+byte digest into the platform-independent
-# fixture. Cargo.lock is intentionally absent because it is ignored; its digest,
-# the fresh koto executable, and exact Git are attested only in private cache.
-# Live-tree publication remains a separate guarded operation.
+# The generator resolves the exact transitive local-package closure from present
+# indexed or nonignored-untracked Cargo manifests. The platform-independent
+# fixture binds every present build input by path+bytes without depending on its
+# tracked state, so committing the same overlay does not stale the fixture.
+# Index-only deletions and tracked/untracked classifications are authenticated in
+# the private cache attestation and before/after inventory guards. Cargo.lock is
+# intentionally absent because it is ignored; its digest, the fresh koto
+# executable, and exact Git are also attested only in private cache. Live-tree
+# publication remains a separate guarded operation.
 check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
 
 [[generated]]
@@ -422,6 +456,7 @@ check = "python3 scripts/gen_syscall_doc.py --check"
 name = "norito-rpc-fixtures"
 kind = "file"
 outputs = [
+  "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json",
   "fixtures/norito_rpc/typed_fee_payment_gas_limit.norito",
   "fixtures/norito_rpc/register_asset_definition.norito",
   "fixtures/norito_rpc/transfer_asset.norito",
@@ -489,10 +524,14 @@ outputs = [
 ]
 generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures"
 generator_sources = [
+  "crates/iroha/Cargo.toml",
+  "crates/iroha/src/client.rs",
   "tools/norito_codegen_exporter/src/lib.rs",
   "tools/norito_codegen_exporter/src/norito_rpc.rs",
+  "xtask/Cargo.toml",
   "xtask/src/main.rs",
   "xtask/src/norito_rpc.rs",
+  "xtask/src/norito_rpc/alias_setup_fixture.rs",
 ]
 inputs = [
   "crates/iroha_crypto/src/**/*.rs",
@@ -684,3 +723,91 @@ inputs = []
 check = "cargo test --locked -p iroha_monitor"
 external = true
 provenance = "historical reference trace; the original generator and recording are not tracked"
+
+# Kagami profile generation consumes the ignored/untracked root Cargo.lock at
+# runtime. The fail-closed wrapper authenticates its stable regular-file bytes
+# before and after every child: size=321032,
+# sha256=cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79.
+# Update both literal arguments only as a reviewed lock refresh; Cargo.lock must
+# not be listed below because generated-file inputs must be tracked.
+[[generated]]
+name = "kagami-iroha3-dev-profile-bundle"
+kind = "file"
+outputs = [
+  "defaults/kagami/iroha3-dev/README.md",
+  "defaults/kagami/iroha3-dev/config-peer-1.toml",
+  "defaults/kagami/iroha3-dev/config-peer-2.toml",
+  "defaults/kagami/iroha3-dev/config-peer-3.toml",
+  "defaults/kagami/iroha3-dev/config.toml",
+  "defaults/kagami/iroha3-dev/docker-compose.yml",
+  "defaults/kagami/iroha3-dev/genesis.expected_hash",
+  "defaults/kagami/iroha3-dev/genesis.json",
+  "defaults/kagami/iroha3-dev/genesis.public_key",
+  "defaults/kagami/iroha3-dev/genesis.signed.nrt",
+  "defaults/kagami/iroha3-dev/peer0.toml",
+  "defaults/kagami/iroha3-dev/peer1.toml",
+  "defaults/kagami/iroha3-dev/peer2.toml",
+  "defaults/kagami/iroha3-dev/peer3.toml",
+  "defaults/kagami/iroha3-dev/verify.txt",
+]
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator_sources = [
+  "scripts/kagami_profile_owner.py",
+  "xtask/src/kagami_profiles.rs",
+  "xtask/src/main.rs",
+]
+inputs = [
+  ".cargo/config.toml",
+  "Cargo.toml",
+  "crates/**",
+  "rust-toolchain.toml",
+  "vendor/**",
+  "xtask/Cargo.toml",
+]
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+
+# This output set is intentionally disjoint from the dev owner above. The
+# incomplete iroha3-nexus directory remains unregistered until all 15 outputs
+# can be generated from an authenticated operator-supplied canonical XOR id.
+[[generated]]
+name = "kagami-iroha3-taira-profile-bundle"
+kind = "file"
+outputs = [
+  "defaults/kagami/iroha3-taira/README.md",
+  "defaults/kagami/iroha3-taira/config-peer-1.toml",
+  "defaults/kagami/iroha3-taira/config-peer-2.toml",
+  "defaults/kagami/iroha3-taira/config-peer-3.toml",
+  "defaults/kagami/iroha3-taira/config-peer-4.toml",
+  "defaults/kagami/iroha3-taira/config-peer-5.toml",
+  "defaults/kagami/iroha3-taira/config-peer-6.toml",
+  "defaults/kagami/iroha3-taira/config.toml",
+  "defaults/kagami/iroha3-taira/docker-compose.yml",
+  "defaults/kagami/iroha3-taira/genesis.expected_hash",
+  "defaults/kagami/iroha3-taira/genesis.json",
+  "defaults/kagami/iroha3-taira/genesis.public_key",
+  "defaults/kagami/iroha3-taira/genesis.signed.nrt",
+  "defaults/kagami/iroha3-taira/peer0.toml",
+  "defaults/kagami/iroha3-taira/peer1.toml",
+  "defaults/kagami/iroha3-taira/peer2.toml",
+  "defaults/kagami/iroha3-taira/peer3.toml",
+  "defaults/kagami/iroha3-taira/peer4.toml",
+  "defaults/kagami/iroha3-taira/peer5.toml",
+  "defaults/kagami/iroha3-taira/peer6.toml",
+  "defaults/kagami/iroha3-taira/sorafs_sites.json",
+  "defaults/kagami/iroha3-taira/verify.txt",
+]
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-taira --output-root \"${IROHA_KAGAMI_TAIRA_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator_sources = [
+  "scripts/kagami_profile_owner.py",
+  "xtask/src/kagami_profiles.rs",
+  "xtask/src/main.rs",
+]
+inputs = [
+  ".cargo/config.toml",
+  "Cargo.toml",
+  "crates/**",
+  "rust-toolchain.toml",
+  "vendor/**",
+  "xtask/Cargo.toml",
+]
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-taira --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"

@@ -92,13 +92,40 @@ use iroha_primitives::{
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::Metrics;
-use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+};
 use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
 use nonzero_ext::nonzero;
 
 use super::{deserialize::default_zk, *};
 use crate::smartcontracts::ValidQuery;
 use crate::telemetry::StateTelemetry;
+
+fn test_da_pin_intent(
+    network_id: NetworkId,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+    manifest_hash: ManifestDigest,
+) -> DaPinIntent {
+    DaPinIntent::new(
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        manifest_hash,
+        crate::da::signed_test_ingest_authorization(
+            network_id,
+            &ALICE_KEYPAIR,
+            lane_id,
+            epoch,
+            sequence,
+            1,
+        ),
+    )
+}
 
 #[test]
 fn musubi_v1_world_defaults_and_domain_generation_are_deterministic() {
@@ -800,7 +827,7 @@ ledger::nft::create_for_all_users();
     let authority = ALICE_ID.clone();
     let code_hash = ivm::contract_code_hash(&program);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &DEFAULT_TEST_NETWORK_ID,
         &authority,
         95,
         DataSpaceId::UNIVERSAL,
@@ -1202,7 +1229,14 @@ fn world_transaction_apply_commits_sorafs_da_and_direct_lane_overlays() {
     let ticket = StorageTicketId::new([0x94; 32]);
     let manifest = ManifestDigest::new([0x95; 32]);
     let alias = "world-transaction-apply-regression".to_owned();
-    let mut intent = DaPinIntent::new(lane_id, epoch, sequence, ticket, manifest);
+    let mut intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
+        lane_id,
+        epoch,
+        sequence,
+        ticket,
+        manifest,
+    );
     intent.alias = Some(alias.clone());
     let intent_with_location = DaPinIntentWithLocation {
         intent: intent.clone(),
@@ -3555,7 +3589,7 @@ fn asset_definition_alias_bindings_roundtrip_through_state_json() {
 fn contract_alias_bindings_roundtrip_through_state_json() {
     let mut world = World::default();
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &DEFAULT_TEST_NETWORK_ID,
         &ALICE_ID,
         41,
         DataSpaceId::UNIVERSAL,
@@ -3641,7 +3675,7 @@ fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
         LiveQueryStore::start_test(),
     );
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         42,
         DataSpaceId::UNIVERSAL,
@@ -4525,41 +4559,46 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         [],
         [],
     );
-    let mut block = world.block();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let world = &state.world;
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
 
     {
-        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut transaction = block.transaction();
         let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
-        transaction.track_asset_holder(&asset_id);
-        transaction.assets.insert(asset_id.clone(), value);
+        transaction.world.track_asset_holder(&asset_id);
+        transaction.world.assets.insert(asset_id.clone(), value);
         let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
             .build(&ALICE_ID)
             .into_key_value();
-        transaction.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(nft_id.clone(), value);
         // Drop without applying: the primary rows and every derived bucket must roll back.
     }
-    assert!(block.assets.get(&asset_id).is_none());
-    assert!(block.assets_by_account.get(&ALICE_ID).is_none());
-    assert!(block.assets_by_domain.get(&domain).is_none());
-    assert!(block.nfts.get(&nft_id).is_none());
-    assert!(block.nfts_by_domain.get(&domain).is_none());
+    assert!(block.world.assets.get(&asset_id).is_none());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_none());
+    assert!(block.world.assets_by_domain.get(&domain).is_none());
+    assert!(block.world.nfts.get(&nft_id).is_none());
+    assert!(block.world.nfts_by_domain.get(&domain).is_none());
 
     {
-        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut transaction = block.transaction();
         let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
-        transaction.track_asset_holder(&asset_id);
-        transaction.assets.insert(asset_id.clone(), value);
+        transaction.world.track_asset_holder(&asset_id);
+        transaction.world.assets.insert(asset_id.clone(), value);
         let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
             .build(&ALICE_ID)
             .into_key_value();
-        transaction.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(nft_id.clone(), value);
         transaction.apply();
     }
-    assert!(block.assets_by_account.get(&ALICE_ID).is_some());
-    assert!(block.assets_by_domain.get(&domain).is_some());
-    assert!(block.nfts_by_domain.get(&domain).is_some());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_some());
+    assert!(block.world.assets_by_domain.get(&domain).is_some());
+    assert!(block.world.nfts_by_domain.get(&domain).is_some());
 
-    block.commit();
+    block.commit().expect("commit explorer index fixture");
     let view = world.view();
     assert_eq!(
         view.assets_by_account().get(&ALICE_ID),
@@ -11077,7 +11116,7 @@ fn autoscale_drain_state_for_test(
         version: 1,
         intent: LaneDrainIntentV1 {
             version: 1,
-            chain_id_digest: crate::merge::merge_network_id_digest(&DEFAULT_TEST_NETWORK_ID),
+            network_id: DEFAULT_TEST_NETWORK_ID,
             lane_id,
             dataspace_id,
             lane_incarnation,
@@ -11969,7 +12008,8 @@ fn autoscale_scale_out_height_mismatch_does_not_publish_storage_or_da() {
     store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xB8);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13401,7 +13441,8 @@ fn autoscale_commit_failure_does_not_publish_staged_da_indexes() {
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root), None, 1, 0);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xC0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13517,7 +13558,8 @@ fn autoscale_commit_kura_preflight_failure_does_not_publish_staged_da_or_tiered_
     let elastic_snapshot_dir = cold_root.join("lanes").join(&elastic_entry.kura_segment);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13642,7 +13684,8 @@ fn autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_
         .expect("seed conflicting tiered snapshot path");
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD4);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13825,7 +13868,8 @@ fn autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_o
     seed_verified_lane_relay_record(&state, &retired_relay);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xE0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -14084,7 +14128,8 @@ fn autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da
     record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xE4);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -17030,7 +17075,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
     ));
     let validator_set = vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())];
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, 0x5B),
         &routing_plan,
         crate::queue::QueuePlanAdmissionContextV2 {
@@ -17062,7 +17107,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
             .expect("block-local route-member key");
     let route_member_payload = State::queue_plan_pending_route_member_marker_payload(&route_member)
         .expect("block-local route-member payload");
-    let chain_id_digest = binding.chain_id_digest;
+    let network_id_digest = binding.network_id_digest;
     let entrypoint_hash = binding.entrypoint_hash.clone();
     let registry_key = binding.registry_key();
     state_block.world.smart_contract_state.insert(
@@ -17072,7 +17117,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
             .expect("block-local registry payload"),
     );
     state_block.world.smart_contract_state.insert(
-        State::queue_plan_pending_obligation_marker_key(chain_id_digest, entrypoint_hash)
+        State::queue_plan_pending_obligation_marker_key(network_id_digest, entrypoint_hash)
             .expect("block-local obligation key"),
         State::queue_plan_pending_obligation_marker_payload(&obligation)
             .expect("block-local obligation payload"),
@@ -19760,7 +19805,8 @@ fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
         block.commit();
     }
 
-    let mut retired_pin_intent = DaPinIntent::new(
+    let mut retired_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         9,
         0,
@@ -19768,7 +19814,8 @@ fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
         ManifestDigest::new([0xF4; 32]),
     );
     retired_pin_intent.alias = Some("committed-autoscale-retired-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         9,
         1,
@@ -20336,7 +20383,8 @@ fn da_pin_intent_index_prune_keys_select_embedded_and_index_lanes() {
         block_height: 9,
         index_in_bundle: 0,
     };
-    let mut reset_intent = DaPinIntent::new(
+    let mut reset_intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
         reset_lane,
         3,
         0,
@@ -20344,7 +20392,8 @@ fn da_pin_intent_index_prune_keys_select_embedded_and_index_lanes() {
         ManifestDigest::new([0x51; 32]),
     );
     reset_intent.alias = Some("reset-pin".to_owned());
-    let mut survivor_intent = DaPinIntent::new(
+    let mut survivor_intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
         survivor_lane,
         3,
         1,
@@ -20530,7 +20579,8 @@ fn autoscale_transition_prunes_retired_managed_lane_runtime_caches_and_pin_index
             .is_some(),
         "test setup should seed retired-lane pin intents"
     );
-    let mut retired_pin_intent = DaPinIntent::new(
+    let mut retired_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         7,
         0,
@@ -20538,7 +20588,8 @@ fn autoscale_transition_prunes_retired_managed_lane_runtime_caches_and_pin_index
         ManifestDigest::new([0xB5; 32]),
     );
     retired_pin_intent.alias = Some("retired-lane-world-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         7,
         1,
@@ -20695,7 +20746,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
     let mut retirement = autoscale_signed_block_with_committed_fragments(Some(&carrier), 300, 0);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &close);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &carrier);
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         9,
         0,
@@ -20703,7 +20755,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
         ManifestDigest::new([0xC5; 32]),
     );
     retired_intent.alias = Some("same-block-retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         9,
         1,
@@ -20711,7 +20764,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
         ManifestDigest::new([0xC7; 32]),
     );
     retained_intent.alias = Some("same-block-retained-pin".to_owned());
-    let mut retained_side_intent = DaPinIntent::new(
+    let mut retained_side_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retained_side_lane_id,
         9,
         2,
@@ -25131,7 +25185,8 @@ fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() 
     };
     nexus.autoscale.enabled = true;
     let state = State::new_with_nexus_for_testing(World::default(), nexus, query_handle);
-    let mut future_pin_intent = DaPinIntent::new(
+    let mut future_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(1),
         7,
         0,
@@ -25139,7 +25194,8 @@ fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() 
         ManifestDigest::new([0x75; 32]),
     );
     future_pin_intent.alias = Some("future-created-repair-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         7,
         1,
@@ -29305,7 +29361,8 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             reset_lane,
             1,
             1,
@@ -29515,7 +29572,8 @@ fn apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             reset_lane,
             1,
             1,
@@ -31095,7 +31153,8 @@ fn apply_lane_lifecycle_retire_prunes_lane_relays() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             LaneId::new(1),
             1,
             1,
@@ -31246,7 +31305,8 @@ fn apply_lane_lifecycle_retire_prunes_da_pin_intent_world_indexes() {
         .apply_lane_lifecycle(&plan)
         .expect("added pin test lane");
 
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         5,
         0,
@@ -31254,7 +31314,8 @@ fn apply_lane_lifecycle_retire_prunes_da_pin_intent_world_indexes() {
         ManifestDigest::new([0x71; 32]),
     );
     retired_intent.alias = Some("retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         5,
         1,
@@ -31356,7 +31417,8 @@ fn set_nexus_retire_prunes_da_pin_intent_world_indexes() {
         })
         .expect("seed pin test lane through set_nexus");
 
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         5,
         0,
@@ -31364,7 +31426,8 @@ fn set_nexus_retire_prunes_da_pin_intent_world_indexes() {
         ManifestDigest::new([0x73; 32]),
     );
     retired_intent.alias = Some("set-nexus-retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         5,
         1,
@@ -31655,7 +31718,8 @@ fn apply_lane_lifecycle_recreated_lane_hides_previous_da_indexes_after_kura_repl
     );
 
     let stale_record = sample_da_commitment_record(recreated_lane_id, 2, 1, 0xC8);
-    let mut stale_pin = DaPinIntent::new(
+    let mut stale_pin = test_da_pin_intent(
+        *state.network_id_ref(),
         recreated_lane_id,
         2,
         1,
@@ -32022,7 +32086,6 @@ fn durable_lane_diagnostics_reconstruct_after_kura_restart() {
     let kura_config =
         strict_kura_config_for_testing(temp_dir.path().join("restart-diagnostics-kura"));
     let lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
-
     let expected = {
         let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initialize Kura");
         let state = State::new_for_testing(
@@ -32056,6 +32119,7 @@ fn durable_lane_diagnostics_reconstruct_after_kura_restart() {
             CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
         );
         assert!(snapshot.lane_block_sessions[0].committed_session_drained);
+        assert_passive_state_diagnostics(&state, &kura, &lane_config, &session);
         let autonomous = state
             .autonomous_lane_execution_diagnostics()
             .expect("derive restart-stable autonomous diagnostics");
@@ -33652,7 +33716,8 @@ fn lane_lifecycle_same_shard_dataspace_rebind_hides_previous_da_indexes_after_ku
     );
 
     let stale_record = sample_da_commitment_record(rebound_lane_id, 2, 1, 0xCE);
-    let mut stale_pin = DaPinIntent::new(
+    let mut stale_pin = test_da_pin_intent(
+        *state.network_id_ref(),
         rebound_lane_id,
         2,
         1,
@@ -34987,7 +35052,8 @@ fn seed_da_runtime_record_for_lane(
             Vec::new(),
         ),
     );
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         1,
         1,
@@ -35349,6 +35415,7 @@ fn finalize_lane_relay_for_state_test(
         block
             .canonical_wire()
             .expect("encode relay finality carrier")
+            .as_framed()
             .len(),
     )
     .expect("relay finality carrier length fits u64");
@@ -41820,7 +41887,8 @@ fn da_pin_intents_hydrate_from_kura_block_log() {
         })
         .expect("apply Nexus catalog for DA pin replay test");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         7,
         3,
@@ -41897,7 +41965,8 @@ fn da_pin_intents_kura_replay_rejects_future_created_autoscale_lane() {
         nexus.lane_catalog = catalog;
     }
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         0,
@@ -42063,14 +42132,22 @@ fn da_pin_intents_kura_replay_preserves_committed_owner_after_account_removed() 
         })
         .expect("apply Nexus catalog for owned DA pin replay test");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         9,
         0,
         StorageTicketId::new([0x44; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x55; 32]),
     );
-    intent.owner = Some(owner_id.clone());
+    intent.authorization = crate::da::signed_test_ingest_authorization(
+        *state.network_id_ref(),
+        &crate::state::checked_keypair(),
+        lane,
+        intent.epoch,
+        intent.sequence,
+        1,
+    );
     intent.alias = Some("owned-alias".to_string());
 
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
@@ -42116,8 +42193,7 @@ fn da_pin_intents_kura_replay_preserves_committed_owner_after_account_removed() 
         .expect("committed owned pin intent must survive Kura replay");
     assert_eq!(replayed.intent, intent);
     assert_eq!(
-        replayed.intent.owner.as_ref(),
-        Some(&owner_id),
+        &replayed.intent.authorization.owner, &owner_id,
         "replay must preserve the historical owner field"
     );
     assert_eq!(
@@ -43909,7 +43985,8 @@ fn da_bundle_indexes_are_not_committed_when_block_height_mismatches() {
     let signed_first: SignedBlock = first_block.into();
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xA0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -46714,7 +46791,14 @@ fn block_and_revert_rewinds_da_indexes() {
         storage_ticket: StorageTicketId::new([0xFF; 32]),
         manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAA; 32]),
         alias: Some("rewind-alias".to_string()),
-        owner: None,
+        authorization: crate::da::signed_test_ingest_authorization(
+            *state.network_id_ref(),
+            &keypair,
+            LaneId::new(0),
+            1,
+            2,
+            1,
+        ),
     };
     let pin_bundle =
         iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![pin_intent.clone()]);
@@ -47194,7 +47278,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
 
     let lane = lane_config.primary().lane_id;
 
-    let mut superseded = DaPinIntent::new(
+    let mut superseded = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         1,
         1,
@@ -47203,7 +47288,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     superseded.alias = Some("alias-one".to_string());
 
-    let mut winner = DaPinIntent::new(
+    let mut winner = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         2,
         0,
@@ -47212,7 +47298,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     winner.alias = Some("alias-one".to_string());
 
-    let mut zero_manifest = DaPinIntent::new(
+    let mut zero_manifest = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         3,
         0,
@@ -47221,7 +47308,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     zero_manifest.alias = Some("alias-drop".to_string());
 
-    let plain = DaPinIntent::new(
+    let plain = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         4,
         0,
@@ -47277,7 +47365,12 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
 fn da_pin_intents_drop_missing_owner_accounts() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut world = World::default();
+    world.accounts.insert(
+        ALICE_ID.clone(),
+        iroha_data_model::account::AccountValue::new(AccountDetails::default()),
+    );
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let lane_count = nonzero!(1_u32);
     let catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -47289,18 +47382,27 @@ fn da_pin_intents_drop_missing_owner_accounts() {
         })
         .expect("configure nexus");
     let lane_id = state.nexus_snapshot().lane_config.primary().lane_id;
-    let (missing_owner_id, _) = gen_account_in("missing-owner");
+    let (_, missing_owner_keypair) = gen_account_in("missing-owner");
 
-    let mut missing_owner = DaPinIntent::new(
+    let mut missing_owner = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         6,
         0,
         StorageTicketId::new([0x10; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
     );
-    missing_owner.owner = Some(missing_owner_id);
+    missing_owner.authorization = crate::da::signed_test_ingest_authorization(
+        *state.network_id_ref(),
+        &missing_owner_keypair,
+        lane_id,
+        missing_owner.epoch,
+        missing_owner.sequence,
+        1,
+    );
 
-    let mut valid = DaPinIntent::new(
+    let mut valid = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         6,
         1,
@@ -47360,7 +47462,8 @@ fn da_pin_intents_persist_into_world_indexes() {
         })
         .expect("configure nexus");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         5,
         0,
@@ -47477,7 +47580,8 @@ fn da_pin_intent_ingest_rejects_future_created_autoscale_lane() {
         nexus.lane_catalog = catalog;
     }
 
-    let mut early = DaPinIntent::new(
+    let mut early = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         0,
@@ -47497,7 +47601,8 @@ fn da_pin_intent_ingest_rejects_future_created_autoscale_lane() {
             .is_none()
     );
 
-    let mut active = DaPinIntent::new(
+    let mut active = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         1,
@@ -48880,8 +48985,8 @@ fn reinstalling_exact_axt_policy_snapshot_preserves_merge_write_set() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x44; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 7,
-        min_sub_nonce: 3,
+        active_handle_era: 7,
+        next_handle_counter: 3,
         current_slot: 9,
     };
     {
@@ -53446,8 +53551,9 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
     };
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        chain_id: ChainId::from("explorer-index-test"),
-        genesis_hash: [0xA5; 32],
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xA5; 32]),
+        )),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: fee_asset,
@@ -53478,7 +53584,7 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
 
 #[allow(clippy::too_many_lines)]
 fn indexed_settled_vpn_lease(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     client: &AccountId,
     account_tag: u8,
     ordinal: u16,
@@ -53499,15 +53605,15 @@ fn indexed_settled_vpn_lease(
             .expect("fixture VPN address slot arithmetic"),
     )
     .expect("fixture VPN address slot");
-    let lease_id = derive_vpn_lease_id_v1(chain_id, quote_id, client);
-    let session_id = derive_vpn_session_id_v1(chain_id, quote_id, client, address_slot);
+    let lease_id = derive_vpn_lease_id_v1(network_id, quote_id, client);
+    let session_id = derive_vpn_session_id_v1(network_id, quote_id, client, address_slot);
     let operator_account_id = AccountId::new(operator_key.public_key().clone());
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"),
         "xor".parse().expect("XOR asset name"),
     );
     let custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
-        chain_id,
+        network_id,
         &lease_id,
         &asset_definition,
     )
@@ -53542,7 +53648,7 @@ fn indexed_settled_vpn_lease(
     };
     let signed_quote = VpnSignedQuoteV1::try_sign(
         VpnQuoteBodyV1 {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             quote_id,
             lease_id,
             session_id,
@@ -53613,6 +53719,23 @@ fn indexed_settled_vpn_lease(
         earned_fee: Quantity::from(1_u32),
         refunded_fee: Quantity::from(9_u32),
     }
+}
+
+#[test]
+fn vpn_lease_projection_rejects_a_foreign_exact_network() {
+    let operator_key = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
+        .expect("deterministic VPN operator key");
+    let local_network = *DEFAULT_TEST_NETWORK_ID;
+    let foreign_network = NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFE; Hash::LENGTH])),
+    );
+    let local = indexed_settled_vpn_lease(&local_network, &*ALICE_ID, 1, 1, &operator_key);
+    let foreign = indexed_settled_vpn_lease(&foreign_network, &*ALICE_ID, 1, 1, &operator_key);
+
+    validate_vpn_lease_network(&local, &local_network).expect("local VPN lease network");
+    let error = validate_vpn_lease_network(&foreign, &local_network)
+        .expect_err("foreign VPN lease must fail exact-network restoration");
+    assert!(error.contains("different exact network"));
 }
 
 #[test]
@@ -53784,6 +53907,7 @@ fn governance_unlock_stats_snapshot_obeys_transaction_and_block_visibility() {
 #[allow(clippy::too_many_lines)]
 fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     let chain_id = ChainId::from("derived-index-restart");
+    let network_id = *DEFAULT_TEST_NETWORK_ID;
     let operator_key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
         .expect("deterministic VPN operator key");
     let alice_id = (*ALICE_ID).clone();
@@ -53800,7 +53924,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     ] {
         for ordinal in 0..lease_count {
             let record = indexed_settled_vpn_lease(
-                &chain_id,
+                &network_id,
                 client,
                 account_tag,
                 u16::try_from(ordinal).expect("fixture VPN ordinal"),
@@ -54917,7 +55041,7 @@ fn raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         77,
         DataSpaceId::UNIVERSAL,
@@ -55434,13 +55558,9 @@ fn contract_call_trigger_enforces_entrypoint_authorization_before_argument_decod
         .expect("bounded trigger callback arguments");
 
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        0,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive contract address");
+    let contract_address =
+        ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+            .expect("derive contract address");
     let contract_subject = contract_address.subject_id();
 
     let block1 = new_dummy_block_with_payload(|header| {
@@ -55742,7 +55862,7 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         95,
         DataSpaceId::UNIVERSAL,
@@ -56400,7 +56520,7 @@ fn dummy_merge_qc() -> MergeQuorumCertificate {
         0,
         1,
         HashOf::from_untyped_unchecked(Hash::new(b"dummy-merge-parent")),
-        iroha_crypto::Hash::new(b"chain"),
+        *DEFAULT_TEST_NETWORK_ID,
         VALIDATOR_SET_HASH_VERSION_V1,
         HashOf::new(&validator_set),
         validator_set,
@@ -56938,7 +57058,11 @@ fn merge_carrier_finality_artifact(
         "merge-carrier finality fixtures must form a contiguous chain"
     );
     let context = HeightContext {
-        chain_id: ChainId::from("state-merge-carrier-finality-test"),
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"state-merge-carrier-finality-test",
+            )),
+        ),
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -57210,7 +57334,7 @@ fn queue_plan_admission_certificate_for_state_test(
     };
     let entrypoint = queue_plan_entrypoint_for_state_test(state, tag);
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &entrypoint,
         &routing_plan,
         admission_context,
@@ -58748,7 +58872,7 @@ fn merge_qc_for_candidate(
         candidate.epoch_id,
         candidate.carrier_height,
         candidate.carrier_parent_hash,
-        crate::merge::merge_network_id_digest(state.network_id_ref()),
+        *state.network_id_ref(),
         VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash,
         validator_set,
@@ -60290,21 +60414,20 @@ fn commit_merge_entry_rejects_invalid_aggregate_signature() {
 }
 
 #[test]
-fn commit_merge_entry_rejects_qc_for_another_chain() {
+fn commit_merge_entry_rejects_qc_for_another_network() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     let keypairs = configure_commit_topology(&state, 1);
     let candidate = merge_candidate_with_lanes(1, 1);
     let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
-    qc.chain_id_digest = Hash::new(b"another-chain");
-
+    qc.network_id = crate::sumeragi::synthetic_network_id("foreign-merge-qc-genesis");
     let err = state
         .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
-        .expect_err("cross-chain QC must fail closed");
+        .expect_err("cross-network QC must fail closed");
     assert!(matches!(
         err,
-        MergeLedgerCommitError::MergeQCChainIdMismatch { .. }
+        MergeLedgerCommitError::MergeQCNetworkIdMismatch { .. }
     ));
 }
 

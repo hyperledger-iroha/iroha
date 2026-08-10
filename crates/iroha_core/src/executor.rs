@@ -7214,7 +7214,8 @@ impl Executor {
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                // Thread chain_id from StateTransaction into the IVM host for VRF binding
+                // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
+                // hydration above installs the exact NetworkId used by VRF verification.
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
@@ -11700,7 +11701,9 @@ mod tests {
     fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
         let authority = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             31,
             DataSpaceId::UNIVERSAL,
@@ -12133,12 +12136,15 @@ mod tests {
 
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
-        let chain_id = ChainId::from("initial-governance-scope-regression");
+        let network_id: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("canonical test network id");
         let contract_address =
-            ContractAddress::derive(&chain_id, &authority, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 1, DataSpaceId::UNIVERSAL)
                 .expect("canonical contract address");
         let other_contract_address =
-            ContractAddress::derive(&chain_id, &authority, 2, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 2, DataSpaceId::UNIVERSAL)
                 .expect("second canonical contract address");
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
@@ -12258,11 +12264,12 @@ mod tests {
                 }),
             ]),
         );
-        let state = State::new_with_chain(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id,
+            iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id,
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
@@ -12568,7 +12575,9 @@ mod tests {
         // The address deliberately embeds the attacker as its subject. Contract subjects are
         // not registrar authorities and therefore cannot mint invocation permissions.
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -13839,7 +13848,9 @@ mod tests {
     fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
         let subject = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &subject,
             404,
             DataSpaceId::UNIVERSAL,
@@ -13908,7 +13919,9 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             505,
             DataSpaceId::UNIVERSAL,
@@ -14064,7 +14077,9 @@ mod tests {
         );
 
         let sibling_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             506,
             DataSpaceId::UNIVERSAL,
@@ -14177,7 +14192,9 @@ mod tests {
                 .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             405,
             DataSpaceId::UNIVERSAL,
@@ -14903,7 +14920,9 @@ mod tests {
             ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -18154,7 +18173,9 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             808,
             DataSpaceId::UNIVERSAL,
@@ -18261,7 +18282,9 @@ mod tests {
             .insert(contract_subject.clone(), contract_address.clone());
 
         let inactive_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             809,
             DataSpaceId::UNIVERSAL,
@@ -18342,7 +18365,9 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18430,7 +18455,9 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18492,7 +18519,9 @@ mod tests {
             beneficiary.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18553,7 +18582,9 @@ mod tests {
                 .expect("commit bootstrap block");
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &alice_id,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -18677,7 +18708,9 @@ mod tests {
                 other => panic!("unsupported test instruction kind {other}"),
             };
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &caller,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -19571,7 +19604,9 @@ seiyaku GuardedValue {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -19915,7 +19950,9 @@ seiyaku OrderedBatchGuard {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             93,
             DataSpaceId::UNIVERSAL,
@@ -20137,7 +20174,9 @@ seiyaku MeteredFailure {
         let account = Account::new(authority.clone()).build(&authority);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             94,
             DataSpaceId::UNIVERSAL,
@@ -20338,7 +20377,9 @@ seiyaku IdentityRequired {
     #[test]
     fn contract_invocation_rejects_a_live_code_rebind() {
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             77,
             DataSpaceId::UNIVERSAL,
@@ -20387,7 +20428,9 @@ seiyaku IdentityRequired {
         );
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             1,
             DataSpaceId::UNIVERSAL,
@@ -20428,7 +20471,9 @@ seiyaku IdentityRequired {
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
             .expect("prepare nested-view contract");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             2,
             DataSpaceId::UNIVERSAL,
@@ -20610,7 +20655,9 @@ seiyaku IdentityRequired {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             44,
             DataSpaceId::UNIVERSAL,

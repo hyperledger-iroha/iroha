@@ -16,7 +16,7 @@ SPDX-License-Identifier: Apache-2.0
 - Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
 - Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
   - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independent of note ordering.
+  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || network_id)`, where `network_id` is the exact genesis-derived `NetworkId`, independent of note ordering.
   - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
 - Specialized confidential protocols transport Norito-encoded proof payloads containing:
   - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
@@ -212,7 +212,7 @@ deterministic and wallets have time to adjust.
   metadata, and validate retained roots and checkpoints. Hot consensus writes
   never substitute that linear rebuild for incremental validation.
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
-- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
+- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, network_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
 ### V1 public-amount proof scalars
 
@@ -287,7 +287,7 @@ CLI command, or SDK transaction builder may expose either circuit directly.
   when retained roots and checkpoints do not authenticate under the profile.
 - The ordered commitment prefix and bounded exact root suffix (per asset with
   frontier checkpoints), `NullifierSet` keyed by
-  `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, and
+  `(network_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, and
   `PoseidonParams` are stored in world state.
 - Mempool maintains transient `NullifierIndex` and `AnchorIndex` structures for early duplicate detection and anchor age checks.
 - Norito schema updates include canonical ordering for public inputs; round-trip tests ensure encoding determinism.
@@ -344,8 +344,8 @@ lockstep.
 
 ### Replay-safe handshake flow
 
-1. Each attempt negotiates a fresh SoraNet or Noise session key. The signed payload (`handshake_signature_payload`) uses an explicit V1 domain and binds the complete 256-bit domain-separated session hash, identity algorithm and public key, Norito-encoded advertised address, relay/consensus/confidential/crypto/trust capabilities, mandatory configured `ChainId`, and presence/value of any TLS or QUIC certificate fingerprint. The message is AEAD-encrypted before it leaves the node.
-2. The responder derives the same full session hash and verifies the long-term peer signature over those exact `HandshakeHelloV1` claims before enforcing or using them. Replaying a captured message in another session, altering a capability, connecting on another chain, or changing the authenticated transport binding therefore fails signature verification deterministically; the compact 64-bit connection disambiguator is used only for simultaneous-connection tie-breaking.
+1. Each attempt negotiates a fresh SoraNet or Noise session key. The signed payload (`handshake_signature_payload`) uses an explicit V1 domain and binds the complete 256-bit domain-separated session hash, identity algorithm and public key, Norito-encoded advertised address, relay/consensus/confidential/crypto/trust capabilities, mandatory exact genesis-derived `NetworkId`, and presence/value of any TLS or QUIC certificate fingerprint. The message is AEAD-encrypted before it leaves the node.
+2. The responder derives the same full session hash and verifies the long-term peer signature over those exact `HandshakeHelloV1` claims before enforcing or using them. Replaying a captured message in another session, altering a capability, connecting to a network with another genesis hash (even under the same display name), or changing the authenticated transport binding therefore fails signature verification deterministically; the compact 64-bit connection disambiguator is used only for simultaneous-connection tie-breaking.
 3. Confidential capability flags and the `ConfidentialFeatureDigest` travel inside the signed `HandshakeConfidentialMeta`. After authentication, the receiver compares the tuple `{ enabled, assume_valid, verifier_backend, digest }` against its locally configured `ConfidentialHandshakeCaps`; any mismatch exits early with `HandshakeConfidentialMismatch` before the transport transitions to `Ready`.
 4. Operators MUST recompute the digest (via `compute_confidential_feature_digest`) and restart nodes with the updated registries/policies before reconnecting. Peers advertising old digests continue to fail the handshake, preventing stale state from re-entering the validator set.
 5. Handshake successes and failures update the standard `iroha_p2p::peer` counters (`handshake_failure_count`, error taxonomy helpers) and emit structured log entries tagged with the remote peer ID and digest fingerprint. Monitor these indicators to catch replay attempts or misconfigurations during rollout.
@@ -467,7 +467,7 @@ lockstep.
 
 ## Implementation Phasing
 1. **Phase M0 — Stop-Ship Hardening**
-   - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) with deterministic commitment ordering enforced in ledger updates.
+   - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, exact genesis-derived `network_id`) with deterministic commitment ordering enforced in ledger updates.
    - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
    - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
    - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.

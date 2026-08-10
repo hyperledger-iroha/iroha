@@ -429,9 +429,9 @@ pub mod isi {
         else {
             return Ok(());
         };
-        if &next.chain_id != &state_transaction.chain_id {
+        if next.network_id != state_transaction.network_id {
             return Err(invalid_smart_contract_parameter(
-                "finalized-reputation archive retention request targets another chain",
+                "finalized-reputation archive retention request targets another network",
             ));
         }
         if next.compact_through.height >= state_transaction.block_height() {
@@ -1978,12 +1978,12 @@ pub mod isi {
 
     fn derive_ballot_nullifier(
         domain_tag: &str,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         election_id: &str,
         commit: &[u8; 32],
     ) -> [u8; 32] {
         let mut input = Vec::with_capacity(
-            domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+            domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
         );
         // Length-prefix fields to avoid delimiter collisions in concatenated inputs.
         let push_len = |input: &mut Vec<u8>, len: usize| {
@@ -1992,8 +1992,8 @@ pub mod isi {
         };
         push_len(&mut input, domain_tag.len());
         input.extend_from_slice(domain_tag.as_bytes());
-        push_len(&mut input, chain_id.as_str().len());
-        input.extend_from_slice(chain_id.as_str().as_bytes());
+        push_len(&mut input, network_id.as_bytes().len());
+        input.extend_from_slice(network_id.as_bytes());
         push_len(&mut input, election_id.len());
         input.extend_from_slice(election_id.as_bytes());
         input.extend_from_slice(commit);
@@ -2137,11 +2137,11 @@ pub mod isi {
         }
         let mut input = Vec::with_capacity(
             b"iroha:gov:jit:entropy:fallback:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>(),
         );
         input.extend_from_slice(b"iroha:gov:jit:entropy:fallback:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&state_transaction._curr_block.height().get().to_le_bytes());
         let digest = Blake2b512::digest(input);
         let mut out = [0u8; 32];
@@ -2156,12 +2156,12 @@ pub mod isi {
         let entropy = latest_governance_entropy_seed(state_transaction);
         let mut input = Vec::with_capacity(
             b"iroha:gov:epoch-beacon:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>()
                 + entropy.len(),
         );
         input.extend_from_slice(b"iroha:gov:epoch-beacon:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&epoch.to_le_bytes());
         input.extend_from_slice(&entropy);
         let digest = Blake2b512::digest(input);
@@ -2178,13 +2178,13 @@ pub mod isi {
         let entropy = latest_governance_entropy_seed(state_transaction);
         let mut input = Vec::with_capacity(
             b"iroha:gov:proposal-beacon:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>()
                 + proposal_id.len()
                 + entropy.len(),
         );
         input.extend_from_slice(b"iroha:gov:proposal-beacon:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&created_height.to_le_bytes());
         input.extend_from_slice(&proposal_id);
         input.extend_from_slice(&entropy);
@@ -2243,7 +2243,7 @@ pub mod isi {
         // records the exact smaller roster (and therefore its exact quorum).
         let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
             &state_transaction.gov,
-            &state_transaction.chain_id,
+            &state_transaction.network_id,
             selection_epoch,
             &beacon,
             candidates
@@ -3840,26 +3840,10 @@ pub mod isi {
                 ),
             ));
         }
-        if policy.chain_id != state_transaction.chain_id {
+        if policy.network_id != state_transaction.network_id {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "validation-fee policy targets a different chain".into(),
-                ),
-            ));
-        }
-        let Some(genesis_hash) = state_transaction
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-        else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee policy cannot be genesis-bound before genesis is committed".into(),
-            ));
-        };
-        if policy.genesis_hash != genesis_hash {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "validation-fee policy genesis hash mismatch".into(),
+                    "validation-fee policy targets a different exact network".into(),
                 ),
             ));
         }
@@ -5031,7 +5015,7 @@ pub mod isi {
             }
             let nullifier = derive_ballot_nullifier(
                 &domain_tag,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 &self.election_id,
                 &commit_bytes,
             );
@@ -7753,7 +7737,7 @@ pub mod isi {
                 ));
             }
             let derived_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                state_transaction.chain_id(),
+                state_transaction.network_id(),
                 authority,
                 current_nonce,
                 alias_dataspace_id,
@@ -7767,7 +7751,7 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         format!(
-                            "contract address does not match authority, nonce, chain, and alias dataspace; expected {derived_address}"
+                            "contract address does not match authority, nonce, network, and alias dataspace; expected {derived_address}"
                         )
                         .into(),
                     ),
@@ -9123,7 +9107,7 @@ pub mod isi {
                         .unwrap_or_else(|| {
                             derive_parliament_bodies(
                                 &state_transaction.gov,
-                                &state_transaction.chain_id,
+                                &state_transaction.network_id,
                                 fallback_epoch,
                                 &beacon,
                                 &council,
@@ -9153,7 +9137,7 @@ pub mod isi {
                     .unwrap_or_else(|| {
                         derive_parliament_bodies(
                             &state_transaction.gov,
-                            &state_transaction.chain_id,
+                            &state_transaction.network_id,
                             epoch,
                             &beacon,
                             &council,
@@ -9517,7 +9501,7 @@ pub mod isi {
             let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction);
             let bodies = derive_parliament_bodies(
                 &state_transaction.gov,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 rec.epoch,
                 &beacon,
                 &rec,
@@ -15424,7 +15408,7 @@ pub mod isi {
             };
             let expected_nullifier = derive_ballot_nullifier(
                 &domain_tag,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 &id,
                 &commit_bytes,
             );
@@ -20829,13 +20813,26 @@ pub mod isi {
         }
 
         #[test]
-        fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
+        fn derive_ballot_nullifier_is_exact_network_bound_and_unambiguous() {
             let commit = [0x42; 32];
-            let chain_left: iroha_data_model::ChainId = "c".parse().expect("valid chain id");
-            let chain_right: iroha_data_model::ChainId = "b|c".parse().expect("valid chain id");
-            let first = derive_ballot_nullifier("a|b", &chain_left, "d", &commit);
-            let second = derive_ballot_nullifier("a", &chain_right, "d", &commit);
+            let first_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([1; iroha_crypto::Hash::LENGTH]),
+                ));
+            let second_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([2; iroha_crypto::Hash::LENGTH]),
+                ));
+            let first = derive_ballot_nullifier("a|b", &first_network, "d", &commit);
+            let second = derive_ballot_nullifier("a|b", &second_network, "d", &commit);
             assert_ne!(first, second);
+
+            let delimiter_variant = derive_ballot_nullifier("a", &first_network, "b|d", &commit);
+            assert_ne!(first, delimiter_variant);
         }
 
         #[test]
@@ -20999,13 +20996,10 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("governance-boundary-test"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("canonical contract address");
+            let network_id = *state_transaction.network_id();
+            let contract_address =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("canonical contract address");
             let permission: Permission =
                 iroha_executor_data_model::permission::governance::CanProposeContractDeployment {
                     contract_address: contract_address.clone(),
@@ -21075,13 +21069,9 @@ pub mod isi {
                 );
             }
 
-            let other_contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("governance-boundary-test"),
-                &ALICE_ID,
-                2,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("second canonical contract address");
+            let other_contract_address =
+                ContractAddress::derive(&network_id, &ALICE_ID, 2, DataSpaceId::UNIVERSAL)
+                    .expect("second canonical contract address");
             let wrong_target_permission: Permission = CanProposeContractDeployment {
                 contract_address: other_contract_address,
             }
@@ -21116,6 +21106,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
+            let network_id = *state_transaction.network_id();
             let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
             let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
                 name: "exact-runtime-target".to_owned(),
@@ -21136,13 +21127,9 @@ pub mod isi {
                 mode: Some(gov::VotingMode::Plain),
             };
 
-            let unrelated_contract = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("runtime-permission-regression"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("canonical contract address");
+            let unrelated_contract =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("canonical contract address");
             let legacy_permission: Permission = CanProposeContractDeployment {
                 contract_address: unrelated_contract,
             }
@@ -24463,7 +24450,9 @@ seiyaku GovernanceLifecycle {
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
                 contract_address: ContractAddress::derive(
-                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                        .parse()
+                        .expect("canonical test network id"),
                     authority,
                     nonce,
                     DataSpaceId::UNIVERSAL,
@@ -28265,7 +28254,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             let escrow = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-                stx.chain_id(),
+                stx.network_id(),
                 &reward_def,
             );
             stx.settlement
@@ -28525,6 +28514,7 @@ seiyaku GovernanceLifecycle {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
+            let network_id = *state.network_id_ref();
 
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -28537,7 +28527,7 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let (account_id, _) = gen_account_in(&domain_id);
+            let (account_id, account_keypair) = gen_account_in(&domain_id);
             Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
@@ -28698,7 +28688,14 @@ seiyaku GovernanceLifecycle {
                             [0xE3; 32],
                         ),
                         alias: None,
-                        owner: Some(account_id.clone()),
+                        authorization: crate::da::signed_test_ingest_authorization(
+                            network_id,
+                            &account_keypair,
+                            LaneId::new(1),
+                            1,
+                            1,
+                            1,
+                        ),
                     },
                     location: iroha_data_model::da::commitment::DaCommitmentLocation {
                         block_height: 1,
@@ -35993,9 +35990,10 @@ seiyaku GovernanceLifecycle {
             );
             let mut state_block = state.block(header);
             let mut stx = state_block.transaction();
+            let network_id = stx.network_id;
             let request = |sequence, predecessor, height, hash| {
                 ReputationFinalizedArchiveRetentionRequestV1::try_new(
-                    chain_id.clone(),
+                    network_id,
                     sequence,
                     predecessor,
                     ReputationFinalizedArchiveRetentionTargetV1::try_new(height, hash)
@@ -36011,6 +36009,24 @@ seiyaku GovernanceLifecycle {
             SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("exact request replay is idempotent");
+
+            let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"same-label-foreign-retention-genesis"),
+                ),
+            );
+            let foreign = ReputationFinalizedArchiveRetentionRequestV1::try_new(
+                foreign_network,
+                2,
+                Some(first.request_digest),
+                ReputationFinalizedArchiveRetentionTargetV1::try_new(2, [0x52; 32])
+                    .expect("valid foreign-network target shape"),
+            )
+            .expect("valid foreign-network request shape");
+            let error = SetParameter::new(Parameter::Custom(foreign.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("same-label foreign genesis must fail");
+            assert!(error.to_string().contains("targets another network"));
 
             let wrong_hash = request(2, Some(first.request_digest), 2, [0x53; 32]);
             let error = SetParameter::new(Parameter::Custom(wrong_hash.into_custom_parameter()))
@@ -37959,7 +37975,9 @@ seiyaku GovernanceLifecycle {
                 .expect("authorized manifest registration");
 
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -38173,35 +38191,30 @@ seiyaku GovernanceLifecycle {
             .expect("register verified manifest");
             stx.apply();
             let mut stx = block.transaction();
+            let network_id = *stx.network_id();
 
             let alias: ContractAlias = "payments::universal".parse().expect("contract alias");
-            let address_at_nonce_0 = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("nonce zero address");
-            let address_at_nonce_1 = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("nonce one address");
+            let address_at_nonce_0 =
+                ContractAddress::derive(&network_id, &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+                    .expect("nonce zero address");
+            let address_at_nonce_1 =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("nonce one address");
             let subject_at_nonce_0 = address_at_nonce_0.subject_id();
             assert!(
                 stx.world.account(&subject_at_nonce_0).is_err(),
                 "the deployment fixture must begin without a subject account",
             );
 
-            let foreign_chain_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("foreign-contract-deployment-chain"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("foreign-chain address");
+            let foreign_network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"foreign-contract-deployment-genesis"),
+                ));
+            let foreign_chain_address =
+                ContractAddress::derive(&foreign_network_id, &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+                    .expect("foreign-chain address");
             let error = scode::CommitContractDeployment {
                 expected_deploy_nonce: 0,
                 contract_address: foreign_chain_address.clone(),
@@ -38246,7 +38259,9 @@ seiyaku GovernanceLifecycle {
             );
 
             let wrong_dataspace_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::new(7),
@@ -38457,7 +38472,9 @@ seiyaku GovernanceLifecycle {
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 1,
                 DataSpaceId::UNIVERSAL,

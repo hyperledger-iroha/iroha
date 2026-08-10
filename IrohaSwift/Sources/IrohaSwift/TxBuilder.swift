@@ -1031,14 +1031,15 @@ public final class IrohaSDK: @unchecked Sendable {
     /// unsigned request is sent to Torii; the opening remains local.
     @available(iOS 15.0, macOS 12.0, *)
     public func prepareKagemushaTopUpShield(
-        chainId: String,
+        networkId: NetworkId,
         assetId: String,
         amount: KagemushaScaledAmount,
         payer: String,
         operationId: Data,
         opening: KagemushaNoteOpening,
         artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
-        expectedReadiness: KagemushaTopUpShieldReadinessExpectation
+        expectedReadiness: KagemushaTopUpShieldReadinessExpectation,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
@@ -1062,7 +1063,8 @@ public final class IrohaSDK: @unchecked Sendable {
         _ = try await toriiRestClient.getOfflineCapability()
         let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
             asset: assetDefinitionId,
-            commitments: []
+            commitments: [],
+            canonicalAuth: canonicalAuth
         )
         guard snapshot.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
               verifier.activationHeight <= snapshot.evaluatedBlockHeight,
@@ -1079,7 +1081,7 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
         }
         let unsigned = try KagemushaTopUpShieldBuildRequestV4(
-            chainID: chainId,
+            networkID: networkId,
             assetID: canonicalAssetId,
             amount: amount,
             payer: payer,
@@ -1908,52 +1910,55 @@ public final class IrohaSDK: @unchecked Sendable {
         return try await toriiRestClient.getMetrics(asText: asText)
     }
 
-    public func getNodeCapabilities(completion: @escaping (Result<ToriiNodeCapabilities, Error>) -> Void) {
+    public func getNodeCapabilities(canonicalAuth: ToriiCanonicalRequestAuth,
+                                    completion: @escaping (Result<ToriiNodeCapabilities, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getNodeCapabilities(completion: completion)
+        toriiRestClient.getNodeCapabilities(canonicalAuth: canonicalAuth, completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getNodeCapabilities() async throws -> ToriiNodeCapabilities {
+    public func getNodeCapabilities(canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiNodeCapabilities {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getNodeCapabilities()
+        return try await toriiRestClient.getNodeCapabilities(canonicalAuth: canonicalAuth)
     }
 
-    public func getRuntimeMetrics(completion: @escaping (Result<ToriiRuntimeMetrics, Error>) -> Void) {
+    public func getRuntimeMetrics(canonicalAuth: ToriiCanonicalRequestAuth,
+                                  completion: @escaping (Result<ToriiRuntimeMetrics, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getRuntimeMetrics(completion: completion)
+        toriiRestClient.getRuntimeMetrics(canonicalAuth: canonicalAuth, completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getRuntimeMetrics() async throws -> ToriiRuntimeMetrics {
+    public func getRuntimeMetrics(canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRuntimeMetrics {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getRuntimeMetrics()
+        return try await toriiRestClient.getRuntimeMetrics(canonicalAuth: canonicalAuth)
     }
 
-    public func getRuntimeAbiActive(completion: @escaping (Result<ToriiRuntimeAbiActive, Error>) -> Void) {
+    public func getRuntimeAbiActive(canonicalAuth: ToriiCanonicalRequestAuth,
+                                    completion: @escaping (Result<ToriiRuntimeAbiActive, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getRuntimeAbiActive(completion: completion)
+        toriiRestClient.getRuntimeAbiActive(canonicalAuth: canonicalAuth, completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getRuntimeAbiActive() async throws -> ToriiRuntimeAbiActive {
+    public func getRuntimeAbiActive(canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRuntimeAbiActive {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getRuntimeAbiActive()
+        return try await toriiRestClient.getRuntimeAbiActive(canonicalAuth: canonicalAuth)
     }
 
     public func getRuntimeAbiHash(completion: @escaping (Result<ToriiRuntimeAbiHash, Error>) -> Void) {
@@ -2061,48 +2066,71 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public func submitGovernanceDeployContractProposal(_ request: ToriiGovernanceDeployContractProposalRequest,
+                                                       canonicalAuth: ToriiCanonicalRequestAuth,
                                                        completion: @escaping (Result<ToriiGovernanceProposalResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceDeployContractProposal(request, completion: completion)
+        toriiRestClient.submitGovernanceDeployContractProposal(
+            request, canonicalAuth: canonicalAuth, completion: completion
+        )
     }
 
     public func submitGovernancePlainBallot(_ request: ToriiGovernancePlainBallotRequest,
+                                            canonicalAuth: ToriiCanonicalRequestAuth,
                                             completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernancePlainBallot(request, completion: completion)
+        toriiRestClient.submitGovernancePlainBallot(
+            request,
+            canonicalAuth: canonicalAuth,
+            completion: completion
+        )
     }
 
     public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest,
+                                                 canonicalAuth: ToriiCanonicalRequestAuth,
                                                  completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceParliamentBallot(request, completion: completion)
+        toriiRestClient.submitGovernanceParliamentBallot(
+            request,
+            canonicalAuth: canonicalAuth,
+            completion: completion
+        )
     }
 
     public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request,
+                                           canonicalAuth: ToriiCanonicalRequestAuth,
                                            completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceZkBallotV1(request, completion: completion)
+        toriiRestClient.submitGovernanceZkBallotV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            completion: completion
+        )
     }
 
     public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest,
+                                                canonicalAuth: ToriiCanonicalRequestAuth,
                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceZkBallotProofV1(request, completion: completion)
+        toriiRestClient.submitGovernanceZkBallotProofV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            completion: completion
+        )
     }
 
     public func finalizeGovernanceReferendum(_ request: ToriiGovernanceFinalizeRequest,
@@ -2115,52 +2143,69 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public func enactGovernanceProposal(_ request: ToriiGovernanceEnactRequest,
+                                        canonicalAuth: ToriiCanonicalRequestAuth,
                                         completion: @escaping (Result<ToriiGovernanceEnactResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.enactGovernanceProposal(request, completion: completion)
+        toriiRestClient.enactGovernanceProposal(
+            request, canonicalAuth: canonicalAuth, completion: completion
+        )
     }
 
     public func getGovernanceProposal(idHex: String,
+                                      canonicalAuth: ToriiCanonicalRequestAuth,
                                       completion: @escaping (Result<ToriiGovernanceProposalGetResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getGovernanceProposal(idHex: idHex, completion: completion)
+        toriiRestClient.getGovernanceProposal(
+            idHex: idHex, canonicalAuth: canonicalAuth, completion: completion
+        )
     }
 
     public func getGovernanceLocks(referendumId: String,
+                                   canonicalAuth: ToriiCanonicalRequestAuth,
                                    completion: @escaping (Result<ToriiGovernanceLocksResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getGovernanceLocks(referendumId: referendumId, completion: completion)
+        toriiRestClient.getGovernanceLocks(
+            referendumId: referendumId, canonicalAuth: canonicalAuth,
+            completion: completion
+        )
     }
 
     public func getGovernanceReferendum(id: String,
+                                        canonicalAuth: ToriiCanonicalRequestAuth,
                                         completion: @escaping (Result<ToriiGovernanceReferendumResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getGovernanceReferendum(id: id, completion: completion)
+        toriiRestClient.getGovernanceReferendum(
+            id: id, canonicalAuth: canonicalAuth, completion: completion
+        )
     }
 
     public func getGovernanceTally(id: String,
+                                   canonicalAuth: ToriiCanonicalRequestAuth,
                                    completion: @escaping (Result<ToriiGovernanceTallyResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getGovernanceTally(id: id, completion: completion)
+        toriiRestClient.getGovernanceTally(
+            id: id, canonicalAuth: canonicalAuth, completion: completion
+        )
     }
 
     public func getGovernanceUnlockStats(height: UInt64? = nil,
                                          referendumId: String? = nil,
+                                         canonicalAuth: ToriiCanonicalRequestAuth,
                                          completion: @escaping (Result<ToriiGovernanceUnlockStatsResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
@@ -2168,47 +2213,77 @@ public final class IrohaSDK: @unchecked Sendable {
         }
         toriiRestClient.getGovernanceUnlockStats(height: height,
                                                  referendumId: referendumId,
+                                                 canonicalAuth: canonicalAuth,
                                                  completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceDeployContractProposal(_ request: ToriiGovernanceDeployContractProposalRequest) async throws -> ToriiGovernanceProposalResponse {
+    public func submitGovernanceDeployContractProposal(
+        _ request: ToriiGovernanceDeployContractProposalRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceProposalResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceDeployContractProposal(request)
+        return try await toriiRestClient.submitGovernanceDeployContractProposal(
+            request, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernancePlainBallot(_ request: ToriiGovernancePlainBallotRequest) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernancePlainBallot(
+        _ request: ToriiGovernancePlainBallotRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernancePlainBallot(request)
+        return try await toriiRestClient.submitGovernancePlainBallot(
+            request,
+            canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernanceParliamentBallot(
+        _ request: ToriiGovernanceParliamentBallotRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceParliamentBallot(request)
+        return try await toriiRestClient.submitGovernanceParliamentBallot(
+            request,
+            canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernanceZkBallotV1(
+        _ request: ToriiGovernanceZkBallotV1Request,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceZkBallotV1(request)
+        return try await toriiRestClient.submitGovernanceZkBallotV1(
+            request,
+            canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernanceZkBallotProofV1(
+        _ request: ToriiGovernanceZkBallotProofRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceZkBallotProofV1(request)
+        return try await toriiRestClient.submitGovernanceZkBallotProofV1(
+            request,
+            canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2220,52 +2295,77 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func enactGovernanceProposal(_ request: ToriiGovernanceEnactRequest) async throws -> ToriiGovernanceEnactResponse {
+    public func enactGovernanceProposal(
+        _ request: ToriiGovernanceEnactRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceEnactResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.enactGovernanceProposal(request)
+        return try await toriiRestClient.enactGovernanceProposal(
+            request, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getGovernanceProposal(idHex: String) async throws -> ToriiGovernanceProposalGetResponse {
+    public func getGovernanceProposal(
+        idHex: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceProposalGetResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getGovernanceProposal(idHex: idHex)
+        return try await toriiRestClient.getGovernanceProposal(
+            idHex: idHex, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getGovernanceLocks(referendumId: String) async throws -> ToriiGovernanceLocksResponse {
+    public func getGovernanceLocks(
+        referendumId: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceLocksResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getGovernanceLocks(referendumId: referendumId)
+        return try await toriiRestClient.getGovernanceLocks(
+            referendumId: referendumId, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getGovernanceReferendum(id: String) async throws -> ToriiGovernanceReferendumResponse {
+    public func getGovernanceReferendum(
+        id: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceReferendumResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getGovernanceReferendum(id: id)
+        return try await toriiRestClient.getGovernanceReferendum(
+            id: id, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getGovernanceTally(id: String) async throws -> ToriiGovernanceTallyResponse {
+    public func getGovernanceTally(
+        id: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiGovernanceTallyResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getGovernanceTally(id: id)
+        return try await toriiRestClient.getGovernanceTally(
+            id: id, canonicalAuth: canonicalAuth
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func getGovernanceUnlockStats(height: UInt64? = nil,
-                                         referendumId: String? = nil) async throws -> ToriiGovernanceUnlockStatsResponse {
+                                         referendumId: String? = nil,
+                                         canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiGovernanceUnlockStatsResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getGovernanceUnlockStats(height: height, referendumId: referendumId)
+        return try await toriiRestClient.getGovernanceUnlockStats(
+            height: height, referendumId: referendumId,
+            canonicalAuth: canonicalAuth
+        )
     }
 
     private func submitTransactionOnce(envelope: SignedTransactionEnvelope,

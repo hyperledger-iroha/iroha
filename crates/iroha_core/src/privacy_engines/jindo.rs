@@ -19,14 +19,13 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
     privacy::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_MAX_POLYNOMIALS_V1,
         IROHA_JINDO_RING_DEGREE_V1, IrohaJindoPolynomialCommitmentStatementV1,
-        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyConsensusLimitsV1, PrivacyJindoFieldElementV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
-        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1,
+        PrivacyConsensusLimitsV1, PrivacyJindoFieldElementV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -330,8 +329,6 @@ impl From<JindoCanonicalPolynomialErrorV1> for JindoPrivacyActionWitnessErrorV1 
 pub struct JindoPrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
     pub network_id: NetworkId,
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
     /// Exact single-key transaction authority.
     pub authority: AccountId,
     /// Required creation time, resolved once before the two-pass construction.
@@ -588,9 +585,6 @@ pub enum JindoPrivacyActionBuildErrorV1 {
     /// The signed transaction domain does not equal the supplied canonical genesis hash.
     #[error("Jindo action transaction network does not match the canonical genesis hash")]
     NetworkIdMismatch,
-    /// The chain identifier is empty or exceeds the consensus maximum.
-    #[error("Jindo action chain id is outside the first-release byte bound")]
-    InvalidChainId,
     /// Creation time cannot be represented in the transaction wire.
     #[error("Jindo action creation time cannot be represented in milliseconds")]
     CreationTimeOutOfRange,
@@ -644,14 +638,6 @@ pub enum JindoPrivacyActionBuildErrorV1 {
 fn validate_transaction_context_v1(
     context: &JindoPrivacyActionTransactionContextV1,
 ) -> Result<(), JindoPrivacyActionBuildErrorV1> {
-    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
-    if chain_id_bytes == 0
-        || chain_id_bytes
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(JindoPrivacyActionBuildErrorV1::InvalidChainId);
-    }
     if context.creation_time.as_millis() > u128::from(u64::MAX) {
         return Err(JindoPrivacyActionBuildErrorV1::CreationTimeOutOfRange);
     }
@@ -813,7 +799,7 @@ where
 
     let native_statement = IrohaJindoPolynomialCommitmentStatementV1 {
         context: PrivacyStatementContextV1 {
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
             parameter_id: profile.parameter_id,
@@ -845,7 +831,7 @@ where
     )
     .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let binding = crate::privacy_engines::p256::TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1153,7 +1139,6 @@ mod tests {
     fn action_context() -> JindoPrivacyActionTransactionContextV1 {
         JindoPrivacyActionTransactionContextV1 {
             network_id: network_id_from_genesis_hash_bytes([0xA7; 32]),
-            chain_id: ChainId::from("jindo-signed-action-kat-v1"),
             authority: authority(),
             creation_time: Duration::from_millis(1_800_000_000_123),
             time_to_live: Some(Duration::from_secs(60)),
@@ -1456,7 +1441,7 @@ mod tests {
                 "an adversarial proof-empty Jindo envelope must fail closed"
             );
             let binding = crate::privacy_engines::p256::TranscriptBindingV1 {
-                chain_id: statement.context.chain_id.as_str().as_bytes(),
+                network_id: statement.context.network_id.as_bytes(),
                 genesis_hash: [0xA7; 32],
                 action_index: statement.context.action_index,
                 statement_digest: prepared.statement_digest(),

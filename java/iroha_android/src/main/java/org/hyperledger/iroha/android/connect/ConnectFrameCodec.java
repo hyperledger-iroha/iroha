@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
 import java.util.Optional;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -116,19 +117,19 @@ public final class ConnectFrameCodec {
 
   public static final class OpenControl {
     private final byte[] appPublicKey;
-    private final String chainId;
+    private final NetworkId networkId;
 
-    OpenControl(final byte[] appPublicKey, final String chainId) {
+    OpenControl(final byte[] appPublicKey, final NetworkId networkId) {
       this.appPublicKey = appPublicKey.clone();
-      this.chainId = chainId;
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
     }
 
     public byte[] appPublicKey() {
       return appPublicKey.clone();
     }
 
-    public String chainId() {
-      return chainId;
+    public NetworkId networkId() {
+      return networkId;
     }
   }
 
@@ -277,10 +278,10 @@ public final class ConnectFrameCodec {
   }
 
   private static final class Constraints {
-    private final String chainId;
+    private final NetworkId networkId;
 
-    Constraints(final String chainId) {
-      this.chainId = chainId;
+    Constraints(final NetworkId networkId) {
+      this.networkId = networkId;
     }
   }
 
@@ -324,12 +325,15 @@ public final class ConnectFrameCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final Constraints value) {
-          STRING.encode(encoder, value.chainId);
+          encoder.writeBytes(value.networkId.bytes());
         }
 
         @Override
         public Constraints decode(final NoritoDecoder decoder) {
-          return new Constraints(STRING.decode(decoder));
+          if (decoder.remaining() != NetworkId.BYTE_LENGTH) {
+            throw new IllegalArgumentException("Connect NetworkId must contain exactly 32 bytes");
+          }
+          return new Constraints(NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH)));
         }
       };
 
@@ -557,7 +561,7 @@ public final class ConnectFrameCodec {
     skipLengthPrefixedField(cursor, "open.permissions");
     cursor.ensureFullyConsumed("open control");
 
-    final OpenControl open = new OpenControl(appPk, constraints.chainId);
+    final OpenControl open = new OpenControl(appPk, constraints.networkId);
     return new DecodedFrame(sid, direction, sequence, FrameType.OPEN, open, null, null, null);
   }
 

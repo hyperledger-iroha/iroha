@@ -608,7 +608,15 @@ terminal `event: stream_error`, the iterator raises `SseStreamError` with the st
 for explicitly replayable feeds such as the SoraFS event logs.
 
 ```python
-from iroha_python import create_torii_client, DataEventFilter, SseStreamError
+import os
+
+from iroha_python import (
+    DataEventFilter,
+    NetworkId,
+    SseStreamError,
+    ToriiCanonicalRequestAuth,
+    create_torii_client,
+)
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 
@@ -740,6 +748,7 @@ for provider in ingestion.providers:
 # require per-request canonical account authentication, never retry or follow
 # redirects, and enforce the Torii 1 MiB JSON / 22 MiB statement response caps.
 billing_auth = ToriiCanonicalRequestAuth(
+    network_id=NetworkId.parse(os.environ["IROHA_NETWORK_ID"]).literal,
     account_id=os.environ["IROHA_ACCOUNT_ID"],
     signer=external_request_signer,
 )
@@ -910,6 +919,8 @@ app-facing Torii requests with a callback while keeping private keys in the
 caller-owned wallet/keystore.
 
 ```python
+import os
+
 from iroha_python import (
     Ed25519KeyPair,
     NetworkId,
@@ -921,7 +932,11 @@ from iroha_python import (
 
 client = create_torii_client("https://torii.example")
 wallet_key = Ed25519KeyPair.from_private_key_hex("<hex-private-key>")
-auth = ToriiCanonicalRequestAuth(account_id="merchant@paynet", signer=wallet_key.sign)
+auth = ToriiCanonicalRequestAuth(
+    network_id=NetworkId.parse(os.environ["IROHA_NETWORK_ID"]).literal,
+    account_id="merchant@paynet",
+    signer=wallet_key.sign,
+)
 
 quote = client.create_vpn_quote(
     VpnQuoteCreateRequest(

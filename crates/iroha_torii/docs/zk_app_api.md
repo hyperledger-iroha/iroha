@@ -16,6 +16,12 @@ Attachments (store sanitized bytes with metadata):
 - `GET  /v1/zk/attachments/{id}` — fetch stored attachment bytes by id
 - `DELETE /v1/zk/attachments/{id}` — delete an attachment
 
+Every attachment route requires canonical account authentication over the exact
+runtime `NetworkId`, HTTP method, URI, nonce, expiry, and bounded raw body. Torii
+verifies these headers before query/path/body extraction and derives the storage
+tenant only from the verified account. An API token, when configured, is an
+additional gate and never establishes attachment ownership.
+
 Background prover reports (non‑consensus verification):
 - `GET    /v1/zk/prover/reports` — list reports (JSON array)
 - `GET    /v1/zk/prover/reports/count` — count reports matching the same list filters
@@ -32,6 +38,12 @@ IVM prove helper (non-consensus proof generation):
 - `POST   /v1/zk/ivm/prove` — submit a prove job for execution-derived `IvmProved` payload (returns `{ job_id }`)
 - `GET    /v1/zk/ivm/prove/{job_id}` — poll job status (`pending|running|done|error`)
 - `DELETE /v1/zk/ivm/prove/{job_id}` — delete/cancel a job from the in-memory cache
+
+`POST /v1/zk/verify-batch` and `POST /v1/zk/ivm/derive` require canonical
+account authentication over the exact runtime `NetworkId`, method, URI, nonce,
+expiry, and bounded raw body before content-type inspection or decode. The IVM
+derive signer must equal the authority encoded in its body. Proof admission and
+blocking-work limits remain additional gates, not authentication substitutes.
 
 Notes
 - Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the sanitized body bytes.
@@ -65,7 +77,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Maximum size (bytes) for a single attachment. Requests over the cap receive `413 Payload Too Large`.
   - Default: 4 MiB.
 - `torii.attachments_per_tenant_max_count` (u64)
-  - Maximum number of attachments retained per tenant (0 disables the cap). Tenants are derived from `x-api-token` (hashed as `token:<blake2b32>`); missing tokens fall back to `anon`.
+  - Maximum number of attachments retained per tenant (0 disables the cap). The tenant is the exact canonically authenticated `AccountId`; anonymous and token-derived tenants do not exist.
   - Default: 128.
 - `torii.attachments_per_tenant_max_bytes` (u64)
   - Aggregate bytes retained per tenant. When uploads would exceed the cap, Torii deterministically evicts the oldest attachments for that tenant before persisting the new body. Bodies larger than the cap are rejected with `413`.
@@ -112,6 +124,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
 - `torii.zk_ivm_prove_job_max_entries_per_owner` / `torii.zk_ivm_prove_job_max_retained_bytes_per_owner`
   - Per-account retained-job caps (defaults: 32 entries and 32 MiB). Admission and terminal-result growth may evict only terminal entries belonging to the same account, never another tenant's result.
   - IVM prove POST/GET/DELETE require canonical account authentication. The POST signer must match the request authority; the stored owner alone may read or delete the job, and foreign/missing identifiers share `404`.
+  - IVM derive and verify-batch also require exact-network canonical account authentication before decode; derive additionally requires the signer to match its request authority.
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
 - `confidential.tree_roots_history_len` (non-zero usize)
@@ -164,18 +177,6 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 Using curl:
 
 ```bash
-# Upload a JSON proof envelope (ensure Content-Type is set)
-curl -sS -X POST \
-  -H 'Content-Type: application/json' \
-  --data-binary @proof.json \
-  http://localhost:8080/api/v1/zk/attachments | jq .
-
-# List attachments
-curl -sS http://localhost:8080/api/v1/zk/attachments | jq .
-
-# Download attachment bytes
-curl -sS http://localhost:8080/api/v1/zk/attachments/<id> -o downloaded.bin
-
 # List background prover reports (if enabled)
 curl -sS http://localhost:8080/api/v1/zk/prover/reports | jq .
 
@@ -183,12 +184,10 @@ curl -sS http://localhost:8080/api/v1/zk/prover/reports | jq .
 curl -sS http://localhost:8080/api/v1/zk/prover/reports/<id> | jq .
 ```
 
-With tokens/rate limits:
-
-```bash
-# When require_api_token=true and tokens are configured
-curl -sS -H 'x-api-token: my-token' http://localhost:8080/api/v1/zk/attachments
-```
+Raw attachment `curl` calls are intentionally omitted: all five routes require
+the complete canonical exact-network account-signature header set. Prefer the
+CLI or an SDK signer. If `require_api_token=true`, include the configured token
+in addition to those signed headers; a token alone is rejected.
 
 CLI shortcuts (`iroha_cli`):
 

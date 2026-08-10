@@ -15,7 +15,7 @@
 
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     isi::sorafs::{MaintainSorafsOrderbook, MatchSorafsOrderbook},
     sorafs::orderbook::{
@@ -195,7 +195,7 @@ enum FinalizedCursorRelationV1 {
 /// policy and status must never be assembled from independently advancing
 /// queries.
 pub(crate) fn reconcile_orderbook_semantics(
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
     delivery: &OrderbookTransactionPendingV1,
     retained: &OrderbookTransactionSigningRequestV1,
     finalized: &OrderbookFinalizedSnapshotV1,
@@ -204,14 +204,13 @@ pub(crate) fn reconcile_orderbook_semantics(
     if validate_orderbook_reconciliation_material_v1(delivery, retained).is_err() {
         return OrderbookSemanticReconciliationV1::InvalidDurableState;
     }
-    if &delivery.chain_id != expected_chain_id || &retained.chain_id != expected_chain_id {
+    if &delivery.network_id != expected_network_id || &retained.network_id != expected_network_id {
         return if valid_finalized_cursor(cursor) {
             OrderbookSemanticReconciliationV1::Conflict(cursor)
         } else {
             OrderbookSemanticReconciliationV1::Deferred
         };
     }
-
     match finalized_cursor_relation(delivery, cursor) {
         FinalizedCursorRelationV1::Invalid | FinalizedCursorRelationV1::Older => {
             return OrderbookSemanticReconciliationV1::Deferred;
@@ -311,7 +310,7 @@ pub(crate) fn reconcile_orderbook_semantics(
 /// completion is considered only after the exact envelope is proven absent;
 /// pending or unavailable exact status always defers semantic completion.
 pub(crate) fn plan_orderbook_worker_action(
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
     configured_signer_authority: Option<&AccountId>,
     delivery: &OrderbookTransactionPendingV1,
     envelope: OrderbookEnvelopeReconciliationV1,
@@ -328,7 +327,7 @@ pub(crate) fn plan_orderbook_worker_action(
             OrderbookWorkerDeferReasonV1::FinalizedStateUnavailable,
         );
     }
-    if &delivery.chain_id != expected_chain_id {
+    if &delivery.network_id != expected_network_id {
         return semantic_cursor.map_or(
             OrderbookWorkerActionV1::Defer(OrderbookWorkerDeferReasonV1::FinalizedStateUnavailable),
             |finalized_cursor| OrderbookWorkerActionV1::DeadLetterConflict { finalized_cursor },
@@ -763,8 +762,9 @@ pub(crate) fn plan_orderbook_generation(
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        block::BlockHeader,
         isi::sorafs::{
             MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
         },
@@ -786,7 +786,11 @@ mod tests {
 
     use super::*;
 
-    const CHAIN: &str = "orderbook-worker-test";
+    fn foreign_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xF1; 32]),
+        ))
+    }
 
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
@@ -832,7 +836,6 @@ mod tests {
         let policy_digest = policy.digest().expect("policy digest");
         OrderbookTransactionContextV1 {
             network_id: crate::signed_query_test_network_id(),
-            chain_id: ChainId::from(CHAIN),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,
                 policy_digest,
@@ -1033,21 +1036,36 @@ mod tests {
             let (delivery, retained) = retained_delivery(operation, &context);
             let exact = snapshot(&delivery, &context, context.finalized_cursor);
             assert_eq!(
-                reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &exact,),
+                reconcile_orderbook_semantics(
+                    &crate::signed_query_test_network_id(),
+                    &delivery,
+                    &retained,
+                    &exact,
+                ),
                 OrderbookSemanticReconciliationV1::Ready(context.finalized_cursor),
             );
 
             let mut stale = exact.clone();
             stale.finalized_cursor = cursor(9, 0x09);
             assert_eq!(
-                reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &stale,),
+                reconcile_orderbook_semantics(
+                    &crate::signed_query_test_network_id(),
+                    &delivery,
+                    &retained,
+                    &stale,
+                ),
                 OrderbookSemanticReconciliationV1::Deferred,
             );
 
             let mut fork = exact.clone();
             fork.finalized_cursor = cursor(10, 0xEE);
             assert_eq!(
-                reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &fork,),
+                reconcile_orderbook_semantics(
+                    &crate::signed_query_test_network_id(),
+                    &delivery,
+                    &retained,
+                    &fork,
+                ),
                 OrderbookSemanticReconciliationV1::Conflict(cursor(10, 0xEE)),
             );
 
@@ -1057,7 +1075,7 @@ mod tests {
             changed_revision.status = Some(status(8));
             assert_eq!(
                 reconcile_orderbook_semantics(
-                    &ChainId::from(CHAIN),
+                    &crate::signed_query_test_network_id(),
                     &delivery,
                     &retained,
                     &changed_revision,
@@ -1070,7 +1088,7 @@ mod tests {
             abandoned_baseline.baseline_block_hash = Some([0xEF; 32]);
             assert_eq!(
                 reconcile_orderbook_semantics(
-                    &ChainId::from(CHAIN),
+                    &crate::signed_query_test_network_id(),
                     &delivery,
                     &retained,
                     &abandoned_baseline,
@@ -1094,7 +1112,7 @@ mod tests {
             });
             assert_eq!(
                 reconcile_orderbook_semantics(
-                    &ChainId::from(CHAIN),
+                    &crate::signed_query_test_network_id(),
                     &delivery,
                     &retained,
                     &authority_rotation,
@@ -1151,7 +1169,7 @@ mod tests {
         absent_after_rotation.policy_record = Some(rotated_record.clone());
         assert_eq!(
             reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 &delivery,
                 &retained,
                 &absent_after_rotation,
@@ -1161,12 +1179,17 @@ mod tests {
 
         finalized.policy_record = Some(rotated_record);
         assert_eq!(
-            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &finalized,),
+            reconcile_orderbook_semantics(
+                &crate::signed_query_test_network_id(),
+                &delivery,
+                &retained,
+                &finalized,
+            ),
             OrderbookSemanticReconciliationV1::Finalized(advanced),
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::NotSigned,
@@ -1193,7 +1216,7 @@ mod tests {
             .push(0);
         assert_eq!(
             reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 &delivery,
                 &retained,
                 &substituted,
@@ -1216,7 +1239,7 @@ mod tests {
 
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Applied {
@@ -1233,7 +1256,7 @@ mod tests {
         let later_snapshot = cursor(32, 0x32);
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Applied {
@@ -1246,7 +1269,7 @@ mod tests {
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Rejected {
@@ -1263,7 +1286,7 @@ mod tests {
         delivery.state = OrderbookTransactionDeliveryStateV1::Ambiguous;
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Pending {
@@ -1276,7 +1299,7 @@ mod tests {
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Unavailable,
@@ -1286,7 +1309,7 @@ mod tests {
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Absent {
@@ -1304,7 +1327,7 @@ mod tests {
         let baseline = context.finalized_cursor;
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Absent {
@@ -1327,7 +1350,7 @@ mod tests {
 
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Absent {
@@ -1340,7 +1363,7 @@ mod tests {
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::Absent {
@@ -1365,7 +1388,7 @@ mod tests {
         corrupt_identity.operation_id[0] ^= 1;
         assert_eq!(
             reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 &corrupt_identity,
                 &retained,
                 &exact,
@@ -1377,7 +1400,7 @@ mod tests {
         corrupt_semantic.semantic_digest[0] ^= 1;
         assert_eq!(
             reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 &corrupt_semantic,
                 &retained,
                 &exact,
@@ -1393,7 +1416,7 @@ mod tests {
         corrupt_signed.transaction_digest = Some([0xEE; 32]);
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&corrupt_signed.authority),
                 &corrupt_signed,
                 OrderbookEnvelopeReconciliationV1::Applied {
@@ -1416,8 +1439,8 @@ mod tests {
 
         let mut wrong_operation_id = retained.clone();
         wrong_operation_id.operation_id[0] ^= 1;
-        let mut wrong_chain = retained.clone();
-        wrong_chain.chain_id = ChainId::from("substituted-chain");
+        let mut wrong_network = retained.clone();
+        wrong_network.network_id = foreign_network_id();
         let mut wrong_authority = retained.clone();
         wrong_authority.authority = account(&key(0x5A));
         let mut wrong_operation = retained;
@@ -1429,13 +1452,13 @@ mod tests {
 
         for substituted in [
             wrong_operation_id,
-            wrong_chain,
+            wrong_network,
             wrong_authority,
             wrong_operation,
         ] {
             assert_eq!(
                 reconcile_orderbook_semantics(
-                    &ChainId::from(CHAIN),
+                    &crate::signed_query_test_network_id(),
                     &delivery,
                     &substituted,
                     &exact,
@@ -1446,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_delivery_requires_exact_governed_signer_and_chain() {
+    fn ready_delivery_requires_exact_governed_signer_and_network() {
         let matcher = key(0x61);
         let settlement = key(0x62);
         let context = context(&matcher, &settlement, 3, cursor(60, 0x60));
@@ -1454,7 +1477,7 @@ mod tests {
 
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::NotSigned,
@@ -1465,7 +1488,7 @@ mod tests {
         let wrong = account(&key(0x63));
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 Some(&wrong),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::NotSigned,
@@ -1475,7 +1498,7 @@ mod tests {
         );
         assert_eq!(
             plan_orderbook_worker_action(
-                &ChainId::from("foreign-chain"),
+                &foreign_network_id(),
                 Some(&delivery.authority),
                 &delivery,
                 OrderbookEnvelopeReconciliationV1::NotSigned,
@@ -1507,7 +1530,12 @@ mod tests {
         finalized.settlement_channel = Some(channel.clone());
 
         assert_eq!(
-            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &finalized,),
+            reconcile_orderbook_semantics(
+                &crate::signed_query_test_network_id(),
+                &delivery,
+                &retained,
+                &finalized,
+            ),
             OrderbookSemanticReconciliationV1::Ready(context.finalized_cursor),
         );
 
@@ -1515,7 +1543,12 @@ mod tests {
         stale.finalized_at_unix =
             receipt.issued_at_unix + context.policy_record.policy.max_receipt_age_secs + 1;
         assert_eq!(
-            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &stale,),
+            reconcile_orderbook_semantics(
+                &crate::signed_query_test_network_id(),
+                &delivery,
+                &retained,
+                &stale,
+            ),
             OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),
         );
 
@@ -1527,7 +1560,7 @@ mod tests {
             .provider = account(&key(0x67));
         assert_eq!(
             reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
+                &crate::signed_query_test_network_id(),
                 &delivery,
                 &retained,
                 &substituted_provider,
@@ -1537,7 +1570,12 @@ mod tests {
 
         finalized.finalized_at_unix = 0;
         assert_eq!(
-            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &finalized,),
+            reconcile_orderbook_semantics(
+                &crate::signed_query_test_network_id(),
+                &delivery,
+                &retained,
+                &finalized,
+            ),
             OrderbookSemanticReconciliationV1::Deferred,
         );
     }
@@ -1604,8 +1642,12 @@ mod tests {
             status.open_orders = 1;
             status.partially_filled_orders = 1;
             status.last_match_scan_book_revision = status.book_revision;
-            let semantics =
-                reconcile_orderbook_semantics(&ChainId::from(CHAIN), delivery, retained, &sealed);
+            let semantics = reconcile_orderbook_semantics(
+                &crate::signed_query_test_network_id(),
+                delivery,
+                retained,
+                &sealed,
+            );
             assert_eq!(
                 semantics,
                 OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),
@@ -1613,7 +1655,7 @@ mod tests {
             );
             assert_eq!(
                 plan_orderbook_worker_action(
-                    &ChainId::from(CHAIN),
+                    &crate::signed_query_test_network_id(),
                     Some(&delivery.authority),
                     delivery,
                     OrderbookEnvelopeReconciliationV1::NotSigned,

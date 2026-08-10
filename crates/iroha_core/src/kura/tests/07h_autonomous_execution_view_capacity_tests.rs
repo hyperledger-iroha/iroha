@@ -34,14 +34,14 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("execution-input capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist capacity payload");
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover exact autonomous execution input");
     let artifact = LaneBlockExecutionInputArtifact::new(recovered.clone());
     let payload_bytes = artifact.encode_framed().expect("encode execution input");
@@ -155,11 +155,11 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("view recovery capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view recovery payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -181,7 +181,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             false,
         )
@@ -225,7 +225,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         )
@@ -250,7 +250,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         )
@@ -274,11 +274,11 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("view writer capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view writer payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -334,7 +334,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
             &payload,
             &state,
             &view_path,
-            chain_id_hash,
+            network_id,
             epoch,
         )
     };
@@ -368,7 +368,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
             &payload,
             &state,
             &view_path,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("exact equal-sized named-temp replacement peak succeeds");
@@ -387,11 +387,11 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("view lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist lock-order payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let lane_id = lane.lane_id;
@@ -402,7 +402,7 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             false,
         )
@@ -415,7 +415,7 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
         let result = worker_kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         );

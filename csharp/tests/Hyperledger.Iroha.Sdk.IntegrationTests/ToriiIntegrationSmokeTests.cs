@@ -1,4 +1,5 @@
 using System.Net;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Crypto;
@@ -202,10 +203,16 @@ public sealed class ToriiIntegrationSmokeTests
         var canonicalCredentials = TryGetCanonicalRequestCredentials();
         if (canonicalCredentials is not null)
         {
+            var networkId = Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID");
+            Assert.False(
+                string.IsNullOrWhiteSpace(networkId),
+                "IROHA_CSHARP_NETWORK_ID is required with canonical request credentials.");
             using var signedClient = new ToriiClient(
                 new Uri(baseUrl, UriKind.Absolute),
                 options: new ToriiClientOptions
                 {
+                    LocalSigningContext = new ToriiLocalSigningContext(
+                        NetworkId.Parse(networkId!.Trim())),
                     CanonicalRequestCredentials = canonicalCredentials,
                 });
 

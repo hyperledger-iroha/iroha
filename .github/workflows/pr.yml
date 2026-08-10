@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,12 +29,12 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
-      - name: Build binaries (irohad, iroha, kagami, koto) (release)
+      - name: Build binaries (iroha3d, iroha, kagami, koto) (release)
         run: |
-          cargo build --locked --release --bin irohad --bin iroha --bin kagami
+          cargo build --locked --release --bin iroha3d --bin iroha --bin kagami
           cargo build --locked --release -p ivm --bin koto
           mkdir target/release/pre_build
-          mv target/release/irohad target/release/iroha target/release/kagami target/release/koto target/release/pre_build
+          mv target/release/iroha3d target/release/iroha target/release/kagami target/release/koto target/release/pre_build
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -190,6 +190,7 @@ jobs:
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/profile_build_test.py \
+            scripts/tests/check_musubi_fixture_owner_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py \
@@ -238,7 +239,7 @@ jobs:
       matrix: ${{ fromJSON(needs.rust_changes.outputs.matrix) }}
     env:
       IROHA_TEST_REQUIRE_NETWORK: "1"
-      TEST_NETWORK_BIN_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHAD: bins/iroha3d
       TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -314,7 +315,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IROHA_CONTAINER: "defaults-irohad0-1"
-      BIN_IROHAD: bins/irohad
+      BIN_IROHAD: bins/iroha3d
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
     steps:
@@ -421,25 +422,74 @@ jobs:
 
   sumeragi_formal:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    env:
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
           java-version: '17'
+      - name: Create fresh private formal invocation layout
+        id: formal_layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          invocation_root="$(mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX)"
+          chmod 700 "$invocation_root"
+          mkdir -m 700 \
+            "$invocation_root/target" \
+            "$invocation_root/artifacts" \
+            "$invocation_root/artifacts/formal" \
+            "$invocation_root/artifacts/formal/sumeragi_v2" \
+            "$invocation_root/tmp" \
+            "$invocation_root/tools" \
+            "$invocation_root/tools/tlapm" \
+            "$invocation_root/tools/tla2tools" \
+            "$invocation_root/tools/apalache" \
+            "$invocation_root/tools/verus"
+          {
+            printf 'invocation_root=%s\n' "$invocation_root"
+            printf 'artifact_root=%s\n' "$invocation_root/artifacts"
+            printf 'tlapm_root=%s\n' "$invocation_root/tools/tlapm"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
+            printf 'IROHA_RELEASE_ARTIFACT_ROOT=%s\n' "$invocation_root/artifacts"
+            printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
+            printf 'SUMERAGI_V2_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sumeragi_v2"
+            printf 'TMPDIR=%s\n' "$invocation_root/tmp"
+            printf 'TLAPM_INSTALL_ROOT=%s\n' "$invocation_root/tools/tlapm"
+            printf 'TLA2TOOLS_INSTALL_ROOT=%s\n' "$invocation_root/tools/tla2tools"
+            printf 'APALACHE_INSTALL_ROOT=%s\n' "$invocation_root/tools/apalache"
+            printf 'VERUS_INSTALL_ROOT=%s\n' "$invocation_root/tools/verus"
+          } >> "$GITHUB_ENV"
       - name: Cache pinned TLAPM
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: target/tlapm/toolchains/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
+          path: ${{ steps.formal_layout.outputs.tlapm_root }}/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
           key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681
       - name: Install pinned formal tools
         run: |
+          set -euo pipefail
           bash scripts/formal/install_sumeragi_v2_tlapm.sh
           bash scripts/formal/install_sumeragi_v2_tla2tools.sh
           bash scripts/formal/install_apalache.sh 0.52.2
           bash scripts/formal/install_sumeragi_v2_verus.sh
-          echo "$GITHUB_WORKSPACE/target/verus/toolchains/0.2026.05.31.5dd6d83/x86-linux" >> "$GITHUB_PATH"
+          tlapm_tree="$TLAPM_INSTALL_ROOT/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu/tlapm"
+          mapfile -t tlapm_functions < <(find "$tlapm_tree" -type f -name Functions.tla -print)
+          test "${#tlapm_functions[@]}" -eq 1
+          tlapm_stdlib="$(dirname -- "${tlapm_functions[0]}")"
+          test -f "$tlapm_stdlib/Folds.tla"
+          {
+            printf 'TLAPM_BIN=%s\n' "$tlapm_tree/bin/tlapm"
+            printf 'TLAPM_STDLIB=%s\n' "$tlapm_stdlib"
+            printf 'TLA2TOOLS_JAR=%s\n' "$TLA2TOOLS_INSTALL_ROOT/1.7.4/tla2tools.jar"
+            printf 'APALACHE_BIN=%s\n' "$APALACHE_INSTALL_ROOT/v0.52.2/bin/apalache-mc"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' \
+            "$VERUS_INSTALL_ROOT/0.2026.05.31.5dd6d83/x86-linux" \
+            >> "$GITHUB_PATH"
       - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
         run: bash ci/check_sumeragi_formal.sh
       - name: Upload Sumeragi v2 formal logs
@@ -447,19 +497,15 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sumeragi-v2-formal-pr
-          path: target/formal/sumeragi_v2
+          path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sumeragi_v2
           if-no-files-found: ignore
 
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 240
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
       - name: Nexus cross-dataspace localnet proof
         run: bash ci/check_nexus_cross_dataspace_localnet.sh
 
@@ -467,11 +513,7 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
       - name: Nexus cross-lane proof filters
         run: bash ci/check_nexus_cross_lane_proofs.sh

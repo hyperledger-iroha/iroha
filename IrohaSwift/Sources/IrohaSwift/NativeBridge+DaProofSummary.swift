@@ -1,6 +1,14 @@
 import Foundation
 
 extension NoritoNativeBridge {
+    typealias DaProofSummaryFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        CUnsignedLong, UInt64,
+        UnsafePointer<CUnsignedLong>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+
     func daProofSummary(
         manifest: Data,
         payload: Data,

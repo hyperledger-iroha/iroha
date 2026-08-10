@@ -1596,6 +1596,34 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
     );
 
     let schemas = component_schemas(&document);
+    let hedge_intent = schemas
+        .get("HedgeIntentV1")
+        .and_then(Value::as_object)
+        .expect("hedge-intent schema");
+    let required = hedge_intent
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("hedge-intent required fields");
+    assert!(
+        required
+            .iter()
+            .any(|field| field.as_str() == Some("network_id"))
+    );
+    assert!(
+        !required
+            .iter()
+            .any(|field| field.as_str() == Some("chain_id"))
+    );
+    assert_eq!(
+        hedge_intent
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("network_id"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str),
+        Some("#/components/schemas/NetworkId")
+    );
     for (schema_name, tag, variants) in [
         (
             "HedgingBillingRetentionScopeV1",

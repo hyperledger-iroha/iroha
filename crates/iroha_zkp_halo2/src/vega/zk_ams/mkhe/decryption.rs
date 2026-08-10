@@ -29,17 +29,24 @@ use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, SecretPolynomial, WideUint,
     ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    active::ZkAmsMkheActivePartySecretV1,
+    active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
     checked_coefficient_work, checked_ring_multiplication_work, checked_rns_polynomial_bytes,
     collective::{
-        ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectivePartyStateV1,
-        ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
+        COLLECTIVE_CIPHERTEXT_DOMAIN_V1, ZkAmsMkheCollectiveCiphertextV1,
+        ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
+        ZkAmsMkheCollectivePublicKeyV1,
     },
+    cpk_relation::derive_active_collective_public_a_limb_v1,
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
         release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
     },
-    modulus_product, sample_below,
+    modulus_product,
+    persistent_decryption_equality::{
+        PersistentDecryptionProofBindingV1, ZkAmsMkhePersistentDecryptionPartyUseV1,
+        ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    },
+    sample_below,
     wire::{
         ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1,
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
@@ -52,6 +59,7 @@ use crate::vega::sponge::{Keccak256, keccak256, shake256};
 #[cfg(test)]
 use super::{
     AuthenticationSecret,
+    persistent_decryption_equality::prepare_zk_ams_mkhe_persistent_decryption_v1,
     persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
     wire::ZkAmsMkheWireBindingV1,
 };
@@ -107,10 +115,13 @@ pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1: usize = 4
     + 33
     + 65;
 /// Digest pinned by a genuine release-size split prove/reconstruct/verify KAT.
-pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1: [u8; 32] = [
-    0xe0, 0x3a, 0x07, 0xa2, 0xea, 0xc5, 0xc5, 0xbe, 0x90, 0x7d, 0x6c, 0x46, 0x82, 0xc8, 0x07, 0xb9,
-    0xfb, 0xf0, 0x00, 0xb5, 0x4f, 0x5e, 0x1d, 0xe9, 0x72, 0x5b, 0xc8, 0x58, 0xc2, 0xdb, 0xdc, 0xbd,
-];
+pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1: [u8; 32] = [0; 32];
+/// Digest pinned only by an authenticated release-native peak-residency run.
+///
+/// Wire lengths and allocator-independent source accounting cannot populate
+/// this pin. It remains zero until the exact governed runtime topology is
+/// measured under the release workspace ceiling.
+pub const ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8; 32] = [0; 32];
 // tag, version, profile, roster, epoch, transcript, ciphertext, key context,
 // exact public statement binding, sample index, party index, party, level, and
 // proof length. The polynomial byte count below already includes its canonical
@@ -175,10 +186,22 @@ pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     pub split_proof_headroom_bytes: u64,
     /// Both separately addressed release objects fit their unchanged ceilings.
     pub split_component_ceilings_met: bool,
+    /// Source-derived lower bound for the simultaneously retained native RNS
+    /// relation payloads in the current full-roster combine implementation.
+    pub native_combine_relation_residency_lower_bound_bytes: u64,
+    /// Governed native peak-workspace ceiling for the release profile.
+    pub governed_native_workspace_ceiling_bytes: u64,
+    /// Authenticated certificate for peak RSS/address-space residency in the
+    /// exact release-native worker topology; zero means absent.
+    pub native_peak_residency_certificate_digest: [u8; 32],
+    /// True only when the static lower bound fits and authenticated native
+    /// peak-residency evidence is installed.
+    pub native_peak_residency_certified: bool,
     /// Pinned authenticated manifest digest from the exact release-size split KAT.
     pub split_release_kat_digest: [u8; 32],
-    /// The exact release-size native prove/verify path and canonical split
-    /// reconstruction have closed the transport-implementation gate.
+    /// The exact release-size native prove/verify path, canonical split
+    /// reconstruction, and native peak-residency audit have closed the
+    /// transport-implementation gate.
     ///
     /// This is not a knowledge-soundness claim for the sparse proof and does
     /// not close the global decryption admission/readiness gate.
@@ -231,9 +254,17 @@ impl ZkAmsMkheDecryptionResourceEvidenceV1 {
             || self.split_component_ceilings_met
                 != (self.split_polynomial_object_bytes <= self.governed_share_ceiling_bytes
                     && self.split_proof_envelope_bytes <= self.governed_proof_payload_ceiling_bytes)
+            || self.native_peak_residency_certificate_digest
+                != ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1
+            || self.native_peak_residency_certified
+                != (self.native_combine_relation_residency_lower_bound_bytes
+                    <= self.governed_native_workspace_ceiling_bytes
+                    && self.native_peak_residency_certificate_digest != [0; 32])
             || self.split_release_kat_digest != ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1
             || self.split_transport_ready
-                != (self.split_component_ceilings_met && self.split_release_kat_digest != [0; 32])
+                != (self.split_component_ceilings_met
+                    && self.native_peak_residency_certified
+                    && self.split_release_kat_digest != [0; 32])
             || self.share_ceiling_met
                 != (self.total_share_record_bytes <= self.governed_share_ceiling_bytes)
             || self.ceiling_shortfall_bytes
@@ -275,6 +306,21 @@ fn derive_decryption_resource_evidence(
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let share_polynomial_bytes = u64::try_from(checked_rns_polynomial_bytes(profile)?)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let native_rns_payload_bytes = ring_degree
+        .checked_mul(
+            u64::try_from(profile.moduli.len())
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        )
+        .and_then(|value| value.checked_mul(size_of::<u64>() as u64))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let native_combine_relation_residency_lower_bound_bytes = native_rns_payload_bytes
+        .checked_mul(
+            u64::try_from(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        )
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let secret_response_bytes = ring_degree
         .checked_mul(DECRYPTION_SIGNED_SMALL_BYTES_V1 as u64)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -314,6 +360,11 @@ fn derive_decryption_resource_evidence(
     }
     let governed_share_ceiling_bytes = u64::try_from(profile.max_share_bytes)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let governed_native_workspace_ceiling_bytes = u64::try_from(profile.max_workspace_bytes)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let native_peak_residency_certified = native_combine_relation_residency_lower_bound_bytes
+        <= governed_native_workspace_ceiling_bytes
+        && ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1 != [0; 32];
     let mut evidence = ZkAmsMkheDecryptionResourceEvidenceV1 {
         ring_degree: u32::try_from(profile.ring_degree)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
@@ -350,9 +401,15 @@ fn derive_decryption_resource_evidence(
             .saturating_sub(proof_payload_bytes),
         split_component_ceilings_met: share_polynomial_bytes <= governed_share_ceiling_bytes
             && proof_payload_bytes <= governed_proof_payload_ceiling_bytes,
+        native_combine_relation_residency_lower_bound_bytes,
+        governed_native_workspace_ceiling_bytes,
+        native_peak_residency_certificate_digest:
+            ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1,
+        native_peak_residency_certified,
         split_release_kat_digest: ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1,
         split_transport_ready: share_polynomial_bytes <= governed_share_ceiling_bytes
             && proof_payload_bytes <= governed_proof_payload_ceiling_bytes
+            && native_peak_residency_certified
             && ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1 != [0; 32],
         record_overhead_bytes,
         total_share_record_bytes,
@@ -370,7 +427,7 @@ fn derive_decryption_resource_evidence(
 fn decryption_resource_evidence_digest(
     evidence: ZkAmsMkheDecryptionResourceEvidenceV1,
 ) -> [u8; 32] {
-    let mut frame = Vec::with_capacity(384);
+    let mut frame = Vec::with_capacity(448);
     frame.extend_from_slice(DECRYPTION_RESOURCE_DOMAIN_V1);
     for domain in [
         DECRYPTION_PROOF_DOMAIN_V1,
@@ -407,6 +464,8 @@ fn decryption_resource_evidence_digest(
         evidence.split_manifest_bytes,
         evidence.split_polynomial_headroom_bytes,
         evidence.split_proof_headroom_bytes,
+        evidence.native_combine_relation_residency_lower_bound_bytes,
+        evidence.governed_native_workspace_ceiling_bytes,
         evidence.record_overhead_bytes,
         evidence.total_share_record_bytes,
         evidence.governed_share_ceiling_bytes,
@@ -417,12 +476,175 @@ fn decryption_resource_evidence_digest(
     }
     frame.push(evidence.proof_payload_ceiling_met.into());
     frame.push(evidence.split_component_ceilings_met.into());
+    frame.extend_from_slice(&evidence.native_peak_residency_certificate_digest);
+    frame.push(evidence.native_peak_residency_certified.into());
     frame.extend_from_slice(&evidence.split_release_kat_digest);
     frame.push(evidence.split_transport_ready.into());
     frame.push(evidence.share_ceiling_met.into());
     frame.extend_from_slice(&WIDE_RELATION_MASK_SLACK_LOG2_V1.to_be_bytes());
     frame.extend_from_slice(&(DECRYPTION_MAX_WIDE_BITS_V1 as u32).to_be_bytes());
     keccak256(&frame)
+}
+
+fn clear_secret_bytes_v1(bytes: &mut [u8]) {
+    let bytes = core::hint::black_box(bytes);
+    bytes.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *bytes);
+}
+
+fn clear_secret_i64_slice_v1(values: &mut [i64]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+fn clear_secret_u64_slice_v1(values: &mut [u64]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DECRYPTION_TRANSIENT_ZEROIZED_DROP_COUNT_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_decryption_transient_zeroized_drop_v1(zeroized: bool) {
+    if zeroized {
+        DECRYPTION_TRANSIENT_ZEROIZED_DROP_COUNT_V1.with(|count| {
+            count.set(count.get().saturating_add(1));
+        });
+    }
+}
+
+#[cfg(test)]
+pub(super) fn reset_decryption_transient_zeroized_drop_count_v1() {
+    DECRYPTION_TRANSIENT_ZEROIZED_DROP_COUNT_V1.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn decryption_transient_zeroized_drop_count_v1() -> usize {
+    DECRYPTION_TRANSIENT_ZEROIZED_DROP_COUNT_V1.with(std::cell::Cell::get)
+}
+
+/// Fixed random bytes erased on success, error, or unwind.
+struct ZeroizingFixedBytesV1<const N: usize>([u8; N]);
+
+impl<const N: usize> ZeroizingFixedBytesV1<N> {
+    const fn zeroed() -> Self {
+        Self([0; N])
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl<const N: usize> Drop for ZeroizingFixedBytesV1<N> {
+    fn drop(&mut self) {
+        clear_secret_bytes_v1(&mut self.0);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
+    }
+}
+
+/// Fallibly allocated random bytes erased on success, error, or unwind.
+struct ZeroizingByteVectorV1(Vec<u8>);
+
+impl ZeroizingByteVectorV1 {
+    fn zeroed(len: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(len)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        bytes.resize(len, 0);
+        Ok(Self(bytes))
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl Drop for ZeroizingByteVectorV1 {
+    fn drop(&mut self) {
+        clear_secret_bytes_v1(&mut self.0);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
+    }
+}
+
+/// Signed small-mask coefficients erased on every exit path.
+struct ZeroizingI64VectorV1(Vec<i64>);
+
+impl ZeroizingI64VectorV1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self(values))
+    }
+
+    fn from_vec(values: Vec<i64>) -> Self {
+        Self(values)
+    }
+
+    fn push(&mut self, value: i64) {
+        self.0.push(value);
+    }
+
+    fn as_slice(&self) -> &[i64] {
+        &self.0
+    }
+
+    fn iter(&self) -> core::slice::Iter<'_, i64> {
+        self.0.iter()
+    }
+}
+
+impl Drop for ZeroizingI64VectorV1 {
+    fn drop(&mut self) {
+        clear_secret_i64_slice_v1(&mut self.0);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
+    }
+}
+
+/// Secret RNS mask material erased when its last named owner leaves scope.
+struct ZeroizingDecryptionRnsV1(RnsPolynomial);
+
+impl ZeroizingDecryptionRnsV1 {
+    fn new(polynomial: RnsPolynomial) -> Self {
+        Self(polynomial)
+    }
+
+    fn as_polynomial(&self) -> &RnsPolynomial {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingDecryptionRnsV1 {
+    fn drop(&mut self) {
+        clear_secret_u64_slice_v1(&mut self.0.coefficients);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(
+            self.0.coefficients.iter().all(|value| *value == 0),
+        );
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -544,6 +766,32 @@ impl core::fmt::Debug for WideMagnitudeV1 {
             .debug_struct("WideMagnitudeV1")
             .field("bit_len", &self.bit_len())
             .finish_non_exhaustive()
+    }
+}
+
+/// One rejection-sampler candidate whose limbs are erased unless ownership is
+/// transferred into a zeroizing signed-wide value.
+struct ZeroizingWideMagnitudeCandidateV1(WideMagnitudeV1);
+
+impl ZeroizingWideMagnitudeCandidateV1 {
+    fn new(value: WideMagnitudeV1) -> Self {
+        Self(value)
+    }
+
+    fn as_magnitude(&self) -> &WideMagnitudeV1 {
+        &self.0
+    }
+
+    fn into_magnitude(mut self) -> WideMagnitudeV1 {
+        core::mem::replace(&mut self.0, WideMagnitudeV1::zero())
+    }
+}
+
+impl Drop for ZeroizingWideMagnitudeCandidateV1 {
+    fn drop(&mut self) {
+        clear_secret_u64_slice_v1(&mut self.0.limbs);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(self.0.limbs.iter().all(|value| *value == 0));
     }
 }
 
@@ -687,18 +935,62 @@ impl SignedWideV1 {
         }
         Self::new(negative, magnitude)
     }
+
+    fn clear_secret_v1(&mut self) {
+        self.negative = false;
+        clear_secret_u64_slice_v1(&mut self.magnitude.limbs);
+    }
 }
 
 impl Drop for SignedWideV1 {
     fn drop(&mut self) {
-        self.negative = false;
-        self.magnitude.limbs.fill(0);
+        self.clear_secret_v1();
     }
 }
 
 impl core::fmt::Debug for SignedWideV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SignedWideV1([REDACTED])")
+    }
+}
+
+/// Signed wide-mask coefficients erased on success, error, or unwind.
+struct ZeroizingSignedWideVectorV1(Vec<SignedWideV1>);
+
+impl ZeroizingSignedWideVectorV1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self(values))
+    }
+
+    fn from_vec(values: Vec<SignedWideV1>) -> Self {
+        Self(values)
+    }
+
+    fn push(&mut self, value: SignedWideV1) {
+        self.0.push(value);
+    }
+
+    fn as_slice(&self) -> &[SignedWideV1] {
+        &self.0
+    }
+
+    fn iter(&self) -> core::slice::Iter<'_, SignedWideV1> {
+        self.0.iter()
+    }
+}
+
+impl Drop for ZeroizingSignedWideVectorV1 {
+    fn drop(&mut self) {
+        self.0.clear();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let values = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        record_decryption_transient_zeroized_drop_v1(values.is_empty());
+        let _ = core::hint::black_box(values);
     }
 }
 
@@ -790,50 +1082,49 @@ pub(super) fn sample_signed_small<R: MaskedRelaxedRandomSourceV1>(
 pub(super) fn validate_wide_relation_random_health<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    let mut first = [0_u8; 32];
+    let mut first = ZeroizingFixedBytesV1::<32>::zeroed();
     random
-        .fill_bytes(&mut first)
+        .fill_bytes(first.as_mut_slice())
         .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-    if first == [0; 32] {
+    if first.as_slice() == [0; 32] {
         return Err(ZkAmsMkheErrorV1::RandomUnavailable);
     }
     for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut next = [0_u8; 32];
+        let mut next = ZeroizingFixedBytesV1::<32>::zeroed();
         random
-            .fill_bytes(&mut next)
+            .fill_bytes(next.as_mut_slice())
             .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-        if next != [0; 32] && next != first {
-            first.fill(0);
-            next.fill(0);
+        if next.as_slice() != [0; 32] && next.as_slice() != first.as_slice() {
             return Ok(());
         }
-        next.fill(0);
     }
-    first.fill(0);
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
 fn sample_wide_magnitude_below_or_equal<R: MaskedRelaxedRandomSourceV1>(
     bound: &WideMagnitudeV1,
     random: &mut R,
-) -> Result<WideMagnitudeV1, ZkAmsMkheErrorV1> {
+) -> Result<ZeroizingWideMagnitudeCandidateV1, ZkAmsMkheErrorV1> {
     if bound.is_zero() {
-        return Ok(WideMagnitudeV1::zero());
+        return Ok(ZeroizingWideMagnitudeCandidateV1::new(
+            WideMagnitudeV1::zero(),
+        ));
     }
     let bits = bound.bit_len();
     let byte_len = bits.div_ceil(8);
     let unused = byte_len * 8 - bits;
     for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut bytes = vec![0_u8; byte_len];
+        let mut bytes = ZeroizingByteVectorV1::zeroed(byte_len)?;
         random
-            .fill_bytes(&mut bytes)
+            .fill_bytes(bytes.as_mut_slice())
             .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
         if unused != 0 {
-            bytes[0] &= u8::MAX >> unused;
+            bytes.as_mut_slice()[0] &= u8::MAX >> unused;
         }
-        let candidate = WideMagnitudeV1::from_fixed_be(&bytes)?;
-        bytes.fill(0);
-        if candidate <= *bound {
+        let candidate = ZeroizingWideMagnitudeCandidateV1::new(WideMagnitudeV1::from_fixed_be(
+            bytes.as_slice(),
+        )?);
+        if candidate.as_magnitude() <= bound {
             return Ok(candidate);
         }
     }
@@ -849,10 +1140,11 @@ pub(super) fn sample_signed_wide<R: MaskedRelaxedRandomSourceV1>(
         .checked_mul_u64(2)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let sample = sample_wide_magnitude_below_or_equal(&twice_bound, random)?;
-    if sample <= *magnitude_bound {
-        SignedWideV1::new(false, sample)
+    if sample.as_magnitude() <= magnitude_bound {
+        SignedWideV1::new(false, sample.into_magnitude())
     } else {
         let magnitude = sample
+            .as_magnitude()
             .checked_sub(magnitude_bound)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         SignedWideV1::new(true, magnitude)
@@ -1203,10 +1495,16 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
     fn validate_for_statement(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
+        persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_structural()?;
-        let expected =
-            decryption_binding_from_statement(statement, usize::from(self.binding.party_index))?;
+        let persistent =
+            persistent_context.proof_binding(statement, usize::from(self.binding.party_index))?;
+        let expected = decryption_binding_from_statement(
+            statement,
+            usize::from(self.binding.party_index),
+            &persistent,
+        )?;
         if self.binding != expected {
             return Err(ZkAmsMkheErrorV1::InvalidShareSet);
         }
@@ -1247,6 +1545,7 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
     /// Decode, authenticate, and bind one exact manifest before any component allocation.
     pub fn decode_exact(
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
+        persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
         bytes: &[u8],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1 {
@@ -1304,7 +1603,7 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
             manifest_digest,
             authentication,
         };
-        value.validate_for_statement(statement)?;
+        value.validate_for_statement(statement, persistent_context)?;
         Ok(value)
     }
 
@@ -1480,6 +1779,42 @@ fn update_wire_rns_hash(
     Ok(())
 }
 
+/// Allocation-bounded digest of the exact release ciphertext wire form.
+pub(super) fn decryption_wire_ciphertext_digest_v1(
+    profile: &BgvProfile,
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    profile.validate()?;
+    let binding = ciphertext.binding();
+    ciphertext.constant().encoded_len()?;
+    ciphertext.linear().encoded_len()?;
+    if binding.profile_digest() != profile.digest()?
+        || binding.profile_digest() != roster.profile_digest()
+        || binding.roster_digest() != roster.roster_digest()
+        || binding.epoch() != roster.epoch()
+        || binding.transcript_digest() == [0; 32]
+        || binding.level() > 1
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
+    hash.update(&binding.profile_digest());
+    hash.update(&binding.roster_digest());
+    hash.update(&binding.epoch().to_be_bytes());
+    hash.update(&binding.transcript_digest());
+    hash.update(&ciphertext.sample_index().to_be_bytes());
+    hash.update(&[binding.level()]);
+    update_wire_rns_hash(&mut hash, ciphertext.constant())?;
+    update_wire_rns_hash(&mut hash, ciphertext.linear())?;
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    Ok(digest)
+}
+
 /// Borrowed release-only statement for exact all-eight governed P24-H decryption.
 ///
 /// The verified aggregate key and its exact eight proof-carrying source shares
@@ -1580,18 +1915,11 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
     /// Compact digest of every non-polynomial statement binding axis.
     #[must_use]
     pub fn binding_digest(&self) -> [u8; 32] {
-        let binding = self.ciphertext.binding();
-        let mut frame = Vec::with_capacity(192);
-        frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.decryption-statement-binding");
-        frame.extend_from_slice(&self.roster.profile_digest());
-        frame.extend_from_slice(&self.roster.roster_digest());
-        frame.extend_from_slice(&self.roster.epoch().to_be_bytes());
-        frame.extend_from_slice(&binding.transcript_digest());
-        frame.extend_from_slice(&binding.record_index().to_be_bytes());
-        frame.extend_from_slice(&self.ciphertext.sample_index().to_be_bytes());
-        frame.push(binding.level());
-        frame.extend_from_slice(&self.key_context_digest);
-        keccak256(&frame)
+        decryption_statement_binding_digest_from_axes_v1(
+            self.roster,
+            self.ciphertext,
+            self.key_context_digest,
+        )
     }
 
     /// Native ciphertext digest bound into every party proof and share.
@@ -1600,7 +1928,7 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
         Ok(ciphertext.digest())
     }
 
-    fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
+    pub(super) fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let binding = self.ciphertext.binding();
         self.collective_public_key.validate(&profile)?;
@@ -1711,9 +2039,95 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
     }
 }
 
+/// Derive the native decryption key-context digest without retaining a key.
+///
+/// The callback must stream each complete canonical count-prefixed party-`b`
+/// object into the supplied hash. Its call order is fixed to the governed
+/// roster, and the common `a` polynomial is derived one release limb at a time.
+pub(super) fn decryption_key_context_digest_from_bounded_cpk_v1<F>(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    cpk_transcript_digest: [u8; 32],
+    collective_public_key_digest: [u8; 32],
+    share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    mut stream_party_b: F,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1>
+where
+    F: FnMut(usize, &mut Keccak256) -> Result<(), ZkAmsMkheErrorV1>,
+{
+    roster.validate()?;
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let coefficient_count = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if cpk_transcript_digest == [0; 32]
+        || collective_public_key_digest == [0; 32]
+        || share_digests.contains(&[0; 32])
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(DECRYPTION_KEY_CONTEXT_DOMAIN_V1);
+    hash.update(&roster.profile_digest());
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&zk_ams_mkhe_security_certificate_v1()?.certificate_digest());
+    hash.update(&roster.key_material_digest());
+    hash.update(&collective_public_key_digest);
+    hash.update(
+        &u32::try_from(coefficient_count)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    for limb in 0..profile.moduli.len() {
+        let public_a = derive_active_collective_public_a_limb_v1(
+            &profile,
+            roster,
+            cpk_transcript_digest,
+            limb,
+        )
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        for residue in public_a {
+            hash.update(&residue.to_be_bytes());
+        }
+    }
+    for (party_index, participant) in roster.participants().iter().enumerate() {
+        hash.update(&participant.party().to_bytes());
+        hash.update(&share_digests[party_index]);
+        stream_party_b(party_index, &mut hash)?;
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(digest)
+}
+
+/// Exact non-polynomial statement binding shared by native and compact paths.
+pub(super) fn decryption_statement_binding_digest_from_axes_v1(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+    key_context_digest: [u8; 32],
+) -> [u8; 32] {
+    let binding = ciphertext.binding();
+    let mut hash = Keccak256::new();
+    hash.update(b"iroha.zk-ams.v1.mkhe.decryption-statement-binding");
+    hash.update(&roster.profile_digest());
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&binding.transcript_digest());
+    hash.update(&binding.record_index().to_be_bytes());
+    hash.update(&ciphertext.sample_index().to_be_bytes());
+    hash.update(&[binding.level()]);
+    hash.update(&key_context_digest);
+    hash.finalize()
+}
+
 fn decryption_binding_from_statement(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     party_index: usize,
+    persistent: &PersistentDecryptionProofBindingV1,
 ) -> Result<DecryptionBindingV1, ZkAmsMkheErrorV1> {
     statement.validate()?;
     if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
@@ -1726,12 +2140,44 @@ fn decryption_binding_from_statement(
         transcript_digest: statement.ciphertext.binding().transcript_digest(),
         ciphertext_digest: statement.ciphertext_digest()?,
         key_context_digest: statement.key_context_digest,
-        statement_binding_digest: statement.binding_digest(),
+        statement_binding_digest: persistent.binding_digest(),
         ciphertext_record_index: statement.ciphertext.binding().record_index(),
         sample_index: statement.ciphertext.sample_index(),
         party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
         party: statement.roster.parties()[party_index],
         level: statement.ciphertext.binding().level(),
+    })
+}
+
+pub(super) fn decryption_binding_from_compact_axes_v1(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+    ciphertext_digest: [u8; 32],
+    key_context_digest: [u8; 32],
+    party_index: usize,
+    persistent: &PersistentDecryptionProofBindingV1,
+) -> Result<DecryptionBindingV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+        || key_context_digest == [0; 32]
+        || ciphertext_digest != decryption_wire_ciphertext_digest_v1(&profile, roster, ciphertext)?
+        || persistent.binding_digest() == [0; 32]
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidShareSet);
+    }
+    Ok(DecryptionBindingV1 {
+        profile_digest: roster.profile_digest(),
+        roster_digest: roster.roster_digest(),
+        epoch: roster.epoch(),
+        transcript_digest: ciphertext.binding().transcript_digest(),
+        ciphertext_digest,
+        key_context_digest,
+        statement_binding_digest: persistent.binding_digest(),
+        ciphertext_record_index: ciphertext.binding().record_index(),
+        sample_index: ciphertext.sample_index(),
+        party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
+        party: roster.parties()[party_index],
+        level: ciphertext.binding().level(),
     })
 }
 
@@ -2354,9 +2800,10 @@ fn authenticated_decryption_share_identity(
 /// Materialize the sole canonical first-release split transport from a verified native share.
 pub fn split_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     share: &ZkAmsMkheAuthenticatedDecryptionShareV1,
 ) -> Result<ZkAmsMkheDecryptionSplitTransportV1, ZkAmsMkheErrorV1> {
-    verify_zk_ams_mkhe_decryption_share_v1(statement, share)?;
+    verify_zk_ams_mkhe_decryption_share_v1(statement, persistent_context, share)?;
     let (polynomial_object, proof_envelope, polynomial, proof) =
         release_decryption_split_components(share)?;
     let manifest = ZkAmsMkheDecryptionTransportManifestV1::new(
@@ -2365,7 +2812,7 @@ pub fn split_zk_ams_mkhe_decryption_share_v1(
         proof,
         share.authentication.clone(),
     )?;
-    manifest.validate_for_statement(statement)?;
+    manifest.validate_for_statement(statement, persistent_context)?;
     Ok(ZkAmsMkheDecryptionSplitTransportV1 {
         manifest,
         polynomial_object,
@@ -2380,10 +2827,15 @@ pub fn split_zk_ams_mkhe_decryption_share_v1(
 /// component is hashed or decoded.
 pub fn reconstruct_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     manifest_bytes: &[u8],
     components: &[&[u8]],
 ) -> Result<ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheErrorV1> {
-    let manifest = ZkAmsMkheDecryptionTransportManifestV1::decode_exact(statement, manifest_bytes)?;
+    let manifest = ZkAmsMkheDecryptionTransportManifestV1::decode_exact(
+        statement,
+        persistent_context,
+        manifest_bytes,
+    )?;
     if components.len() != DECRYPTION_SPLIT_COMPONENT_COUNT_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
@@ -2397,7 +2849,7 @@ pub fn reconstruct_zk_ams_mkhe_decryption_share_v1(
         proof,
         authentication: manifest.authentication,
     };
-    verify_zk_ams_mkhe_decryption_share_v1(statement, &native)?;
+    verify_zk_ams_mkhe_decryption_share_v1(statement, persistent_context, &native)?;
     Ok(native)
 }
 
@@ -2475,17 +2927,27 @@ fn validate_party_witness(
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    let expected_b = relation
-        .common_a
-        .mul(&witness.secret.as_rns(profile)?, profile)?
-        .negate(profile)?
-        .add(
-            &witness
-                .public_key_error
-                .as_rns(profile)?
-                .scale_plaintext_modulus(profile)?,
-            profile,
-        )?;
+    let expected_b = {
+        let scaled_public_key_error_rns = {
+            let public_key_error_rns =
+                ZeroizingDecryptionRnsV1::new(witness.public_key_error.as_rns(profile)?);
+            ZeroizingDecryptionRnsV1::new(
+                public_key_error_rns
+                    .as_polynomial()
+                    .scale_plaintext_modulus(profile)?,
+            )
+        };
+        let negated_secret_product = {
+            let secret_rns = ZeroizingDecryptionRnsV1::new(witness.secret.as_rns(profile)?);
+            let secret_product = ZeroizingDecryptionRnsV1::new(
+                relation.common_a.mul(secret_rns.as_polynomial(), profile)?,
+            );
+            ZeroizingDecryptionRnsV1::new(secret_product.as_polynomial().negate(profile)?)
+        };
+        negated_secret_product
+            .as_polynomial()
+            .add(scaled_public_key_error_rns.as_polynomial(), profile)?
+    };
     if expected_b != relation.party_b {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -2558,13 +3020,27 @@ fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     if smudge.iter().any(|value| value.magnitude > smudge_bound) {
         return Err(ZkAmsMkheErrorV1::InvalidShareProof);
     }
-    let expected_share = ciphertext
-        .linear()
-        .mul(&witness.secret.as_rns(profile)?, profile)?
-        .add(
-            &wide_vector_as_rns(profile, smudge)?.scale_plaintext_modulus(profile)?,
-            profile,
-        )?;
+    let expected_share = {
+        let scaled_smudge_rns = {
+            let smudge_rns = ZeroizingDecryptionRnsV1::new(wide_vector_as_rns(profile, smudge)?);
+            ZeroizingDecryptionRnsV1::new(
+                smudge_rns
+                    .as_polynomial()
+                    .scale_plaintext_modulus(profile)?,
+            )
+        };
+        let secret_share_component = {
+            let witness_secret_rns = ZeroizingDecryptionRnsV1::new(witness.secret.as_rns(profile)?);
+            ZeroizingDecryptionRnsV1::new(
+                ciphertext
+                    .linear()
+                    .mul(witness_secret_rns.as_polynomial(), profile)?,
+            )
+        };
+        secret_share_component
+            .as_polynomial()
+            .add(scaled_smudge_rns.as_polynomial(), profile)?
+    };
     if expected_share != *share {
         return Err(ZkAmsMkheErrorV1::InvalidShareProof);
     }
@@ -2587,76 +3063,128 @@ fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     validate_wide_relation_random_health(random)?;
 
     for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut secret_mask = (0..profile.ring_degree)
-            .map(|_| sample_signed_small(secret_mask_bound, random))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut error_mask = (0..profile.ring_degree)
-            .map(|_| sample_signed_small(error_mask_bound, random))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut smudge_mask = (0..profile.ring_degree)
-            .map(|_| sample_signed_wide(&wide_mask_bound, random))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut secret_mask = ZeroizingI64VectorV1::with_capacity(profile.ring_degree)?;
+        for _ in 0..profile.ring_degree {
+            secret_mask.push(sample_signed_small(secret_mask_bound, random)?);
+        }
+        let mut error_mask = ZeroizingI64VectorV1::with_capacity(profile.ring_degree)?;
+        for _ in 0..profile.ring_degree {
+            error_mask.push(sample_signed_small(error_mask_bound, random)?);
+        }
+        let mut smudge_mask = ZeroizingSignedWideVectorV1::with_capacity(profile.ring_degree)?;
+        for _ in 0..profile.ring_degree {
+            smudge_mask.push(sample_signed_wide(&wide_mask_bound, random)?);
+        }
 
-        let secret_mask_rns = RnsPolynomial::from_signed(profile, &secret_mask)?;
-        let error_mask_rns = RnsPolynomial::from_signed(profile, &error_mask)?;
-        let smudge_mask_rns = wide_vector_as_rns(profile, &smudge_mask)?;
-        let public_key_commitment = relation
-            .common_a
-            .mul(&secret_mask_rns, profile)?
-            .negate(profile)?
-            .add(&error_mask_rns.scale_plaintext_modulus(profile)?, profile)?;
-        let share_commitment = ciphertext
-            .linear()
-            .mul(&secret_mask_rns, profile)?
-            .add(&smudge_mask_rns.scale_plaintext_modulus(profile)?, profile)?;
-        let challenge_seed = decryption_challenge_seed(
-            profile,
-            smudge_bits,
-            relation,
-            ciphertext,
-            share,
-            &public_key_commitment,
-            &share_commitment,
-        )?;
+        let challenge_seed = {
+            let (public_key_commitment, share_commitment) =
+                {
+                    let secret_mask_rns = ZeroizingDecryptionRnsV1::new(
+                        RnsPolynomial::from_signed(profile, secret_mask.as_slice())?,
+                    );
+                    let scaled_error_mask_rns = {
+                        let error_mask_rns = ZeroizingDecryptionRnsV1::new(
+                            RnsPolynomial::from_signed(profile, error_mask.as_slice())?,
+                        );
+                        ZeroizingDecryptionRnsV1::new(
+                            error_mask_rns
+                                .as_polynomial()
+                                .scale_plaintext_modulus(profile)?,
+                        )
+                    };
+                    let scaled_smudge_mask_rns = {
+                        let smudge_mask_rns = ZeroizingDecryptionRnsV1::new(wide_vector_as_rns(
+                            profile,
+                            smudge_mask.as_slice(),
+                        )?);
+                        ZeroizingDecryptionRnsV1::new(
+                            smudge_mask_rns
+                                .as_polynomial()
+                                .scale_plaintext_modulus(profile)?,
+                        )
+                    };
+                    let public_key_commitment = {
+                        let public_key_mask_product = ZeroizingDecryptionRnsV1::new(
+                            relation
+                                .common_a
+                                .mul(secret_mask_rns.as_polynomial(), profile)?,
+                        );
+                        let negated_public_key_mask_product = ZeroizingDecryptionRnsV1::new(
+                            public_key_mask_product.as_polynomial().negate(profile)?,
+                        );
+                        ZeroizingDecryptionRnsV1::new(
+                            negated_public_key_mask_product
+                                .as_polynomial()
+                                .add(scaled_error_mask_rns.as_polynomial(), profile)?,
+                        )
+                    };
+                    let share_commitment = {
+                        let share_mask_product = ZeroizingDecryptionRnsV1::new(
+                            ciphertext
+                                .linear()
+                                .mul(secret_mask_rns.as_polynomial(), profile)?,
+                        );
+                        ZeroizingDecryptionRnsV1::new(
+                            share_mask_product
+                                .as_polynomial()
+                                .add(scaled_smudge_mask_rns.as_polynomial(), profile)?,
+                        )
+                    };
+                    (public_key_commitment, share_commitment)
+                };
+            decryption_challenge_seed(
+                profile,
+                smudge_bits,
+                relation,
+                ciphertext,
+                share,
+                public_key_commitment.as_polynomial(),
+                share_commitment.as_polynomial(),
+            )?
+        };
         if challenge_seed == [0; 32] {
-            secret_mask.fill(0);
-            error_mask.fill(0);
-            smudge_mask.clear();
             continue;
         }
         let challenge = derive_sparse_challenge(profile.ring_degree, challenge_seed)?;
-        let folded_secret = sparse_negacyclic_mul_small(&challenge, &witness.secret.coefficients)?;
-        let folded_error =
-            sparse_negacyclic_mul_small(&challenge, &witness.public_key_error.coefficients)?;
-        let folded_smudge = sparse_negacyclic_mul_wide(&challenge, smudge)?;
+        let folded_secret = ZeroizingI64VectorV1::from_vec(sparse_negacyclic_mul_small(
+            &challenge,
+            &witness.secret.coefficients,
+        )?);
+        let folded_error = ZeroizingI64VectorV1::from_vec(sparse_negacyclic_mul_small(
+            &challenge,
+            &witness.public_key_error.coefficients,
+        )?);
+        let folded_smudge =
+            ZeroizingSignedWideVectorV1::from_vec(sparse_negacyclic_mul_wide(&challenge, smudge)?);
         let mut accepted = true;
         let mut secret_response = Vec::with_capacity(profile.ring_degree);
         let mut public_key_error_response = Vec::with_capacity(profile.ring_degree);
         let mut smudge_response = Vec::with_capacity(profile.ring_degree);
-        for (mask, folded) in secret_mask.iter().copied().zip(folded_secret) {
+        for (mask, folded) in secret_mask
+            .iter()
+            .copied()
+            .zip(folded_secret.iter().copied())
+        {
             let response = mask
                 .checked_add(folded)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             accepted &= response.unsigned_abs() <= secret_response_limit as u64;
             secret_response.push(response);
         }
-        for (mask, folded) in error_mask.iter().copied().zip(folded_error) {
+        for (mask, folded) in error_mask.iter().copied().zip(folded_error.iter().copied()) {
             let response = mask
                 .checked_add(folded)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             accepted &= response.unsigned_abs() <= error_response_limit as u64;
             public_key_error_response.push(response);
         }
-        for (mask, folded) in smudge_mask.iter().zip(folded_smudge) {
+        for (mask, folded) in smudge_mask.iter().zip(folded_smudge.iter()) {
             let response = mask
-                .checked_add(&folded)
+                .checked_add(folded)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             accepted &= response.magnitude <= wide_response_limit;
             smudge_response.push(response);
         }
-        secret_mask.fill(0);
-        error_mask.fill(0);
-        smudge_mask.clear();
         if !accepted {
             continue;
         }
@@ -2779,16 +3307,32 @@ fn create_decryption_share<R: MaskedRelaxedRandomSourceV1>(
     }
     validate_wide_relation_random_health(random)?;
     let smudge_bound = WideMagnitudeV1::max_for_bits(smudge_bits)?;
-    let mut smudge = (0..profile.ring_degree)
-        .map(|_| sample_signed_wide(&smudge_bound, random))
-        .collect::<Result<Vec<_>, _>>()?;
-    let share = ciphertext
-        .linear()
-        .mul(&witness.secret.as_rns(profile)?, profile)?
-        .add(
-            &wide_vector_as_rns(profile, &smudge)?.scale_plaintext_modulus(profile)?,
-            profile,
-        )?;
+    let mut smudge = ZeroizingSignedWideVectorV1::with_capacity(profile.ring_degree)?;
+    for _ in 0..profile.ring_degree {
+        smudge.push(sample_signed_wide(&smudge_bound, random)?);
+    }
+    let share = {
+        let scaled_smudge_rns = {
+            let smudge_rns =
+                ZeroizingDecryptionRnsV1::new(wide_vector_as_rns(profile, smudge.as_slice())?);
+            ZeroizingDecryptionRnsV1::new(
+                smudge_rns
+                    .as_polynomial()
+                    .scale_plaintext_modulus(profile)?,
+            )
+        };
+        let secret_share_component = {
+            let witness_secret_rns = ZeroizingDecryptionRnsV1::new(witness.secret.as_rns(profile)?);
+            ZeroizingDecryptionRnsV1::new(
+                ciphertext
+                    .linear()
+                    .mul(witness_secret_rns.as_polynomial(), profile)?,
+            )
+        };
+        secret_share_component
+            .as_polynomial()
+            .add(scaled_smudge_rns.as_polynomial(), profile)?
+    };
     let proof = prove_decryption_relation(
         profile,
         parties,
@@ -2796,11 +3340,10 @@ fn create_decryption_share<R: MaskedRelaxedRandomSourceV1>(
         witness,
         ciphertext,
         &share,
-        &smudge,
+        smudge.as_slice(),
         smudge_bits,
         random,
     )?;
-    smudge.clear();
     let placeholder = ArtifactAuthentication {
         version: MKHE_VERSION_V1,
         party: relation.binding.party,
@@ -2848,63 +3391,6 @@ fn create_authenticated_decryption_share<R: MaskedRelaxedRandomSourceV1>(
     Ok(record)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OpaquePartyStateContextV1 {
-    profile_digest: [u8; 32],
-    security_certificate_digest: [u8; 32],
-    roster_digest: [u8; 32],
-    key_material_digest: [u8; 32],
-    epoch: u64,
-    transcript_digest: [u8; 32],
-    party_index: u8,
-    party: ZkAmsMkhePartyIdV1,
-    public_share_digest: [u8; 32],
-}
-
-fn expected_opaque_party_state_context(
-    statement: ZkAmsMkheDecryptionStatementV1<'_>,
-    party_index: usize,
-) -> Result<OpaquePartyStateContextV1, ZkAmsMkheErrorV1> {
-    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidPartySet);
-    }
-    Ok(OpaquePartyStateContextV1 {
-        profile_digest: statement.roster.profile_digest(),
-        security_certificate_digest: statement
-            .collective_public_key
-            .security_certificate_digest(),
-        roster_digest: statement.roster.roster_digest(),
-        key_material_digest: statement
-            .collective_public_key
-            .key_material_digest_internal(),
-        epoch: statement.roster.epoch(),
-        transcript_digest: statement.collective_public_key.transcript_digest(),
-        party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
-        party: statement.roster.parties()[party_index],
-        public_share_digest: statement.public_key_shares[party_index].digest(),
-    })
-}
-
-fn validate_opaque_party_state_context(
-    party_state: &ZkAmsMkheCollectivePartyStateV1,
-    expected: OpaquePartyStateContextV1,
-) -> Result<(), ZkAmsMkheErrorV1> {
-    if party_state.profile_digest_internal() != expected.profile_digest
-        || party_state.security_certificate_digest_internal()
-            != expected.security_certificate_digest
-        || party_state.roster_digest_internal() != expected.roster_digest
-        || party_state.key_material_digest_internal() != expected.key_material_digest
-        || party_state.epoch() != expected.epoch
-        || party_state.transcript_digest() != expected.transcript_digest
-        || party_state.party_index() != expected.party_index
-        || party_state.party() != expected.party
-        || party_state.public_share_digest() != expected.public_share_digest
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-    }
-    Ok(())
-}
-
 /// Create one authenticated native P24-H partial-decryption share.
 ///
 /// Materialize its sole canonical public representation with
@@ -2912,7 +3398,9 @@ fn validate_opaque_party_state_context(
 /// admitted independently under their unchanged governed ceilings.
 pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     party_index: usize,
+    persistent_use: ZkAmsMkhePersistentDecryptionPartyUseV1,
     party_state: &ZkAmsMkheCollectivePartyStateV1,
     party_secret: &ZkAmsMkheActivePartySecretV1,
     random: &mut R,
@@ -2921,29 +3409,24 @@ pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
     if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
-    let expected_context = expected_opaque_party_state_context(statement, party_index)?;
-    let expected_party = expected_context.party;
-    if party_secret.party()? != expected_party {
+    let persistent = persistent_context.consume_party_use(
+        statement,
+        party_index,
+        persistent_use,
+        party_state,
+    )?;
+    if party_secret.party()? != statement.roster.parties()[party_index] {
         return Err(ZkAmsMkheErrorV1::InvalidAuthentication);
     }
-    validate_opaque_party_state_context(party_state, expected_context)?;
     let (profile, parties, ciphertext, common_a, party_b) =
         statement.internal_for_party(party_index)?;
     let ciphertext_digest = ciphertext.digest();
-    let binding = DecryptionBindingV1 {
-        profile_digest: statement.roster.profile_digest(),
-        roster_digest: statement.roster.roster_digest(),
-        epoch: statement.roster.epoch(),
-        transcript_digest: statement.ciphertext.binding().transcript_digest(),
-        ciphertext_digest,
-        key_context_digest: statement.key_context_digest,
-        statement_binding_digest: statement.binding_digest(),
-        ciphertext_record_index: statement.ciphertext.binding().record_index(),
-        sample_index: statement.ciphertext.sample_index(),
-        party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
-        party: parties.parties[party_index],
-        level: statement.ciphertext.binding().level(),
-    };
+    let binding = decryption_binding_from_statement(statement, party_index, &persistent)?;
+    if binding.ciphertext_digest != ciphertext_digest
+        || binding.party != parties.parties[party_index]
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
     let relation = DecryptionPublicRelationV1 {
         binding: binding.clone(),
         common_a: Arc::new(common_a),
@@ -2977,6 +3460,7 @@ pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
 /// Verify one authenticated native share against its exact governed statement.
 pub fn verify_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     share: &ZkAmsMkheAuthenticatedDecryptionShareV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let party_index = usize::from(share.binding.party_index);
@@ -2984,6 +3468,8 @@ pub fn verify_zk_ams_mkhe_decryption_share_v1(
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
     statement.validate()?;
+    let persistent = persistent_context.proof_binding(statement, party_index)?;
+    let expected_binding = decryption_binding_from_statement(statement, party_index, &persistent)?;
     let public_binding = statement.ciphertext.binding();
     let ciphertext_digest = statement.ciphertext_digest()?;
     if share.binding.profile_digest != statement.roster.profile_digest()
@@ -2992,7 +3478,7 @@ pub fn verify_zk_ams_mkhe_decryption_share_v1(
         || share.binding.transcript_digest != public_binding.transcript_digest()
         || share.binding.ciphertext_digest != ciphertext_digest
         || share.binding.key_context_digest != statement.key_context_digest
-        || share.binding.statement_binding_digest != statement.binding_digest()
+        || share.binding.statement_binding_digest != expected_binding.statement_binding_digest
         || share.binding.ciphertext_record_index != public_binding.record_index()
         || share.binding.sample_index != statement.ciphertext.sample_index()
         || share.binding.party != statement.roster.parties()[party_index]
@@ -3005,20 +3491,12 @@ pub fn verify_zk_ams_mkhe_decryption_share_v1(
     if ciphertext.digest() != ciphertext_digest {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
     }
-    let expected_binding = DecryptionBindingV1 {
-        profile_digest: statement.roster.profile_digest(),
-        roster_digest: statement.roster.roster_digest(),
-        epoch: statement.roster.epoch(),
-        transcript_digest: statement.ciphertext.binding().transcript_digest(),
-        ciphertext_digest,
-        key_context_digest: statement.key_context_digest,
-        statement_binding_digest: statement.binding_digest(),
-        ciphertext_record_index: statement.ciphertext.binding().record_index(),
-        sample_index: statement.ciphertext.sample_index(),
-        party_index: share.binding.party_index,
-        party: parties.parties[party_index],
-        level: statement.ciphertext.binding().level(),
-    };
+    if expected_binding.party_index != share.binding.party_index
+        || expected_binding.party != parties.parties[party_index]
+        || expected_binding.ciphertext_digest != ciphertext_digest
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidShareSet);
+    }
     let relation = DecryptionPublicRelationV1 {
         binding: expected_binding.clone(),
         common_a: Arc::new(common_a),
@@ -3039,6 +3517,7 @@ pub fn verify_zk_ams_mkhe_decryption_share_v1(
 /// CRT, enforce the certified residual bound, and recover canonical T256 values.
 pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
     shares: &[ZkAmsMkheAuthenticatedDecryptionShareV1],
 ) -> Result<ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1> {
     let profile = release_profile_v1();
@@ -3088,6 +3567,11 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
         .map_err(|_| binding_failure(0, [0; 32]))?;
     let ciphertext_digest = ciphertext.digest();
     for (index, share) in shares.iter().enumerate() {
+        let persistent = persistent_context
+            .proof_binding(statement, index)
+            .map_err(|_| binding_failure(index, ciphertext_digest))?;
+        let expected = decryption_binding_from_statement(statement, index, &persistent)
+            .map_err(|_| binding_failure(index, ciphertext_digest))?;
         if usize::from(share.binding.party_index) != index
             || share.binding.party != parties.parties[index]
         {
@@ -3104,7 +3588,7 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
             || share.binding.transcript_digest != binding.transcript_digest()
             || share.binding.ciphertext_digest != ciphertext_digest
             || share.binding.key_context_digest != statement.key_context_digest
-            || share.binding.statement_binding_digest != statement.binding_digest()
+            || share.binding.statement_binding_digest != expected.statement_binding_digest
             || share.binding.ciphertext_record_index != binding.record_index()
             || share.binding.sample_index != statement.ciphertext.sample_index()
             || share.binding.level != binding.level()
@@ -3118,6 +3602,11 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
     );
     let mut relations = Vec::with_capacity(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1);
     for index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        let persistent = persistent_context
+            .proof_binding(statement, index)
+            .map_err(|_| binding_failure(index, ciphertext_digest))?;
+        let persistent_binding = decryption_binding_from_statement(statement, index, &persistent)
+            .map_err(|_| binding_failure(index, ciphertext_digest))?;
         let party_b = RnsPolynomial::from_flat(
             &profile,
             statement.public_key_shares[index]
@@ -3134,7 +3623,7 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
                 transcript_digest: binding.transcript_digest(),
                 ciphertext_digest,
                 key_context_digest: statement.key_context_digest,
-                statement_binding_digest: statement.binding_digest(),
+                statement_binding_digest: persistent_binding.statement_binding_digest,
                 ciphertext_record_index: binding.record_index(),
                 sample_index: statement.ciphertext.sample_index(),
                 party_index: u8::try_from(index).unwrap_or(u8::MAX),
@@ -3686,6 +4175,18 @@ fn decode_centered_plaintext(
         }
     }
 }
+
+#[path = "decryption_streaming.rs"]
+mod streaming;
+
+pub use streaming::{
+    ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
+    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingBlockerV1,
+    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
+    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
+    zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
+};
 
 #[cfg(test)]
 mod tests {

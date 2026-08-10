@@ -29,7 +29,7 @@ use wire::{VrfCommit, VrfReveal};
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 
 fn derive_vrf_material_from_key(
-    chain_hash: &Hash,
+    network_id: &iroha_data_model::NetworkId,
     private_key: &PrivateKey,
     epoch: u64,
     signer: wire::ValidatorIndex,
@@ -37,7 +37,7 @@ fn derive_vrf_material_from_key(
     if private_key.algorithm() != iroha_crypto::Algorithm::BlsNormal {
         return Err("NPoS VRF requires a BLS-normal consensus key".to_owned());
     }
-    let message = vrf_input(chain_hash, epoch, signer);
+    let message = vrf_input(network_id, epoch, signer);
     let payload = Zeroizing::new(
         private_key
             .try_payload()
@@ -46,19 +46,23 @@ fn derive_vrf_material_from_key(
     let secret = iroha_crypto::BlsNormal::parse_private_key(payload.as_slice())
         .map_err(|error| format!("failed to parse BLS key for VRF derivation: {error}"))?;
     let (output, proof) =
-        iroha_crypto::vrf::prove_normal_with_chain(&secret, chain_hash.as_ref(), &message)
+        iroha_crypto::vrf::prove_normal_with_network_id(&secret, network_id.as_bytes(), &message)
             .map_err(|error| format!("failed to derive deterministic BLS VRF material: {error}"))?;
     let reveal = output.0;
     let commitment: [u8; 32] = Hash::new(reveal).into();
     Ok((reveal, commitment, proof.encode()))
 }
 
-fn vrf_input(chain_hash: &Hash, epoch: u64, signer: wire::ValidatorIndex) -> Vec<u8> {
+fn vrf_input(
+    network_id: &iroha_data_model::NetworkId,
+    epoch: u64,
+    signer: wire::ValidatorIndex,
+) -> Vec<u8> {
     let mut message = Vec::with_capacity(
-        VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
+        VRF_INPUT_DOMAIN.len() + network_id.as_bytes().len() + core::mem::size_of::<u64>() * 2,
     );
     message.extend_from_slice(VRF_INPUT_DOMAIN);
-    message.extend_from_slice(chain_hash.as_ref());
+    message.extend_from_slice(network_id.as_bytes());
     message.extend_from_slice(&epoch.to_be_bytes());
     message.extend_from_slice(&u64::from(signer).to_be_bytes());
     message
@@ -833,9 +837,8 @@ impl ActiveVrfLifecycle {
         if local_peer.public_key() != key_pair.public_key() {
             return Err(V2NposError::LocalIdentityMismatch);
         }
-        let chain_hash = Hash::prehashed(*self.context.network_id.as_bytes());
         let (reveal, commitment, vrf_proof) = derive_vrf_material_from_key(
-            &chain_hash,
+            &self.context.network_id,
             key_pair.private_key(),
             self.context.epoch,
             local_validator,
@@ -997,11 +1000,10 @@ fn verify_vrf_reveal_for_chain(
     if algorithm != iroha_crypto::Algorithm::BlsNormal {
         return false;
     }
-    let chain_hash = Hash::prehashed(*network_id.as_bytes());
-    let input = vrf_input(&chain_hash, reveal.epoch, reveal.signer);
-    iroha_crypto::vrf::verify_normal_bytes_with_chain(
+    let input = vrf_input(network_id, reveal.epoch, reveal.signer);
+    iroha_crypto::vrf::verify_normal_bytes_with_network_id(
         public_key,
-        chain_hash.as_ref(),
+        network_id.as_bytes(),
         &input,
         &proof,
     )
@@ -1694,9 +1696,13 @@ mod tests {
         context: &wire::HeightContext,
         signer: wire::ValidatorIndex,
     ) -> ([u8; 32], [u8; 32], Vec<u8>) {
-        let chain_hash = Hash::prehashed(*context.network_id.as_bytes());
-        derive_vrf_material_from_key(&chain_hash, key.private_key(), context.epoch, signer)
-            .expect("derive fixture VRF material")
+        derive_vrf_material_from_key(
+            &context.network_id,
+            key.private_key(),
+            context.epoch,
+            signer,
+        )
+        .expect("derive fixture VRF material")
     }
 
     fn sign_reveal(
@@ -1705,9 +1711,8 @@ mod tests {
         mut reveal: VrfReveal,
     ) -> VrfReveal {
         if reveal.vrf_proof.is_empty() {
-            let chain_hash = Hash::prehashed(*context.network_id.as_bytes());
             let (_, _, proof) = derive_vrf_material_from_key(
-                &chain_hash,
+                &context.network_id,
                 key.private_key(),
                 reveal.epoch,
                 reveal.signer,

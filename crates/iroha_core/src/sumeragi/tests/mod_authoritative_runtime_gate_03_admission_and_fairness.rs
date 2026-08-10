@@ -659,7 +659,11 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"live-drain-ingress-chain"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::new(b"live-drain-ingress-genesis"),
+                    ),
+                ),
                 lane_id: LaneId::new(7),
                 dataspace_id: DataSpaceId::new(9),
                 lane_incarnation: Hash::new(b"live-drain-ingress-incarnation"),

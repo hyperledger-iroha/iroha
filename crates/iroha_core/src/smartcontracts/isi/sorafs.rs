@@ -424,7 +424,7 @@ impl PinAccountingMutation {
     }
 }
 
-fn pin_record_is_charged(record: &PinManifestRecord) -> bool {
+fn pin_record_has_live_content_charge(record: &PinManifestRecord) -> bool {
     !matches!(record.status, PinStatus::Retired(_))
 }
 
@@ -443,13 +443,9 @@ fn prepare_pin_admission_accounting(
     let global_usage = match read_pin_usage(world, global_key, "global resource usage")? {
         Some(usage) => usage,
         None => {
-            if world
-                .pin_manifests()
-                .iter()
-                .any(|(_, record)| pin_record_is_charged(record))
-            {
+            if world.pin_manifests().iter().next().is_some() {
                 return Err(pin_accounting_corruption(
-                    "live manifests exist without the global resource summary",
+                    "retained manifests exist without the global resource summary",
                 ));
             }
             PinResourceUsage::default()
@@ -474,11 +470,13 @@ fn prepare_pin_admission_accounting(
     let authority_usage = match read_pin_usage(world, &authority_key, "authority resource usage")? {
         Some(usage) => usage,
         None => {
-            if world.pin_manifests().iter().any(|(_, record)| {
-                pin_record_is_charged(record) && &record.submitted_by == authority
-            }) {
+            if world
+                .pin_manifests()
+                .iter()
+                .any(|(_, record)| &record.submitted_by == authority)
+            {
                 return Err(pin_accounting_corruption(format!(
-                    "live manifests for authority {authority} exist without a resource summary"
+                    "retained manifests for authority {authority} exist without a resource summary"
                 )));
             }
             PinResourceUsage::default()
@@ -590,7 +588,7 @@ fn prepare_pin_admission_accounting(
     })
 }
 
-fn prepare_pin_release_accounting(
+fn prepare_pin_retirement_accounting(
     state_transaction: &StateTransaction<'_, '_>,
     record: &PinManifestRecord,
     retired_status: &PinStatus,
@@ -598,12 +596,12 @@ fn prepare_pin_release_accounting(
     let world = state_transaction.world();
     let global_usage = read_pin_usage(world, pin_global_usage_key(), "global resource usage")?
         .ok_or_else(|| pin_accounting_corruption("global resource summary is missing"))?
-        .checked_release(record.content_length)
+        .checked_release_content(record.content_length)
         .ok_or_else(|| pin_accounting_corruption("global resource summary underflow"))?;
     let authority_key = pin_authority_usage_key(&record.submitted_by)?;
     let authority_usage = read_pin_usage(world, &authority_key, "authority resource usage")?
         .ok_or_else(|| pin_accounting_corruption("authority resource summary is missing"))?
-        .checked_release(record.content_length)
+        .checked_release_content(record.content_length)
         .ok_or_else(|| pin_accounting_corruption("authority resource summary underflow"))?;
     read_pin_lineage(world, &record.digest)?.ok_or_else(|| {
         pin_accounting_corruption(format!(
@@ -618,9 +616,7 @@ fn prepare_pin_release_accounting(
         &record.status,
         retired_status,
     )?;
-    let mut writes = Vec::with_capacity(
-        status_transition.writes.len() + if record.successor_of.is_some() { 3 } else { 2 },
-    );
+    let mut writes = Vec::with_capacity(status_transition.writes.len() + 2);
     writes.push((
         pin_global_usage_key().clone(),
         encode_pin_accounting_state(&global_usage, "global resource usage")?,
@@ -636,16 +632,12 @@ fn prepare_pin_release_accounting(
                 manifest_hex(&parent_digest)
             ))
         })?;
-        let parent_lineage = parent_lineage.checked_remove_successor().ok_or_else(|| {
-            pin_accounting_corruption(format!(
-                "parent manifest {} successor count underflow",
+        if parent_lineage.direct_successor_count == 0 {
+            return Err(pin_accounting_corruption(format!(
+                "parent manifest {} has no retained successor charge",
                 manifest_hex(&parent_digest)
-            ))
-        })?;
-        writes.push((
-            pin_lineage_key(&parent_digest),
-            encode_pin_accounting_state(&parent_lineage, "parent manifest lineage")?,
-        ));
+            )));
+        }
     }
     writes.extend(status_transition.writes);
     let mut removals = vec![pin_expiry_key(
@@ -735,7 +727,9 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
                     manifest_hex(digest)
                 ))
             })?;
-        if record.policy.retention_epoch != *retention_epoch || !pin_record_is_charged(&record) {
+        if record.policy.retention_epoch != *retention_epoch
+            || !pin_record_has_live_content_charge(&record)
+        {
             return Err(pin_accounting_corruption(format!(
                 "expiry marker for {} disagrees with its live manifest record",
                 manifest_hex(digest)
@@ -2713,7 +2707,7 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
 
         let retired_status = PinStatus::Retired(retired_epoch);
         let accounting =
-            prepare_pin_release_accounting(state_transaction, &record, &retired_status)?;
+            prepare_pin_retirement_accounting(state_transaction, &record, &retired_status)?;
 
         if let Some(location) = musubi_location {
             super::musubi::ensure_locations_may_be_invalidated(
@@ -3827,10 +3821,10 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 .insert(self.order_id, reference);
         }
 
-        // TODO: Bind chain/genesis to the finalized reader-created precursor,
-        // propagate it through the lifecycle lease or private broker, run the
-        // shared verifier, re-read the exact post-completion finalized row,
-        // then construct the attestation and request approval-only signing.
+        // Issuance deliberately stops at the immutable pre-location binding. It cannot observe a
+        // finalized completion, mint a completed-row claim, read provider bytes, or request an
+        // attestation. The daemon-owned finalized capture path performs those post-completion
+        // operations under its exact NetworkId and storage-incarnation capabilities.
 
         Ok(())
     }
@@ -6407,13 +6401,9 @@ fn query_pin_manifest_page(
         .map_err(pin_query_failure)?
     {
         Some(usage) => usage,
-        None if world
-            .pin_manifests()
-            .iter()
-            .any(|(_, record)| pin_record_is_charged(record)) =>
-        {
+        None if world.pin_manifests().iter().next().is_some() => {
             return Err(QueryExecutionFail::Conversion(
-                "live pin manifests exist without the global resource summary".to_owned(),
+                "retained pin manifests exist without the global resource summary".to_owned(),
             ));
         }
         None => PinResourceUsage::default(),
@@ -7945,8 +7935,11 @@ mod sorafs_tests {
         let payload = MusubiSeedIngressReceiptPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: MusubiSeedIngressReceiptBindingV1 {
-                chain_id: iroha_data_model::ChainId::from("musubi-order-binding-test"),
-                genesis_block_hash: [seed.wrapping_add(6); 32],
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::prehashed([seed.wrapping_add(6); 32]),
+                )),
                 publisher: alice(),
                 ingress_broker: broker,
                 seed_provider: ProviderId::new([seed.wrapping_add(7); 32]),
@@ -8227,7 +8220,130 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn pin_expiry_uses_consensus_time_and_releases_accounting_atomically() {
+    fn retired_pin_history_cannot_recycle_count_ceilings() {
+        for authority_scoped in [false, true] {
+            let state = make_state();
+            let mut block = state.block(block_header());
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx);
+            if authority_scoped {
+                stx.gov.sorafs_pin_policy.max_manifests_per_authority = 1;
+            } else {
+                stx.gov.sorafs_pin_policy.max_global_manifests = 1;
+            }
+
+            RegisterPinManifest {
+                manifest_payload: default_manifest_payload(),
+                alias: None,
+                successor_of: None,
+            }
+            .execute(&alice(), &mut stx)
+            .expect("first pin remains within the retained-record ceiling");
+            RetirePinManifest {
+                digest: default_digest(),
+                reason: Some("release replica capacity".to_owned()),
+            }
+            .execute(&alice(), &mut stx)
+            .expect("the authenticated submitter may retire its pin");
+
+            let expected_usage = PinResourceUsage {
+                manifest_count: 1,
+                content_bytes: 0,
+            };
+            assert_eq!(
+                read_pin_usage(stx.world(), pin_global_usage_key(), "global usage")
+                    .expect("valid global usage"),
+                Some(expected_usage)
+            );
+            assert_eq!(
+                read_pin_usage(
+                    stx.world(),
+                    &pin_authority_usage_key(&alice()).expect("authority usage key"),
+                    "authority usage",
+                )
+                .expect("valid authority usage"),
+                Some(expected_usage)
+            );
+
+            let alice_balance_before = pin_fee_balance(&stx, &alice());
+            let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+            let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+            let error = RegisterPinManifest {
+                manifest_payload: manifest_payload_for_seed(0xBB),
+                alias: None,
+                successor_of: None,
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("retirement must not reopen a retained-record quota slot");
+
+            let expected_error = if authority_scoped {
+                "SoraFS pin ceiling for authority"
+            } else {
+                "global SoraFS pin ceiling"
+            };
+            assert!(smart_contract_error_message(&error).contains(expected_error));
+            assert!(stx.world.pin_manifests.get(&second_digest()).is_none());
+            assert_pin_fee_balances_unchanged(
+                &stx,
+                &alice(),
+                alice_balance_before,
+                &treasury_account,
+                treasury_balance_before,
+            );
+        }
+    }
+
+    #[test]
+    fn public_pin_global_and_authority_byte_ceilings_reject_before_fee_or_state() {
+        for authority_scoped in [false, true] {
+            let state = make_state();
+            let mut block = state.block(block_header());
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx);
+            if authority_scoped {
+                stx.gov.sorafs_pin_policy.max_bytes_per_authority = default_content_length();
+            } else {
+                stx.gov.sorafs_pin_policy.max_global_bytes = default_content_length();
+            }
+
+            RegisterPinManifest {
+                manifest_payload: default_manifest_payload(),
+                alias: None,
+                successor_of: None,
+            }
+            .execute(&alice(), &mut stx)
+            .expect("first pin remains within the content-byte ceiling");
+
+            let alice_balance_before = pin_fee_balance(&stx, &alice());
+            let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+            let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+            let error = RegisterPinManifest {
+                manifest_payload: manifest_payload_for_seed(0xBB),
+                alias: None,
+                successor_of: None,
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("the second pin must exceed the content-byte ceiling");
+
+            let expected_error = if authority_scoped {
+                "SoraFS pin ceiling for authority"
+            } else {
+                "global SoraFS pin ceiling"
+            };
+            assert!(smart_contract_error_message(&error).contains(expected_error));
+            assert!(stx.world.pin_manifests.get(&second_digest()).is_none());
+            assert_pin_fee_balances_unchanged(
+                &stx,
+                &alice(),
+                alice_balance_before,
+                &treasury_account,
+                treasury_balance_before,
+            );
+        }
+    }
+
+    #[test]
+    fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
         let state = make_state();
         {
             let mut block = state.block(block_header());
@@ -8299,7 +8415,11 @@ mod sorafs_tests {
         assert_eq!(
             read_pin_usage(&block.world, pin_global_usage_key(), "global usage")
                 .expect("valid global usage"),
-            Some(PinResourceUsage::default())
+            Some(PinResourceUsage {
+                manifest_count: 1,
+                content_bytes: 0,
+            }),
+            "expiry must retain the record charge while releasing live content bytes"
         );
         assert!(
             block
@@ -8692,28 +8812,27 @@ mod sorafs_tests {
         stx: &mut crate::state::StateTransaction<'_, '_>,
         record: PinManifestRecord,
     ) {
-        if pin_record_is_charged(&record) {
-            let accounting = prepare_pin_admission_accounting(
-                stx,
-                &record.submitted_by,
-                &record.digest,
-                record.successor_of.as_ref(),
-                record.content_length,
+        let has_live_content_charge = pin_record_has_live_content_charge(&record);
+        let accounting = prepare_pin_admission_accounting(
+            stx,
+            &record.submitted_by,
+            &record.digest,
+            record.successor_of.as_ref(),
+            if has_live_content_charge {
+                record.content_length
+            } else {
+                0
+            },
+            record.policy.retention_epoch,
+            &record.status,
+        )
+        .expect("coherent pin fixture accounting");
+        accounting.apply(stx);
+        if !has_live_content_charge {
+            stx.world.smart_contract_state.remove(pin_expiry_key(
                 record.policy.retention_epoch,
-                &record.status,
-            )
-            .expect("coherent pin fixture accounting");
-            accounting.apply(stx);
-        } else {
-            stx.world.smart_contract_state.insert(
-                pin_lineage_key(&record.digest),
-                encode_pin_accounting_state(&PinLineageSummaryV1::root(), "fixture lineage")
-                    .expect("encode fixture lineage"),
-            );
-            stx.world.smart_contract_state.insert(
-                pin_status_index_key(&record.status, &record.digest),
-                Vec::new(),
-            );
+                &record.digest,
+            ));
         }
         stx.world.pin_manifests.insert(record.digest, record);
     }
@@ -11045,6 +11164,66 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn retired_successor_does_not_reopen_the_parent_fanout_ceiling() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            None,
+            PinStatus::Approved(5),
+        );
+        RegisterPinManifest {
+            manifest_payload: default_manifest_payload(),
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("first direct successor remains within the fanout ceiling");
+        RetirePinManifest {
+            digest: default_digest(),
+            reason: Some("superseded".to_owned()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("retire the first successor");
+
+        let parent_lineage = read_pin_lineage(stx.world(), &second_digest())
+            .expect("valid lineage state")
+            .expect("parent lineage exists");
+        assert_eq!(
+            parent_lineage.direct_successor_count, 1,
+            "retained successor history must continue consuming fanout"
+        );
+
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+        let error = RegisterPinManifest {
+            manifest_payload: manifest_payload_for_seed(0xDD),
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("retirement must not recycle the retained lineage slot");
+
+        assert!(
+            smart_contract_error_message(&error)
+                .contains("successor fanout 2 exceeds configured maximum 1")
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
+    }
+
+    #[test]
     fn register_manifest_rejects_lineage_beyond_consensus_depth_limit() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -12441,8 +12620,11 @@ mod sorafs_tests {
         assert_eq!(
             read_pin_usage(stx.world(), pin_global_usage_key(), "global usage")
                 .expect("valid global usage"),
-            Some(PinResourceUsage::default()),
-            "retirement must release the global count and byte charge"
+            Some(PinResourceUsage {
+                manifest_count: 1,
+                content_bytes: 0,
+            }),
+            "retirement must retain the global record charge and release live content bytes"
         );
         assert_eq!(
             read_pin_usage(
@@ -12451,8 +12633,11 @@ mod sorafs_tests {
                 "authority usage",
             )
             .expect("valid authority usage"),
-            Some(PinResourceUsage::default()),
-            "retirement must release the submitter count and byte charge"
+            Some(PinResourceUsage {
+                manifest_count: 1,
+                content_bytes: 0,
+            }),
+            "retirement must retain the submitter record charge and release live content bytes"
         );
         assert!(
             stx.world
@@ -13089,48 +13274,7 @@ mod sorafs_tests {
         );
     }
 
-    #[test]
-    fn issue_replication_order_atomically_installs_musubi_archive_binding() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-
-        let pin = registry_grade_musubi_pin();
-        let archive = musubi_archive_for_pin(&pin, 0x61);
-        let archive_id = archive.archive_id;
-        insert_pin_record_with_accounting(&mut stx, pin);
-        stx.world
-            .musubi_archives
-            .insert(archive_id, archive.clone());
-
-        let order_id = ReplicationOrderId::new([0x62; 32]);
-        let providers = vec![
-            ProviderId::new([0x63; 32]),
-            ProviderId::new([0x64; 32]),
-            ProviderId::new([0x65; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let order = replication_order_struct(order_id, default_digest(), &providers, 3);
-        IssueReplicationOrder::new(order_id, encode_replication_order(&order), 12, 32)
-            .for_musubi_archive(archive_id)
-            .execute(&alice(), &mut stx)
-            .expect("issue archive-bound replication order");
-
-        assert!(stx.world.replication_orders.get(&order_id).is_some());
-        let reference = stx
-            .world
-            .musubi_locations_by_replication_order
-            .get(&order_id)
-            .expect("pre-location archive binding stored");
-        reference.validate().expect("stored binding validates");
-        assert_eq!(reference.binding.archive_id, archive_id);
-        assert_eq!(reference.binding.commitment, archive.commitment);
-        assert_eq!(
-            reference.lifecycle,
-            MusubiReplicationOrderLocationLifecycleV1::PreLocation
-        );
-    }
+    include!("sorafs/musubi_replication_order_tests.rs");
 
     #[test]
     fn issue_replication_order_rejects_musubi_commitment_mismatch_without_partial_state() {

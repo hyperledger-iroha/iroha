@@ -430,10 +430,12 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         rebound_context.digest = terminal_context_digest(rebound_context);
         let mut rebound_governed = governed.clone();
         rebound_governed.context_digest = rebound_context.digest;
-        rebound_governed.digest = governed_batch_digest(&rebound_governed);
+        rebound_governed.digest = governed_batch_digest(&rebound_governed)
+            .expect("rebound governed batch digest must fit release bounds");
         let mut rebound_anchor = output.batch_anchor.clone();
         rebound_anchor.context_digest = rebound_context.digest;
-        rebound_anchor.digest = batch_anchor_digest(&rebound_anchor);
+        rebound_anchor.digest = batch_anchor_digest(&rebound_anchor)
+            .expect("rebound batch anchor digest must fit release bounds");
         rejected.push(verify(
             &proof_context,
             rebound_context,

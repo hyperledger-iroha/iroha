@@ -2567,7 +2567,7 @@ mod tests {
     fn binding() -> TranscriptBindingV1<'static> {
         let parameters = AnonymousPgcParametersV1::get().expect("parameters");
         TranscriptBindingV1 {
-            chain_id: b"taira-test",
+            network_id: &[0x81; 32],
             genesis_hash: [0x81; 32],
             action_index: 4,
             statement_digest: [0x82; 32],

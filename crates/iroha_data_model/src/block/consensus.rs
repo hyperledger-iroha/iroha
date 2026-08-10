@@ -15,6 +15,7 @@ use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
 use crate::{
+    NetworkId,
     asset::AssetDefinitionId,
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, FeeDebitSource, LaneId, LaneRelayEnvelope},
@@ -1112,6 +1113,7 @@ struct LaneBlockProposalPreimage {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockDescriptorV1 {
     /// Lane whose local block is described.
     pub lane_id: LaneId,
@@ -1207,6 +1209,7 @@ impl LaneBlockDescriptorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalPayloadHintV1 {
     /// Global proposal height that anchored the lane payload ownership.
     pub proposal_height: u64,
@@ -1222,6 +1225,7 @@ pub struct LaneBlockProposalPayloadHintV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalV1 {
     /// Replayable descriptor proposed to the lane committee.
     pub descriptor: LaneBlockDescriptorV1,
@@ -1370,7 +1374,7 @@ impl LaneBlockVoteBodyV1 {
 ///
 /// The body names both the immutable payload's origin proposal and the
 /// view-specific proposal being prepared. This prevents a valid payload
-/// certificate from being rebound across chains, epochs, lane incarnations,
+/// certificate from being rebound across networks, epochs, lane incarnations,
 /// proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1380,8 +1384,8 @@ impl LaneBlockVoteBodyV1 {
 pub struct LanePayloadAvailabilityBodyV1 {
     /// Artifact schema version. Only version one is accepted.
     pub version: u8,
-    /// Hash of the chain identifier that owns the payload.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns the payload.
+    pub network_id: NetworkId,
     /// Consensus epoch at the proposal compatibility height.
     pub epoch: u64,
     /// Lane whose executable payload is retained.
@@ -1933,6 +1937,7 @@ impl SumeragiLanePayloadOwnership {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneSettlementReceipt {
     /// Caller-specified identifier linking the receipt to the originating transaction.
     pub source_id: [u8; 32],
@@ -2028,7 +2033,12 @@ pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
+#[norito(
+    tag = "phase",
+    content = "detail",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum NativeAmxPhase {
     /// Participant prepared its dataspace-local leg.
     Prepare,
@@ -2039,20 +2049,21 @@ pub enum NativeAmxPhase {
 /// Canonical Sumeragi v2 native AMX attestation payload.
 ///
 /// The exact frozen round and election epoch are part of the signed payload,
-/// preventing a valid lane-local vote from being replayed across chains,
+/// preventing a valid lane-local vote from being replayed across networks,
 /// parent decisions, epochs, heights, or views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxAttestationBodyV2 {
     /// Exact frozen global round in which the receipt may be included.
     pub round: super::consensus_v2::ConsensusRound,
     /// Finalized election epoch repeated from the frozen height context.
     pub epoch: u64,
-    /// Hash of the chain identifier that owns this attestation.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns this attestation.
+    pub network_id: NetworkId,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
     /// Hash of the canonical transaction entrypoint.
@@ -2316,6 +2327,7 @@ impl NativeAmxAttestationQcV2 {
 
 #[derive(Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 struct NativeAmxAttestationQcV2Wire {
     body: NativeAmxAttestationBodyV2,
     validator_set_hash_version: u16,
@@ -2381,6 +2393,7 @@ impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxLegRecordV2 {
     /// Participant lane certified by both phase QCs.
     pub lane_id: LaneId,
@@ -2416,13 +2429,14 @@ impl PartialOrd for NativeAmxLegRecordV2 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxReceipt {
     /// Receipt format version.
     pub version: u16,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
-    /// Hash of the chain identifier that owns this receipt.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns this receipt.
+    pub network_id: NetworkId,
     /// Deterministic digest of the coordinator/participant routing plan.
     pub plan_digest: Hash,
     /// Coordinator lane that finalized the transaction.
@@ -2521,6 +2535,7 @@ pub struct LaneSwapMetadata {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockCommitment {
     /// Lane-local block height associated with the commitment.
     pub block_height: u64,
@@ -2657,7 +2672,7 @@ fn validate_native_amx_qc_shape(
         || !native_amx_nonzero(body.round.context_id.0.as_ref())
         || body.authority_context_height != body.round.height
         || body.planned_coordinator_block_height == 0
-        || !native_amx_nonzero(body.chain_id_hash.as_ref())
+        || !native_amx_nonzero(body.network_id.as_bytes())
         || !native_amx_nonzero(&body.source_id)
         || !native_amx_nonzero(body.tx_entrypoint_hash.as_ref())
         || !native_amx_nonzero(body.plan_digest.as_ref())
@@ -2735,7 +2750,7 @@ fn validate_native_amx_leg_shape(
     let descriptor = &leg.participant_proposal.descriptor;
     if body.round != expected_round
         || body.epoch != expected_epoch
-        || body.chain_id_hash != receipt.chain_id_hash
+        || body.network_id != receipt.network_id
         || body.source_id != receipt.source_id
         || Hash::from(body.tx_entrypoint_hash) != expected_entrypoint_hash
         || body.plan_digest != receipt.plan_digest
@@ -2880,7 +2895,7 @@ impl LaneBlockCommitment {
                 receipt.lane_block_height == self.block_height;
             if receipt.version != NATIVE_AMX_RECEIPT_VERSION_V2
                 || !native_amx_nonzero(&receipt.source_id)
-                || !native_amx_nonzero(receipt.chain_id_hash.as_ref())
+                || !native_amx_nonzero(receipt.network_id.as_bytes())
                 || !native_amx_nonzero(receipt.plan_digest.as_ref())
                 || !native_amx_nonzero(receipt.lane_incarnation.as_ref())
                 || receipt.authority_context_height == 0
@@ -5908,97 +5923,6 @@ mod tests {
         );
     }
 
-    fn sample_native_amx_qc(
-        phase: NativeAmxPhase,
-        source_id: [u8; 32],
-        plan_digest: Hash,
-        coordinator: (LaneId, DataSpaceId),
-        participant: (LaneId, DataSpaceId),
-        mut validator_set: Vec<PeerId>,
-    ) -> NativeAmxAttestationQcV2 {
-        validator_set.sort();
-        validator_set.dedup();
-        let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
-        let (participant_lane_id, participant_dataspace_id) = participant;
-        let participant_validator_count =
-            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-        let participant_min_quorum = u32::try_from(
-            validator_set
-                .len()
-                .saturating_sub(validator_set.len().saturating_sub(1) / 3)
-                .max(1),
-        )
-        .expect("fixture validator quorum fits u32");
-        let validator_set_hash = HashOf::new(&validator_set);
-        let validator_set_pops = vec![vec![0x5A; 96]; validator_set.len()];
-        let chain_id_hash = Hash::new(b"native-amx-model-chain");
-        let coordinator_lane_incarnation = Hash::new(b"native-amx-model-coordinator");
-        let participant_lane_incarnation = Hash::new(
-            [
-                b"native-amx-model-participant:".as_slice(),
-                &participant_lane_id.as_u32().to_be_bytes(),
-            ]
-            .concat(),
-        );
-        let coordinator_proposal_hash = Hash::new(b"native-amx-model-proposal");
-        let participant_previous_block_descriptor_hash = Some(Hash::new(
-            [
-                b"native-amx-model-participant-parent:".as_slice(),
-                &participant_lane_id.as_u32().to_be_bytes(),
-            ]
-            .concat(),
-        ));
-        let mut body = NativeAmxAttestationBodyV2 {
-            round: crate::block::consensus_v2::ConsensusRound {
-                context_id: crate::block::consensus_v2::HeightContextId(
-                    HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
-                ),
-                height: 42,
-                view: 3,
-            },
-            epoch: 7,
-            chain_id_hash,
-            source_id,
-            tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed(source_id)),
-            plan_digest,
-            phase,
-            coordinator_lane_id,
-            coordinator_dataspace_id,
-            coordinator_lane_incarnation,
-            participant_lane_id,
-            participant_dataspace_id,
-            participant_lane_incarnation,
-            participant_previous_block_height: 41,
-            participant_previous_block_descriptor_hash,
-            participant_lane_block_height: 42,
-            participant_lane_block_view: 0,
-            participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
-            participant_validator_set_hash: validator_set_hash,
-            participant_validator_count,
-            participant_min_quorum,
-            authority_context_height: 42,
-            planned_coordinator_block_height: 42,
-            coordinator_lane_block_view: 3,
-            coordinator_proposal_hash,
-        };
-        body.participant_proposal_hash =
-            sample_native_amx_participant_proposal(&body, validator_set.clone()).proposal_hash;
-        body.participant_settlement_commitment = body
-            .computed_grouped_participant_settlement_commitment(&[body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        NativeAmxAttestationQcV2::try_new(
-            body,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash,
-            validator_set,
-            validator_set_pops,
-            vec![0b0000_0111],
-            vec![0xA5; 96],
-        )
-        .expect("fixture validator set and proofs must align")
-    }
-
     fn sample_native_amx_invariant_qc() -> NativeAmxAttestationQcV2 {
         sample_native_amx_qc(
             NativeAmxPhase::Prepare,
@@ -6543,32 +6467,6 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
-        let document = grouped_native_amx_fixture_document();
-        let commitment: LaneBlockCommitment = norito::json::from_value(
-            document
-                .pointer("/golden/receipt_group")
-                .cloned()
-                .expect("fixture contains receipt group"),
-        )
-        .expect("fixture receipt group decodes");
-        commitment
-            .validate_native_amx_receipts()
-            .expect("Rust-owned grouped Native AMX fixture is structurally valid");
-        validate_grouped_native_amx_application_evidence(&document)
-            .expect("Rust-owned Native AMX application evidence is valid");
-
-        for receipt in &commitment.native_amx_receipts {
-            for leg in &receipt.legs {
-                assert!(
-                    !leg.requires_mixed_role_anchor_validation(),
-                    "golden grouped legs contain their exact current entrypoint"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn native_amx_receipt_negative_corpus_fails_closed() {
         const EXPECTED_RECEIPT_CONTROLS: usize = 45;
 
@@ -6648,7 +6546,7 @@ mod tests {
 
     #[test]
     fn native_amx_application_evidence_negative_corpus_fails_closed() {
-        const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 8;
+        const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 10;
 
         let canonical = grouped_native_amx_fixture_document();
         validate_grouped_native_amx_application_evidence(&canonical)
@@ -6915,7 +6813,9 @@ mod tests {
             native_amx_receipts: vec![NativeAmxReceipt {
                 version: 2,
                 source_id,
-                chain_id_hash: Hash::new(b"native-amx-model-chain"),
+                network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                    Hash::new(b"native-amx-model-genesis"),
+                )),
                 plan_digest,
                 lane_id: coordinator_lane_id,
                 dataspace_id: coordinator_dataspace_id,

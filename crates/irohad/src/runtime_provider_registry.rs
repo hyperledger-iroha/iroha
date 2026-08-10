@@ -1452,7 +1452,7 @@ const fn native_signer_role_for_slot(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IrohaRuntimeProviderBindingsV1 {
     chain_id: String,
-    network_id: Option<NetworkId>,
+    network_id: NetworkId,
     bindings: Vec<IrohaRuntimeProviderBindingV1>,
 }
 
@@ -1493,7 +1493,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         });
         Ok(Self {
             chain_id: config.common.chain.to_string(),
-            network_id: Some(NetworkId::from_genesis_hash(config.genesis.expected_hash)),
+            network_id: NetworkId::from_genesis_hash(config.genesis.expected_hash),
             bindings,
         })
     }
@@ -1514,6 +1514,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// binding.
     pub fn try_from_governance_dag_service_view(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let service = &view.service;
@@ -1622,6 +1623,7 @@ impl IrohaRuntimeProviderBindingsV1 {
 
         Self::try_from_governance_dag_service_projection(
             chain_id,
+            network_id,
             GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator,
                 head_authenticator,
@@ -1644,11 +1646,17 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// invalid issuer, policy, or authorization-lifetime bindings.
     pub fn try_from_bootle_lantern_issuance_service(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         handle: impl Into<String>,
         revision: u64,
         policy_digest: [u8; 32],
         bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        if network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+            ));
+        }
         let binding = IrohaRuntimeProviderBindingV1::try_new_bootle_lantern_issuance(
             handle,
             revision,
@@ -1657,7 +1665,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         )?;
         Ok(Self {
             chain_id: chain_id.to_string(),
-            network_id: None,
+            network_id,
             bindings: vec![binding],
         })
     }
@@ -1676,6 +1684,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// request-size bound.
     pub fn try_from_governance_dag_service(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         service: &sorafs_node::GovernanceDagServiceRuntimeProviderBindingsV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let head_authenticator = match (
@@ -1699,6 +1708,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         };
         Self::try_from_governance_dag_service_projection(
             chain_id,
+            network_id,
             GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
                     handle: service.ipfs_authenticator_handle(),
@@ -1714,6 +1724,7 @@ impl IrohaRuntimeProviderBindingsV1 {
 
     fn try_from_governance_dag_service_projection(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         service: GovernanceDagServiceBindingProjectionV1<'_>,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let mut bindings = Vec::with_capacity(3);
@@ -1751,7 +1762,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         });
         Ok(Self {
             chain_id: chain_id.to_string(),
-            network_id: None,
+            network_id,
             bindings,
         })
     }
@@ -1762,13 +1773,10 @@ impl IrohaRuntimeProviderBindingsV1 {
         &self.chain_id
     }
 
-    /// Return the exact configured network identity when this catalog came from node configuration.
-    ///
-    /// Standalone service catalogs that cannot sign or validate transactions do not carry a
-    /// network identity.
+    /// Return the exact genesis-derived network identity for this catalog.
     #[must_use]
-    pub const fn network_id(&self) -> Option<&NetworkId> {
-        self.network_id.as_ref()
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Iterate over the stable, deterministically ordered provider requests.
@@ -1794,7 +1802,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     pub(crate) fn empty_for_test(chain_id: impl Into<String>) -> Self {
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings: Vec::new(),
         }
     }
@@ -1810,7 +1818,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     slot,
@@ -1835,6 +1843,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_dag_signer(
                     handle,
@@ -1895,7 +1904,8 @@ impl IrohaRuntimeProviderBindingsV1 {
         let mut bindings = vec![publication, checkpoint, archive];
         bindings.sort_unstable_by_key(|binding| binding.slot);
         Self {
-            chain_id: fixture.chain_id.as_str().to_owned(),
+            chain_id: "server-test-chain".to_owned(),
+            network_id: fixture.network_id,
             bindings,
         }
     }
@@ -1920,7 +1930,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         binding.evidence_viewer_transparency_publisher_public_key = Some(public_key);
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![binding],
         }
     }
@@ -1960,7 +1970,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         .expect("test request-ingress binding must be production-shaped");
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_request_auth(
                     slot,
@@ -1995,7 +2005,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         bindings.sort_unstable_by_key(IrohaRuntimeProviderBindingV1::slot);
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings,
         }
     }
@@ -2011,7 +2021,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
-            network_id: None,
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_provider_ingest_source(
                     handle,
@@ -2027,9 +2037,17 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// Attach one explicit network identity to a test catalog.
     #[cfg(test)]
     pub(crate) fn with_network_id_for_test(mut self, network_id: NetworkId) -> Self {
-        self.network_id = Some(network_id);
+        self.network_id = network_id;
         self
     }
+}
+#[cfg(test)]
+pub(crate) fn runtime_provider_test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x15; iroha_crypto::Hash::LENGTH]),
+        ),
+    )
 }
 
 /// Payload-free failure returned by the deployment registry or launcher.
@@ -3170,11 +3188,8 @@ fn qualify_provider_ingest_dependencies(
             Ok(qualification)
         };
         let expected_qualification = observe()?;
-        let chain_id = bindings
-            .chain_id()
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-        if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
+        let network_id = bindings.network_id();
+        if let Some(record) = authority.load_latest(network_id).map_err(|error| {
             match error {
             iroha_core::query::provider_ingest_finalized::
                 ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
@@ -3242,11 +3257,8 @@ fn qualify_reputation_retention_dependency(
         Ok(qualification)
     };
     let expected_qualification = observe()?;
-    let chain_id = bindings
-        .chain_id()
-        .parse::<iroha_data_model::ChainId>()
-        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-    if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
+    let network_id = bindings.network_id();
+    if let Some(record) = authority.load_latest(network_id).map_err(|error| {
         match error {
         iroha_core::query::reputation_finalized::
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
@@ -3611,7 +3623,7 @@ mod tests {
 
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 
     fn standalone_bootle_lantern_bindings()
     -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
@@ -3626,9 +3638,11 @@ mod tests {
     #[test]
     fn standalone_bootle_lantern_catalog_is_exactly_one_qualified_slot() {
         let chain_id = iroha_data_model::ChainId::from("taira");
+        let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         let catalog = IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
             &chain_id,
+            network_id,
             "runtime://privacy/bootle-lantern/taira-primary",
             7,
             [0x93; 32],
@@ -3637,7 +3651,7 @@ mod tests {
         .expect("construct exact standalone slot-56 catalog");
 
         assert_eq!(catalog.chain_id(), "taira");
-        assert_eq!(catalog.network_id(), None);
+        assert_eq!(catalog.network_id(), &network_id);
         assert_eq!(catalog.len(), 1);
         let binding = catalog.iter().next().expect("one exact slot");
         assert_eq!(
@@ -3656,6 +3670,7 @@ mod tests {
     #[test]
     fn standalone_bootle_lantern_catalog_rejects_unqualified_or_test_bindings() {
         let chain_id = iroha_data_model::ChainId::from("taira");
+        let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         for (handle, revision, digest) in [
             ("runtime://privacy/bootle-lantern/test", 7, [0x93; 32]),
@@ -3668,7 +3683,7 @@ mod tests {
         ] {
             assert!(
                 IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
-                    &chain_id, handle, revision, digest, exact,
+                    &chain_id, network_id, handle, revision, digest, exact,
                 )
                 .is_err(),
                 "must reject standalone binding {handle:?}/{revision}/{digest:?}"
@@ -3881,7 +3896,7 @@ mod tests {
         let archive = por_archive_config(binding);
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_por_replay_archive(&archive)
                     .expect("valid archive request"),
@@ -4123,7 +4138,7 @@ mod tests {
     ) -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "hf-credential-registry-test".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(configured)
                     .expect("valid HF credential-provider binding"),
@@ -4433,7 +4448,7 @@ mod tests {
 
         let empty = IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         assert!(matches!(
@@ -6390,7 +6405,7 @@ mod tests {
             .expect("configured evidence viewer");
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-archive-test-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_archive(viewer)
                     .expect("valid evidence-viewer archive request"),
@@ -6409,7 +6424,7 @@ mod tests {
             .expect("configured evidence viewer");
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-transparency-test-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_transparency_publisher(
                     viewer,
@@ -6470,7 +6485,7 @@ mod tests {
         bindings.sort_unstable_by_key(IrohaRuntimeProviderBindingV1::slot);
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings,
         }
     }
@@ -6478,7 +6493,7 @@ mod tests {
     fn one_binding_catalog() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     IrohaRuntimeProviderSlotV1::BillingStatementSigner,
@@ -6560,14 +6575,14 @@ mod tests {
         let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project configured runtime-provider catalog");
 
-        assert_eq!(catalog.network_id(), Some(&expected));
+        assert_eq!(catalog.network_id(), &expected);
     }
 
     #[test]
     fn disabled_services_need_no_registry() {
         let bindings = IrohaRuntimeProviderBindingsV1 {
             chain_id: "default-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
 
@@ -6810,7 +6825,7 @@ mod tests {
         .expect("valid evidence-viewer checkpoint-store binding");
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![binding],
         };
         assert!(matches!(
@@ -6829,7 +6844,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6861,7 +6876,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6942,7 +6957,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -7011,7 +7026,7 @@ mod tests {
 
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: vec![binding.clone()],
         };
         assert!(matches!(
@@ -7031,7 +7046,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -7176,7 +7191,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
-            network_id: None,
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let runtime = Arc::new(FencedPrivacyRuntime::exact());

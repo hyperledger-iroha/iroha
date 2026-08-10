@@ -1491,9 +1491,9 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
-        let chain_id = state.view().chain_id().clone();
+        let network_id = *state.network_id_ref();
         let contract_address =
-            dm::ContractAddress::derive(&chain_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
+            dm::ContractAddress::derive(&network_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),

@@ -14,6 +14,7 @@ import {
 } from "./norito.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
 import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
+import { networkIdBytes } from "./networkId.js";
 import {
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
@@ -24,6 +25,12 @@ import {
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import {
+  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+  SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+  parseSumeragiDiagnosticsJson,
+  parseSumeragiStatusJson,
+} from "./sumeragiTyped.js";
 import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
@@ -39,9 +46,13 @@ const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
 const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS = new Set([
+  "authAccountId",
   "headers",
+  "nonce",
   "signal",
+  "sign",
   "successStatuses",
+  "timestampMs",
 ]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
@@ -1025,13 +1036,17 @@ function signalFrom(options) {
   return options.signal === undefined ? undefined : options.signal;
 }
 
-function kagemushaOptions(options, context) {
+function signalOnlyOptions(options, context) {
   const item = requireObject(options, context);
   const unknown = Object.keys(item).filter((key) => key !== "signal");
   if (unknown.length > 0) {
     throw new TypeError(`${context} contains unsupported option ${unknown[0]}`);
   }
   return item;
+}
+
+function kagemushaOptions(options, context) {
+  return signalOnlyOptions(options, context);
 }
 
 function copyRequestFields(source) {
@@ -1396,6 +1411,16 @@ export class ToriiBrowserClient {
     };
     this.timeoutMs =
       normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
+    const networkId = normalizedOptions.networkId ?? null;
+    if (networkId !== null) {
+      networkIdBytes(networkId, "ToriiBrowserClient options.networkId");
+    }
+    Object.defineProperty(this, "networkId", {
+      value: networkId,
+      writable: false,
+      configurable: false,
+      enumerable: true,
+    });
   }
 
   getOfflineCapability(options = {}) {
@@ -1562,7 +1587,8 @@ export class ToriiBrowserClient {
         normalizedOptions.maximumBodyBytes,
         `${method} ${path}`,
       );
-    return text ? jsonParser(text) : null;
+    if (text === "" && normalizedOptions.jsonParser === undefined) return null;
+    return jsonParser(text);
   }
 
   async _bytes(method, path, options = {}) {
@@ -1621,13 +1647,19 @@ export class ToriiBrowserClient {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  async _canonicalJson(method, path, body, options, successStatuses = [200]) {
+  async _canonicalJson(method, path, body, options, successStatuses = [200], responseOptions = {}) {
     const opts = requireObject(options, `${method} ${path} canonical options`);
     if (typeof opts.sign !== "function") {
       throw new TypeError(`${method} ${path} options.sign is required`);
     }
+    if (this.networkId === null) {
+      throw new TypeError(
+        `${method} ${path} requires ToriiBrowserClient options.networkId`,
+      );
+    }
     const signed = await buildCanonicalJsonRequest({
       accountId: requireNonEmptyString(opts.authAccountId, `${method} ${path} options.authAccountId`),
+      networkId: this.networkId,
       method,
       path,
       baseUrl: this.baseUrl,
@@ -1644,6 +1676,7 @@ export class ToriiBrowserClient {
       oneShot: true,
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? successStatuses,
+      ...responseOptions,
     });
   }
 
@@ -1818,26 +1851,19 @@ export class ToriiBrowserClient {
   }
 
   /** Read the node compatibility advert before constructing deployment bytes. */
-  getNodeCapabilities(options = {}) {
+  getNodeCapabilities(options) {
     const opts = requireObject(options, "getNodeCapabilities options");
-    return this._json("GET", "/v1/node/capabilities", {
-      headers: opts.headers,
-      signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200],
-    });
+    return this._canonicalJson("GET", "/v1/node/capabilities", undefined, opts);
   }
 
   /** @internal Raw bounded transport for the optional privacy-capabilities API. */
-  async [privacyCapabilityTransportV1](options = {}) {
+  async [privacyCapabilityTransportV1](options) {
     const opts = requireSupportedOptions(
       options,
       "getPrivacyCapabilitiesV1 options",
       PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS,
     );
-    return this._json("GET", "/v1/privacy/capabilities", {
-      headers: { ...(opts.headers ?? {}), Accept: "application/json" },
-      signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200],
+    return this._canonicalJson("GET", "/v1/privacy/capabilities", undefined, opts, [200], {
       maximumBodyBytes: PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
@@ -1868,11 +1894,17 @@ export class ToriiBrowserClient {
       if (typeof opts.sign !== "function") {
         throw new TypeError("getContractDeploymentState options.sign must be a function");
       }
+      if (this.networkId === null) {
+        throw new TypeError(
+          "getContractDeploymentState requires ToriiBrowserClient options.networkId",
+        );
+      }
       const signed = await buildCanonicalJsonRequest({
         accountId: requireNonEmptyString(
           opts.authAccountId,
           "getContractDeploymentState options.authAccountId",
         ),
+        networkId: this.networkId,
         method: "POST",
         path: "/v1/contracts/deployment-state",
         baseUrl: this.baseUrl,
@@ -2585,9 +2617,47 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/status", { signal: signalFrom(opts) });
   }
 
+  getSumeragiStatusTyped(options = {}) {
+    const opts = signalOnlyOptions(options, "getSumeragiStatusTyped options");
+    return this._json("GET", "/v1/sumeragi/status", {
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed status response",
+        );
+      },
+      jsonParser: (text) => parseSumeragiStatusJson(
+        text,
+        "Sumeragi typed status",
+      ),
+    });
+  }
+
   getSumeragiDiagnostics(options = {}) {
     const opts = requireObject(options, "getSumeragiDiagnostics options");
     return this._json("GET", "/v1/sumeragi/diagnostics", { signal: signalFrom(opts) });
+  }
+
+  getSumeragiDiagnosticsTyped(options = {}) {
+    const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
+    return this._json("GET", "/v1/sumeragi/diagnostics", {
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed diagnostics response",
+        );
+      },
+      jsonParser: (text) => parseSumeragiDiagnosticsJson(
+        text,
+        "Sumeragi typed diagnostics",
+      ),
+    });
   }
 
   getSumeragiTelemetry(options = {}) {

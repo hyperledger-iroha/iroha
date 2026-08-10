@@ -7,6 +7,7 @@ mod cli;
 mod command;
 mod compiler;
 mod graph;
+mod local_file;
 mod lockfile;
 pub mod manifest;
 mod output;

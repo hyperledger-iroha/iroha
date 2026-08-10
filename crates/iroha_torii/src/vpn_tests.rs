@@ -14,8 +14,62 @@ use norito::codec::Encode;
 
 use super::*;
 use crate::tests_runtime_handlers::{
-    app_auth_test_guard, mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
+    app_auth_test_guard, mk_app_state_for_tests_with_world, world_with_account,
 };
+
+fn signed_app_headers_for_network(
+    network_id: &iroha_data_model::NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> HeaderMap {
+    static TEST_NONCE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_millis() as u64;
+    let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = format!("vpn-test-{timestamp_ms}-{nonce_seq}");
+    let message = crate::app_auth::canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
+    let signature = Signature::try_new(key_pair.private_key(), &message)
+        .expect("sign exact-network VPN request fixture");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::HEADER_ACCOUNT,
+        account.to_string().parse().expect("account header"),
+    );
+    headers.insert(
+        crate::HEADER_SIGNATURE,
+        crate::app_auth::signature_header_value(&signature)
+            .parse()
+            .expect("signature header"),
+    );
+    headers.insert(
+        crate::HEADER_TIMESTAMP_MS,
+        timestamp_ms.to_string().parse().expect("timestamp header"),
+    );
+    headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
+    headers
+}
+
+fn signed_app_headers(
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> HeaderMap {
+    signed_app_headers_for_network(&vpn_test_network_id(), account, key_pair, method, uri, body)
+}
 
 fn account_id_for(key_pair: &KeyPair) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
@@ -28,6 +82,16 @@ fn checked_vpn_ed25519_keypair(seed: u8) -> KeyPair {
 
 fn checked_vpn_account(seed: u8) -> AccountId {
     account_id_for(&checked_vpn_ed25519_keypair(seed))
+}
+
+fn vpn_test_network_id() -> iroha_data_model::NetworkId {
+    let mut bytes = [0_u8; Hash::LENGTH];
+    bytes[Hash::LENGTH - 1] = 1;
+    iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            bytes,
+        )),
+    )
 }
 
 fn test_vpn_relay_trust() -> VpnRelayTrust {
@@ -249,15 +313,15 @@ async fn create_session_for_quote(
 fn sample_session_record(account_id: &AccountId) -> VpnSessionRecord {
     let metering_keys = checked_vpn_ed25519_keypair(0x54);
     let lease_fee = Quantity::from(1_000_000_u64);
-    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let network_id = vpn_test_network_id();
     let quote_id = [0x11; 32];
     let address_slot = derive_vpn_address_slot_v1(quote_id);
-    let lease_id = derive_vpn_lease_id_v1(&chain_id, quote_id, account_id);
-    let session_id = derive_vpn_session_id_v1(&chain_id, quote_id, account_id, address_slot);
+    let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id, account_id);
+    let session_id = derive_vpn_session_id_v1(&network_id, quote_id, account_id, address_slot);
     let fee_asset_definition = xor_asset_definition_id();
     let fee_asset_id = fee_asset_definition.to_string();
     let escrow_account_id =
-        vpn_lease_custody_account_id(&chain_id, &lease_id, &fee_asset_definition)
+        vpn_lease_custody_account_id(&network_id, &lease_id, &fee_asset_definition)
             .expect("fixture protocol custody");
     VpnSessionRecord {
         session_id: hex::encode(session_id),
@@ -306,14 +370,15 @@ fn sample_quote_record(
     let mut session = sample_session_record(account_id);
     let operator = checked_vpn_ed25519_keypair(0x7A);
     session.operator_account_id = AccountId::new(operator.public_key().clone());
-    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let network_id = vpn_test_network_id();
     let quote_id_bytes = decode_hex_32(&quote_id, "quote").expect("quote id");
     let address_slot = derive_vpn_address_slot_v1(quote_id_bytes);
-    let lease_id = derive_vpn_lease_id_v1(&chain_id, quote_id_bytes, account_id);
-    let session_id = derive_vpn_session_id_v1(&chain_id, quote_id_bytes, account_id, address_slot);
+    let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id_bytes, account_id);
+    let session_id =
+        derive_vpn_session_id_v1(&network_id, quote_id_bytes, account_id, address_slot);
     let asset_definition = xor_asset_definition_id();
     session.escrow_account_id =
-        vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+        vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("fixture custody");
     session.tunnel_addresses = derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses;
     let policy = VpnQuotePolicyV1 {
@@ -340,7 +405,7 @@ fn sample_quote_record(
     };
     let signed_quote = VpnSignedQuoteV1::try_sign(
         VpnQuoteBodyV1 {
-            chain_id,
+            network_id,
             quote_id: quote_id_bytes,
             lease_id,
             session_id,
@@ -486,7 +551,7 @@ fn lease_record_from_session_record(
     let operator = fixture_operator_key(&record.operator_account_id);
     let signed_quote = VpnSignedQuoteV1::try_sign(
         VpnQuoteBodyV1 {
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: vpn_test_network_id(),
             quote_id,
             lease_id,
             session_id,
@@ -549,10 +614,10 @@ fn lease_record_from_session_record(
 fn settled_lease_for_account(account: &AccountId, ordinal: u16) -> VpnLeaseRecordV1 {
     let mut quote_id = [0_u8; 32];
     quote_id[..2].copy_from_slice(&ordinal.to_be_bytes());
-    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let network_id = vpn_test_network_id();
     let address_slot = derive_vpn_address_slot_v1(quote_id);
-    let lease_id = derive_vpn_lease_id_v1(&chain_id, quote_id, account);
-    let session_id = derive_vpn_session_id_v1(&chain_id, quote_id, account, address_slot);
+    let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id, account);
+    let session_id = derive_vpn_session_id_v1(&network_id, quote_id, account, address_slot);
     let mut session = sample_session_record(account);
     session.session_id = hex::encode(session_id);
     session.lease_id = lease_id;
@@ -560,7 +625,7 @@ fn settled_lease_for_account(account: &AccountId, ordinal: u16) -> VpnLeaseRecor
     session.payment_reference = hex::encode(quote_id);
     let asset_definition = xor_asset_definition_id();
     session.escrow_account_id =
-        vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+        vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("fixture protocol custody");
     session.tunnel_addresses = derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses;
     let settled_at_ms = 10_000_u64 + u64::from(ordinal);
@@ -928,9 +993,12 @@ async fn create_vpn_quote_derives_protocol_custody() {
         .into_response();
     let quote: VpnQuoteResponseDto = read_json(response).await;
     let lease_id = decode_hex_32(&quote.lease_id_hex, "lease_id").expect("lease id");
-    let expected_custody =
-        vpn_lease_custody_account_id(app.chain_id.as_ref(), &lease_id, &xor_asset_definition_id())
-            .expect("deterministic protocol custody");
+    let expected_custody = vpn_lease_custody_account_id(
+        app.state.network_id_ref(),
+        &lease_id,
+        &xor_asset_definition_id(),
+    )
+    .expect("deterministic protocol custody");
     assert_eq!(quote.fee_asset_id, xor_asset_definition_id().to_string());
     assert_eq!(quote.escrow_account_id, expected_custody.to_string());
     assert_ne!(quote.escrow_account_id, account.to_string());
@@ -1068,6 +1136,37 @@ async fn create_vpn_session_requires_signed_headers() {
         };
 
     assert!(format!("{error:?}").contains("signed account headers are required"));
+}
+
+#[tokio::test]
+async fn vpn_request_rejects_foreign_network_signature_before_decode() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_vpn_ed25519_keypair(0xA7);
+    let account = account_id_for(&key_pair);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let method = Method::POST;
+    let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+    let body = b"{not valid json";
+    let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        Hash::new(b"same-label-foreign-vpn-genesis"),
+    ));
+    let headers =
+        signed_app_headers_for_network(&foreign_network, &account, &key_pair, &method, &uri, body);
+
+    let error = handle_create_vpn_session(app, &method, &uri, &headers, body)
+        .await
+        .expect_err("foreign-network VPN signature must fail closed");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("query signature failed verification"),
+        "unexpected foreign-network rejection: {message}"
+    );
+    assert!(
+        !message.contains("invalid vpn session payload"),
+        "VPN authentication must precede semantic decode: {message}"
+    );
 }
 
 #[tokio::test]
@@ -1785,7 +1884,8 @@ fn vpn_runtime_rejects_unsigned_quote_record_projections() {
     let app = mk_app_state_for_tests_with_world(world_with_account(&account));
     let mut state = VpnRuntimeState::with_capacities(1, 1);
     let mut quote = sample_quote_record(&account, "df".repeat(32), u64::MAX);
-    validate_quote_record_projection(&quote).expect("exact signed projection");
+    validate_quote_record_projection(&quote, app.state.network_id_ref())
+        .expect("exact signed projection");
     quote.relay_tls_spki_sha256[0] ^= 1;
 
     let error = insert_quote_locked(&app, &mut state, quote)
@@ -1794,6 +1894,25 @@ fn vpn_runtime_rejects_unsigned_quote_record_projections() {
     assert!(format!("{error:?}").contains("TLS SPKI"));
     assert!(app.vpn_quotes.is_empty());
     assert!(state.quote_ids_by_account.is_empty());
+}
+
+#[test]
+fn vpn_runtime_rejects_a_valid_quote_from_a_different_exact_network() {
+    let account = checked_vpn_account(0xE1);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let mut quote = sample_quote_record(&account, "e1".repeat(32), u64::MAX);
+    let mut body = quote.signed_quote.body.clone();
+    let foreign_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xE1; Hash::LENGTH]),
+    );
+    body.network_id = iroha_data_model::NetworkId::from_genesis_hash(foreign_hash);
+    quote.signed_quote =
+        VpnSignedQuoteV1::try_sign(body, checked_vpn_ed25519_keypair(0x7A).private_key())
+            .expect("re-sign foreign-network VPN quote");
+
+    let error = validate_quote_record_projection(&quote, app.state.network_id_ref())
+        .expect_err("foreign-network VPN quote must fail before runtime caching");
+    assert!(format!("{error:?}").contains("different exact network"));
 }
 
 #[test]
@@ -2759,126 +2878,4 @@ async fn submit_vpn_receipt_rejects_refunded_lease_after_cache_loss() {
     .await;
 }
 
-#[tokio::test]
-async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
-    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-    let user_keys = checked_vpn_ed25519_keypair(0x7D);
-    let operator_keys = checked_vpn_ed25519_keypair(0x7E);
-    let user = account_id_for(&user_keys);
-    let operator = account_id_for(&operator_keys);
-    let app = vpn_enabled_app_with_operator(
-        world_with_accounts(&[user.clone(), operator.clone()]),
-        &operator,
-    );
-    let (quote, metering_keys) =
-        create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
-    let session =
-        create_session_for_quote(app.clone(), &user, &user_keys, &quote, &metering_keys).await;
-    let active_record = app
-        .vpn_sessions
-        .get(&session.session_id)
-        .expect("active session")
-        .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
-
-    let relay_session_id = relay_session_id_from_session_id(&session.session_id);
-    let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
-    assert_eq!(session.relay_id_hex, hex::encode(active_record.relay_id));
-    let relay_id = active_record.relay_id;
-    let voucher_body = VpnUsageVoucherBodyV1 {
-        session_id: relay_session_id,
-        quote_id,
-        relay_id,
-        sequence: 3,
-        ingress_bytes: 1_024,
-        egress_bytes: 2_048,
-        active_ms: 10_000,
-        issued_at_ms: now_ms(),
-    };
-    let voucher = VpnUsageVoucherV1::try_sign(voucher_body, metering_keys.private_key())
-        .expect("checked usage voucher fixture");
-    let earned_fee = {
-        let record = app
-            .vpn_sessions
-            .get(&session.session_id)
-            .expect("active session record");
-        session_earned_fee(&record, &voucher).expect("fixture tariff arithmetic")
-    };
-    let receipt = VpnSessionReceiptV1 {
-        session_id: relay_session_id,
-        quote_id,
-        payment_tx_hash: decode_hex_32(&session.payment_tx_hash, "payment").expect("payment"),
-        account_hash: account_hash(&user),
-        relay_id,
-        ingress_bytes: 1_024,
-        egress_bytes: 2_048,
-        cover_bytes: 128,
-        uptime_secs: 10,
-        started_at_ms: session.connected_at_ms,
-        ended_at_ms: now_ms(),
-        exit_class: VpnExitClassV1::Standard,
-        meter_hash: [0x44; 32],
-        earned_fee: earned_fee.clone(),
-        highest_voucher_sequence: voucher.body.sequence,
-        client_voucher_hash: voucher.hash(),
-    };
-    let body = norito::json::to_vec(&VpnReceiptSubmitRequestDto {
-        relay_receipt_hex: hex::encode(receipt.encode()),
-        client_voucher_hex: hex::encode(voucher.encode()),
-        lease_id_hex: String::new(),
-    })
-    .expect("receipt request");
-    let method = Method::POST;
-    let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
-    let headers = signed_app_headers(&operator, &operator_keys, &method, &uri, body.as_ref());
-    app.vpn_sessions.clear();
-
-    let response = handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())
-        .await
-        .expect("settled")
-        .into_response();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let settled: VpnReceiptResponseDto = read_json(response).await;
-    assert_eq!(settled.status, "settled");
-    assert_eq!(settled.receipt_source, "relay");
-    assert_eq!(settled.earned_fee, earned_fee);
-    assert_eq!(
-        settled.refunded_fee,
-        session
-            .lease_fee
-            .checked_sub(&earned_fee)
-            .expect("fixture earned fee does not exceed lease fee")
-    );
-    assert_eq!(settled.lease_id_hex, hex::encode(active_record.lease_id));
-    let settle_instruction = settled
-        .settle_lease_instruction
-        .as_ref()
-        .expect("native settle instruction");
-    let settle_payload = hex::decode(&settle_instruction.payload_hex).expect("payload hex");
-    let decoded_settle = iroha_data_model::isi::decode_instruction_from_pair(
-        &settle_instruction.wire_id,
-        &settle_payload,
-    )
-    .expect("decode native settle instruction");
-    let settle = decoded_settle
-        .as_any()
-        .downcast_ref::<SettleVpnLease>()
-        .expect("settle vpn lease instruction");
-    assert_eq!(settle.lease_id, active_record.lease_id);
-    assert_eq!(settle.relay_receipt, receipt);
-    assert_eq!(settle.client_voucher, voucher);
-    assert_eq!(app.vpn_sessions.len(), 0);
-    assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
-    let runtime = lock_vpn_runtime(&app);
-    assert!(
-        !runtime
-            .session_ids_by_account
-            .contains_key(&user.to_string())
-    );
-    assert!(runtime.settling_session_ids.is_empty());
-}
+include!("vpn_tests_tail.rs");

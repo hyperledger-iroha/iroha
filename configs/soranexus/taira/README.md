@@ -364,8 +364,9 @@ four systemd artifacts listed above. Install the drop-in only as
 `/etc/systemd/system/taira-irohad.service.d/peer1-privacy.conf` on
 `taira-validator-1`; peers 2–4 must not install or enable the broker unit.
 Copy the example public environment file to
-`/etc/default/taira-bootle-lantern-broker` and replace its two digest latches
-from the same reviewed export.
+`/etc/default/taira-bootle-lantern-broker`; set `TAIRA_NETWORK_ID` from the
+deployment's mandatory genesis expected hash and replace its two digest latches
+from the same reviewed export. The export's `network_id` must equal that value.
 
 Provision the issuer seed (exactly 32 random bytes), opaque bearer (32–4096
 random bytes), and stable-principal seed (exactly 32 independent random bytes)
@@ -514,7 +515,7 @@ source_sha="$(tr -d '\n' < "${bundle}/provenance/privacy-native/workspace-source
   --x509-resource-norito "${bundle}/provenance/privacy-native/zk-x509-resource-v1.norito" \
   --x509-resource-json "${bundle}/provenance/privacy-native/zk-x509-resource-v1.json" \
   --cargo-lock "${bundle}/provenance/Cargo.lock" \
-  --validator-binary "${bundle}/bin/irohad" \
+  --validator-binary "${bundle}/bin/iroha3d" \
   --command-manifest-norito "${bundle}/provenance/privacy-native/command-manifest-v1.norito" \
   --command-manifest-json "${bundle}/provenance/privacy-native/command-manifest-v1.json" \
   --stage-artifacts-norito "${bundle}/provenance/privacy-native/stage-artifacts-v1.norito" \
@@ -867,7 +868,7 @@ python3 scripts/migrate_taira_peer_supervision.py plan \
   --output-dir /absolute/path/to/new/taira-supervision-plan
 ```
 
-It requires four exact peer PID files, exact `irohad --sora --config ...`
+It requires four exact peer PID files, exact `iroha3d --sora --config ...`
 commands, one common parent whose command names an approved
 `run-canonical.sh` or `launchd-run.sh`, non-symlink configs, and four distinct
 existing storage directories. Each live peer's exact working directory is
@@ -1151,7 +1152,7 @@ Use the public-lane staking flow for validator candidacy instead of manual
 allowlisting:
 
 1. Render a per-validator config with the node's own `public_address` and
-   `torii_public_address`, then start `irohad` against the published seed peers.
+   `torii_public_address`, then start `iroha3d` against the published seed peers.
 2. Wait for the node to sync and confirm lane mode:
    - `iroha app nexus lane-report --summary`
    - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
@@ -1713,7 +1714,7 @@ away from the shipped MCP-enabled config:
      `sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables`
    - verify the host will advertise real Inrou capacity:
      `bash configs/soranexus/taira/check_inrou_host_prereqs.sh`
-   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/irohad /usr/local/bin/irohad`
+   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha3d /usr/local/bin/iroha3d`
    - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha /usr/local/bin/iroha`
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`
    - copy `configs/soranexus/taira/taira-irohad.env.example` to
@@ -1724,7 +1725,7 @@ away from the shipped MCP-enabled config:
      update the unit's config, signer, manifest, and SoraFS admission preflight
      paths together before enabling it
    - if your repo checkout or binary path differs from `/opt/iroha` and
-     `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and set
+     `/usr/local/bin/iroha3d`, adjust `WorkingDirectory=` and set
      `IROHA_TAIRA_IROHAD_BIN=` in `/etc/default/taira-irohad` before enabling
      the unit
 5. Reload systemd and restart the validator:
@@ -1733,7 +1734,7 @@ away from the shipped MCP-enabled config:
    - `sudo systemctl restart taira-irohad.service`
 6. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
-   - `cd /opt/iroha && sudo -u iroha env KURA_STORE_DIR=/var/lib/iroha/taira-validator-1 SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot /usr/local/bin/irohad --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
+   - `cd /opt/iroha && sudo -u iroha env KURA_STORE_DIR=/var/lib/iroha/taira-validator-1 SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot /usr/local/bin/iroha3d --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:

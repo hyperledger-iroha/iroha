@@ -3420,7 +3420,7 @@ pub mod isi {
             } => {
                 let expected_custody =
                     crate::smartcontracts::isi::escrow::escrow_custody_account_id(
-                        state_transaction.chain_id(),
+                        state_transaction.network_id(),
                         &escrow_id,
                         source_id.definition(),
                     )?;
@@ -3505,7 +3505,7 @@ pub mod isi {
                 let expected_source =
                     AssetId::new(parent.asset_definition.clone(), parent.custody.clone());
                 let child_custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
-                    state_transaction.chain_id(),
+                    state_transaction.network_id(),
                     &child_id,
                     &parent.asset_definition,
                 )?;
@@ -3636,7 +3636,7 @@ pub mod isi {
                 let (source, destination, amount) = &legs[0];
                 let expected_custody =
                     crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
-                        state_transaction.chain_id(),
+                        state_transaction.network_id(),
                         &lease_id,
                         source.definition(),
                     )?;
@@ -7424,7 +7424,6 @@ pub mod query {
             Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
             ManifestEffect, ManifestEntry,
         };
-        use iroha_data_model::privacy::PrivacyStatementDigestV1;
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};

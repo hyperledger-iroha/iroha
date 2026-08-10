@@ -135,9 +135,11 @@ fn peer(seed: u8) -> PeerId {
 }
 
 fn network_id(seed: u8) -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([seed; Hash::LENGTH]),
-    ))
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [seed; Hash::LENGTH],
+        )),
+    )
 }
 
 fn context() -> HeightContext {
@@ -721,12 +723,14 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     };
     certificate.proposal_round = round(&values.context, 1);
 
-    let mut invalid_chain_utf8 = canonical_request.encode();
+    let mut invalid_network_id = *values.context.network_id.as_bytes();
+    invalid_network_id[Hash::LENGTH - 1] &= !1;
+    let mut invalid_network_id_message = canonical_request.encode();
     replace_first_guarded(
-        &mut invalid_chain_utf8,
-        b"sumeragi-v2-test",
-        b"\xffumeragi-v2-test",
-        "commit-request chain id",
+        &mut invalid_network_id_message,
+        values.context.network_id.as_bytes(),
+        &invalid_network_id,
+        "commit-request network id",
     )?;
 
     rows.extend([
@@ -859,8 +863,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         ),
         FixtureRow::rejected(
             "negative_message",
-            "commit_request_invalid_chain_utf8",
-            invalid_chain_utf8,
+            "commit_request_invalid_network_id",
+            invalid_network_id_message,
         ),
     ]);
 
@@ -1052,7 +1056,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "unknown_payload_tag",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
-        "commit_request_invalid_chain_utf8",
+        "commit_request_invalid_network_id",
         "execution_commitment_missing_merge_carrier_field",
     ] {
         if decode_message(&row(rows, "negative_message", name)?.bytes).is_ok() {

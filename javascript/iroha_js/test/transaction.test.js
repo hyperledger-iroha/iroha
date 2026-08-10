@@ -148,7 +148,10 @@ test("hashSignedTransactionPayload delegates to the native payload hasher", () =
 test("decodeSignedTransaction parses the native JSON inspection envelope", () => {
   const input = Buffer.from([0xca, 0xfe]);
   const decoded = {
-    payload: { domain: { Network: NETWORK_ID.literal }, authority: "account" },
+    payload: {
+      domain: { kind: "network", value: NETWORK_ID.literal },
+      authority: "account",
+    },
   };
   withNativeBinding(
     { decodeSignedTransactionJson: () => JSON.stringify(decoded) },
@@ -267,7 +270,8 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const binding = {
     hashSignedTransaction: () => hashBytes,
-    signTransaction: (tx) => {
+    signTransaction: (networkId, tx) => {
+      assert.deepEqual(Buffer.from(networkId), Buffer.from(NETWORK_ID.toBytes()));
       assert.deepEqual([...tx.values()], [...txBytes.values()]);
       return signedBytes;
     },
@@ -277,6 +281,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     submitSignedTransaction(client, txBytes, {
       waitForCommit: true,
       pollIntervalMs: 0,
+      networkId: NETWORK_ID,
       privateKey: Buffer.alloc(32, 0x01),
     }),
   );
@@ -319,6 +324,7 @@ test("submitSignedTransaction rejects removed scope before signing or submission
     withNativeBinding(binding, () =>
       submitSignedTransaction(client, txBytes, {
         waitForCommit: true,
+        networkId: NETWORK_ID,
         privateKey: Buffer.alloc(32, 0x01),
         scope: "global",
       }),
@@ -386,6 +392,7 @@ test("submitSignedTransaction times out when no terminal status", async () => {
           waitForCommit: true,
           timeoutMs: 1,
           pollIntervalMs: 0,
+          networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x02),
         }),
       /did not reach a terminal status within/i,
@@ -436,6 +443,7 @@ test("submitSignedTransaction rejects a deceptive non-canonical status envelope"
           waitForCommit: true,
           timeoutMs: 5,
           pollIntervalMs: 0,
+          networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x03),
         }),
       /missing or unsupported/i,
@@ -449,17 +457,73 @@ test("resignSignedTransaction delegates to native binding", () => {
   const output = Buffer.from([0xef]);
   withNativeBinding(
     {
-      signTransaction: (tx, pk) => {
+      signTransaction: (networkId, tx, pk) => {
+        assert.deepEqual(Buffer.from(networkId), Buffer.from(NETWORK_ID.toBytes()));
         assert.deepEqual([...tx.values()], [...input.values()]);
         assert.deepEqual([...pk.values()], [...key.values()]);
         return output;
       },
     },
     () => {
-      const result = resignSignedTransaction(input, key);
+      const result = resignSignedTransaction(NETWORK_ID, input, key);
       assert.deepEqual(result, output);
     },
   );
+});
+
+baseTest("resignSignedTransaction rejects non-nominal NetworkId before native dispatch", () => {
+  let nativeCalls = 0;
+  withNativeBinding(
+    {
+      signTransaction: () => {
+        nativeCalls += 1;
+        return Buffer.from([0xef]);
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          resignSignedTransaction(
+            NETWORK_ID.literal,
+            Buffer.from([0xde]),
+            Buffer.alloc(32, 0x11),
+          ),
+        /networkId must be a NetworkId/u,
+      );
+    },
+  );
+  assert.equal(nativeCalls, 0);
+});
+
+baseTest("submitSignedTransaction rejects retired identity aliases before re-signing", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("retired identity must fail before fetch");
+    },
+  });
+  let nativeCalls = 0;
+  await withNativeBinding(
+    {
+      signTransaction: () => {
+        nativeCalls += 1;
+        return Buffer.from([0xef]);
+      },
+    },
+    async () => {
+      for (const retired of ["chain", "chainId", "chain_id"]) {
+        await assert.rejects(
+          () =>
+            submitSignedTransaction(client, Buffer.from([0xde]), {
+              networkId: NETWORK_ID,
+              privateKey: Buffer.alloc(32, 0x11),
+              [retired]: "retired",
+            }),
+          /is unsupported; provide networkId when re-signing/u,
+        );
+      }
+    },
+  );
+  assert.equal(nativeCalls, 0);
 });
 test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
   const captures = [];

@@ -181,7 +181,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
 
         XCTAssertThrowsError(try KagemushaRecipientLineageQueryV2(
-            chainID: request.payload.chainID,
+            networkID: request.payload.networkID,
             recipient: request.payload.recipient,
             chainDiscriminant: AccountId.defaultNetworkPrefix,
             receiverDeviceID: request.payload.receiverDeviceID,
@@ -207,7 +207,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             AccountId.defaultNetworkPrefix
         ) {
             try KagemushaRecipientLineageQueryV2(
-                chainID: request.payload.chainID,
+                networkID: request.payload.networkID,
                 recipient: request.payload.recipient,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
                 receiverDeviceID: request.payload.receiverDeviceID,
@@ -232,7 +232,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             request.payload.recipient,
             expectedPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let chainID = request.payload.chainID
+        let networkID = request.payload.networkID
         let receiverDeviceID = request.payload.receiverDeviceID
         let assetDefinitionID = request.payload.assetDefinitionID
         let contexts: [(discriminant: UInt16, recipient: String)] = [
@@ -247,7 +247,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         ]
         let expected = try contexts.map { context in
             try KagemushaRecipientLineageQueryV2(
-                chainID: chainID,
+                networkID: networkID,
                 recipient: context.recipient,
                 chainDiscriminant: context.discriminant,
                 receiverDeviceID: receiverDeviceID,
@@ -261,7 +261,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             let context = contexts[contextIndex]
             do {
                 let query = try KagemushaRecipientLineageQueryV2(
-                    chainID: chainID,
+                    networkID: networkID,
                     recipient: context.recipient,
                     chainDiscriminant: context.discriminant,
                     receiverDeviceID: receiverDeviceID,
@@ -286,6 +286,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         XCTAssertEqual(anchor.noritoArchive(), archive)
+        XCTAssertEqual(anchor.networkId, TestNetworkIds.canonical)
         XCTAssertEqual(anchor.digest, Data(repeating: 0xd8, count: 32))
         XCTAssertEqual(anchor.operationId, String(repeating: "d5", count: 32))
         XCTAssertEqual(
@@ -903,11 +904,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             .parseEncoded(payer, expectedPrefix: 0x02f1)
             .compactNoritoAccountControllerPayload()
 
-        func chain(_ value: String) -> Data {
-            var writer = CompactNoritoWriter()
-            writer.writeField(CompactNorito.encodeString(value))
-            return writer.data
-        }
+        func network() -> Data { TestNetworkIds.canonical.bytes }
         func amount() -> Data {
             var atomic = Data(repeating: 0, count: 16)
             atomic[0] = 1
@@ -918,7 +915,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
         func note() -> Data {
             var writer = CompactNoritoWriter()
-            writer.writeField(chain("swift-offline-api"))
+            writer.writeField(network())
             writer.writeField(constVector(assetBytes))
             writer.writeField(fixed32(0xd0))
             writer.writeField(fixed32(0xd1))
@@ -948,7 +945,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         let payload = fields([
             uint16(KagemushaRecursiveSpend.wireVersionV4),
-            chain("swift-offline-api"),
+            network(),
             account,
             assetID(),
             uint32(2),

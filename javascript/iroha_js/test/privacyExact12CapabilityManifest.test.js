@@ -1,7 +1,73 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-
 import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import * as productionPrivacyCapabilities from "../src/privacyCapabilities.js";
+import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
+import { ToriiClient } from "../src/toriiClient.js";
+
+const TEST_NATIVE_BINDING = Symbol.for("iroha.test.exact12.native-binding");
+const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
+writeFileSync(join(SUBJECT_ROOT, "package.json"), '{"type":"module"}\n');
+
+function writeSubjectFile(directory, name, contents) {
+  const path = join(directory, name);
+  writeFileSync(path, contents, { encoding: "utf8", flag: "wx" });
+}
+
+async function loadSubject(name, nativeModuleSource) {
+  const directory = join(SUBJECT_ROOT, name);
+  const source = readFileSync(
+    new URL("../src/privacyCapabilities.js", import.meta.url),
+    "utf8",
+  );
+  mkdirSync(directory, { mode: 0o700 });
+  writeSubjectFile(directory, "privacyCapabilities.js", source);
+  writeSubjectFile(directory, "native.js", nativeModuleSource);
+  for (const dependency of [
+    "privacyCapabilityAdmission",
+    "privacyCapabilityTransport",
+    "strictLosslessJson",
+  ]) {
+    const target = new URL(`../src/${dependency}.js`, import.meta.url).href;
+    writeSubjectFile(
+      directory,
+      `${dependency}.js`,
+      `export * from ${JSON.stringify(target)};\n`,
+    );
+  }
+  return import(`${pathToFileURL(join(directory, "privacyCapabilities.js")).href}?${name}`);
+}
+
+const authenticatedTestSubject = await loadSubject(
+  "authenticated-test-loader",
+  `const key = Symbol.for("iroha.test.exact12.native-binding");
+export function getNativeBinding() {
+  const binding = globalThis[key];
+  if (binding === undefined) throw new Error("test native binding is absent");
+  return binding;
+}
+`,
+);
+const browserSubject = await loadSubject(
+  "browser-loader",
+  `export { getNativeBinding } from ${JSON.stringify(
+    new URL("../src/native.browser.js", import.meta.url).href,
+  )};\n`,
+);
+
+after(() => rmSync(SUBJECT_ROOT, { recursive: true, force: true }));
+
+const {
   PRIVACY_PROTOCOL_IDS_V1,
   PrivacyExact12CapabilityManifestError,
   PrivacyExact12CapabilityManifestV1,
@@ -9,9 +75,7 @@ import {
   getPrivacyExact12CapabilityManifestV1,
   parsePrivacyCapabilitySnapshotV1,
   requirePrivacyExact12CapabilityAdmissionV1,
-} from "../src/privacyCapabilities.js";
-import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
-import { ToriiClient } from "../src/toriiClient.js";
+} = authenticatedTestSubject;
 
 const ARCHIVE = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 1, 2, 3, 4]);
 const CATALOG = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 9, 8, 7, 6]);
@@ -154,10 +218,36 @@ function fakeNative(payload = manifestPayload(), overrides = {}) {
 }
 
 async function withNative(native, callback) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = native;
+  const previous = globalThis[TEST_NATIVE_BINDING];
+  globalThis[TEST_NATIVE_BINDING] = native;
   try {
     return await callback();
+  } finally {
+    if (previous === undefined) {
+      delete globalThis[TEST_NATIVE_BINDING];
+    } else {
+      globalThis[TEST_NATIVE_BINDING] = previous;
+    }
+  }
+}
+
+test("mutable global bindings cannot authorize Exact12 native admission", () => {
+  let fakeCalls = 0;
+  const fake = fakeNative(manifestPayload(), {
+    privacyCompiledProfileCatalogV1: () => {
+      fakeCalls += 1;
+      return Uint8Array.from(CATALOG);
+    },
+  });
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = fake;
+  try {
+    try {
+      productionPrivacyCapabilities.compiledProfileCatalogV1();
+    } catch (error) {
+      assert.ok(error instanceof Error);
+    }
+    assert.equal(fakeCalls, 0, "mutable global binding was consulted");
   } finally {
     if (previous === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -165,7 +255,31 @@ async function withNative(native, callback) {
       globalThis.__IROHA_NATIVE_BINDING__ = previous;
     }
   }
-}
+});
+
+test("browser Exact12 exports fail closed even when a fake global binding exists", () => {
+  let fakeCalls = 0;
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = fakeNative(manifestPayload(), {
+    privacyCompiledProfileCatalogV1: () => {
+      fakeCalls += 1;
+      return Uint8Array.from(CATALOG);
+    },
+  });
+  try {
+    assert.throws(
+      () => browserSubject.compiledProfileCatalogV1(),
+      /no browser or mock fallback is permitted/u,
+    );
+    assert.equal(fakeCalls, 0, "browser facade consulted a mutable global binding");
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
 
 test("canonical decoder preserves immutable bytes and the closed Exact12 mapping", async () => {
   await withNative(fakeNative(), () => {

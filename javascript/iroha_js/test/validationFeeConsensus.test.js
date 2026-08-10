@@ -6,12 +6,12 @@ import {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "../src/validationFeeConsensus.js";
+import { NetworkId } from "../src/networkId.js";
 import { ToriiClient } from "../src/toriiClient.js";
 
 const binding = Object.freeze({
   schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
-  chainId: "iroha3-nexus",
-  genesisHash: "13".repeat(32),
+  networkId: NetworkId.fromBytes(Buffer.from("13".repeat(32), "hex")),
   policyChainGenesisHash: "35".repeat(32),
   checkpoint: Object.freeze({
     height: 100,
@@ -124,8 +124,7 @@ function completeVerifiedProjection() {
   return {
     schema: "iroha.validation_fee.verified_policy_projection.v1",
     version: 1,
-    chain_id: binding.chainId,
-    genesis_hash: binding.genesisHash,
+    network_id: binding.networkId.toString(),
     policy_chain_genesis_hash: binding.policyChainGenesisHash,
     registry_hash: "79".repeat(32),
     head_policy_version: 1,
@@ -177,7 +176,7 @@ function verifyProjectionFixture(projection) {
 
 test("immutable ledger binding requires marked Iroha hashes and rejects aliases", () => {
   const normalized = normalizeValidationFeeLedgerBindingV1(binding);
-  assert.equal(normalized.genesisHash, "13".repeat(32));
+  assert.equal(normalized.networkId, binding.networkId);
   assert.equal(normalized.policyChainGenesisHash, "35".repeat(32));
   assert.equal(normalized.checkpoint.contextId, "57".repeat(32));
   assert.throws(
@@ -192,16 +191,12 @@ test("immutable ledger binding requires marked Iroha hashes and rejects aliases"
     () =>
       normalizeValidationFeeLedgerBindingV1({
         ...binding,
-        genesisHash: "AA".repeat(32),
+        chainId: "legacy-label",
       }),
-    /lowercase hexadecimal/u,
+    /must contain exactly/u,
   );
   assert.throws(
-    () =>
-      normalizeValidationFeeLedgerBindingV1({
-        ...binding,
-        genesisHash: "12".repeat(32),
-      }),
+    () => NetworkId.fromBytes(Buffer.from("12".repeat(32), "hex")),
     /canonical Iroha hash marker/u,
   );
 });
@@ -252,8 +247,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   const projection = {
     schema: "iroha.validation_fee.verified_policy_projection.v1",
     version: 1,
-    chain_id: binding.chainId,
-    genesis_hash: binding.genesisHash,
+    network_id: binding.networkId.toString(),
     policy_chain_genesis_hash: binding.policyChainGenesisHash,
     registry_hash: "79".repeat(32),
     head_policy_version: 2,
@@ -275,15 +269,13 @@ test("native verified projection remains bound to the release checkpoint", () =>
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(
         proof,
-        chainId,
-        genesis,
+        networkId,
         policyGenesis,
         height,
         context,
       ) {
         assert.deepEqual(proof, Buffer.from([9]));
-        assert.equal(chainId, binding.chainId);
-        assert.deepEqual(genesis, Buffer.from(binding.genesisHash, "hex"));
+        assert.deepEqual(networkId, Buffer.from(binding.networkId.toBytes()));
         assert.deepEqual(
           policyGenesis,
           Buffer.from(binding.policyChainGenesisHash, "hex"),
@@ -437,7 +429,7 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
     checkpoint,
   ) => {
     visited.push(checkpoint.height);
-    assert.equal(normalizedBinding.chainId, binding.chainId);
+    assert.equal(normalizedBinding.networkId, binding.networkId);
     const nextHeight = checkpoint.height === 100n ? 127n : 190n;
     return Object.freeze({
       proofNorito: Buffer.from([Number(nextHeight % 256n)]),

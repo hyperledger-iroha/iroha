@@ -94,14 +94,14 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         lane_id: LaneId,
         lane_block_height: u64,
         proposal_height: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         decoded_bytes: &mut u64,
         attempts: &mut BTreeMap<(LaneId, u64, u64), AutonomousReservationAttemptRead>,
     ) -> std::result::Result<(), AutonomousLaneReservationEvidenceError> {
         let coordinate = (lane_id, lane_block_height, proposal_height);
         if let Some(existing) = attempts.get(&coordinate) {
-            if existing.payload.chain_id_hash != expected_chain_id_hash
+            if existing.payload.network_id != expected_network_id
                 || existing.payload.epoch != expected_epoch
             {
                 return Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict);
@@ -134,7 +134,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 lane_id,
                 lane_block_height,
                 proposal_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
                 None,
             )?
@@ -157,7 +157,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         lane_id: LaneId,
         lane_block_height: u64,
         proposal_height: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         decoded_bytes: &mut u64,
         attempts: &mut BTreeMap<(LaneId, u64, u64), AutonomousReservationAttemptRead>,
     ) -> std::result::Result<(), AutonomousLaneReservationEvidenceError> {
@@ -201,7 +201,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         )?;
         let pointer =
             AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
-        if pointer.chain_id_hash != expected_chain_id_hash
+        if pointer.network_id != expected_network_id
             || pointer.lane_id != lane_id
             || pointer.lane_block_height != lane_block_height
             || pointer.proposal_height != proposal_height
@@ -217,7 +217,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         let record = self.read_autonomous_lane_block_attempt_artifact_locked(
             entry,
             &pointer,
-            expected_chain_id_hash,
+            expected_network_id,
             pointer.epoch,
             None,
         )?;
@@ -301,7 +301,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
-                &payload.chain_id_hash,
+                &payload.network_id,
                 entrypoint_hash,
             );
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
@@ -371,7 +371,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             if existing == released {
                 continue;
             }
-            if existing.chain_id_hash != payload.chain_id_hash
+            if existing.network_id != payload.network_id
                 || existing.epoch < payload.epoch
                 || existing.entrypoint_hash != *entrypoint_hash
                 || existing.lane_id != descriptor.lane_id
@@ -388,7 +388,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 existing.lane_id,
                 existing.lane_block_height,
                 existing.proposal_height,
-                existing.chain_id_hash,
+                existing.network_id,
                 existing.epoch,
                 decoded_bytes,
                 attempts,
@@ -772,7 +772,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     pub(crate) fn classify_autonomous_lane_reservation_groups(
         &self,
         groups: &[LaneQueueReservationReconciliationGroupV1],
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epochs: &[u64],
     ) -> std::result::Result<
         Vec<AutonomousLaneReservationEvidenceV1>,
@@ -874,7 +874,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 let pointer = self
                     .read_autonomous_lane_block_latest_attempt_locked(entry, *height)?
                     .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
-                if pointer.chain_id_hash != expected_chain_id_hash
+                if pointer.network_id != expected_network_id
                     || !inventory
                         .attempts
                         .contains_key(&(pointer.lane_block_height, pointer.proposal_height))
@@ -904,7 +904,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                     let record = self.read_autonomous_lane_block_attempt_artifact_locked(
                         entry,
                         &pointer,
-                        expected_chain_id_hash,
+                        expected_network_id,
                         pointer.epoch,
                         None,
                     )?;
@@ -928,7 +928,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 let pointer = self
                     .read_autonomous_lane_route_latest_attempt_locked(entry)?
                     .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
-                if pointer.chain_id_hash != expected_chain_id_hash
+                if pointer.network_id != expected_network_id
                     || !inventory
                         .attempts
                         .contains_key(&(pointer.lane_block_height, pointer.proposal_height))
@@ -954,7 +954,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                     let record = self.read_autonomous_lane_block_attempt_artifact_locked(
                         entry,
                         &pointer,
-                        expected_chain_id_hash,
+                        expected_network_id,
                         pointer.epoch,
                         None,
                     )?;
@@ -1013,7 +1013,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                     lane_id,
                     lane_block_height,
                     proposal_height,
-                    expected_chain_id_hash,
+                    expected_network_id,
                     *expected_epoch,
                     &mut decoded_bytes,
                     &mut attempts,
@@ -1143,7 +1143,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                         other_coordinate.0,
                         other_coordinate.1,
                         other_coordinate.2,
-                        expected_chain_id_hash,
+                        expected_network_id,
                         &mut decoded_bytes,
                         &mut attempts,
                     )?;
@@ -1199,7 +1199,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     fn classify_autonomous_lane_reservation_group(
         &self,
         group: &LaneQueueReservationReconciliationGroupV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<
         AutonomousLaneReservationEvidenceV1,
@@ -1207,7 +1207,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     > {
         self.classify_autonomous_lane_reservation_groups(
             std::slice::from_ref(group),
-            expected_chain_id_hash,
+            expected_network_id,
             std::slice::from_ref(&expected_epoch),
         )?
         .pop()

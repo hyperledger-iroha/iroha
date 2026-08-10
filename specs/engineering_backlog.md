@@ -9601,7 +9601,7 @@ redistributable schemas, and official trust/revocation bundles.
     requires operator mixed-host inventory and observability evidence before it
     can produce a blocker-free rollout report.
   - The affected live deployment is intentionally running the 2026-05-08
-    no-embedded-runtime `irohad` binary after the Inrou advert incident. Before
+    no-embedded-runtime `iroha3d` binary after the Inrou advert incident. Before
     any future live Soracloud runtime rollout, add an explicit operator config
     gate for Inrou enablement and prove that zero-backend hosts do not emit host
     adverts.

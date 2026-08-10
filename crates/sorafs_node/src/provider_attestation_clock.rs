@@ -20,11 +20,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use iroha_config::parameters::{
-    defaults::sorafs::storage::provider_ingest_runtime::outbox::COMPLETION_CHAIN_ID_MAX_BYTES_V1,
-    is_production_runtime_handle,
-};
-use iroha_data_model::{ChainId, sorafs::capacity::ProviderId};
+use iroha_config::parameters::is_production_runtime_handle;
+use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -48,12 +45,18 @@ const JOURNAL_CHECKPOINT_HEAD_RECORD_VERSION_V1: u8 = 1;
 const CLOCK_SEAL_QUALIFICATION_VERSION_V1: u8 = 1;
 /// Hard deadline for one external monotonic-seal call.
 pub const MUSUBI_PROVIDER_ATTESTATION_CLOCK_SEAL_TIMEOUT_MS_V1: u64 = 5_000;
+/// Maximum unreferenced candidate checkpoint blobs retained by a V1 seal.
+pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_COUNT_MAX_V1: u32 = 16;
+/// Maximum aggregate canonical bytes retained across V1 orphan blobs.
+pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1: u64 =
+    2 * MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1 as u64;
+/// Maximum age of a V1 orphan blob before authenticated collection is required.
+pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 
 /// Exact chain incarnation and provider whose journal consumes the clock.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationClockScopeV1 {
-    chain_id: ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: NetworkId,
     provider_id: ProviderId,
 }
 
@@ -62,32 +65,23 @@ impl MusubiProviderAttestationClockScopeV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty or overlong chain identity or a zero
-    /// genesis/provider identity.
+    /// Returns an error for an invalid network or zero provider identity.
     pub fn try_new(
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         provider_id: ProviderId,
     ) -> Result<Self, MusubiProviderAttestationClockErrorV1> {
         let scope = Self {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             provider_id,
         };
         scope.validate()?;
         Ok(scope)
     }
 
-    /// Borrow the exact chain identity.
+    /// Borrow the exact deployment identity.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    /// Return the exact genesis block hash.
-    #[must_use]
-    pub const fn genesis_block_hash(&self) -> [u8; 32] {
-        self.genesis_block_hash
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Return the exact provider identity.
@@ -97,11 +91,7 @@ impl MusubiProviderAttestationClockScopeV1 {
     }
 
     fn validate(&self) -> Result<(), MusubiProviderAttestationClockErrorV1> {
-        if self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > COMPLETION_CHAIN_ID_MAX_BYTES_V1
-            || self.genesis_block_hash == [0; 32]
-            || *self.provider_id.as_bytes() == [0; 32]
-        {
+        if self.network_id.as_bytes()[31] & 1 != 1 || *self.provider_id.as_bytes() == [0; 32] {
             return Err(MusubiProviderAttestationClockErrorV1::InvalidScope);
         }
         Ok(())
@@ -123,8 +113,7 @@ impl MusubiProviderAttestationClockScopeV1 {
 /// Exact deployment and journal-policy scope of one sealed checkpoint chain.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationJournalCheckpointScopeV1 {
-    chain_id: ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: NetworkId,
     provider_id: ProviderId,
     journal_policy_digest: [u8; 32],
 }
@@ -137,17 +126,15 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty or overlong chain identity, a zero
-    /// genesis/provider identity, or a zero journal-policy digest.
+    /// Returns an error for an invalid network, zero provider identity, or zero journal-policy
+    /// digest.
     pub fn try_new(
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         provider_id: ProviderId,
         journal_policy_digest: [u8; 32],
     ) -> Result<Self, MusubiProviderAttestationJournalCheckpointSealErrorV1> {
         let scope = Self {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             provider_id,
             journal_policy_digest,
         };
@@ -155,16 +142,10 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
         Ok(scope)
     }
 
-    /// Borrow the exact chain identity.
+    /// Borrow the exact deployment identity.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    /// Return the exact genesis block hash.
-    #[must_use]
-    pub const fn genesis_block_hash(&self) -> [u8; 32] {
-        self.genesis_block_hash
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Return the exact provider identity.
@@ -186,9 +167,7 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
     /// Returns an error when any deployment identity or policy digest is
     /// inert or outside its V1 bound.
     pub fn validate(&self) -> Result<(), MusubiProviderAttestationJournalCheckpointSealErrorV1> {
-        if self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > COMPLETION_CHAIN_ID_MAX_BYTES_V1
-            || self.genesis_block_hash == [0; 32]
+        if self.network_id.as_bytes()[31] & 1 != 1
             || *self.provider_id.as_bytes() == [0; 32]
             || self.journal_policy_digest == [0; 32]
         {
@@ -498,6 +477,9 @@ pub struct MusubiProviderAttestationClockSealQualificationV1 {
     version: u8,
     adapter_revision: u64,
     policy_digest: [u8; 32],
+    orphan_blob_count_max: u32,
+    orphan_blob_bytes_max: u64,
+    orphan_blob_age_max_ms: u64,
 }
 
 impl MusubiProviderAttestationClockSealQualificationV1 {
@@ -508,6 +490,9 @@ impl MusubiProviderAttestationClockSealQualificationV1 {
             version: CLOCK_SEAL_QUALIFICATION_VERSION_V1,
             adapter_revision,
             policy_digest,
+            orphan_blob_count_max: MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_COUNT_MAX_V1,
+            orphan_blob_bytes_max: MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1,
+            orphan_blob_age_max_ms: MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1,
         }
     }
 
@@ -523,10 +508,31 @@ impl MusubiProviderAttestationClockSealQualificationV1 {
         self.policy_digest
     }
 
+    /// Return the fixed maximum count of unreferenced candidate blobs.
+    #[must_use]
+    pub const fn orphan_blob_count_max(self) -> u32 {
+        self.orphan_blob_count_max
+    }
+
+    /// Return the fixed maximum aggregate bytes of unreferenced candidate blobs.
+    #[must_use]
+    pub const fn orphan_blob_bytes_max(self) -> u64 {
+        self.orphan_blob_bytes_max
+    }
+
+    /// Return the fixed maximum orphan age before authenticated collection.
+    #[must_use]
+    pub const fn orphan_blob_age_max_ms(self) -> u64 {
+        self.orphan_blob_age_max_ms
+    }
+
     fn validate(self) -> Result<(), MusubiProviderAttestationClockErrorV1> {
         if self.version != CLOCK_SEAL_QUALIFICATION_VERSION_V1
             || self.adapter_revision == 0
             || self.policy_digest == [0; 32]
+            || self.orphan_blob_count_max != MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_COUNT_MAX_V1
+            || self.orphan_blob_bytes_max != MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1
+            || self.orphan_blob_age_max_ms != MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1
         {
             return Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding);
         }
@@ -708,7 +714,7 @@ pub enum MusubiProviderAttestationClockSealErrorV1 {
 /// Stable failure from the sealed journal-checkpoint protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
-    /// The chain/genesis/provider/policy scope is inert or malformed.
+    /// The network/provider/policy scope is inert or malformed.
     #[error("Musubi provider-attestation journal checkpoint scope is invalid")]
     InvalidScope,
     /// A checkpoint head contains an inert or malformed field.
@@ -776,8 +782,9 @@ pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
 /// None of these operations may persist credentials, paths, nonces, or provider
 /// URLs.
 ///
-/// TODO: production provider qualification must set a fixed orphan-blob count/
-/// byte/age bound and prove that garbage collection cannot race a head CAS or
+/// Returning a valid qualification attests to the exact fixed orphan count,
+/// byte, and age ceilings exported above. TODO: qualify the provider's
+/// head-CAS/garbage-collection concurrency matrix and prove collection cannot
 /// remove the latest head's blob or its retained direct predecessor's blob.
 pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'static {
     /// Return the stable credential-free runtime identity.
@@ -1167,8 +1174,7 @@ fn validate_checkpoint_blob(
         validate_musubi_provider_attestation_journal_checkpoint_metadata_v1(
             checkpoint_blob,
             policy,
-            &scope.chain_id,
-            scope.genesis_block_hash,
+            &scope.network_id,
             scope.provider_id,
         )
         .map_err(|_| MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidBlob)?;
@@ -1185,12 +1191,9 @@ async fn load_checkpoint_clock_floor(
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
     seal: &dyn MusubiProviderAttestationClockSealV1,
 ) -> Result<u64, MusubiProviderAttestationJournalCheckpointSealErrorV1> {
-    let clock_scope = MusubiProviderAttestationClockScopeV1::try_new(
-        scope.chain_id.clone(),
-        scope.genesis_block_hash,
-        scope.provider_id,
-    )
-    .map_err(map_clock_checkpoint_error)?;
+    let clock_scope =
+        MusubiProviderAttestationClockScopeV1::try_new(scope.network_id, scope.provider_id)
+            .map_err(map_clock_checkpoint_error)?;
     let clock_scope_digest = clock_scope
         .scope_digest()
         .map_err(map_clock_checkpoint_error)?;
@@ -1508,7 +1511,7 @@ fn map_clock_checkpoint_error(
 /// Stable failure from the qualified journal clock boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationClockErrorV1 {
-    /// The chain/genesis/provider scope is inert or malformed.
+    /// The network/provider scope is inert or malformed.
     #[error("Musubi provider-attestation clock scope is invalid")]
     InvalidScope,
     /// The configured or live seal identity/qualification is invalid.
@@ -1707,7 +1710,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         self.state.lock().await.floor_unix_ms()
     }
 
-    /// Return the non-secret chain/genesis/provider scope commitment.
+    /// Return the non-secret network/provider scope commitment.
     ///
     /// A deployment constructor can compare this value with the independently
     /// derived file-store binding before exposing the combined journal runtime.
@@ -1830,8 +1833,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
     ) -> Result<(), MusubiProviderAttestationJournalCheckpointSealErrorV1> {
         scope.validate()?;
         let clock_scope = MusubiProviderAttestationClockScopeV1::try_new(
-            scope.chain_id().clone(),
-            scope.genesis_block_hash(),
+            *scope.network_id(),
             scope.provider_id(),
         )
         .map_err(map_clock_checkpoint_error)?;
@@ -2049,6 +2051,8 @@ mod tests {
 
     use super::*;
     use crate::provider_attestation_journal::musubi_provider_attestation_journal_test_checkpoint_bytes_v1;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
 
     const HANDLE: &str = "hsm://musubi/provider-attestation-clock/seal";
 
@@ -2489,10 +2493,48 @@ mod tests {
         MusubiProviderAttestationClockSealQualificationV1::new(1, [0xA5; 32])
     }
 
+    #[test]
+    fn qualification_binds_fixed_orphan_retention_limits() {
+        let exact = qualification();
+        assert_eq!(
+            exact.orphan_blob_count_max(),
+            MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_COUNT_MAX_V1
+        );
+        assert_eq!(
+            exact.orphan_blob_bytes_max(),
+            MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1
+        );
+        assert_eq!(
+            exact.orphan_blob_age_max_ms(),
+            MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1
+        );
+        assert!(exact.validate().is_ok());
+
+        let mut substituted = exact;
+        substituted.orphan_blob_count_max = substituted.orphan_blob_count_max.saturating_add(1);
+        assert_eq!(
+            substituted.validate(),
+            Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding)
+        );
+        let mut substituted = exact;
+        substituted.orphan_blob_bytes_max = substituted.orphan_blob_bytes_max.saturating_add(1);
+        assert_eq!(
+            substituted.validate(),
+            Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding)
+        );
+        let mut substituted = exact;
+        substituted.orphan_blob_age_max_ms = substituted.orphan_blob_age_max_ms.saturating_add(1);
+        assert_eq!(
+            substituted.validate(),
+            Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding)
+        );
+    }
+
     fn scope(seed: u8) -> MusubiProviderAttestationClockScopeV1 {
         MusubiProviderAttestationClockScopeV1::try_new(
-            ChainId::try_from(format!("musubi-clock-{seed}")).expect("canonical test chain ID"),
-            [seed; 32],
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                [seed; 32],
+            ))),
             ProviderId::new([seed.wrapping_add(1); 32]),
         )
         .expect("valid test scope")
@@ -2501,8 +2543,7 @@ mod tests {
     fn checkpoint_scope(seed: u8) -> MusubiProviderAttestationJournalCheckpointScopeV1 {
         let clock_scope = scope(seed);
         MusubiProviderAttestationJournalCheckpointScopeV1::try_new(
-            clock_scope.chain_id().clone(),
-            clock_scope.genesis_block_hash(),
+            *clock_scope.network_id(),
             clock_scope.provider_id(),
             MusubiProviderAttestationJournalPolicyV1::default()
                 .digest()
@@ -2747,8 +2788,7 @@ mod tests {
         );
 
         let foreign_scope = MusubiProviderAttestationJournalCheckpointScopeV1::try_new(
-            checkpoint_scope.chain_id().clone(),
-            checkpoint_scope.genesis_block_hash(),
+            *checkpoint_scope.network_id(),
             checkpoint_scope.provider_id(),
             [0xFE; 32],
         )
@@ -3316,9 +3356,10 @@ mod tests {
     #[test]
     fn public_scope_digest_revalidates_decoded_shape() {
         let mut raw_fixture = scope(9);
-        // Model a structurally decoded value that bypassed `try_new` without
-        // invoking the validating `ChainId` parser with deliberately bad text.
-        raw_fixture.genesis_block_hash = [0; 32];
+        // Model a structurally decoded value that bypassed `try_new` with an unmarked hash.
+        raw_fixture.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
+        );
         let bytes = norito::encode_canonical(&raw_fixture).expect("encode raw invalid fixture");
         let invalid = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
             .expect("decode raw invalid fixture");

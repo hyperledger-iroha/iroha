@@ -173,12 +173,13 @@ def current_onboarding_receipt(request_payload: dict) -> dict:
             "version": 1,
             "request": dict(request_payload),
             "authority": "sora-onboarding-authority",
-            "chain_id": MODULE.DEFAULT_CHAIN_ID,
+            "network_id": MODULE.DEFAULT_NETWORK_ID,
             "anchor": {"block_height": 1, "block_hash": "11" * 32},
             "resource": {"disposition": {"kind": "create"}},
             "acquisition": {"term_years": 1},
             "quote_guard": {"valid_until_ms": 9999999999999},
             "instructions": [],
+            "owner_auto_renew_instruction": None,
             "valid_until_ms": 9999999999999,
         },
         "plan_hash": "22" * 32,
@@ -212,6 +213,7 @@ def test_onboarding_plans_then_applies_exact_receipt(monkeypatch) -> None:
         "https://taira.example",
         alias,
         account_id,
+        network_id=MODULE.DEFAULT_NETWORK_ID,
         onboarding_token=ONBOARDING_TOKEN,
         permissions=["CanFoo", "", "CanFoo", "CanBar"],
     )
@@ -268,6 +270,7 @@ def test_onboarding_rejects_retired_synchronous_response(monkeypatch) -> None:
             "https://taira.example",
             alias,
             account_id,
+            network_id=MODULE.DEFAULT_NETWORK_ID,
             onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
@@ -289,12 +292,65 @@ def test_onboarding_rejects_substituted_receipt_request(monkeypatch) -> None:
             "https://taira.example",
             "canary@universal",
             "sora-test-account",
+            network_id=MODULE.DEFAULT_NETWORK_ID,
             onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
         assert "differs from the submitted intent" in str(error)
     else:  # pragma: no cover
         raise AssertionError("substituted onboarding receipt was accepted")
+
+
+def test_onboarding_rejects_foreign_network_receipt_before_apply(monkeypatch) -> None:
+    calls = []
+
+    def fake_http_json(_method, _url, payload=None, **_kwargs):
+        calls.append(payload)
+        receipt = current_onboarding_receipt(payload)
+        receipt["body"]["network_id"] = "genesis"
+        return 200, receipt
+
+    monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
+
+    with pytest.raises(RuntimeError, match="exact local network"):
+        MODULE.onboard_account(
+            "https://taira.example",
+            "canary@universal",
+            "sora-test-account",
+            network_id=MODULE.DEFAULT_NETWORK_ID,
+            onboarding_token=ONBOARDING_TOKEN,
+        )
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("retired", ["chain", "chainId", "chain_id"])
+@pytest.mark.parametrize("keep_network_id", [False, True])
+def test_onboarding_rejects_retired_receipt_network_keys(
+    monkeypatch,
+    retired,
+    keep_network_id,
+) -> None:
+    calls = []
+
+    def fake_http_json(_method, _url, payload=None, **_kwargs):
+        calls.append(payload)
+        receipt = current_onboarding_receipt(payload)
+        if not keep_network_id:
+            receipt["body"].pop("network_id")
+        receipt["body"][retired] = MODULE.DEFAULT_CHAIN_ID
+        return 200, receipt
+
+    monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
+
+    with pytest.raises(RuntimeError, match="invalid fields"):
+        MODULE.onboard_account(
+            "https://taira.example",
+            "canary@universal",
+            "sora-test-account",
+            network_id=MODULE.DEFAULT_NETWORK_ID,
+            onboarding_token=ONBOARDING_TOKEN,
+        )
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -313,6 +369,7 @@ def test_onboarding_rejects_malformed_token_before_http(monkeypatch, token) -> N
             "https://taira.example",
             "canary@universal",
             "aabbcc",
+            network_id=MODULE.DEFAULT_NETWORK_ID,
             onboarding_token=token,
         )
 
@@ -429,6 +486,7 @@ def test_onboarding_redacts_server_echo_before_error(monkeypatch) -> None:
             "https://taira.example",
             "canary@universal",
             "aabbcc",
+            network_id=MODULE.DEFAULT_NETWORK_ID,
             onboarding_token=ONBOARDING_TOKEN,
         )
 

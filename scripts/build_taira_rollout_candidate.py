@@ -124,6 +124,24 @@ def _fail(message: str) -> NoReturn:
     raise TairaCandidateBuildError(message)
 
 
+def _require_privacy_protocol_controller_origin_authority() -> None:
+    """Translate the shared provisioning barrier into this command's error."""
+
+    try:
+        privacy_evidence.require_controller_origin_authority_provisioned()
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise TairaCandidateBuildError(str(exc)) from exc
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        admission._require_independent_native_evidence_authority()
+    except admission.TairaRolloutAdmissionError as exc:
+        raise TairaCandidateBuildError(str(exc)) from exc
+
+
 def _sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         _fail(f"{label} must be one lowercase SHA-256 digest")
@@ -439,6 +457,12 @@ def _final_manifest(
 
 
 def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
+    # This must precede argument/path inspection, output creation, and access to
+    # the candidate signer.  The current unsigned v2 self-hash chain cannot
+    # establish that the sealed qualification controller produced the bytes.
+    _require_privacy_protocol_controller_origin_authority()
+    _require_independent_native_evidence_authority()
+
     source = admission.SourceIdentity(
         _commit(args.source_commit, "source commit"),
         _commit(
@@ -915,7 +939,7 @@ def pack_deploy_payload(args: argparse.Namespace) -> dict[str, object]:
     directories.extend(("bin", "supervisor"))
     members.extend(
         [
-            PayloadMember(binary.parent, binary.name, "bin/irohad", binary_info, 0o500),
+            PayloadMember(binary.parent, binary.name, "bin/iroha3d", binary_info, 0o500),
             PayloadMember(
                 supervisor.parent,
                 supervisor.name,

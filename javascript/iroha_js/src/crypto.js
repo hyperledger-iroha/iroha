@@ -17,6 +17,7 @@ import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
+import { networkIdBytes } from "./networkId.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
@@ -769,7 +770,7 @@ export function deriveConfidentialNoteV2(input) {
 
 /**
  * Derive a confidential v2 nullifier from note material.
- * @param {{chainId: string, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @param {{networkId: import("./networkId.js").NetworkId, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
  * @returns {{nullifier: Buffer, nullifierHex: string}}
  */
 export function deriveConfidentialNullifierV2(input) {
@@ -777,7 +778,9 @@ export function deriveConfidentialNullifierV2(input) {
     resolveNativeBinding(),
     "deriveConfidentialNullifierV2",
   );
-  const chainId = normalizeConfidentialV2ExactString(input?.chainId, "chainId");
+  const networkId = Buffer.from(
+    networkIdBytes(input?.networkId, "networkId"),
+  );
   const assetDefinitionId = normalizeConfidentialV2ExactString(
     input?.assetDefinitionId,
     "assetDefinitionId",
@@ -789,7 +792,7 @@ export function deriveConfidentialNullifierV2(input) {
   const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
   const nullifier = Buffer.from(
     native.deriveConfidentialNullifierV2(
-      chainId,
+      networkId,
       assetDefinitionId,
       spendKey,
       rhoHex,

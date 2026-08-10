@@ -384,10 +384,8 @@ impl Kura {
                         false,
                     );
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
-                        entry,
-                        actual_height,
-                        block_hash,
+                    self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
+                        entry, block,
                     )
                     .map_err(|error| {
                         self.committed_recovery_failure(
@@ -460,10 +458,8 @@ impl Kura {
                     false,
                 );
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
-                    entry,
-                    actual_height,
-                    block_hash,
+                self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
+                    entry, block,
                 )
                 .map_err(|error| {
                     self.committed_recovery_failure(
@@ -547,10 +543,8 @@ impl Kura {
             ));
         }
         if let Some(entry) = merge_entry {
-            self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
-                entry,
-                actual_height,
-                block_hash,
+            self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
+                entry, block,
             )
             .map_err(|error| {
                 self.committed_recovery_failure("post-WSV lane artifact budget reservation", &error)

@@ -169,7 +169,7 @@ secret-free `AliasSetupReportV1`. Static configuration can be checked without
 opening sockets:
 
 ```bash
-irohad --config peer.toml --check-config
+iroha3d --config peer.toml --check-config
 iroha --config client.toml app alias doctor --token-file onboarding.token
 ```
 

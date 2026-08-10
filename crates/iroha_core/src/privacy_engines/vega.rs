@@ -13,12 +13,12 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
     privacy::{
-        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyChallengeV1, PrivacyConsensusLimitsV1,
-        PrivacyP256PointV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyP256PointV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
         VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -90,8 +90,6 @@ pub const VEGA_PRIVACY_ACTION_PROVER_WORKERS_V1: usize = 1;
 pub struct VegaPrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
     pub network_id: NetworkId,
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
     /// Exact single-key transaction authority.
     pub authority: AccountId,
     /// Required creation time, resolved once before the two-pass construction.
@@ -428,8 +426,8 @@ impl SignedVegaPrivacyActionV1 {
 /// statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VegaBindingFieldV1 {
-    /// Chain identifier.
-    ChainId,
+    /// Genesis-header-derived network identity.
+    NetworkId,
     /// Action index.
     ActionIndex,
     /// Parameter-set identifier.
@@ -462,14 +460,9 @@ pub enum VegaMdlError {
         /// Mismatched field.
         field: VegaBindingFieldV1,
     },
-    /// The chain id is empty or too large.
-    #[error("Vega chain id length {actual} is outside 1..={max}")]
-    InvalidChainIdLength {
-        /// Actual byte length.
-        actual: usize,
-        /// Closed maximum.
-        max: usize,
-    },
+    /// The typed network identity and explicit genesis hash differ.
+    #[error("Vega network id differs from its genesis hash")]
+    NetworkGenesisMismatch,
     /// A mandatory consensus digest is the all-zero sentinel.
     #[error("Vega consensus digest `{field}` must be non-zero")]
     ZeroConsensusDigest {
@@ -631,9 +624,6 @@ pub enum VegaPrivacyActionBuildErrorV1 {
     /// The signed transaction domain does not equal the supplied canonical genesis hash.
     #[error("Vega action transaction network does not match the canonical genesis hash")]
     NetworkIdMismatch,
-    /// The chain identifier is empty or exceeds the consensus maximum.
-    #[error("Vega action chain id is outside the first-release byte bound")]
-    InvalidChainId,
     /// Creation time cannot be represented in the transaction wire.
     #[error("Vega action creation time cannot be represented in milliseconds")]
     CreationTimeOutOfRange,
@@ -718,8 +708,8 @@ impl From<VegaMdlFigure9ErrorV1> for VegaMdlError {
 /// active chain and governed artifacts.
 #[derive(Clone, Copy, Debug)]
 pub struct VegaMdlConsensusBindingV1<'a> {
-    /// Exact chain-id bytes.
-    pub chain_id: &'a [u8],
+    /// Exact genesis-header-derived network-identity bytes.
+    pub network_id: &'a [u8; 32],
     /// Hash of the exact genesis block or genesis manifest.
     pub genesis_hash: [u8; 32],
     /// Zero-based privacy action index inside its transaction.
@@ -742,7 +732,7 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
     #[must_use]
     pub fn from_context(context: &'a PrivacyStatementContextV1, genesis_hash: [u8; 32]) -> Self {
         Self {
-            chain_id: context.chain_id.as_str().as_bytes(),
+            network_id: context.network_id.as_bytes(),
             genesis_hash,
             action_index: context.action_index,
             parameter_id: *context.parameter_id.as_bytes(),
@@ -757,7 +747,9 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
     #[must_use]
     pub const fn proof_context(&self) -> VegaMdlProofContextV1<'a> {
         VegaMdlProofContextV1 {
-            chain_id: self.chain_id,
+            // The protected Halo2 profile retains this internal field name;
+            // these are exact NetworkId bytes, never a display label.
+            chain_id: self.network_id,
             genesis_hash: self.genesis_hash,
             action_index: self.action_index,
             parameter_id: self.parameter_id,
@@ -769,17 +761,12 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
     }
 
     fn validate(&self, statement: &VegaExistingCredentialStatementV1) -> Result<(), VegaMdlError> {
-        let max = usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-            .expect("privacy chain-id bound fits usize");
-        if self.chain_id.is_empty() || self.chain_id.len() > max {
-            return Err(VegaMdlError::InvalidChainIdLength {
-                actual: self.chain_id.len(),
-                max,
-            });
+        if self.network_id != &self.genesis_hash {
+            return Err(VegaMdlError::NetworkGenesisMismatch);
         }
-        if self.chain_id != statement.context.chain_id.as_str().as_bytes() {
+        if self.network_id != statement.context.network_id.as_bytes() {
             return Err(VegaMdlError::BindingMismatch {
-                field: VegaBindingFieldV1::ChainId,
+                field: VegaBindingFieldV1::NetworkId,
             });
         }
         if self.action_index != VEGA_PRIVACY_ACTION_INDEX_V1
@@ -984,14 +971,6 @@ pub fn verify_mdl_figure9_v1(
 fn validate_vega_transaction_context_v1(
     context: &VegaPrivacyActionTransactionContextV1,
 ) -> Result<(), VegaPrivacyActionBuildErrorV1> {
-    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
-    if chain_id_bytes == 0
-        || chain_id_bytes
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(VegaPrivacyActionBuildErrorV1::InvalidChainId);
-    }
     if context.authority.try_signatory().is_none() {
         return Err(VegaPrivacyActionBuildErrorV1::UnsupportedAuthority);
     }
@@ -1043,7 +1022,7 @@ fn vega_statement_context_v1(
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         action_index: VEGA_PRIVACY_ACTION_INDEX_V1,
         transaction_intent_digest,
         parameter_id: profile.parameter_id,
@@ -1538,7 +1517,7 @@ pub fn device_authentication_frame_v1(
         &[VEGA_MDL_DEVICE_AUTHENTICATION_FRAME_VERSION_V1],
     )?;
     append_frame_field(&mut frame, b"upstream_commit", VEGA_PINNED_SOURCE_COMMIT_V1)?;
-    append_frame_field(&mut frame, b"chain_id", binding.chain_id)?;
+    append_frame_field(&mut frame, b"network_id", binding.network_id)?;
     append_frame_field(&mut frame, b"genesis_hash", &binding.genesis_hash)?;
     append_frame_field(
         &mut frame,
@@ -1889,7 +1868,6 @@ mod tests {
         let key_pair = transaction_key(0x41);
         VegaPrivacyActionTransactionContextV1 {
             network_id: network_id_from_genesis_hash_bytes([0xA7; 32]),
-            chain_id: ChainId::from("vega-signed-action-boundary-v1"),
             authority: AccountId::new(key_pair.public_key().clone()),
             creation_time: Duration::from_millis(1_785_023_999_999),
             time_to_live: Some(Duration::from_secs(60)),

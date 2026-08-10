@@ -1195,11 +1195,6 @@ fn bench_transaction_admission(c: &mut Criterion) {
 
 fn bench_transaction_handle_enqueue(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_enqueue_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -1238,7 +1233,6 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
             |(queue, tx)| {
                 let decision = runtime
                     .block_on(handle_transaction_with_metrics_for_bench(
-                        Arc::clone(&chain_id),
                         queue,
                         Arc::clone(&tx_state),
                         tx,

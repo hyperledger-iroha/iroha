@@ -480,7 +480,6 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
                 .expect("canonical contract deployment nonce")
         })
         .unwrap_or(0);
-    let chain_id = state_view.chain_id().clone();
     let network_id = *state_view.network_id();
     drop(state_view);
 
@@ -491,7 +490,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
     )
     .expect("construct contract alias");
     let contract_address =
-        ContractAddress::derive(&chain_id, authority, deploy_nonce, DataSpaceId::UNIVERSAL)
+        ContractAddress::derive(&network_id, authority, deploy_nonce, DataSpaceId::UNIVERSAL)
             .expect("derive contract address");
     let total_size = u64::try_from(artifact.len()).expect("artifact size fits u64");
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))

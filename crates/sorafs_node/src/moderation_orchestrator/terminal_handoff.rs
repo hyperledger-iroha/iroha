@@ -1,7 +1,7 @@
 //! Deterministic terminal-handoff identity and finalized-event binding.
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     events::data::sorafs::SorafsModerationLedgerEventKind,
     sorafs::moderation_ledger::{
         ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1, ModerationOutcomeRecordV1,
@@ -17,10 +17,10 @@ use super::{
 };
 
 impl ModerationOrchestratorCheckpointV1 {
-    pub(super) fn new(chain_id: &ChainId) -> Self {
+    pub(super) fn new(network_id: &NetworkId) -> Self {
         let mut state = Self {
             version: MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
-            chain_id: chain_id.as_str().to_owned(),
+            network_id: *network_id,
             generation: 0,
             panel_notification_clock_unix_ms: 0,
             panel_notification_scanned_cursor: None,
@@ -51,7 +51,7 @@ impl ModerationOrchestratorCheckpointV1 {
 }
 
 pub(super) fn terminal_handoff_id(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kind: ModerationTerminalHandoffKindV1,
     case_id: &str,
     round_id: &str,
@@ -64,7 +64,7 @@ pub(super) fn terminal_handoff_id(
     domain_hash(
         HANDOFF_ID_DOMAIN_V1,
         &[
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             &kind,
             case_id.as_bytes(),
             round_id.as_bytes(),
@@ -101,7 +101,7 @@ pub(super) fn terminal_finalization_event_matches_outcome(
 pub(super) fn validate_retained_terminal_handoff(
     handoff: &ModerationTerminalHandoffV1,
     snapshot: Option<&ModerationFinalizedLedgerSnapshotV1>,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(), ModerationOrchestratorError> {
     if !is_canonical_moderation_identifier_v1(&handoff.case_id)
         || !is_canonical_moderation_identifier_v1(&handoff.round_id)
@@ -112,14 +112,7 @@ pub(super) fn validate_retained_terminal_handoff(
             handoff.finalized_cursor.block_hash,
             snapshot,
         )
-        || handoff.handoff_id
-            != terminal_handoff_id(
-                chain_id,
-                handoff.kind,
-                &handoff.case_id,
-                &handoff.round_id,
-                handoff.outcome_digest,
-            )
+        || !handoff.is_bound_to_network(network_id)
     {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "terminal handoff identity, scope, or finalized cursor is invalid".to_owned(),

@@ -41,7 +41,7 @@ function requireNonEmptyString(value, name) {
 
 /**
  * Generate a Connect session preview and (optionally) register it with Torii.
- * @param {{ createConnectSession(input: { sid: string; node?: string | null }): Promise<import("./toriiClient.js").ConnectSessionResponse> }} toriiClient
+ * @param {{ createConnectSession(input: { sid: string; networkId: import("./networkId.js").NetworkId; appPublicKey: Uint8Array; nonce: Uint8Array; node?: string | null }): Promise<import("./toriiClient.js").ConnectSessionResponse> }} toriiClient
  * @param {import("./connectSession.js").ConnectSessionPreviewOptions & {
  *   register?: boolean;
  *   sessionOptions?: { node?: string | null } | null;
@@ -56,7 +56,7 @@ export async function bootstrapConnectPreviewSession(toriiClient, options = {}) 
   requireToriiClient(toriiClient);
   requireObject(options, "options");
   const preview = createConnectSessionPreview({
-    chainId: options.chainId,
+    networkId: options.networkId,
     node: options.node ?? null,
     nonce: options.nonce ?? null,
     appKeyPair: options.appKeyPair ?? null,
@@ -73,6 +73,9 @@ export async function bootstrapConnectPreviewSession(toriiClient, options = {}) 
   const sessionInput = {
     ...sessionOverrides,
     sid: preview.sidBase64Url,
+    networkId: preview.networkId,
+    appPublicKey: preview.appKeyPair.publicKey,
+    nonce: preview.nonce,
   };
   if (
     (sessionInput.node === undefined || sessionInput.node === null) &&

@@ -238,6 +238,17 @@ mod stock_registry_tests {
     use super::*;
 
     #[test]
+    fn standalone_registry_retains_exact_network_identity() {
+        let chain_id = iroha_data_model::ChainId::from("standalone-governance-test");
+        let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
+        let registry =
+            StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
+
+        assert_eq!(registry.chain_id, chain_id);
+        assert_eq!(registry.network_id, network_id);
+    }
+
+    #[test]
     fn reserved_musubi_attestation_slots_fail_before_broker_connection() {
         let registry = StockRuntimeProviderBrokerRegistryV1::new();
         for (slot, handle) in [
@@ -272,19 +283,25 @@ mod stock_registry_tests {
 
 /// Stock broker-backed registry for the packaged Governance DAG service.
 ///
-/// The chain identity is public and participates in the broker's exact-catalog
-/// handshake. Construction performs no I/O and stores no credential or private
-/// key material.
+/// The display chain and exact genesis-derived network identity participate in
+/// the broker handshake. Construction performs no I/O and stores no secret.
 #[derive(Clone, Debug)]
 pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
 }
 
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
-    /// Construct a standalone-service registry for one canonical chain.
+    /// Construct a standalone-service registry for one exact network.
     #[must_use]
-    pub const fn new(chain_id: iroha_data_model::ChainId) -> Self {
-        Self { chain_id }
+    pub const fn new(
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Self {
+        Self {
+            chain_id,
+            network_id,
+        }
     }
 }
 
@@ -300,6 +317,7 @@ impl sorafs_node::GovernanceDagServiceRuntimeProviderRegistryV1
     > {
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service(
             &self.chain_id,
+            self.network_id,
             service,
         )
         .map_err(map_governance_service_registry_error)?;

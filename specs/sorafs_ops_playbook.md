@@ -22,7 +22,13 @@ incident retrospectives.
 
 ## Auth & Governance Checklist
 
-- RBAC tokens: SoraFS instructions remain gated by their dedicated permission tokens (pin register/approve/retire/alias; capacity declare/telemetry/dispute; replication order issue/complete; pricing/credit upsert). Keep grants in sync with governance onboarding/offboarding.
+- Pin lifecycle: registration is a paid public operation for any authenticated
+  account and has no general permission token. Approval authority is the
+  verified threshold-governance envelope (which an authenticated account may
+  relay), retirement is restricted to the recorded submitter, and only alias
+  attachment uses `CanBindSorafsAlias`. Keep the remaining provider,
+  telemetry, dispute, replication, pricing, and credit permissions in sync
+  with governance onboarding/offboarding.
 - Provider binding: configuration may establish bindings only before genesis. Runtime establishment, compare-and-set rebind, and compare-and-remove require an enacted `SorafsProviderGovernanceActionV1`; direct owner ISIs reject. Drain capacity and native reserve state before proposing rebind/removal. `gov.sorafs_telemetry.require_submitter/require_nonce` defaults stay on, with global and per-provider submitter allow-lists enforced by the executor.
 - Repair workers: `/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`
   accept one caller-signed Iroha transaction containing exactly the matching

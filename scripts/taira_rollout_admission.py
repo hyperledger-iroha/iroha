@@ -116,6 +116,7 @@ MACOS_CONTROLLER_FILES = (
     "scripts/taira_privacy_protocol_receipt.py",
     "scripts/taira_privacy_rollout_contract.py",
     "scripts/taira_privacy_sealed_controller.py",
+    "scripts/taira_privacy_verange_case_plan.py",
     "scripts/taira_release_authority.py",
     "scripts/taira_rollout_admission.py",
     "scripts/write_release_sha256sums.py",
@@ -247,6 +248,24 @@ class ReplayLedgerSnapshot:
 
 def _fail(message: str) -> NoReturn:
     raise TairaRolloutAdmissionError(message)
+
+
+def _require_privacy_protocol_controller_origin_authority() -> None:
+    """Translate the shared provisioning barrier into admission's error."""
+
+    try:
+        privacy_evidence.require_controller_origin_authority_provisioned()
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise TairaRolloutAdmissionError(str(exc)) from exc
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        taira_release_authority.require_independent_native_evidence_authority_provisioned()
+    except taira_release_authority.TairaReleaseAuthorityError as exc:
+        raise TairaRolloutAdmissionError(str(exc)) from exc
 
 
 def _exact_fields(value: Mapping[str, object], expected: set[str], label: str) -> None:
@@ -1195,6 +1214,10 @@ def _verify_closed_linux_authority(
     trusted_release_manifest_verifier_sha256: str,
     linux_archive_path: Path,
 ) -> dict[str, object]:
+    # This helper is imported by candidate and extraction controllers, so it
+    # must not become an unbarriered signed-archive trust oracle.
+    _require_independent_native_evidence_authority()
+
     authority_root = root / LINUX_AUTHORITY_DIRECTORY
     try:
         inventory = scan_inventory_paths(authority_root)
@@ -1431,6 +1454,9 @@ def _verify_existing_linux_authority(
     trusted_signing_fingerprint: str,
     native_verifier_sha256: str,
 ) -> None:
+    # Refuse before creating the extraction directory or reading the archive.
+    _require_independent_native_evidence_authority()
+
     evidence_root = root / "linux-evidence"
     evidence_root.mkdir(mode=0o700)
     _extract_linux_evidence(linux_archive_path, evidence_root)
@@ -1544,6 +1570,12 @@ def verify_admission(
     now_unix: int | None = None,
 ) -> dict[str, object]:
     """Verify the complete dual-target candidate without applying it."""
+
+    # Refuse before identity/path inspection or replay-ledger reads.  Candidate
+    # signatures cannot substitute for independently authenticated provenance
+    # of the controller-owned native test bytes.
+    _require_privacy_protocol_controller_origin_authority()
+    _require_independent_native_evidence_authority()
 
     expected_source = SourceIdentity(
         commit=_commit(expected_source.commit, "expected source commit"),

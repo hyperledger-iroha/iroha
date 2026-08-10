@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,14 +21,15 @@ HEAD_COMMIT = "1" * 40
 HEAD_TREE = "2" * 40
 CARGO_LOCK_SHA256 = "3" * 64
 SOURCE_MANIFEST = "b" * 64
-PROGRAM_TARGET = (
-    REPO_ROOT
-    / "target"
-    / "sumeragi-v2-release"
-    / SOURCE_MANIFEST
-    / "programs"
-    / "invocation.tairafixture"
-)
+_EXTERNAL_ROOTS: list[Path] = []
+
+
+@atexit.register
+def _cleanup_external_roots() -> None:
+    for root in _EXTERNAL_ROOTS:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 PINNED_ENV = {
     "IROHA_TEST_REQUIRE_NETWORK": "1",
     "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
@@ -52,15 +56,15 @@ PINNED_ENV = {
 
 
 def _install_source_bound_fake_localnet_binaries(
-    program_target: Path = PROGRAM_TARGET,
+    program_target: Path,
 ) -> tuple[Path, str]:
     attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
     binaries = {
-        "irohad": program_target / "release" / "irohad",
+        "irohad": program_target / "release" / "iroha3d",
         "irohad_message_control": (
-            program_target / "message-control" / "release" / "irohad"
+            program_target / "message-control" / "release" / "iroha3d"
         ),
         "iroha": program_target / "release" / "iroha",
         "kagami": program_target / "release" / "kagami",
@@ -95,8 +99,8 @@ def _install_source_bound_fake_localnet_binaries(
         ("bundle_dir", str(program_target)),
     ]
     for label, relative in (
-        ("irohad", "release/irohad"),
-        ("irohad_message_control", "message-control/release/irohad"),
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     ):
@@ -131,8 +135,23 @@ def _stubbed_environment(
     inventory_mode: str = "one",
     run_mode: str = "one",
     evidence_check_status: int = 0,
-    program_target: Path = PROGRAM_TARGET,
+    program_target_name: str = "invocation.tairafixture",
 ) -> tuple[dict[str, str], Path]:
+    external_root = Path(
+        tempfile.mkdtemp(prefix="iroha-taira-v2-soak-test-", dir="/private/tmp")
+    )
+    _EXTERNAL_ROOTS.append(external_root)
+    cargo_target = external_root / "cargo-target"
+    artifact_root = external_root / "artifacts"
+    cargo_target.mkdir(mode=0o700)
+    artifact_root.mkdir(mode=0o700)
+    program_target = (
+        artifact_root
+        / "sumeragi-v2-release"
+        / SOURCE_MANIFEST
+        / "programs"
+        / program_target_name
+    )
     program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries(
         program_target
     )
@@ -320,6 +339,11 @@ esac
     env["IROHA_RELEASE_HEAD_COMMIT"] = HEAD_COMMIT
     env["IROHA_RELEASE_HEAD_TREE"] = HEAD_TREE
     env["IROHA_RELEASE_CARGO_LOCK_SHA256"] = CARGO_LOCK_SHA256
+    env["CARGO_TARGET_DIR"] = str(cargo_target)
+    env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifact_root)
+    env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        external_root / "cancel-request.json"
+    )
     env["IROHA_TEST_TARGET_DIR"] = str(program_target)
     env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"] = manifest_sha256
     env["TAIRA_REAL_PYTHON3"] = sys.executable
@@ -346,9 +370,9 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
 ) -> None:
     env, capture = _stubbed_environment(tmp_path)
     env.update({name: "inherited-malicious-override" for name in PINNED_ENV})
-    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-irohad"
+    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-iroha3d"
     env["KAGAMI_BIN"] = "/tmp/malicious-kagami"
-    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-irohad"
+    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-iroha3d"
     env["TEST_NETWORK_BIN_IROHA"] = "/tmp/malicious-iroha"
     env["TEST_NETWORK_IROHAD_FEATURES"] = "malicious-feature"
     env["CARGO_BIN_EXE_iroha"] = "/tmp/malicious-cargo-iroha"
@@ -371,7 +395,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     calls = [line for line in captured.splitlines() if line.startswith("args=")]
     assert len(calls) == 2
     assert all(
-        "test --locked --offline --release -p integration_tests --test consensus_and_da"
+        "test -j1 --locked --offline --release -p integration_tests --test consensus_and_da"
         in call
         for call in calls
     )
@@ -382,7 +406,8 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     for name, value in PINNED_ENV.items():
         assert captured_lines.count(f"{name}={value}") == 2
         assert f"{name}=inherited-malicious-override" not in captured_lines
-    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / SOURCE_MANIFEST
+    artifact_root = Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
+    source_root = artifact_root / "sumeragi-v2-release" / SOURCE_MANIFEST
     evidence_root = source_root / "evidence" / "taira-v2-24h"
     assert not (evidence_root / ".taira_v2_24h_soak.lock").exists()
     assert (
@@ -391,8 +416,9 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
         )
         == 2
     )
-    assert captured.count(f"IROHA_TEST_TARGET_DIR={PROGRAM_TARGET}\n") == 2
-    assert captured.count(f"CARGO_TARGET_DIR={source_root / 'test-suite'}\n") == 2
+    program_target = Path(env["IROHA_TEST_TARGET_DIR"])
+    assert captured.count(f"IROHA_TEST_TARGET_DIR={program_target}\n") == 2
+    assert captured.count(f"CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}\n") == 2
     evidence_values = {
         line.split("=", 1)[1]
         for line in captured_lines
@@ -424,10 +450,9 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
         == env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"]
     )
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(completion)
-    program_target = PROGRAM_TARGET
     assert (
         captured.count(
-            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'irohad'}\n"
+            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'}\n"
         )
         == 2
     )
@@ -438,7 +463,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert (
         captured.count(
             "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-            f"{program_target / 'message-control' / 'release' / 'irohad'}\n"
+            f"{program_target / 'message-control' / 'release' / 'iroha3d'}\n"
         )
         == 2
     )
@@ -480,13 +505,13 @@ def test_launcher_rejects_bundle_tampering_before_completion(
     tmp_path: Path,
 ) -> None:
     invocation_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
-    program_target = PROGRAM_TARGET.parent / f"invocation.T{invocation_suffix}"
     env, _capture = _stubbed_environment(
         tmp_path,
         run_mode="tamper-bundle",
-        program_target=program_target,
+        program_target_name=f"invocation.T{invocation_suffix}",
     )
-    binary = program_target / "release" / "irohad"
+    program_target = Path(env["IROHA_TEST_TARGET_DIR"])
+    binary = program_target / "release" / "iroha3d"
     original = binary.read_bytes()
     env["TAIRA_TAMPER_BINARY"] = str(binary)
     completion_pointer = tmp_path / "taira-completion-path"
@@ -572,7 +597,11 @@ def test_launcher_rejects_profile_override_arguments_before_cargo(
 
 def test_launcher_rejects_a_concurrent_source_bound_soak(tmp_path: Path) -> None:
     env, capture = _stubbed_environment(tmp_path)
-    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / SOURCE_MANIFEST
+    source_root = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
+        / "sumeragi-v2-release"
+        / SOURCE_MANIFEST
+    )
     lock_path = source_root / "evidence" / "taira-v2-24h" / ".taira_v2_24h_soak.lock"
     lock_path.mkdir(parents=True, exist_ok=False)
     try:

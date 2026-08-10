@@ -33,6 +33,10 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(status, .missing(path: "/tmp/does/not/exist"))
     }
 
+    func testZkAssetPolicyStatusUsesTheCurrentFirstReleaseName() {
+        XCTAssertEqual(NativeBridgeError.fromStatus(-404), .zkAssetPolicy)
+    }
+
     func testExplicitChainDiscriminantRequiresNativeScope() throws {
         XCTAssertNoThrow(try NoritoNativeBridge.validateChainDiscriminantContext(
             nil,
@@ -164,7 +168,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 21,
+          "native_bridge_abi_version": 22,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -206,7 +210,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         )
         XCTAssertEqual(
             status,
-            .abiMismatch(path: bridgeURL.path, expected: 21, actual: 19)
+            .abiMismatch(path: bridgeURL.path, expected: 22, actual: 19)
         )
     }
 
@@ -234,7 +238,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 21,
+          "native_bridge_abi_version": 22,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

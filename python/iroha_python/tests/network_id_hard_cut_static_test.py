@@ -264,7 +264,30 @@ def test_nexus_preserves_connect_chain_id_but_uses_network_id_for_transactions()
 
     crypto = _tree("crypto.py")
     privacy = _function(crypto.body, "privacy_vega_device_authentication_digest_v1")
-    assert {"chain_id", "canonical_genesis_hash"}.issubset(_arguments(privacy))
+    assert "network_id" in _arguments(privacy)
+    assert {"chain_id", "canonical_genesis_hash"}.isdisjoint(_arguments(privacy))
+
+
+def test_confidential_proof_builders_require_exact_network_id() -> None:
+    crypto = _tree("crypto.py")
+    function_names = (
+        "build_confidential_transfer_proof_v2",
+        "build_confidential_transfer_proof_v2_with_paths",
+        "build_confidential_unshield_proof_v3",
+        "build_confidential_unshield_proof_v3_with_paths",
+    )
+    for name in function_names:
+        function = _function(crypto.body, name)
+        assert "network_id" in _arguments(function)
+        assert _argument_annotation(function, "network_id") == "NetworkId"
+        assert RETIRED_DOMAIN_NAMES.isdisjoint(_arguments(function))
+
+    rust = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
+    for name in function_names:
+        start = rust.index(f"fn {name}_py(")
+        signature = rust[start : rust.index(") -> PyResult", start)]
+        assert "network_id: &PyNetworkId" in signature
+        assert all(retired not in signature for retired in RETIRED_DOMAIN_NAMES)
 
 
 def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
@@ -283,6 +306,14 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
     assert "network_id: &super::PyNetworkId" in vk_rust
     assert "canonical_genesis_hash: &[u8]" not in vk_rust
     assert "fn parse_query_network_id" not in rust
+    vega_start = rust.index("fn privacy_vega_device_authentication_digest_v1_py(")
+    vega_end = rust.index(
+        "fn python_authenticated_privacy_action_envelope_v1", vega_start
+    )
+    vega = rust[vega_start:vega_end]
+    assert "network_id: &PyNetworkId" in vega
+    assert "network_id: network_id.inner" in vega
+    assert {"chain_id", "canonical_genesis_hash"}.isdisjoint(vega)
     for function_name in (
         "build_find_asset_escrow_query_py",
         "build_find_asset_escrows_by_seller_query_py",

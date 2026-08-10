@@ -291,8 +291,7 @@ impl MusubiPersistedState<'_> {
             let receipt = &archive.staging_receipt.payload.binding;
             let binding = &record.attestation.payload.binding;
             if record.registered_at_height < archive.registered_at_height
-                || binding.chain_id != receipt.chain_id
-                || binding.genesis_block_hash != receipt.genesis_block_hash
+                || binding.network_id != receipt.network_id
                 || binding.archive_id != archive.archive_id
                 || binding.bundle_digest != archive.commitment.bundle_digest
                 || binding.descriptor_digest != archive.commitment.descriptor_digest
@@ -2633,8 +2632,9 @@ mod decode_tests {
         let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: MusubiSeedIngressReceiptBindingV1 {
-                chain_id: iroha_data_model::ChainId::from("musubi-atomicity-test"),
-                genesis_block_hash: [0x1B; 32],
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1B; 32])),
+                ),
                 publisher: publisher.clone(),
                 ingress_broker: AccountId::new(broker_keypair.public_key().clone()),
                 seed_provider: ProviderId::new([0x1C; 32]),
@@ -2804,8 +2804,7 @@ mod decode_tests {
             },
         );
         let binding = MusubiProviderBundleVerificationBindingV1 {
-            chain_id: archive.staging_receipt.payload.binding.chain_id.clone(),
-            genesis_block_hash: archive.staging_receipt.payload.binding.genesis_block_hash,
+            network_id: archive.staging_receipt.payload.binding.network_id,
             provider_id,
             completed_by: provider_owner,
             completion_authority,

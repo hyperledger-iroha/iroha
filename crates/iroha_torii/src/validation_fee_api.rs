@@ -3,7 +3,7 @@
 use std::ops::Bound::{Excluded, Unbounded};
 
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Extension, Path, State},
     http::HeaderMap,
 };
 use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _};
@@ -45,7 +45,8 @@ use mv::storage::StorageReadOnly as _;
 
 use crate::{
     Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
-    gov::validation_fee_plain_electorate_rules, utils::extractors::NoritoOnly,
+    gov::validation_fee_plain_electorate_rules, require_runtime_governance_account,
+    utils::extractors::NoritoOnly,
 };
 
 fn inconsistent(message: impl Into<String>) -> Error {
@@ -1026,6 +1027,7 @@ fn canonical_plain_ballot(
 /// Build one exact proposal-bound PLAIN ballot instruction for local signing.
 pub(crate) async fn handler_plain_ballot_draft(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     Path(proposal_id): Path<String>,
@@ -1038,6 +1040,11 @@ pub(crate) async fn handler_plain_ballot_draft(
         "v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
     )
     .await?;
+    require_runtime_governance_account(
+        &request.owner,
+        &verified.account,
+        "validation-fee PLAIN ballot draft",
+    )?;
     if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
         return Err(bad_request(
             "unsupported validation-fee PLAIN ballot draft version",

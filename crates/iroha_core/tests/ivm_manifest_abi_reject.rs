@@ -250,7 +250,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &network_id,
         &account_id,
         1,
         DataSpaceId::UNIVERSAL,
@@ -430,7 +430,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &network_id,
         &account_id,
         2,
         DataSpaceId::UNIVERSAL,

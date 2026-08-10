@@ -154,7 +154,7 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
             fixture.service.queue.as_ref(),
             fixture.kura.as_ref(),
             &carrier,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("control-only carrier has no Queue cleanup authority to consume"),
         0
@@ -317,7 +317,7 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
             &queue,
             fixture.kura.as_ref(),
             &carrier,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("finalize committed merge reservation"),
         1
@@ -333,7 +333,7 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
             &queue,
             fixture.kura.as_ref(),
             &carrier,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("repeat exact reservation finalization"),
         0,
@@ -404,7 +404,7 @@ v2_apply_test!(
         let applications = authenticated_autonomous_carrier_application_projections(
             &reference,
             &entry,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("authenticate complete merge group before State membership preflight");
         let error = finalize_certified_merge_reservations_for_test(
@@ -433,7 +433,7 @@ v2_apply_test!(
         let applications = authenticated_autonomous_carrier_application_projections(
             &reference,
             &entry,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("remint exact authenticated cleanup authority for retry");
         assert_eq!(
@@ -549,7 +549,7 @@ v2_apply_test!(
         let applications = authenticated_autonomous_carrier_application_projections(
             &reference,
             &entry,
-            Hash::prehashed(*fixture.context.network_id.as_bytes()),
+            fixture.context.network_id,
         )
         .expect("authenticate both autonomous cleanup groups");
         assert_eq!(applications.len(), 2);
@@ -634,7 +634,7 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
     let message = authenticated_autonomous_carrier_application_projections(
         &reference,
         &entry,
-        Hash::prehashed(*fixture.context.network_id.as_bytes()),
+        fixture.context.network_id,
     )
     .expect_err("bare reservation metadata must fail authentication before Queue cleanup");
     assert!(
@@ -851,15 +851,15 @@ v2_apply_test!(
             Err("checked ApplyCarrier projection changed before State commit")
         );
 
-        let chain_hash = Hash::prehashed(*fixture.context.network_id.as_bytes());
+        let network_id = fixture.context.network_id;
         let fresh = authenticated_autonomous_carrier_application_projections(
-            &reference, &entry, chain_hash,
+            &reference, &entry, network_id,
         )
         .expect("derive fresh authenticated ApplyCarrier geometry");
         let reconstructed = authenticated_autonomous_carrier_application_projections(
             &CertifiedMergeLedgerReference::new(&entry),
             &entry,
-            chain_hash,
+            network_id,
         )
         .expect("reconstruct authenticated ApplyCarrier geometry from canonical evidence");
         assert_eq!(fresh, reconstructed);
@@ -874,7 +874,7 @@ v2_apply_test!(
         let mut repair_authorizations = post_carrier_evidence_repair_authorizations(
             &reference,
             &entry,
-            chain_hash,
+            network_id,
             carrier_height,
             carrier_hash,
         )
@@ -908,7 +908,7 @@ v2_apply_test!(
                     post_carrier_evidence_repair_authorizations(
                         &reference,
                         &entry,
-                        chain_hash,
+                        network_id,
                         carrier_height,
                         wrong_carrier_hash,
                     )
@@ -934,7 +934,7 @@ v2_apply_test!(
                 post_carrier_evidence_repair_authorizations(
                     &reference,
                     &entry,
-                    chain_hash,
+                    network_id,
                     carrier_height,
                     carrier_hash,
                 )
@@ -1890,7 +1890,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture strict FIFO discriminator admission context");
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            fixture.state.chain_id_ref(),
+            fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
             admission_context,
@@ -2113,7 +2113,7 @@ v2_apply_test!(
             .fixture
             .kura
             .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-                Hash::prehashed(*recovery.fixture.context.network_id.as_bytes()),
+                recovery.fixture.context.network_id,
                 &recovery.expected_groups,
             )
             .expect("prove both deferred carrier outcomes Complete");
@@ -2165,7 +2165,7 @@ v2_apply_test!(
                 .fixture
                 .kura
                 .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-                    Hash::prehashed(*recovery.fixture.context.network_id.as_bytes()),
+                    recovery.fixture.context.network_id,
                     &recovery.expected_groups,
                 )
                 .is_err(),
@@ -2208,7 +2208,7 @@ v2_apply_test!(
             .expect("install pruned-carrier lane marker");
         fixture
             .kura
-            .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+            .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist exact pruned-carrier payload");
         let mut store = fixture.reopen_body_store();
         fixture
@@ -2296,7 +2296,7 @@ v2_apply_test!(
                 .read_autonomous_lane_slot_retirement(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    payload.chain_id_hash,
+                    payload.network_id,
                     payload.epoch,
                 )
                 .expect("read pruned-carrier retirement state")
@@ -2366,11 +2366,11 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
         .expect("install canonical autonomous lane marker");
     fixture
         .kura
-        .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+        .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
         .expect("persist canonical autonomous payload");
     let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
         &payload,
-        payload.chain_id_hash,
+        payload.network_id,
         payload.epoch,
     )
     .expect("encode canonical autonomous envelope");
@@ -2431,7 +2431,7 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
             .read_autonomous_lane_slot_retirement(
                 descriptor.lane_id,
                 descriptor.lane_block_height,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
             )
             .expect("read canonical certified retirement state")
@@ -2480,7 +2480,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
         .expect("capture startup-gate probe admission context");
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        fixture.state.chain_id_ref(),
+        fixture.state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
         admission_context,
@@ -2507,7 +2507,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         .expect("install current autonomous lane marker");
     fixture
         .kura
-        .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+        .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
         .expect("persist current autonomous payload");
     drop(queue);
 
@@ -2610,11 +2610,11 @@ v2_apply_test!(
             .expect("install historical autonomous lane marker");
         fixture
             .kura
-            .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+            .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist historical autonomous payload");
         let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
             &payload,
-            payload.chain_id_hash,
+            payload.network_id,
             payload.epoch,
         )
         .expect("encode historical autonomous envelope");
@@ -2690,7 +2690,7 @@ v2_apply_test!(
                 .read_autonomous_lane_slot_retirement(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    payload.chain_id_hash,
+                    payload.network_id,
                     payload.epoch,
                 )
                 .expect("read historical retirement state")

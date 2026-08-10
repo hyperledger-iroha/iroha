@@ -58,7 +58,7 @@ precision beyond nine fractional digits rejects block finalization.
 - Operator runbook: `ops/runbooks/settlement-buffers.md` (refill/alert workflow) and the FAQ in `specs/nexus_settlement_faq.md`.
 
 ## Developer & SRE Checklist
-- Set `[settlement.router]` values in `config/config.json5` (or TOML) and validate via `irohad --version` logs; ensure thresholds satisfy `100 >= alert >= throttle >= xor_only >= halt`.
+- Set `[settlement.router]` values in `config/config.json5` (or TOML) and validate via `iroha3d --version` logs; ensure thresholds satisfy `100 >= alert >= throttle >= xor_only >= halt`.
 - Populate lane metadata with the buffer account/asset/capacity so buffer gauges reflect live reserves; omit the fields for lanes that should not track buffers.
 - Monitor `settlement_router_*` and `iroha_settlement_*` metrics via `dashboards/grafana/settlement_router_overview.json`; alert on throttle/XOR-only/halt states.
 - Run `cargo test -p settlement_router` for pricing/policy coverage and the existing block-level aggregation tests in `crates/iroha_core/src/block.rs`.
@@ -66,7 +66,7 @@ precision beyond nine fractional digits rejects block finalization.
 
 ## Rollout Plan Snapshot
 - Router + telemetry ship in every build; no feature gates. Lane metadata controls whether buffer snapshots publish.
-- Default config matches the roadmap values (60 s TWAP, 25 bp base epsilon, 72 h buffer horizon); tune via config and restart `irohad` to apply.
+- Default config matches the roadmap values (60 s TWAP, 25 bp base epsilon, 72 h buffer horizon); tune via config and restart `iroha3d` to apply.
 - Evidence bundle = lane settlement commitments + Prometheus scrape for the `settlement_router_*`/`iroha_settlement_*` series + Grafana screenshot/JSON export for the affected window.
 
 ## Evidence & References

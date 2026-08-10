@@ -392,7 +392,7 @@ def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> 
 def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     tmp_path: Path,
 ) -> None:
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     peers = tuple(
         SimpleNamespace(
             slug=slug,
@@ -452,7 +452,7 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
         match=f"peer={MODULE.SLUGS[1]}, status=78",
     ):
         MODULE.validate_installed_peer_configs(
-            tmp_path / "irohad",
+            tmp_path / "iroha3d",
             SimpleNamespace(peers=peers, owner_uid=501, owner_gid=502),
             runner=runner,
         )
@@ -527,7 +527,7 @@ def _fake_plan(
     source_commit = "2" * 40
     root = _build_bundle(tmp_path, binary_sha, source_commit)
     bundle = _validate(root, binary_sha, source_commit)
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     supervisor = tmp_path / "supervisor.py"
     _write(binary, b"binary")
     binary.chmod(0o555)
@@ -549,7 +549,7 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     bundle, sources, binary_info = _fake_plan(tmp_path)
     runtime = tmp_path / "runtime"
     installed_binary = Path(
-        f"/Library/SORA/Taira/binaries/{sources.binary_sha256}/irohad"
+        f"/Library/SORA/Taira/binaries/{sources.binary_sha256}/iroha3d"
     )
     installed_supervisor = Path(
         f"/Library/SORA/Taira/supervisors/{sources.supervisor_sha256}/taira_peer_supervisor.py"
@@ -603,7 +603,7 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
 def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     supervisor = tmp_path / "supervisor.py"
     _write(binary, b"binary")
     binary.chmod(0o555)
@@ -1289,7 +1289,7 @@ def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
         DPN_VALIDATOR_RELEASE_COMMIT,
         tmp_path,
         {peer.label: b"plist"},
-        Path("/irohad"),
+        Path("/iroha3d"),
         object(),
         ops,
     )
@@ -1334,7 +1334,7 @@ def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
             DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
-            Path("/irohad"),
+            Path("/iroha3d"),
             object(),
             ops,
         )
@@ -1374,7 +1374,7 @@ def test_restart_proof_rejects_measured_duration_beyond_bound(
             DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
-            Path("/irohad"),
+            Path("/iroha3d"),
             object(),
             ops,
         )
@@ -1394,7 +1394,7 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
             DPN_VALIDATOR_RELEASE_COMMIT,
             Path("/runtime"),
             {},
-            Path("/irohad"),
+            Path("/iroha3d"),
             SimpleNamespace(),
             SimpleNamespace(),
             terminal_checker=terminal_checker,
@@ -1550,7 +1550,7 @@ def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, 
         "/usr/bin/python3",
         "/old/taira_peer_supervisor.py",
         "--binary",
-        "/old/irohad",
+        "/old/iroha3d",
         "--config",
         "/old/config.toml",
         "--pid-file",
@@ -1589,7 +1589,7 @@ def _framework_python_capture_payload(
     tail = (
         "/old/taira_peer_supervisor.py",
         "--binary",
-        "/old/irohad",
+        "/old/iroha3d",
         "--config",
         "/old/config.toml",
         "--pid-file",
@@ -1877,6 +1877,7 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -1886,7 +1887,9 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         apply=False,
     )
 
-    report = MODULE.execute(args, ops=MODULE.SystemOps())
+    report = MODULE._execute_after_provisioned_authority_contracts(
+        args, ops=MODULE.SystemOps()
+    )
     assert report["mode"] == "verified-read-only-dry-run"
     assert report["applied"] is False
     assert report["admission_receipt_consumed"] is False
@@ -2035,6 +2038,7 @@ def test_admission_failure_precedes_every_deployment_preflight(
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -2045,7 +2049,9 @@ def test_admission_failure_precedes_every_deployment_preflight(
     )
 
     with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE.execute(args, ops=MODULE.SystemOps())
+        MODULE._execute_after_provisioned_authority_contracts(
+            args, ops=MODULE.SystemOps()
+        )
 
     assert events == ["admission-verify"]
 
@@ -2146,6 +2152,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -2155,7 +2162,9 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         apply=True,
     )
 
-    assert MODULE.execute(args, ops=MODULE.SystemOps()) == {
+    assert MODULE._execute_after_provisioned_authority_contracts(
+        args, ops=MODULE.SystemOps()
+    ) == {
         "admission_archive_sha256": "0" * 64,
         "admission_receipt_consumed": True,
         "admission_receipt_id": "f" * 64,
@@ -2440,7 +2449,7 @@ def test_production_config_may_differ_from_secret_free_qualification(tmp_path: P
 def test_under_lock_recheck_rejects_python_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    binary = Path("/candidate/irohad")
+    binary = Path("/candidate/iroha3d")
     supervisor = Path("/candidate/supervisor.py")
     runtime = Path("/Library/Developer/CommandLineTools/Python.app/Python")
     stable = SimpleNamespace(
@@ -2607,7 +2616,7 @@ def _rollback_snapshots(tmp_path: Path) -> tuple[MODULE.PlistSnapshot, ...]:
     for index, label in enumerate(MODULE.LABELS):
         pid_file = tmp_path / f"{label}.pid"
         _write(pid_file, f"{140 + index}\n".encode())
-        binary = f"/old/bin/irohad-{index}"
+        binary = f"/old/bin/iroha3d-{index}"
         config = f"/old/config-{index}.toml"
         supervisor_argv = (
             "/usr/bin/python3",
@@ -2754,29 +2763,54 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
         MODULE.build_parser().parse_args(missing_boi)
 
 
-def test_root_without_sealed_external_tool_identity_fails_before_preflight(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
-    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_UID_ENV, raising=False)
-    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_GID_ENV, raising=False)
-    monkeypatch.setattr(
-        MODULE,
-        "validate_arguments",
-        lambda _args: pytest.fail("argument preflight ran before identity refusal"),
+def test_release_and_boi_qualification_signers_must_be_distinct() -> None:
+    assert MODULE.require_distinct_signing_fingerprints("1" * 64, "2" * 64) == (
+        "1" * 64,
+        "2" * 64,
     )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_deployment_admission",
-        lambda _args: pytest.fail("admission verifier ran before identity refusal"),
-    )
+    with pytest.raises(MODULE.DeploymentError, match="must be distinct"):
+        MODULE.require_distinct_signing_fingerprints("1" * 64, "1" * 64)
 
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match="root deployment lacks the sealed external-tool identity",
+
+@pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
+def test_deploy_issuance_barrier_precedes_identity_paths_admission_and_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    apply: bool,
+) -> None:
+    calls: list[str] = []
+
+    def forbidden(name: str):
+        def call(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"deploy barrier reached forbidden operation: {name}")
+
+        return call
+
+    for name in (
+        "require_sealed_external_tool_identity",
+        "validate_arguments",
+        "verify_deployment_admission",
+        "validate_bundle",
+        "validate_sources",
+        "exclusive_deployment_lock",
+        "consume_admission_receipt",
+        "apply_reset",
     ):
-        MODULE.execute(argparse.Namespace(apply=False), ops=MODULE.SystemOps())
+        monkeypatch.setattr(MODULE, name, forbidden(name))
+    monkeypatch.setattr(MODULE.os, "geteuid", forbidden("geteuid"))
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
+    state = tmp_path / "deployment-state"
+    state.write_bytes(b"unchanged\n")
+
+    with pytest.raises(MODULE.DeploymentError) as error:
+        MODULE.execute(argparse.Namespace(apply=apply), ops=object())
+
+    assert MODULE.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT in str(error.value)
+    assert MODULE.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in str(error.value)
+    assert calls == []
+    assert state.read_bytes() == b"unchanged\n"
 
 
 @pytest.mark.parametrize(

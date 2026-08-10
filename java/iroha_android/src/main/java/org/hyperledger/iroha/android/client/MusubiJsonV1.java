@@ -83,6 +83,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionComparator;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionReq;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.WireValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Strict Norito JSON codec for Musubi V1 query requests and responses. */
 final class MusubiJsonV1 {
@@ -108,22 +109,21 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi exact-release response"),
             "response",
-            keys("chain_id", "genesis_hash", "snapshot", "home_release", "universal_release"));
-    final String chainId = string(root.get("chain_id"), "response.chain_id");
-    final byte[] genesisHash = fixedBytes(root.get("genesis_hash"), "response.genesis_hash");
+            keys("network_id", "snapshot", "home_release", "universal_release"));
     final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), "response.snapshot");
     final ReleaseRecord homeRelease =
         parseReleaseRecord(root.get("home_release"), "response.home_release");
     final ResolverReleaseRow universalRelease =
         parseResolverRow(root.get("universal_release"), "response.universal_release");
     return new ExactReleaseSnapshot(
-        chainId, genesisHash, snapshot, homeRelease, universalRelease);
+        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        snapshot, homeRelease, universalRelease);
   }
 
   static void validateExactReleaseSnapshot(
       final Map<String, Object> home,
       final Map<String, Object> universal,
-      final byte[] genesisHash,
+      final NetworkId networkId,
       final RegistrySnapshot snapshot) {
     final Map<String, Object> manifest =
         object(home.get("manifest"), "response.home_release.manifest");
@@ -216,7 +216,7 @@ final class MusubiJsonV1 {
             && takedownHeight.compareTo(snapshot.finalizedHeight()) <= 0
             && storageFinalizedHeight.compareTo(snapshot.finalizedHeight()) <= 0
             && (!BigInteger.ONE.equals(snapshot.finalizedHeight())
-                || Arrays.equals(genesisHash, snapshot.finalizedBlockHash()))
+                || Arrays.equals(networkId.bytes(), snapshot.finalizedBlockHash()))
             && (!storageFinalizedHeight.equals(snapshot.finalizedHeight())
                 || Arrays.equals(storageFinalizedHash, snapshot.finalizedBlockHash())),
         "Musubi exact release snapshot is inconsistent or not finalized");
@@ -233,7 +233,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi resolver-index response"),
             "response",
-            keys("query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"));
+            keys("query", "network_id", "items", "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<ResolverReleaseRow> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -245,8 +245,7 @@ final class MusubiJsonV1 {
     final ResolverIndexPage page = new ResolverIndexPage(
         (ResolverIndexQuery) decodeQuery(
             MusubiToriiClientV1.RESOLVER_INDEX_PATH, root.get("query")),
-        string(root.get("chain_id"), "response.chain_id"),
-        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
         items,
         cursor,
         snapshot);
@@ -293,7 +292,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi archive-locations response"),
             "response",
-            keys("chain_id", "genesis_hash", "archive", "items", "next_cursor", "snapshot"));
+            keys("network_id", "archive", "items", "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<ArchiveLocation> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -303,8 +302,7 @@ final class MusubiJsonV1 {
     final FinalizedCursor cursor = root.get("next_cursor") == null
         ? null : parseCursor(root.get("next_cursor"), "response.next_cursor");
     return new ArchiveLocationPage(
-        string(root.get("chain_id"), "response.chain_id"),
-        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
         parseArchiveRecord(root.get("archive"), "response.archive"),
         items,
         cursor,
@@ -316,7 +314,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi archive-retention response"),
             "response",
-            keys("chain_id", "genesis_hash", "items", "finalized_time_ms", "snapshot"));
+            keys("network_id", "items", "finalized_time_ms", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<ArchiveRetentionDecision> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -324,8 +322,7 @@ final class MusubiJsonV1 {
           raw.get(index), "response.items[" + index + "]"));
     }
     return new ArchiveRetentionPage(
-        string(root.get("chain_id"), "response.chain_id"),
-        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
         items,
         u64(root.get("finalized_time_ms"), "response.finalized_time_ms"),
         parseSnapshot(root.get("snapshot"), "response.snapshot"));
@@ -359,7 +356,7 @@ final class MusubiJsonV1 {
             parse(payload, "Musubi ordered-prefix response"),
             "response",
             keys(
-                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "query", "network_id", "namespace_binding", "items",
                 "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<OrderedPackageEntry> items = new ArrayList<>();
@@ -372,8 +369,7 @@ final class MusubiJsonV1 {
     final OrderedPrefixPage page = new OrderedPrefixPage(
         (OrderedPrefixQuery) decodeQuery(
             MusubiToriiClientV1.ORDERED_PREFIX_PATH, root.get("query")),
-        string(root.get("chain_id"), "response.chain_id"),
-        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
         parseNamespaceBinding(root.get("namespace_binding"), "response.namespace_binding"),
         items,
         cursor,
@@ -1115,15 +1111,13 @@ final class MusubiJsonV1 {
             payload.get("binding"),
             field + ".payload.binding",
             keys(
-                "chain_id", "genesis_block_hash", "publisher", "ingress_broker",
+                "network_id", "publisher", "ingress_broker",
                 "seed_provider", "semantic_release_manifest_digest", "archive_id",
                 "car_body_digest", "car_body_length", "nonce"));
     final SeedIngressReceiptBinding typedBinding =
         new SeedIngressReceiptBinding(
-            string(binding.get("chain_id"), field + ".payload.binding.chain_id"),
-            fixedBytes(
-                binding.get("genesis_block_hash"),
-                field + ".payload.binding.genesis_block_hash"),
+            NetworkId.parse(
+                string(binding.get("network_id"), field + ".payload.binding.network_id")),
             string(binding.get("publisher"), field + ".payload.binding.publisher"),
             string(binding.get("ingress_broker"), field + ".payload.binding.ingress_broker"),
             newtypeText(binding.get("seed_provider"), field + ".payload.binding.seed_provider"),
@@ -1198,7 +1192,7 @@ final class MusubiJsonV1 {
             payload.get("binding"),
             bindingField,
             keys(
-                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "network_id", "provider_id", "completed_by",
                 "completion_authority", "replication_order", "assignment_revision",
                 "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
                 "descriptor_digest", "semantic_release_manifest_digest",
@@ -1223,8 +1217,7 @@ final class MusubiJsonV1 {
             keys("height", "block_hash"));
     final ProviderBundleVerificationBinding typedBinding =
         new ProviderBundleVerificationBinding(
-            string(binding.get("chain_id"), bindingField + ".chain_id"),
-            fixedBytes(binding.get("genesis_block_hash"), bindingField + ".genesis_block_hash"),
+            NetworkId.parse(string(binding.get("network_id"), bindingField + ".network_id")),
             newtypeText(binding.get("provider_id"), bindingField + ".provider_id"),
             string(binding.get("completed_by"), bindingField + ".completed_by"),
             new ProviderCompletionAuthority(

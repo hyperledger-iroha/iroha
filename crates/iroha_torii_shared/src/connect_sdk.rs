@@ -1,7 +1,7 @@
 //! Iroha Connect SDK helpers: key derivation, AAD, sealing/opening frames.
 use hkdf::Hkdf;
 use iroha_crypto::{
-    SessionKey,
+    PublicKey, SessionKey,
     blake2::{
         Blake2bVar,
         digest::{Update, VariableOutput},
@@ -9,14 +9,33 @@ use iroha_crypto::{
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
+use iroha_data_model::NetworkId;
 use norito::codec::Encode;
 use sha2::{Digest, Sha256};
 
 use crate::connect::{
-    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Dir, EnvelopeV1,
-    FrameKind, PermissionsV1, Role, SignInProofV1, decode_connect_envelope_framed,
-    encode_connect_envelope_framed,
+    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints, Dir,
+    EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
+    decode_connect_envelope_framed, encode_connect_envelope_framed,
 };
+
+/// Derive the canonical Connect session identifier for one exact deployment.
+#[must_use]
+pub fn derive_session_id(
+    network_id: &NetworkId,
+    app_pk: &[u8; 32],
+    nonce: &[u8; 16],
+) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
+    b2.update(b"iroha-connect|sid|");
+    b2.update(network_id.as_bytes());
+    b2.update(app_pk);
+    b2.update(nonce);
+    b2.finalize_variable(&mut out)
+        .expect("fixed BLAKE2b output buffer has the requested length");
+    out
+}
 
 /// Connect bearer-token class used for domain-separated token hashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,34 +347,41 @@ pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
     out
 }
 
-/// Build the canonical approval preimage for wallet signature.
-///
-/// Layout: length-delimited tagged fields under
-/// `iroha-connect|approve|v1`, without relay binding.
-pub fn build_approve_preimage(
-    sid: &[u8; 32],
-    app_pk: &[u8; 32],
-    wallet_pk: &[u8; 32],
-    account_id: &str,
-    perms: Option<&PermissionsV1>,
-    proof: Option<&SignInProofV1>,
-) -> Vec<u8> {
-    build_approve_preimage_with_relay(sid, app_pk, wallet_pk, account_id, perms, proof, None)
+/// Deterministic Norito-encoded BLAKE2b-256 hash of session constraints.
+#[must_use]
+pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
+    let buf = constraints.encode();
+    let mut out = [0u8; 32];
+    let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
+    b2.update(&buf);
+    b2.finalize_variable(&mut out)
+        .expect("fixed BLAKE2b output buffer has the requested length");
+    out
 }
 
-/// Build the canonical approval preimage and bind optional relay auth material.
+/// Build the canonical approval preimage for wallet signature.
+///
+/// The preimage binds the exact deployment, all application constraints, and
+/// the relay authorization established when the one-shot session was created.
 #[must_use]
-pub fn build_approve_preimage_with_relay(
+pub fn build_approve_preimage(
+    constraints: &Constraints,
     sid: &[u8; 32],
     app_pk: &[u8; 32],
     wallet_pk: &[u8; 32],
     account_id: &str,
     perms: Option<&PermissionsV1>,
     proof: Option<&SignInProofV1>,
-    relay_auth: Option<&[u8; 32]>,
+    relay_auth: &[u8; 32],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16 + 32 + 32 + 32 + account_id.len() + 64);
+    let mut out = Vec::with_capacity(16 + 32 * 7 + account_id.len());
     push_tagged(&mut out, b"domain", b"iroha-connect|approve|v1");
+    push_tagged(&mut out, b"network_id", constraints.network_id.as_bytes());
+    push_tagged(
+        &mut out,
+        b"constraints",
+        &hash_constraints_current(constraints),
+    );
     push_tagged(&mut out, b"sid", sid);
     push_tagged(&mut out, b"app_pk", app_pk);
     push_tagged(&mut out, b"wallet_pk", wallet_pk);
@@ -366,10 +392,49 @@ pub fn build_approve_preimage_with_relay(
     if let Some(pf) = proof {
         push_tagged(&mut out, b"proof", &hash_signin_proof_current(pf));
     }
-    if let Some(relay) = relay_auth {
-        push_tagged(&mut out, b"relay_auth", relay);
-    }
+    push_tagged(&mut out, b"relay_auth", relay_auth);
     out
+}
+
+/// Verify a wallet's approval signature against the canonical session preimage.
+///
+/// # Errors
+///
+/// Returns a stable error when the redundant signature algorithm disagrees
+/// with the account key or when cryptographic verification fails.
+pub fn verify_wallet_approval_signature(
+    account_signatory: &PublicKey,
+    constraints: &Constraints,
+    sid: &[u8; 32],
+    app_pk: &[u8; 32],
+    wallet_pk: &[u8; 32],
+    account_id: &str,
+    perms: Option<&PermissionsV1>,
+    proof: Option<&SignInProofV1>,
+    relay_auth: &[u8; 32],
+    signature: &WalletSignatureV1,
+) -> Result<(), &'static str> {
+    if account_signatory
+        .try_algorithm()
+        .map_err(|_| "connect_wallet_account_key_invalid")?
+        != signature.algorithm
+    {
+        return Err("connect_wallet_signature_algorithm_mismatch");
+    }
+    let preimage = build_approve_preimage(
+        constraints,
+        sid,
+        app_pk,
+        wallet_pk,
+        account_id,
+        perms,
+        proof,
+        relay_auth,
+    );
+    signature
+        .signature
+        .verify(account_signatory, &preimage)
+        .map_err(|_| "connect_wallet_signature_invalid")
 }
 
 fn push_tagged(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
@@ -584,20 +649,26 @@ mod tests {
 #[cfg(test)]
 mod approve_preimage_tests {
     use super::*;
-    use iroha_crypto::PublicKey;
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{account::AccountId, block::BlockHeader};
+
+    fn network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
+
     #[test]
-    fn preimage_contains_prefix_and_keys() {
+    fn approval_signature_binds_exact_network_constraints_and_relay() {
         let sid = [1u8; 32];
         let app = [2u8; 32];
         let wal = [3u8; 32];
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .expect("public key parses");
-        let _ = domain;
-        let acc = AccountId::new(public_key).to_string();
+        let key_pair = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("approval fixture keypair");
+        let acc = AccountId::new(key_pair.public_key().clone()).to_string();
+        let constraints = Constraints {
+            network_id: network_id(b"connect-approval-genesis-a"),
+        };
         let perms = PermissionsV1 {
             methods: vec!["SIGN_REQUEST_RAW".into()],
             events: vec![],
@@ -611,20 +682,84 @@ mod approve_preimage_tests {
             nonce: "abc".into(),
         };
         let relay = relay_auth_hash(&sid, "relay-token");
-        let img = build_approve_preimage_with_relay(
+        let img = build_approve_preimage(
+            &constraints,
             &sid,
             &app,
             &wal,
             &acc,
             Some(&perms),
             Some(&proof),
-            Some(&relay),
+            &relay,
+        );
+        let signature = WalletSignatureV1::new(
+            Algorithm::Ed25519,
+            Signature::try_new(key_pair.private_key(), &img).expect("approval fixture signs"),
+        );
+        verify_wallet_approval_signature(
+            key_pair.public_key(),
+            &constraints,
+            &sid,
+            &app,
+            &wal,
+            &acc,
+            Some(&perms),
+            Some(&proof),
+            &relay,
+            &signature,
+        )
+        .expect("exact approval verifies");
+
+        let wrong_constraints = Constraints {
+            network_id: network_id(b"connect-approval-genesis-b"),
+        };
+        assert_eq!(
+            verify_wallet_approval_signature(
+                key_pair.public_key(),
+                &wrong_constraints,
+                &sid,
+                &app,
+                &wal,
+                &acc,
+                Some(&perms),
+                Some(&proof),
+                &relay,
+                &signature,
+            ),
+            Err("connect_wallet_signature_invalid")
+        );
+        let wrong_relay = relay_auth_hash(&sid, "other-relay-token");
+        assert_eq!(
+            verify_wallet_approval_signature(
+                key_pair.public_key(),
+                &constraints,
+                &sid,
+                &app,
+                &wal,
+                &acc,
+                Some(&perms),
+                Some(&proof),
+                &wrong_relay,
+                &signature,
+            ),
+            Err("connect_wallet_signature_invalid")
         );
         assert!(img.windows(24).any(|w| w == b"iroha-connect|approve|v1"));
+        assert!(img.windows(32).any(|w| w == constraints.network_id.as_bytes()));
         assert!(img.windows(32).any(|w| w == sid));
         assert!(img.windows(32).any(|w| w == app));
         assert!(img.windows(32).any(|w| w == wal));
         assert!(img.windows(32).any(|w| w == relay));
         assert!(std::str::from_utf8(&img).is_err(), "binary tail included");
+    }
+
+    #[test]
+    fn session_id_rejects_same_label_different_genesis() {
+        let app = [7u8; 32];
+        let nonce = [8u8; 16];
+        assert_ne!(
+            derive_session_id(&network_id(b"same-label-genesis-a"), &app, &nonce),
+            derive_session_id(&network_id(b"same-label-genesis-b"), &app, &nonce)
+        );
     }
 }

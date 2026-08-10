@@ -25,10 +25,10 @@ use super::v2_core::{
 };
 use crate::{
     kura::{
-        AutonomousLifecycleAttemptBindingV1, AutonomousLifecycleCursorPhaseKindV2,
-        AutonomousLifecycleCursorPhaseV2, AutonomousLifecycleCursorRead,
-        AutonomousLifecycleCursorUnsignedV2, AutonomousLifecycleCursorV2,
-        AutonomousLifecyclePayloadCustodySourceV1,
+        AutonomousLifecycleAttemptBindingV1, AutonomousLifecycleBootstrapCompletionOutcome,
+        AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
+        AutonomousLifecycleCursorRead, AutonomousLifecycleCursorUnsignedV2,
+        AutonomousLifecycleCursorV2, AutonomousLifecyclePayloadCustodySourceV1,
         AutonomousLifecyclePendingReservationGroupObservation,
         AutonomousLifecyclePendingTerminalOutcomeRecovery,
         AutonomousLifecycleProcessGenerationClaim, AutonomousLifecycleTerminalOutcomeDurableStage,
@@ -635,7 +635,7 @@ fn planner_covered_pending_groups_for_route(
 
 fn observer_retirement_lifecycle_projections(
     kura: &Kura,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     local_peer: &PeerId,
     paired_groups: &BTreeSet<LaneQueueReservationGroupIdentityV1>,
     deferred_terminal_recovery: &AutonomousLifecycleDeferredTerminalRecoveryHandoff,
@@ -660,7 +660,7 @@ fn observer_retirement_lifecycle_projections(
         );
         let attempts = kura
             .read_only_active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(
-                chain_id_hash,
+                network_id,
                 local_peer,
                 lane_id,
                 dataspace_id,
@@ -709,7 +709,7 @@ struct AutonomousLifecycleTerminalRecoveryPreflight {
 
 fn pending_terminal_recovery_observations(
     recovery: &AutonomousLifecyclePendingTerminalOutcomeRecovery,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     active_routes: &BTreeSet<(
         iroha_data_model::nexus::LaneId,
         iroha_data_model::nexus::DataSpaceId,
@@ -722,7 +722,7 @@ fn pending_terminal_recovery_observations(
     ),
     String,
 > {
-    if recovery.chain_id_hash() != chain_id_hash {
+    if recovery.network_id() != network_id {
         return Err(
             "autonomous lifecycle terminal recovery targets another chain context".to_owned(),
         );
@@ -847,7 +847,7 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
     let active_routes = active_lifecycle_routes(state, context)?
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let network_id = context.network_id;
     let recoveries = kura
         .pending_autonomous_lifecycle_terminal_outcome_inventory()
         .map_err(|error| lifecycle_error("terminal-outcome inventory failed", error))?;
@@ -860,7 +860,7 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
     let mut preflighted = Vec::with_capacity(recoveries.len());
     for recovery in recoveries {
         let (pending_groups, unit_identity) =
-            pending_terminal_recovery_observations(&recovery, chain_id_hash, &active_routes)?;
+            pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?;
         let mut owned_group_hashes = BTreeSet::new();
         for observation in &pending_groups {
             let binding = observation.binding();
@@ -959,7 +959,7 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
     let mut observed_deferred_groups = BTreeMap::new();
     for recovery in &remaining {
         let (pending_groups, unit_identity) =
-            pending_terminal_recovery_observations(recovery, chain_id_hash, &active_routes)?;
+            pending_terminal_recovery_observations(recovery, network_id, &active_routes)?;
         if !observed_deferred_units.insert(unit_identity) {
             return Err(
                 "autonomous lifecycle terminal recovery readback changed a deferred Queue unit"
@@ -1026,7 +1026,7 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
     state: &State,
     queue: &Queue,
     kura: &Kura,
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     deferred: AutonomousLifecycleDeferredTerminalRecoveryHandoff,
 ) -> Result<usize, String> {
     let queue_snapshot = queue
@@ -1071,7 +1071,7 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
     run_deferred_terminal_stage_proof_hook_for_test();
     let durable_stages = kura
         .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            expected_chain_id_hash,
+            expected_network_id,
             &expected_groups,
         )
         .map_err(|error| lifecycle_error("deferred terminal stage proof failed", error))?;
@@ -1126,7 +1126,7 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
     let mut observed_groups = BTreeSet::new();
     let mut observed_units = BTreeSet::new();
     for recovery in recoveries {
-        if recovery.chain_id_hash() != expected_chain_id_hash {
+        if recovery.network_id() != expected_network_id {
             return Err(
                 "deferred autonomous terminal recovery targets another chain context".to_owned(),
             );
@@ -1214,7 +1214,7 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
     }
     let final_stages = kura
         .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            expected_chain_id_hash,
+            expected_network_id,
             &expected_groups,
         )
         .map_err(|error| lifecycle_error("deferred terminal final stage proof failed", error))?;
@@ -1392,7 +1392,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         }
     }
 
-    let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let network_id = context.network_id;
     let Some(process_generation) = process_generation else {
         if snapshot.is_empty() {
             return Ok(RecoveredAutonomousLifecycleStartup {
@@ -1414,7 +1414,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
             }
             observer_retirement_lifecycle_projections(
                 kura,
-                chain_id_hash,
+                network_id,
                 local_peer,
                 &planner_paired_groups,
                 &deferred_terminal_recovery,
@@ -1444,7 +1444,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         });
     };
     if process_generation.local_peer_id() != local_peer
-        || process_generation.chain_id_hash() != chain_id_hash
+        || process_generation.network_id() != network_id
         || local_peer.public_key() != key_pair.public_key()
     {
         return Err(
@@ -1618,12 +1618,18 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         let completion = kura
             .complete_autonomous_lifecycle_bootstrap(permit)
             .map_err(|error| lifecycle_error("bootstrap completion failed", error))?;
-        if completion.cursor() != &expected_live {
-            return Err(
-                "autonomous lifecycle bootstrap completed with a different Live cursor".to_owned(),
-            );
+        match completion {
+            AutonomousLifecycleBootstrapCompletionOutcome::Completed(completion) => {
+                if completion.cursor() != &expected_live {
+                    return Err(
+                        "autonomous lifecycle bootstrap completed with a different Live cursor"
+                            .to_owned(),
+                    );
+                }
+                drop(completion);
+            }
+            AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal => {}
         }
-        drop(completion);
         completed_bootstraps = completed_bootstraps.saturating_add(1);
     }
 

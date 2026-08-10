@@ -66,7 +66,7 @@
   ],
   "runtime_handles": {
     "monitoring": "monitoring-prod-fleet",
-    "hsm": "hsm-prod-release",
+    "external_signer": "external-signer-prod-release",
     "kms": "kms-prod-envelope",
     "webauthn": "webauthn-prod-operators"
   },

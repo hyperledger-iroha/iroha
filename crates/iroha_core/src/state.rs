@@ -755,6 +755,8 @@ macro_rules! with_world_overlay_fields {
             privacy_commitments,
             privacy_roots,
             privacy_root_heads,
+            confidential_policy_transition_index,
+            confidential_policy_transition_counts,
             ]
             [
             proofs,
@@ -1719,7 +1721,7 @@ struct QueuePlanPendingObligationRouteV1 {
 #[norito(deny_unknown_fields)]
 struct QueuePlanPendingObligationV1 {
     version: u16,
-    chain_id_digest: Hash,
+    network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     binding_hash: Hash,
@@ -1736,7 +1738,7 @@ struct QueuePlanPendingObligationV1 {
 struct QueuePlanPendingRouteMemberV1 {
     version: u16,
     route: QueuePlanPendingObligationRouteV1,
-    chain_id_digest: Hash,
+    network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     binding_hash: Hash,
     member_identity: [u8; Hash::LENGTH],
@@ -2254,13 +2256,13 @@ pub enum MergeLedgerCommitError {
         /// Digest supplied by the merge QC.
         actual: iroha_crypto::Hash,
     },
-    /// Merge QC was produced for a different chain.
-    #[error("merge ledger qc chain id digest mismatch: expected={expected}, actual={actual}")]
-    MergeQCChainIdMismatch {
-        /// Digest derived from the local chain identifier.
-        expected: Hash,
-        /// Digest embedded in the historical QC.
-        actual: Hash,
+    /// Merge QC was produced for a different genesis-derived network.
+    #[error("merge ledger qc network id mismatch: expected={expected}, actual={actual}")]
+    MergeQCNetworkIdMismatch {
+        /// Exact network identifier derived from the local genesis block.
+        expected: NetworkId,
+        /// Exact network identifier embedded in the historical QC.
+        actual: NetworkId,
     },
     /// Merge QC uses an unsupported validator-set hash version.
     #[error("merge ledger qc validator-set hash version {0} is unsupported")]
@@ -11471,9 +11473,9 @@ pub struct State {
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
-    /// Chain identifier from configuration (used in VRF prehash binding).
+    /// Display chain identifier from configuration, exposed through the display sysvar.
     pub chain_id: iroha_data_model::ChainId,
-    /// Exact transaction security domain derived from `genesis.expected_hash`.
+    /// Exact transaction security domain derived from `genesis.expected_hash`; binds VRF prehashes.
     pub network_id: iroha_data_model::NetworkId,
     /// Typed v2 trust root parsed from a snapshot but not yet authorized by snapshot policy.
     snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
@@ -13037,9 +13039,9 @@ pub struct StateTransaction<'block, 'state> {
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
-    /// Chain identifier (from configuration). Used for VRF prehash binding.
+    /// Display chain identifier snapshot exposed through the display sysvar.
     pub chain_id: iroha_data_model::ChainId,
-    /// Exact transaction security domain for this transaction.
+    /// Exact transaction security domain for this transaction; binds VRF prehashes.
     pub network_id: iroha_data_model::NetworkId,
     /// Accumulator used to record settlement receipts for this block.
     settlement_accumulator: &'block mut crate::settlement::SettlementAccumulator,
@@ -26411,6 +26413,8 @@ impl LaneConsensusLifecycleSnapshot {
     }
 }
 
+include!("state/passive_lane_diagnostic_methods.rs");
+
 impl State {
     /// Return the authenticated Sumeragi-v2 snapshot bootstrap trust root, if this state was
     /// restored from an explicitly authorized audited snapshot boundary.
@@ -28821,6 +28825,12 @@ impl State {
         self.world
             .rebuild_account_scope_directory()
             .map_err(|error| format!("failed to rebuild account scope directory: {error}"))?;
+        {
+            let leases = self.world.vpn_leases.view();
+            for (_, record) in leases.iter() {
+                validate_vpn_lease_network(record, &self.network_id)?;
+            }
+        }
         self.world
             .rebuild_vpn_lease_indexes()
             .map_err(|error| format!("failed to rebuild VPN lease indexes: {error}"))?;
@@ -31365,6 +31375,8 @@ impl State {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace a native VPN lease directly for deterministic test setup.
     pub fn insert_vpn_lease_for_testing(&self, record: VpnLeaseRecordV1) {
+        validate_vpn_lease_network(&record, &self.network_id)
+            .expect("test VPN lease must belong to this exact network");
         let mut world = self.world.block();
         {
             let mut transaction = world.transaction_without_telemetry(LaneConfig::default(), 0);
@@ -32618,7 +32630,7 @@ impl State {
                     crate::sumeragi::v2_apply::post_carrier_evidence_repair_authorizations(
                         &reference,
                         &entry,
-                        Hash::new(self.chain_id.as_str().as_bytes()),
+                        self.network_id,
                         carrier.block_height,
                         carrier.block_hash,
                     )
@@ -34600,7 +34612,7 @@ impl State {
     ) -> Result<MergeExecutionSource, MergeLedgerCommitError> {
         let source_bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
             &execution.source_bundle,
-            execution.autonomous_chain_id_hash,
+            execution.autonomous_network_id,
             execution.autonomous_epoch,
         )
         .map_err(|message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()))?;
@@ -34654,7 +34666,7 @@ impl State {
                     "canonical embedded routing-plan encoding failed: {error}"
                 ))
             })?;
-        if executable_payload.chain_id_hash != execution.autonomous_chain_id_hash
+        if executable_payload.network_id != execution.autonomous_network_id
             || executable_payload.epoch != execution.autonomous_epoch
             || executable_payload.payload_hash != execution.autonomous_payload_hash
             || executable_payload.entrypoint_hashes != execution.entrypoint_hashes
@@ -34699,7 +34711,7 @@ impl State {
             crate::kura::RecoveredLaneBlockPayload {
                 proposal: execution.proposal.clone(),
                 artifact: crate::kura::LaneBlockArtifact::new(proposal_block_hash, ownership),
-                autonomous_chain_id_hash: Some(execution.autonomous_chain_id_hash),
+                autonomous_network_id: Some(execution.autonomous_network_id),
                 autonomous_epoch: Some(execution.autonomous_epoch),
                 autonomous_payload_hash: Some(execution.autonomous_payload_hash),
                 entrypoints: execution.entrypoints.clone(),
@@ -34753,7 +34765,7 @@ impl State {
                 .map_err(|message| {
                     MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned())
                 })?;
-            let source_chain_hash = source.input.autonomous_chain_id_hash.ok_or_else(|| {
+            let source_network_id = source.input.autonomous_network_id.ok_or_else(|| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(
                     "autonomous merge source lacks a chain binding".to_owned(),
                 )
@@ -34765,7 +34777,7 @@ impl State {
             })?;
             let authenticated_bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                 &source.source_bundle,
-                source_chain_hash,
+                source_network_id,
                 source_epoch,
             )
             .map_err(|message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()))?;
@@ -34864,7 +34876,7 @@ impl State {
                     entrypoint_hash,
                     source
                         .input
-                        .autonomous_chain_id_hash
+                        .autonomous_network_id
                         .expect("validated autonomous input has a chain binding"),
                     &source.origin_proposal,
                 ) {
@@ -34892,7 +34904,7 @@ impl State {
                         entrypoint.hash(),
                         bound_plan,
                         source_id,
-                        source_chain_hash,
+                        source_network_id,
                         &state_block.nexus.dataspace_catalog,
                         &*state_block,
                         Some(expected_v2_context),
@@ -34970,9 +34982,9 @@ impl State {
                         proof_of_possession,
                     })
                     .collect(),
-                autonomous_chain_id_hash: source
+                autonomous_network_id: source
                     .input
-                    .autonomous_chain_id_hash
+                    .autonomous_network_id
                     .expect("validated autonomous input has a chain binding"),
                 autonomous_epoch: source
                     .input
@@ -35038,7 +35050,7 @@ impl State {
         if !nexus.enabled || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
             return None;
         }
-        let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let network_id = self.network_id;
         let world = self.world.view();
         let multi_lane = crate::queue::routable_lane_ids_for_nexus_at_height(
             &nexus,
@@ -35116,7 +35128,7 @@ impl State {
             let durable_source = match self.kura.durable_autonomous_lane_merge_source(
                 lane.id,
                 expected_height,
-                chain_hash,
+                network_id,
                 expected_epoch,
             ) {
                 Ok(source) if source.bundle.certified == certified => source,
@@ -35159,7 +35171,7 @@ impl State {
         if !nexus.enabled {
             return false;
         }
-        let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let network_id = self.network_id;
         let world = self.world.view();
         for lane in nexus.lane_catalog.lanes() {
             let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
@@ -35208,7 +35220,7 @@ impl State {
                 .durable_autonomous_lane_merge_source(
                     lane.id,
                     expected_height,
-                    chain_hash,
+                    network_id,
                     expected_epoch,
                 )
                 .is_ok_and(|source| source.bundle.certified == certified);
@@ -35368,7 +35380,7 @@ impl State {
             .map(|bytes| {
                 let validated =
                     crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                        &self.chain_id,
+                        &self.network_id,
                         &bytes,
                     )
                     .map_err(|error| {
@@ -35570,7 +35582,7 @@ impl State {
             );
             return None;
         }
-        let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let network_id = self.network_id;
         let world = self.world.view();
         let multi_lane = crate::queue::routable_lane_ids_for_nexus_at_height(
             &nexus,
@@ -35649,7 +35661,7 @@ impl State {
             let durable_source = match self.kura.durable_autonomous_lane_merge_source(
                 lane.id,
                 expected_height,
-                chain_hash,
+                network_id,
                 expected_epoch,
             ) {
                 Ok(source) if source.bundle.certified == certified => source,
@@ -36183,7 +36195,7 @@ impl State {
         for bytes in admissions {
             let admission =
                 crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                    &self.chain_id,
+                    &self.network_id,
                     bytes,
                 )
                 .map_err(|error| {
@@ -36281,7 +36293,7 @@ impl State {
             } else {
                 let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
                 let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-                    obligation.chain_id_digest,
+                    obligation.network_id_digest,
                     obligation.entrypoint_hash,
                 )?;
                 if state_view
@@ -36311,7 +36323,7 @@ impl State {
     > {
         let admission =
             crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                &self.chain_id,
+                &self.network_id,
                 bytes,
             )
             .map_err(|error| {
@@ -36580,11 +36592,9 @@ impl State {
             ))
         })?;
         let intent = &certificate.body.intent;
-        if intent.chain_id_digest != crate::merge::merge_network_id_digest(&self.network_id)
-            || carrier_height <= intent.close_global_height
-        {
+        if intent.network_id != self.network_id || carrier_height <= intent.close_global_height {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate has the wrong chain or an invalid carrier height"
+                "lane drain certificate has the wrong network or an invalid carrier height"
                     .to_owned(),
             ));
         }
@@ -37188,13 +37198,13 @@ impl State {
 
     fn authenticated_native_amx_participant_application_rows_from_autonomous_source(
         source_bundle: &[u8],
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         source_authority: crate::block::HistoricalNativeAmxSourceAuthority<'_>,
     ) -> Result<Vec<SumeragiNativeAmxParticipantApplication>, MergeLedgerCommitError> {
         let bundle = crate::block::validate_historical_native_amx_source_bundle(
             source_bundle,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             source_authority,
         )
@@ -37264,11 +37274,11 @@ impl State {
                 "pending Native AMX diagnostic execution commitments do not match".to_owned(),
             ));
         }
-        let expected_chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let expected_network_id = self.network_id;
         let mut rows = Vec::new();
         for execution in &batch.lanes {
             Self::merge_execution_source_from_embedded(execution)?;
-            if execution.autonomous_chain_id_hash != expected_chain_id_hash {
+            if execution.autonomous_network_id != expected_network_id {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "pending Native AMX diagnostic source has a foreign chain binding".to_owned(),
                 ));
@@ -37276,7 +37286,7 @@ impl State {
             let source_rows =
                 Self::authenticated_native_amx_participant_application_rows_from_autonomous_source(
                     &execution.source_bundle,
-                    expected_chain_id_hash,
+                    expected_network_id,
                     execution.autonomous_epoch,
                     crate::block::HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(
                         &entry.active_lanes,
@@ -37520,7 +37530,7 @@ impl State {
         }
         drop(world);
 
-        let chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let network_id = self.network_id;
         // Pending merge evidence is inventoried first so a source that already
         // has a merge entry cannot be downgraded to bundle-only authority when
         // that entry's QC or historical active-lane binding is invalid.
@@ -37535,7 +37545,7 @@ impl State {
                             execution.native_amx_receipts.iter().any(Option::is_some)
                                 || crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                                     &execution.source_bundle,
-                                    execution.autonomous_chain_id_hash,
+                                    execution.autonomous_network_id,
                                     execution.autonomous_epoch,
                                 )
                                 .map_or(true, |bundle| {
@@ -37565,7 +37575,7 @@ impl State {
         for entry_hash in pending_native_evidence {
             let Some(entry) = self
                 .kura
-                .merge_entry_by_hash(entry_hash)
+                .merge_entry_by_hash_without_append_repair(entry_hash)
                 .map_err(MergeLedgerCommitError::Persistence)?
             else {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -37590,21 +37600,23 @@ impl State {
         let certified_coordinator_authority = self.view();
         for (lane_id, dataspace_id, incarnation) in active_routes.iter().copied() {
             let requested = remaining_native_evidence_scan.saturating_add(1);
-            let certified = self.kura.latest_certified_lane_block_artifacts_matching(
-                lane_id,
-                requested,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+            let certified = self
+                .kura
+                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                    lane_id,
+                    requested,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             if certified.len() > remaining_native_evidence_scan {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "certified autonomous Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
@@ -37625,7 +37637,7 @@ impl State {
                 let source = match self.kura.durable_autonomous_lane_merge_source(
                     lane_id,
                     descriptor.lane_block_height,
-                    chain_id_hash,
+                    network_id,
                     expected_epoch,
                 ) {
                     Ok(source) if source.bundle.certified == artifact => source,
@@ -37653,7 +37665,7 @@ impl State {
                 for row in
                     Self::authenticated_native_amx_participant_application_rows_from_autonomous_source(
                         &source.source_bundle,
-                        chain_id_hash,
+                        network_id,
                         expected_epoch,
                         crate::block::HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(
                             &certified_coordinator_authority,
@@ -38047,84 +38059,6 @@ impl State {
             .collect()
     }
 
-    fn durable_lane_diagnostic_execution_status(
-        &self,
-        session: &crate::lane_consensus::CommittedLaneBlockSession,
-        current_state_height: u64,
-        current_state_hash: HashOf<BlockHeader>,
-    ) -> Option<crate::sumeragi::status::CommittedLaneBlockExecutionStatus> {
-        use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
-
-        let proposal = &session.proposal;
-        let application_receipt_available = if session.prepare_qc.payload_availability_qc.is_some()
-        {
-            self.kura
-                .autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)
-        } else {
-            self.kura.lane_block_application_receipt_available(proposal)
-        };
-        if application_receipt_available {
-            let descriptor = &proposal.descriptor;
-            let receipt = self.kura.read_lane_block_application_receipt(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-            )?;
-            return Some(
-                if receipt.format
-                    == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-                {
-                    ExecutionStatus::StateAppliedByDirectExecution
-                } else {
-                    ExecutionStatus::StateAppliedByCanonicalBlock
-                },
-            );
-        }
-        if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
-            // A replicated frontier or hash-only ordinary snapshot cannot
-            // prove which receipt format produced the application. Keep
-            // diagnostics fail-closed until exact durable evidence recovers.
-            return None;
-        }
-        if self
-            .kura
-            .lane_block_application_receipt_conflicts_with_preflight(proposal)
-        {
-            return Some(ExecutionStatus::ApplicationReceiptConflictsWithPreflight);
-        }
-        if !self.certified_lane_block_session_predecessor_is_applied_cached(session) {
-            return Some(ExecutionStatus::AwaitingPredecessorApplication);
-        }
-        if self
-            .kura
-            .read_preflighted_lane_block_execution_input_for_application(
-                proposal,
-                current_state_height,
-                Some(current_state_hash),
-            )
-            .is_some()
-        {
-            return Some(ExecutionStatus::PayloadPreflightedAwaitingStateApplication);
-        }
-        if self.kura.lane_block_execution_preflight_has_rejections(
-            proposal,
-            current_state_height,
-            Some(current_state_hash),
-        ) == Some(true)
-        {
-            return Some(ExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication);
-        }
-        if self.kura.lane_block_execution_input_available(proposal) {
-            return Some(ExecutionStatus::PayloadRecoveredAwaitingStateApplication);
-        }
-        if matches!(
-            self.kura.lane_block_payload_availability(proposal),
-            crate::kura::LaneBlockPayloadAvailability::Available
-        ) {
-            return Some(ExecutionStatus::PayloadAvailableAwaitingExecutor);
-        }
-        Some(ExecutionStatus::AwaitingExecutablePayload)
-    }
-
     /// Derive bounded autonomous execution stages exclusively from current
     /// lifecycle State and independently revalidated durable Kura evidence.
     ///
@@ -38203,7 +38137,7 @@ impl State {
             return Ok(Vec::new());
         }
         let active_routes = routes.iter().copied().collect::<BTreeSet<_>>();
-        let chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let network_id = self.network_id;
         let authority = self.view();
         let mut evidence =
             BTreeMap::<AutonomousLaneDiagnosticKey, AutonomousLaneDiagnosticEvidence>::new();
@@ -38245,7 +38179,7 @@ impl State {
         let autonomous = self
             .kura
             .latest_autonomous_lane_block_artifacts_snapshot(
-                chain_id_hash,
+                network_id,
                 SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
                 |proposal_height| {
                     crate::sumeragi::epoch_for_height_from_world(&authority.world, proposal_height)
@@ -38287,21 +38221,24 @@ impl State {
 
         let per_route_limit = (SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX / routes.len()).max(1);
         for (lane_id, dataspace_id, incarnation) in routes.iter().copied() {
-            for certified in self.kura.latest_certified_lane_block_artifacts_matching(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            ) {
+            for certified in self
+                .kura
+                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+            {
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
@@ -38322,7 +38259,7 @@ impl State {
                 if let Ok(source) = self.kura.durable_autonomous_lane_merge_source(
                     lane_id,
                     certified.proposal.descriptor.lane_block_height,
-                    chain_id_hash,
+                    network_id,
                     expected_epoch,
                 ) && source.bundle.certified == certified
                 {
@@ -38418,7 +38355,7 @@ impl State {
                     .durable_autonomous_lane_merge_source(
                         execution.proposal.descriptor.lane_id,
                         execution.proposal.descriptor.lane_block_height,
-                        execution.autonomous_chain_id_hash,
+                        execution.autonomous_network_id,
                         execution.autonomous_epoch,
                     )
                     .is_ok_and(|source| {
@@ -38428,7 +38365,7 @@ impl State {
                 let source_bundle_revalidates =
                     match crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                         &execution.source_bundle,
-                        execution.autonomous_chain_id_hash,
+                        execution.autonomous_network_id,
                         execution.autonomous_epoch,
                     ) {
                         Ok(bundle) => {
@@ -38528,10 +38465,13 @@ impl State {
         candidates.truncate(SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX);
 
         for candidate in &mut candidates {
-            let Some(receipt) = self.kura.read_lane_block_application_receipt(
-                candidate.row.lane_id,
-                candidate.row.lane_block_height,
-            ) else {
+            let Some(receipt) = self
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    candidate.row.lane_id,
+                    candidate.row.lane_block_height,
+                )
+            else {
                 continue;
             };
             let receipt_descriptor = &receipt.proposal.descriptor;
@@ -38626,17 +38566,20 @@ impl State {
             .iter()
             .filter_map(|(lane_id, dataspace_id, incarnation)| {
                 self.kura
-                    .latest_lane_block_artifact_matching(*lane_id, |artifact| {
-                        let ownership = &artifact.ownership;
-                        ownership.dataspace_id == *dataspace_id
-                            && ownership.lane_incarnation == *incarnation
-                            && lifecycle.lane_route_and_incarnation_matches(
-                                *lane_id,
-                                *dataspace_id,
-                                ownership.proposal_height,
-                                ownership.lane_incarnation,
-                            )
-                    })
+                    .latest_lane_block_artifact_matching_without_sidecar_repair(
+                        *lane_id,
+                        |artifact| {
+                            let ownership = &artifact.ownership;
+                            ownership.dataspace_id == *dataspace_id
+                                && ownership.lane_incarnation == *incarnation
+                                && lifecycle.lane_route_and_incarnation_matches(
+                                    *lane_id,
+                                    *dataspace_id,
+                                    ownership.proposal_height,
+                                    ownership.lane_incarnation,
+                                )
+                        },
+                    )
                     .map(|artifact| artifact.ownership)
             })
             .collect::<Vec<_>>();
@@ -38659,21 +38602,23 @@ impl State {
         let mut committed_lane_blocks = Vec::new();
         let mut lane_block_sessions = Vec::new();
         for (lane_id, dataspace_id, incarnation) in routes {
-            let artifacts = self.kura.latest_certified_lane_block_artifacts_matching(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+            let artifacts = self
+                .kura
+                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             for artifact in artifacts {
                 let session = crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: artifact.proposal,
@@ -38823,10 +38768,8 @@ impl State {
     pub(crate) fn latest_certified_lane_block_frontier_sessions_snapshot_cached(
         &self,
     ) -> Vec<crate::lane_consensus::CommittedLaneBlockSession> {
-        // Frontier lookup may durably repair a reused ordinary slot with the
-        // snapshot's reset authority. Serialize the complete multi-route
-        // projection with lifecycle publication so that capability cannot
-        // outlive the generation which granted it.
+        // Serialize the complete read-only multi-route projection with
+        // lifecycle publication so route authority cannot change mid-snapshot.
         let _state_write_lock = self.state_write_lock.lock();
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut sessions = Self::lane_block_artifact_routes(&lifecycle.nexus)
@@ -38834,9 +38777,12 @@ impl State {
             .filter_map(|(lane_id, dataspace_id)| {
                 let authority =
                     lifecycle.certified_lane_block_persistence_authority(lane_id, dataspace_id)?;
-                let artifact = self
+                let (artifact, _) = self
                     .kura
-                    .latest_certified_lane_block_frontier_with_authority(lane_id, &authority)?;
+                    .preflight_latest_certified_lane_block_frontier_with_authority(
+                        lane_id, &authority,
+                    )
+                    .ok()??;
                 let descriptor = &artifact.proposal.descriptor;
                 (descriptor.dataspace_id == dataspace_id
                     && lifecycle.lane_route_and_incarnation_matches(
@@ -39440,8 +39386,8 @@ impl State {
         }
         let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest: crate::torii_proxy::queue_plan_admission_chain_id_digest(
-                &self.chain_id,
+            network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
+                &self.network_id,
             ),
             entrypoint_hash,
         };
@@ -39450,7 +39396,7 @@ impl State {
         let state_view = self.view();
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
             let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-                registry_key.chain_id_digest,
+                registry_key.network_id_digest,
                 registry_key.entrypoint_hash,
             )
             .map_err(|error| error.to_string())?;
@@ -39471,7 +39417,7 @@ impl State {
             .map_err(|error| error.to_string())?;
         let application_state = Self::queue_plan_registry_owner_application_state_in_view(
             &state_view,
-            registry_key.chain_id_digest,
+            registry_key.network_id_digest,
             registry_key.entrypoint_hash,
             registry_value.binding_hash,
         )
@@ -39484,7 +39430,7 @@ impl State {
         Ok(true)
     }
 
-    /// Compare one structurally valid, chain-bound QueuePlan admission binding
+    /// Compare one structurally valid, exact-network-bound QueuePlan admission binding
     /// with its immutable WSV registry projection.
     ///
     /// This is the public read-only boundary used by Torii retries and
@@ -39493,17 +39439,17 @@ impl State {
     ///
     /// # Errors
     ///
-    /// Returns an error for a malformed or foreign-chain binding, or for a
+    /// Returns an error for a malformed or foreign-network binding, or for a
     /// malformed WSV marker.
     pub fn queue_plan_admission_binding_registry_match(
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
         binding.validate_structure()?;
-        let expected_chain_id_digest =
-            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
-        if binding.chain_id_digest != expected_chain_id_digest {
-            return Err("QueuePlan admission binding belongs to another chain".to_owned());
+        let expected_network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        if binding.network_id_digest != expected_network_id_digest {
+            return Err("QueuePlan admission binding belongs to another network".to_owned());
         }
         let state_view = self.view();
         let registry_match = Self::queue_plan_admission_registry_match_in_view(
@@ -39557,8 +39503,8 @@ impl State {
         }
         let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest: crate::torii_proxy::queue_plan_admission_chain_id_digest(
-                state_view.chain_id(),
+            network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
+                state_view.network_id(),
             ),
             entrypoint_hash,
         };
@@ -39566,7 +39512,7 @@ impl State {
             .map_err(|error| error.to_string())?;
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
             let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-                registry_key.chain_id_digest,
+                registry_key.network_id_digest,
                 registry_key.entrypoint_hash,
             )
             .map_err(|error| error.to_string())?;
@@ -39587,7 +39533,7 @@ impl State {
             .map_err(|error| error.to_string())?;
         let application_state = Self::queue_plan_registry_owner_application_state_in_view(
             state_view,
-            registry_key.chain_id_digest,
+            registry_key.network_id_digest,
             registry_key.entrypoint_hash,
             value.binding_hash,
         )
@@ -39605,7 +39551,7 @@ impl State {
     ) -> Result<StatePath, MergeLedgerCommitError> {
         if registry_key.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2
             || registry_key
-                .chain_id_digest
+                .network_id_digest
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
@@ -39621,7 +39567,7 @@ impl State {
         }
         format!(
             "{QUEUE_PLAN_ADMISSION_REGISTRY_MARKER_PREFIX}{}_{}",
-            hex::encode(registry_key.chain_id_digest.as_ref()),
+            hex::encode(registry_key.network_id_digest.as_ref()),
             hex::encode(registry_key.entrypoint_hash.as_ref()),
         )
         .parse()
@@ -39706,7 +39652,7 @@ impl State {
         let routes = Self::queue_plan_pending_obligation_routes_from_binding(binding)?;
         let obligation = QueuePlanPendingObligationV1 {
             version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
-            chain_id_digest: binding.chain_id_digest,
+            network_id_digest: binding.network_id_digest,
             entrypoint_hash: binding.entrypoint_hash.clone(),
             signed_transaction_hash: binding.signed_transaction_hash,
             binding_hash: binding.canonical_hash(),
@@ -39764,7 +39710,7 @@ impl State {
         let max_routes = crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS.saturating_add(1);
         if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
             || obligation
-                .chain_id_digest
+                .network_id_digest
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
@@ -39803,7 +39749,7 @@ impl State {
         }
         let expected_routes =
             Self::queue_plan_pending_obligation_routes_from_binding(&obligation.binding)?;
-        if obligation.chain_id_digest != obligation.binding.chain_id_digest
+        if obligation.network_id_digest != obligation.binding.network_id_digest
             || obligation.entrypoint_hash != obligation.binding.entrypoint_hash
             || obligation.signed_transaction_hash != obligation.binding.signed_transaction_hash
             || obligation.binding_hash != obligation.binding.canonical_hash()
@@ -39818,10 +39764,10 @@ impl State {
     }
 
     fn queue_plan_pending_obligation_marker_key(
-        chain_id_digest: Hash,
+        network_id_digest: Hash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<StatePath, MergeLedgerCommitError> {
-        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+        if network_id_digest.as_ref().iter().all(|byte| *byte == 0)
             || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
         {
             return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
@@ -39830,7 +39776,7 @@ impl State {
         }
         format!(
             "{QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX}{}_{}",
-            hex::encode(chain_id_digest.as_ref()),
+            hex::encode(network_id_digest.as_ref()),
             hex::encode(entrypoint_hash.as_ref()),
         )
         .parse()
@@ -39885,7 +39831,7 @@ impl State {
         })?;
         let canonical = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
         let expected_key = Self::queue_plan_pending_obligation_marker_key(
-            obligation.chain_id_digest,
+            obligation.network_id_digest,
             obligation.entrypoint_hash.clone(),
         )?;
         if canonical.as_slice() != payload || &expected_key != key {
@@ -39903,7 +39849,7 @@ impl State {
         Self::validate_queue_plan_pending_obligation_route(&route)?;
         if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
             || obligation
-                .chain_id_digest
+                .network_id_digest
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
@@ -39925,7 +39871,7 @@ impl State {
             ));
         }
         Self::queue_plan_pending_route_member_identity_from_claim(
-            obligation.chain_id_digest,
+            obligation.network_id_digest,
             obligation.entrypoint_hash.clone(),
             obligation.binding_hash,
             route,
@@ -39933,13 +39879,13 @@ impl State {
     }
 
     fn queue_plan_pending_route_member_identity_from_claim(
-        chain_id_digest: Hash,
+        network_id_digest: Hash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         binding_hash: Hash,
         route: QueuePlanPendingObligationRouteV1,
     ) -> Result<[u8; Hash::LENGTH], MergeLedgerCommitError> {
         Self::validate_queue_plan_pending_obligation_route(&route)?;
-        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+        if network_id_digest.as_ref().iter().all(|byte| *byte == 0)
             || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
             || binding_hash.as_ref().iter().all(|byte| *byte == 0)
         {
@@ -39949,7 +39895,7 @@ impl State {
         }
         let encoded = norito::to_bytes(&(
             QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash,
             binding_hash,
             route,
@@ -39978,7 +39924,7 @@ impl State {
         Ok(QueuePlanPendingRouteMemberV1 {
             version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1,
             route,
-            chain_id_digest: obligation.chain_id_digest,
+            network_id_digest: obligation.network_id_digest,
             entrypoint_hash: obligation.entrypoint_hash.clone(),
             binding_hash: obligation.binding_hash,
             member_identity: Self::queue_plan_pending_route_member_identity(obligation, route)?,
@@ -40034,7 +39980,7 @@ impl State {
         Self::validate_queue_plan_pending_obligation_route(&marker.route)?;
         if marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1
             || marker
-                .chain_id_digest
+                .network_id_digest
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
@@ -40051,7 +39997,7 @@ impl State {
             ));
         }
         let expected_identity = Self::queue_plan_pending_route_member_identity_from_claim(
-            marker.chain_id_digest,
+            marker.network_id_digest,
             marker.entrypoint_hash.clone(),
             marker.binding_hash,
             marker.route,
@@ -40156,7 +40102,7 @@ impl State {
                 )));
             }
             let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-                marker.chain_id_digest,
+                marker.network_id_digest,
                 marker.entrypoint_hash.clone(),
             )?;
             if storage.get(&obligation_key).is_none() {
@@ -40232,12 +40178,12 @@ impl State {
 
     fn queue_plan_registry_owner_application_state_in_view(
         state: &impl StateReadOnlyWithTransactions,
-        chain_id_digest: Hash,
+        network_id_digest: Hash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         registry_binding_hash: Hash,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
         let key = Self::queue_plan_pending_obligation_marker_key(
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash.clone(),
         )?;
         let membership_hash = Self::queue_plan_entrypoint_membership_hash(entrypoint_hash.clone());
@@ -40246,7 +40192,7 @@ impl State {
             Some(payload) => {
                 let obligation =
                     Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
-                if obligation.chain_id_digest != chain_id_digest
+                if obligation.network_id_digest != network_id_digest
                     || obligation.entrypoint_hash != entrypoint_hash
                     || obligation.binding_hash != registry_binding_hash
                 {
@@ -40312,7 +40258,7 @@ impl State {
         active: bool,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
         let key = Self::queue_plan_pending_obligation_marker_key(
-            expected.chain_id_digest,
+            expected.network_id_digest,
             expected.entrypoint_hash.clone(),
         )?;
         match storage.get(&key) {
@@ -40396,7 +40342,7 @@ impl State {
         obligation: QueuePlanPendingObligationV1,
     ) -> Result<(), MergeLedgerCommitError> {
         let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-            obligation.chain_id_digest,
+            obligation.network_id_digest,
             obligation.entrypoint_hash.clone(),
         )?;
         if let Some(payload) = storage.get(&obligation_key) {
@@ -40448,11 +40394,11 @@ impl State {
 
     fn resolve_queue_plan_pending_obligation_in_storage(
         storage: &mut impl QueuePlanMarkerStorage,
-        chain_id_digest: Hash,
+        network_id_digest: Hash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<bool, MergeLedgerCommitError> {
         let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash.clone(),
         )?;
         let obligation = if let Some(obligation_payload) = storage.get(&obligation_key) {
@@ -40463,7 +40409,7 @@ impl State {
         } else {
             let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
                 version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-                chain_id_digest,
+                network_id_digest,
                 entrypoint_hash,
             };
             let registry_marker_key =
@@ -40475,7 +40421,7 @@ impl State {
             }
             return Ok(false);
         };
-        if obligation.chain_id_digest != chain_id_digest
+        if obligation.network_id_digest != network_id_digest
             || obligation.entrypoint_hash != entrypoint_hash
         {
             return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -40485,7 +40431,7 @@ impl State {
 
         let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash: obligation.entrypoint_hash.clone(),
         };
         let registry_marker_key = Self::queue_plan_admission_registry_marker_key(&registry_key)?;
@@ -40710,80 +40656,46 @@ impl State {
     pub(crate) fn native_amx_participant_frontier_markers(
         block: &SignedBlock,
     ) -> Result<Vec<AppliedNativeAmxParticipantFrontierMarker>, MergeLedgerCommitError> {
-        let Some(bundle) = block.execution_context() else {
-            return Ok(Vec::new());
-        };
-        type Group = (
-            iroha_data_model::block::consensus::LaneBlockProposalV1,
-            HashOf<LaneBlockCommitment>,
-            BTreeSet<[u8; Hash::LENGTH]>,
-        );
-        let mut groups = BTreeMap::<(LaneId, DataSpaceId, Hash, u64), Group>::new();
-        for context in &bundle.external {
-            let Some(receipt) = context.native_amx_receipt.as_ref() else {
-                continue;
-            };
-            for leg in &receipt.legs {
-                match crate::native_amx::native_amx_participant_application_role(receipt, leg) {
-                    Ok(crate::native_amx::NativeAmxParticipantApplicationRole::Coordinator) => {
-                        continue;
-                    }
-                    Ok(
-                        crate::native_amx::NativeAmxParticipantApplicationRole::SeparateParticipant,
-                    ) => {}
-                    Err(error) => {
-                        return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                            "Native AMX participant application identity is invalid: {error}"
-                        )));
-                    }
-                }
-                let descriptor = &leg.participant_proposal.descriptor;
-                let key = (
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.lane_block_height,
-                );
-                let group = groups.entry(key).or_insert_with(|| {
-                    (
-                        leg.participant_proposal.clone(),
-                        leg.participant_settlement_hash,
-                        BTreeSet::new(),
-                    )
-                });
-                if group.0 != leg.participant_proposal
-                    || group.1 != leg.participant_settlement_hash
-                    || !group.2.insert(receipt.source_id)
-                {
-                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                        "Native AMX participant lane {} dataspace {} height {} has conflicting or duplicate control membership",
-                        descriptor.lane_id.as_u32(),
-                        descriptor.dataspace_id.as_u64(),
-                        descriptor.lane_block_height,
-                    )));
-                }
-            }
-        }
-        groups
-            .into_values()
-            .map(|(proposal, settlement_hash, source_ids)| {
-                let descriptor = &proposal.descriptor;
+        Self::native_amx_participant_frontier_markers_and_merge_entry(block, None)
+    }
+
+    pub(crate) fn native_amx_participant_frontier_markers_and_merge_entry(
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<Vec<AppliedNativeAmxParticipantFrontierMarker>, MergeLedgerCommitError> {
+        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            block,
+            merge_entry,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX participant application projection is invalid: {error}"
+            ))
+        })?;
+        manifest
+            .entries()
+            .iter()
+            .map(|entry| {
+                let leaf = &entry.leaf;
                 Ok(AppliedNativeAmxParticipantFrontierMarker {
                     version: 2,
-                    lane_id: descriptor.lane_id,
-                    dataspace_id: descriptor.dataspace_id,
-                    lane_incarnation: descriptor.lane_incarnation,
-                    lane_block_height: descriptor.lane_block_height,
-                    participant_view: descriptor.lane_block_view,
-                    previous_lane_block_height: descriptor.previous_lane_block_height,
-                    previous_lane_block_descriptor_hash: descriptor
-                        .previous_lane_block_descriptor_hash,
-                    lane_block_descriptor_hash: descriptor.descriptor_hash,
-                    participant_proposal_hash: proposal.proposal_hash,
-                    participant_settlement_hash: settlement_hash,
-                    application_block_height: block.header().height().get(),
-                    application_block_hash: block.hash(),
-                    source_count: u64::try_from(source_ids.len()).unwrap_or(u64::MAX),
+                    lane_id: leaf.lane_id,
+                    dataspace_id: leaf.dataspace_id,
+                    lane_incarnation: leaf.lane_incarnation,
+                    lane_block_height: leaf.participant_height,
+                    participant_view: leaf.participant_view,
+                    previous_lane_block_height: leaf.predecessor_height,
+                    previous_lane_block_descriptor_hash: leaf.predecessor_descriptor_hash,
+                    lane_block_descriptor_hash: leaf.descriptor_hash,
+                    participant_proposal_hash: leaf.proposal_hash,
+                    participant_settlement_hash: leaf.settlement_hash,
+                    application_block_height: leaf.application_block_height,
+                    application_block_hash: leaf.application_block_hash,
+                    source_count: u64::try_from(leaf.members.len()).map_err(|_| {
+                        MergeLedgerCommitError::ExecutionMarkerConflict(
+                            "Native AMX participant source count does not fit u64".to_owned(),
+                        )
+                    })?,
                 })
             })
             .collect()
@@ -42155,7 +42067,7 @@ impl State {
             ));
         }
 
-        let expected_chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let expected_network_id = self.network_id;
         let authority = self.view();
         let world = &authority.world;
         let multi_lane = validate_live_authority && active_lanes.len() > 1;
@@ -42237,7 +42149,7 @@ impl State {
                     });
                 }
             }
-            if execution.autonomous_chain_id_hash != expected_chain_hash {
+            if execution.autonomous_network_id != expected_network_id {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "autonomous payload chain binding mismatch".to_owned(),
                 ));
@@ -42360,7 +42272,7 @@ impl State {
                     routing_plan,
                     reservation.signed_transaction_hash.as_ref(),
                     *expected_hash,
-                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_network_id,
                     &execution.origin_proposal,
                 ) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -42371,7 +42283,7 @@ impl State {
             let computed_payload_hash =
                 crate::lane_consensus::compute_lane_executable_payload_hash(
                     crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_network_id,
                     execution.autonomous_epoch,
                     &execution.origin_proposal,
                     &execution.entrypoints,
@@ -42449,7 +42361,7 @@ impl State {
             if !validate_live_authority {
                 crate::block::validate_historical_native_amx_source_bundle(
                     &execution.source_bundle,
-                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_network_id,
                     execution.autonomous_epoch,
                     crate::block::HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(
                         active_lanes,
@@ -42496,7 +42408,7 @@ impl State {
                     entrypoint.hash(),
                     routing_plan,
                     source_id,
-                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_network_id,
                     &authority.nexus.dataspace_catalog,
                     &authority,
                     Some(expected_v2_context),
@@ -43079,11 +42991,11 @@ impl State {
             ));
         }
         validate_merge_snapshot_carrier_bounds(qc.carrier_height, &entry.lane_snapshots)?;
-        let expected_chain_id_digest = crate::merge::merge_network_id_digest(&self.network_id);
-        if qc.chain_id_digest != expected_chain_id_digest {
-            return Err(MergeLedgerCommitError::MergeQCChainIdMismatch {
-                expected: expected_chain_id_digest,
-                actual: qc.chain_id_digest,
+        let expected_network_id = self.network_id;
+        if qc.network_id != expected_network_id {
+            return Err(MergeLedgerCommitError::MergeQCNetworkIdMismatch {
+                expected: expected_network_id,
+                actual: qc.network_id,
             });
         }
         if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
@@ -44061,7 +43973,7 @@ impl State {
             {
                 return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
                     lane: lane.id,
-                    reason: "autoscale drain state is bound to another chain or incarnation",
+                    reason: "autoscale drain state is bound to another network or incarnation",
                 });
             }
         }
@@ -45705,6 +45617,11 @@ impl State {
         pending: &PendingDaPinIntentBundle,
         context: &str,
     ) {
+        for (key, value) in &pending.quota_writes {
+            world
+                .smart_contract_state
+                .insert(key.clone(), value.clone());
+        }
         let inserted = self.ingest_pin_intents_with_world_block(
             pending.block_height,
             pending.intents.clone(),
@@ -46819,6 +46736,7 @@ struct PendingDaCommitmentBundle {
 struct PendingDaPinIntentBundle {
     block_height: u64,
     intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
+    quota_writes: crate::da::quota::DaIngestQuotaWrites,
 }
 
 #[derive(Default)]
@@ -47557,7 +47475,7 @@ fn autoscale_lane_drain_state_matches_context(
     let Ok(Some(committee)) = decode_autoscale_lane_committee(lane) else {
         return false;
     };
-    state.intent.chain_id_digest == crate::merge::merge_network_id_digest(network_id)
+    state.intent.network_id == *network_id
         && state.intent.lane_id == lane.id
         && state.intent.dataspace_id == lane.dataspace_id
         && state.intent.lane_incarnation == lane_incarnation
@@ -52149,9 +52067,18 @@ impl<'state> StateBlock<'state> {
         block_height: u64,
         intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
     ) {
+        let bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(intents.clone());
+        let quota_writes = crate::da::quota::prepare_ingest_quota_writes(
+            &self.world.smart_contract_state,
+            &bundle,
+            block_height,
+            &self.nexus.da,
+        )
+        .expect("validated block must have deterministic admissible DA ingest quota charges");
         self.pending_da_pin_intents = Some(PendingDaPinIntentBundle {
             block_height,
             intents,
+            quota_writes,
         });
     }
 
@@ -52891,13 +52818,13 @@ impl<'state> StateBlock<'state> {
         &mut self,
         entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
     ) -> Result<(), MergeLedgerCommitError> {
-        let chain_id_digest =
-            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
         let mut markers = self.world.smart_contract_state.transaction();
         for entrypoint_hash in entrypoint_hashes {
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut markers,
-                chain_id_digest,
+                network_id_digest,
                 entrypoint_hash,
             )?;
         }
@@ -52909,12 +52836,12 @@ impl<'state> StateBlock<'state> {
         &mut self,
         pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
     ) -> Result<(), MergeLedgerCommitError> {
-        let chain_id_digest =
-            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
         let mut markers = self.world.smart_contract_state.transaction();
         for (entrypoint_hash, expected_binding_hash) in pending_obligations {
             let key = State::queue_plan_pending_obligation_marker_key(
-                chain_id_digest,
+                network_id_digest,
                 entrypoint_hash.clone(),
             )?;
             let payload = markers.get(&key).ok_or_else(|| {
@@ -52931,7 +52858,7 @@ impl<'state> StateBlock<'state> {
             }
             if !State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut markers,
-                chain_id_digest,
+                network_id_digest,
                 entrypoint_hash,
             )? {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -53004,7 +52931,10 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &SignedBlock,
     ) -> Result<(), MergeLedgerCommitError> {
-        let markers = State::native_amx_participant_frontier_markers(block)?;
+        let markers = State::native_amx_participant_frontier_markers_and_merge_entry(
+            block,
+            self.staged_merge_entry(),
+        )?;
         if markers.is_empty() {
             return Ok(());
         }
@@ -55040,7 +54970,7 @@ impl<'state> StateBlock<'state> {
             })?;
         let intent = LaneDrainIntentV1 {
             version: 1,
-            chain_id_digest: crate::merge::merge_network_id_digest(&self.network_id),
+            network_id: self.network_id,
             lane_id,
             dataspace_id: lane.dataspace_id,
             lane_incarnation,
@@ -57578,7 +57508,7 @@ mod tiered_snapshot_diff_tests {
         };
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &DEFAULT_TEST_NETWORK_ID,
             &authority,
             77,
             DataSpaceId::UNIVERSAL,
@@ -61445,7 +61375,6 @@ fn replay_blocks_from_kura_range_inner(
         let validation = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
             candidate,
             &validation_topology,
-            &state.chain_id.clone(),
             &genesis_account,
             time_source,
             state.sumeragi_block_cadence(),
@@ -61510,13 +61439,13 @@ fn replay_blocks_from_kura_range_inner(
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-                valid_block.as_ref(),
-            )
-            .map_err(|error| {
-                eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
-            })?;
+        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            valid_block.as_ref(),
+            state_block.staged_merge_entry(),
+        )
+        .map_err(|error| {
+            eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
+        })?;
         let lane_finality_manifest =
             crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
                 valid_block.as_ref(),

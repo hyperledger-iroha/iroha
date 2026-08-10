@@ -110,7 +110,7 @@ public final class AccountOnboardingJsonParser {
             "version",
             "request",
             "authority",
-            "chain_id",
+            "network_id",
             "anchor",
             "resource",
             "acquisition",
@@ -143,7 +143,8 @@ public final class AccountOnboardingJsonParser {
             stringField(request, "account_id", "body.request.account_id"),
             permissions),
         stringField(root, "authority", "body.authority"),
-        stringField(root, "chain_id", "body.chain_id"),
+        org.hyperledger.iroha.android.model.NetworkId.parse(
+            stringField(root, "network_id", "body.network_id")),
         AliasTransactionPlanJsonParser.parseAnchor(objectField(root, "anchor", "body.anchor")),
         AliasTransactionPlanJsonParser.parseResource(
             objectField(root, "resource", "body.resource"), "body.resource"),

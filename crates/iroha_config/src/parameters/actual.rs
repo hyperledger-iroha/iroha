@@ -3804,6 +3804,9 @@ struct NexusConsensusDaV1 {
     sample_size_max: u16,
     threshold_base: u16,
     per_attester_shards: u16,
+    ingest_quota_window_blocks: u64,
+    ingest_quota_max_count_per_account: u64,
+    ingest_quota_max_bytes_per_account: u64,
     audit_sample_size: u16,
     audit_window_count: u16,
     audit_interval: NexusConsensusDurationV1,
@@ -4093,6 +4096,9 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             sample_size_max: nexus.da.sample_size_max.get(),
             threshold_base: nexus.da.threshold_base.get(),
             per_attester_shards: nexus.da.per_attester_shards.get(),
+            ingest_quota_window_blocks: nexus.da.ingest_quota_window_blocks.get(),
+            ingest_quota_max_count_per_account: nexus.da.ingest_quota_max_count_per_account.get(),
+            ingest_quota_max_bytes_per_account: nexus.da.ingest_quota_max_bytes_per_account.get(),
             audit_sample_size: nexus.da.audit.sample_size.get(),
             audit_window_count: nexus.da.audit.window_count.get(),
             audit_interval: nexus.da.audit.interval.into(),
@@ -5457,6 +5463,12 @@ pub struct Da {
     pub threshold_base: NonZeroU16,
     /// Number of shards each attester must verify per slot.
     pub per_attester_shards: NonZeroU16,
+    /// Number of consecutive block heights in one deterministic ingest quota window.
+    pub ingest_quota_window_blocks: NonZeroU64,
+    /// Maximum accepted DA ingests per account in one quota window.
+    pub ingest_quota_max_count_per_account: NonZeroU64,
+    /// Maximum canonical DA payload bytes per account in one quota window.
+    pub ingest_quota_max_bytes_per_account: NonZeroU64,
     /// Rolling audit configuration.
     pub audit: DaAudit,
     /// Recovery deadline configuration.
@@ -5480,6 +5492,18 @@ impl Default for Da {
                 .expect("default threshold_base > 0"),
             per_attester_shards: NonZeroU16::new(defaults::nexus::da::PER_ATTESTER_SHARDS)
                 .expect("default per_attester_shards > 0"),
+            ingest_quota_window_blocks: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
+            )
+            .expect("default ingest quota window > 0"),
+            ingest_quota_max_count_per_account: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+            )
+            .expect("default ingest quota count > 0"),
+            ingest_quota_max_bytes_per_account: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
+            )
+            .expect("default ingest quota bytes > 0"),
             audit: DaAudit::default(),
             recovery: DaRecovery::default(),
             rotation: DaRotation::default(),
@@ -9122,10 +9146,6 @@ pub struct ToriiMcp {
     pub rate_per_minute: Option<NonZeroU32>,
     /// Optional MCP burst budget.
     pub burst: Option<NonZeroU32>,
-    /// Retention window in seconds for asynchronous MCP jobs.
-    pub async_job_ttl_secs: u64,
-    /// Maximum asynchronous MCP jobs retained in memory.
-    pub async_job_max_entries: usize,
 }
 
 /// Torii CORS response-header policy.
@@ -9264,8 +9284,6 @@ impl Default for ToriiMcp {
             deny_tool_prefixes: defaults::torii::mcp::deny_tool_prefixes(),
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE.and_then(NonZeroU32::new),
             burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
-            async_job_ttl_secs: defaults::torii::mcp::ASYNC_JOB_TTL_SECS,
-            async_job_max_entries: defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES,
         }
     }
 }
@@ -9293,8 +9311,6 @@ impl From<user::ToriiMcp> for ToriiMcp {
                 .burst
                 .or(defaults::torii::mcp::BURST)
                 .and_then(NonZeroU32::new),
-            async_job_ttl_secs: value.async_job_ttl_secs.max(1),
-            async_job_max_entries: value.async_job_max_entries.max(1),
         }
     }
 }
@@ -12184,17 +12200,17 @@ pub struct SorafsPinPolicyConstraints {
     pub approval_quorum: u16,
     /// Canonically signer-id-ordered trusted Ed25519 approval roster.
     pub approval_signers: Vec<SorafsPinApprovalSigner>,
-    /// Maximum number of live pin manifests in consensus state.
+    /// Maximum number of retained pin-manifest records in consensus state.
     pub max_global_manifests: u64,
     /// Maximum aggregate content bytes represented by live pin manifests.
     pub max_global_bytes: u64,
-    /// Maximum number of live pin manifests owned by one account.
+    /// Maximum number of retained pin-manifest records submitted by one account.
     pub max_manifests_per_authority: u64,
     /// Maximum aggregate content bytes represented by one account's live pins.
     pub max_bytes_per_authority: u64,
     /// Maximum predecessor depth admitted for a manifest lineage.
     pub max_lineage_depth: u32,
-    /// Maximum number of direct successors admitted for one manifest.
+    /// Maximum number of retained direct successors admitted for one manifest.
     pub max_successor_fanout: u32,
 }
 

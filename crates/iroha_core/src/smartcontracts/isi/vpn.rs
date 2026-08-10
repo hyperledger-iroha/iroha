@@ -5,7 +5,7 @@ use std::str::FromStr;
 use eyre::Result;
 use iroha_crypto::{Algorithm, derive_non_signing_ed25519_public_key};
 #[cfg(test)]
-use iroha_crypto::{Hash, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     IntoKeyValue,
     account::{Account, AccountId},
@@ -319,8 +319,10 @@ fn verify_operator_quote(
             "vpn quote signer does not hold CanIssueSoranetVpnQuote",
         ));
     }
-    if &body.chain_id != state_transaction.chain_id() {
-        return Err(validation_err("vpn quote is bound to a different chain"));
+    if &body.network_id != state_transaction.network_id() {
+        return Err(validation_err(
+            "vpn quote is bound to a different exact network",
+        ));
     }
     if &body.client_account_id != authority {
         return Err(validation_err(
@@ -331,21 +333,21 @@ fn verify_operator_quote(
     ensure_non_zero_32("vpn lease id", &body.lease_id)?;
     ensure_non_zero_16("vpn session id", &body.session_id)?;
     let expected_lease_id =
-        derive_vpn_lease_id_v1(&body.chain_id, body.quote_id, &body.client_account_id);
+        derive_vpn_lease_id_v1(&body.network_id, body.quote_id, &body.client_account_id);
     if body.lease_id != expected_lease_id {
         return Err(validation_err(
-            "vpn lease id is not the canonical chain/client/quote derivation",
+            "vpn lease id is not the canonical network/client/quote derivation",
         ));
     }
     let expected_session_id = derive_vpn_session_id_v1(
-        &body.chain_id,
+        &body.network_id,
         body.quote_id,
         &body.client_account_id,
         body.address_slot,
     );
     if body.session_id != expected_session_id {
         return Err(validation_err(
-            "vpn session id is not the canonical chain/client/quote/slot derivation",
+            "vpn session id is not the canonical network/client/quote/slot derivation",
         ));
     }
     let now_ms = state_transaction.block_unix_timestamp_ms();
@@ -370,7 +372,7 @@ fn verify_operator_quote(
         ));
     }
     let custody = vpn_lease_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         &body.lease_id,
         &body.asset_definition,
     )?;
@@ -407,18 +409,14 @@ fn ensure_xor_asset(asset_definition: &AssetDefinitionId) -> Result<(), Error> {
 
 /// Derive the deterministic protocol custody account for a VPN lease.
 pub fn vpn_lease_custody_account_id(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     lease_id: &[u8; 32],
     asset_definition: &AssetDefinitionId,
 ) -> Result<AccountId, Error> {
     let asset_definition = asset_definition.to_string();
     let public_key = derive_non_signing_ed25519_public_key(
         VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN.as_bytes(),
-        &[
-            chain_id.as_str().as_bytes(),
-            lease_id,
-            asset_definition.as_bytes(),
-        ],
+        &[network_id.as_bytes(), lease_id, asset_definition.as_bytes()],
     );
     Ok(AccountId::new(public_key))
 }
@@ -879,6 +877,14 @@ mod tests {
         )
     }
 
+    fn vpn_test_network_id(seed: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ),
+        )
+    }
+
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -891,34 +897,39 @@ mod tests {
 
     #[test]
     fn vpn_lease_custody_account_id_is_stable_without_a_public_signing_seed() {
-        let chain_id = iroha_data_model::ChainId::from("vpn-custody-chain");
+        let network_id = vpn_test_network_id(0x21);
         let asset_definition = xor_asset_definition_id();
         let lease_id = [0x11; 32];
 
-        let first = vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+        let first = vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("custody account derivation succeeds");
-        let second = vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+        let second = vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("custody account derivation is repeatable");
         assert_eq!(first, second);
 
         let mut different_lease_id = lease_id;
         different_lease_id[0] ^= 0x01;
         let different =
-            vpn_lease_custody_account_id(&chain_id, &different_lease_id, &asset_definition)
+            vpn_lease_custody_account_id(&network_id, &different_lease_id, &asset_definition)
                 .expect("different custody account derivation succeeds");
         assert_ne!(first, different);
 
-        let legacy_seed_material = format!(
-            "{VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN}|{}|{}|{asset_definition}",
-            chain_id.as_str(),
-            hex::encode(lease_id),
-        );
-        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
-        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
-            .expect("legacy public seed derives");
+        let different_network =
+            vpn_lease_custody_account_id(&vpn_test_network_id(0x22), &lease_id, &asset_definition)
+                .expect("different exact-network custody derivation succeeds");
+        assert_ne!(first, different_network);
+
+        let mut public_seed_material = Vec::new();
+        public_seed_material.extend_from_slice(VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN.as_bytes());
+        public_seed_material.extend_from_slice(network_id.as_bytes());
+        public_seed_material.extend_from_slice(&lease_id);
+        public_seed_material.extend_from_slice(asset_definition.to_string().as_bytes());
+        let public_seed: [u8; Hash::LENGTH] = Hash::new(public_seed_material).into();
+        let public_seed_keypair = KeyPair::try_from_seed(public_seed.to_vec(), Algorithm::Ed25519)
+            .expect("public seed derives");
         assert_ne!(
             first,
-            AccountId::new(legacy_keypair.public_key().clone()),
+            AccountId::new(public_seed_keypair.public_key().clone()),
             "VPN custody must not expose a signing key through public seed derivation"
         );
     }
@@ -930,16 +941,16 @@ mod tests {
         let client_account_id = AccountId::new(key_pair.public_key().clone());
         let operator_key = checked_keypair();
         let operator_account_id = AccountId::new(operator_key.public_key().clone());
-        let chain_id = iroha_data_model::ChainId::from("vpn-settlement-chain");
+        let network_id = vpn_test_network_id(0x31);
         let address_slot = iroha_data_model::soranet::vpn::VpnAddressSlotV1::new(23)
             .expect("fixture address slot");
         let lease_id = iroha_data_model::soranet::vpn::derive_vpn_lease_id_v1(
-            &chain_id,
+            &network_id,
             voucher_body.quote_id,
             &client_account_id,
         );
         voucher_body.session_id = iroha_data_model::soranet::vpn::derive_vpn_session_id_v1(
-            &chain_id,
+            &network_id,
             voucher_body.quote_id,
             &client_account_id,
             address_slot,
@@ -955,7 +966,7 @@ mod tests {
         };
         let asset_definition = xor_asset_definition_id();
         let custody_account_id =
-            vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+            vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
                 .expect("derive fixture custody");
         let address_plan = iroha_data_model::soranet::vpn::derive_vpn_address_plan_v1(address_slot);
         let quote_policy = iroha_data_model::soranet::vpn::VpnQuotePolicyV1 {
@@ -982,7 +993,7 @@ mod tests {
         };
         let signed_quote = VpnSignedQuoteV1::try_sign(
             VpnQuoteBodyV1 {
-                chain_id,
+                network_id,
                 quote_id: voucher.body.quote_id,
                 lease_id,
                 session_id: voucher.body.session_id,

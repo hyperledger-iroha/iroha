@@ -530,7 +530,7 @@ fn project_kagemusha_v4_verifier(
 pub fn resolve_kagemusha_recursive_readiness_v4(
     world: &impl WorldReadOnly,
     catalog: &KagemushaReleaseCatalogV4,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     asset: &AssetDefinitionId,
     asset_scale: u32,
     block_height: u64,
@@ -562,12 +562,12 @@ pub fn resolve_kagemusha_recursive_readiness_v4(
     ) {
         return Ok(None);
     }
-    if &manifest.chain_id != chain_id
+    if &manifest.network_id != network_id
         || &manifest.asset != asset
         || manifest.asset_scale != asset_scale
     {
         return Err(
-            "Kagemusha V4 authenticated release is not bound to the requested chain/asset/scale"
+            "Kagemusha V4 authenticated release is not bound to the requested network/asset/scale"
                 .to_owned(),
         );
     }
@@ -642,7 +642,7 @@ fn exact_kagemusha_v4_transaction_verifier_record(
 /// Resolve one exact transaction binding without imposing an issuance window.
 ///
 /// The consensus Eq/Ep records, immutable startup catalog, native verifier,
-/// transaction chain/asset/scale, and content-addressed consensus release
+/// transaction network/asset/scale, and content-addressed consensus release
 /// record must all identify the same authenticated release. Callers separately
 /// enforce `issuance_active` only for operations that create a new note.
 pub fn resolve_kagemusha_recursive_transaction_release_v4(
@@ -651,7 +651,7 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
     binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
     requested_height: u64,
     current_height: u64,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     asset: &AssetDefinitionId,
     asset_scale: u32,
 ) -> Result<KagemushaRecursiveTransactionReleaseV4, String> {
@@ -680,12 +680,12 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
     cached.validate_verifier_records(&step_eq_record, &step_ep_record)?;
     let resolved = cached.resolved();
     let manifest = resolved.release().manifest();
-    if &manifest.chain_id != chain_id
+    if &manifest.network_id != network_id
         || &manifest.asset != asset
         || manifest.asset_scale != asset_scale
     {
         return Err(
-            "Kagemusha V4 authenticated release does not match the transaction chain, asset, or scale"
+            "Kagemusha V4 authenticated release does not match the transaction network, asset, or scale"
                 .to_owned(),
         );
     }
@@ -822,7 +822,7 @@ fn resolve_offline_escrow_account(
         state_transaction,
     )?;
     let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         definition,
     );
     Ok(derived)
@@ -836,7 +836,7 @@ pub(crate) fn is_offline_escrow_source_asset(
         .world
         .asset_definition(source_id.definition())?;
     let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         source_id.definition(),
     );
     Ok(&derived == source_id.account())
@@ -2643,7 +2643,7 @@ pub mod isi {
             proof_root,
             public_amount,
             asset_tag,
-            chain_tag,
+            network_tag,
         ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(
             &request.redeem_proof.proof.bytes,
         )
@@ -2653,8 +2653,8 @@ pub mod isi {
         let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
             &statement.asset.to_string(),
         );
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id().as_str(),
+        let expected_network_tag = crate::zk::confidential_v2::derive_confidential_network_tag_v2(
+            state_transaction.network_id(),
         );
         if input_commitments != [statement.current_note.note_commitment, zero]
             || proof_nullifiers != [statement.current_note.spend_nullifier, zero]
@@ -2662,11 +2662,11 @@ pub mod isi {
             || proof_root != statement.final_root
             || public_amount != expected_public_amount
             || asset_tag != expected_asset_tag
-            || chain_tag != expected_chain_tag
+            || network_tag != expected_network_tag
         {
             return Err(labeled_invariant(
                 "final_commitment_mismatch",
-                "Kagemusha V4 unshield-v3 proof is not bound to the exact note, nullifier, root, scaled amount, asset, chain, and full redemption output",
+                "Kagemusha V4 unshield-v3 proof is not bound to the exact note, nullifier, root, scaled amount, asset, network, and full redemption output",
             )
             .into());
         }
@@ -2679,7 +2679,7 @@ pub mod isi {
             root: proof_root,
             public_amount,
             asset_tag,
-            chain_tag,
+            network_tag,
         };
         if parsed_binding != request.redemption.unshield_public_inputs
             || parsed_binding
@@ -4506,7 +4506,7 @@ pub mod isi {
         let definition_id = source_asset.definition().clone();
         state_transaction.world.asset_definition(&definition_id)?;
         let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-            state_transaction.chain_id(),
+            state_transaction.network_id(),
             &definition_id,
         );
         state_transaction.world.account(recipient)?;
@@ -6690,8 +6690,8 @@ pub mod isi {
         let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
             &request.asset.definition().to_string(),
         );
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id().as_str(),
+        let expected_network_tag = crate::zk::confidential_v2::derive_confidential_network_tag_v2(
+            state_transaction.network_id(),
         );
         let expected_payer_tag = crate::zk::confidential_v2::derive_kagemusha_topup_payer_tag_v2(
             &request.authorization.authority.to_string(),
@@ -6718,7 +6718,7 @@ pub mod isi {
                     authoritative_leaf_index,
                 )
             || public.asset_tag != expected_asset_tag
-            || public.chain_tag != expected_chain_tag
+            || public.network_tag != expected_network_tag
             || public.payer_tag != expected_payer_tag
             || public.operation_tag != expected_operation_tag
         {
@@ -6764,7 +6764,7 @@ pub mod isi {
         anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
     ) -> Result<(), Error> {
-        if anchor.chain_id != request.current_note.chain_id
+        if anchor.network_id != request.current_note.network_id
             || anchor.payer != request.authorization.authority
             || anchor.asset != request.asset
             || anchor.asset_scale != request.amount.scale
@@ -6811,7 +6811,7 @@ pub mod isi {
             .as_ref();
         let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
             version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            chain_id: request.current_note.chain_id.clone(),
+            network_id: request.current_note.network_id,
             payer: request.authorization.authority.clone(),
             asset: request.asset.clone(),
             asset_scale: request.amount.scale,
@@ -6841,7 +6841,7 @@ pub mod isi {
     fn resolve_kagemusha_v4_transaction_release(
         binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
         requested_height: u64,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         asset: &AssetDefinitionId,
         asset_scale: u32,
         state_transaction: &StateTransaction<'_, '_>,
@@ -6852,7 +6852,7 @@ pub mod isi {
             binding,
             requested_height,
             state_transaction.block_height(),
-            chain_id,
+            network_id,
             asset,
             asset_scale,
         )
@@ -7123,17 +7123,17 @@ pub mod isi {
     }
 
     fn ensure_kagemusha_v4_redemption_live_context(
-        bundle_chain_id: &iroha_data_model::ChainId,
-        redemption_chain_id: &iroha_data_model::ChainId,
-        live_chain_id: &iroha_data_model::ChainId,
+        bundle_network_id: &iroha_data_model::NetworkId,
+        redemption_network_id: &iroha_data_model::NetworkId,
+        live_network_id: &iroha_data_model::NetworkId,
         amount_scale: u32,
         statement_scale: u32,
         live_scale: u32,
     ) -> Result<(), Error> {
-        if bundle_chain_id != live_chain_id || redemption_chain_id != live_chain_id {
+        if bundle_network_id != live_network_id || redemption_network_id != live_network_id {
             return Err(labeled_invariant(
-                "wrong_chain",
-                "Kagemusha V4 redemption chain id does not match this chain",
+                "wrong_network",
+                "Kagemusha V4 redemption NetworkId does not match this network",
             )
             .into());
         }
@@ -7227,7 +7227,7 @@ pub mod isi {
                 .into());
             }
             let other = &release_record.manifest;
-            let same_scope = other.chain_id == manifest.chain_id
+            let same_scope = other.network_id == manifest.network_id
                 && other.asset == manifest.asset
                 && other.asset_scale == manifest.asset_scale;
             let overlaps = kagemusha_v4_issuance_windows_overlap(
@@ -7294,10 +7294,10 @@ pub mod isi {
                 .into());
             }
             let manifest = &activation.release_record.manifest;
-            if &manifest.chain_id != state_transaction.chain_id() {
+            if &manifest.network_id != state_transaction.network_id() {
                 return Err(labeled_invariant(
-                    "wrong_chain",
-                    "Kagemusha V4 activation manifest targets a different chain",
+                    "wrong_network",
+                    "Kagemusha V4 activation manifest targets a different network",
                 )
                 .into());
             }
@@ -7481,10 +7481,10 @@ pub mod isi {
             };
             let hardware_assertion_commit =
                 plan_kagemusha_online_hardware_assertion(authenticated_device)?;
-            if request.current_note.chain_id != *state_transaction.chain_id() {
+            if request.current_note.network_id != *state_transaction.network_id() {
                 return Err(labeled_invariant(
-                    "wrong_chain",
-                    "Kagemusha V4 top-up chain id does not match this chain",
+                    "wrong_network",
+                    "Kagemusha V4 top-up NetworkId does not match this network",
                 )
                 .into());
             }
@@ -7505,7 +7505,7 @@ pub mod isi {
             let release = resolve_kagemusha_v4_transaction_release(
                 &request.artifact_binding,
                 state_transaction.block_height(),
-                state_transaction.chain_id(),
+                state_transaction.network_id(),
                 request.asset.definition(),
                 live_scale,
                 state_transaction,
@@ -7717,9 +7717,9 @@ pub mod isi {
                 )
             })?;
             ensure_kagemusha_v4_redemption_live_context(
-                &statement.chain_id,
-                &request.redemption.chain_id,
-                state_transaction.chain_id(),
+                &statement.network_id,
+                &request.redemption.network_id,
+                state_transaction.network_id(),
                 request.amount.scale,
                 statement.asset_scale,
                 live_scale,
@@ -7737,7 +7737,7 @@ pub mod isi {
             let parent_release = resolve_kagemusha_v4_transaction_release(
                 &statement.artifact_binding,
                 request.block_height,
-                &statement.chain_id,
+                &statement.network_id,
                 &statement.asset,
                 statement.asset_scale,
                 state_transaction,
@@ -7749,7 +7749,7 @@ pub mod isi {
                     resolve_kagemusha_v4_transaction_release(
                         &change.bundle.statement.artifact_binding,
                         request.block_height,
-                        &change.bundle.statement.chain_id,
+                        &change.bundle.statement.network_id,
                         &change.bundle.statement.asset,
                         change.bundle.statement.asset_scale,
                         state_transaction,

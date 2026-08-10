@@ -20,7 +20,7 @@ readonly PERIODIC_FIXED_CONFIG="adequate_leader_periodic_prefix_fixed.cfg"
 readonly PERIODIC_HIDDEN_BUG_CONFIG="adequate_leader_periodic_hidden_prefix_bug.cfg"
 readonly PERIODIC_REPLENISHMENT_BUG_CONFIG="adequate_leader_periodic_replenishment_bug.cfg"
 readonly TEMPORAL_VIOLATION_DIAGNOSTIC="Error: Temporal properties were violated."
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then

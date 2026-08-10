@@ -5,6 +5,67 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
+private func nativeAmxTestCrc16(_ bytes: [UInt8]) -> UInt16 {
+    var crc = UInt16.max
+    for byte in bytes {
+        crc ^= UInt16(byte) << 8
+        for _ in 0..<8 {
+            crc = (crc & 0x8000) != 0 ? (crc &<< 1) ^ 0x1021 : crc &<< 1
+        }
+    }
+    return crc
+}
+
+func nativeAmxTestHash(_ seed: UInt8) -> String {
+    var bytes = [UInt8](repeating: seed, count: 32)
+    bytes[31] |= 1
+    let body = bytes.map { String(format: "%02X", $0) }.joined()
+    let checksum = nativeAmxTestCrc16(Array("hash:\(body)".utf8))
+    return "hash:\(body)#\(String(format: "%04X", checksum))"
+}
+
+func sumeragiV2TestHeightContext(epochEndHeight: UInt64 = 100) -> [String: Any] {
+    [
+        "epoch": 1,
+        "epoch_end_height": epochEndHeight,
+        "mode": ["mode": "permissioned", "details": NSNull()],
+        "epoch_seed": [UInt8](repeating: 0x42, count: 32),
+        "validator_count": 4,
+        "quorum": [
+            "min_signers": 3,
+            "total_power": 4,
+        ],
+    ]
+}
+
+func sumeragiV2TestLiveness() -> [String: Any] {
+    let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
+    return [
+        "generation": 2,
+        "prepare_quorums": [],
+        "commit_quorums": [],
+        "timeout_quorums": [],
+        "outbound_intents": [],
+        "work": [
+            "candidate": idle,
+            "body_recovery": idle,
+            "body_store": idle,
+            "validation": idle,
+            "application": idle,
+            "successor_height": idle,
+        ],
+        "queues": [],
+        "no_progress_age_ms": 19,
+        "ignore_counts": [],
+    ]
+}
+
+func duplicateSumeragiRootField(_ prefix: String, in payload: Data) -> Data {
+    var duplicate = Data(prefix.utf8)
+    duplicate.append(contentsOf: payload.dropFirst())
+    return duplicate
+}
+
 final class SumeragiV2WireFixtureTests: XCTestCase {
     func testExecutionCommitmentCarriesExactMandatoryMergeCarrierOption() throws {
         func hash(_ seed: UInt8) throws -> SumeragiV2Hash {
@@ -366,28 +427,30 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             return XCTFail("request fixture decoded to the wrong v2 payload")
         }
         XCTAssertEqual(request.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
-        XCTAssertEqual(request.chainID.value, "sumeragi-v2-test")
+        XCTAssertEqual(request.networkID.bytes, Data(repeating: 0x71, count: 32))
         XCTAssertEqual(request.height, 1)
         XCTAssertEqual(request.signature.count, 48)
         XCTAssertEqual(request.signaturePreimage(), try Data(sumeragiV2Hex: requestPreimage.hex))
         let reSignedRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: request.contextID,
             height: request.height,
             requester: request.requester,
             signature: Data([1])
         )
         XCTAssertEqual(request.signaturePreimage(), reSignedRequest.signaturePreimage())
-        let crossChainRequest = try SumeragiV2CommitCertificateRequest(
+        var otherNetworkBytes = request.networkID.bytes
+        otherNetworkBytes[otherNetworkBytes.startIndex] ^= 1
+        let crossNetworkRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: SumeragiV2ChainID("other-chain"),
+            networkID: NetworkId(bytes: otherNetworkBytes),
             contextID: request.contextID,
             height: request.height,
             requester: request.requester,
             signature: Data([1])
         )
-        XCTAssertNotEqual(request.signaturePreimage(), crossChainRequest.signaturePreimage())
+        XCTAssertNotEqual(request.signaturePreimage(), crossNetworkRequest.signaturePreimage())
 
         let decodedResponse = try SumeragiV2ConsensusMessage.decodeCanonical(
             Data(sumeragiV2Hex: responseMessage.hex)
@@ -426,7 +489,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         changedContextBytes[changedContextBytes.startIndex] ^= 1
         let changedContextRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: SumeragiV2HeightContextID(
                 hash: try SumeragiV2Hash(changedContextBytes)
             ),
@@ -446,7 +509,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
 
         let changedHeightRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: request.contextID,
             height: request.height + 1,
             requester: request.requester,

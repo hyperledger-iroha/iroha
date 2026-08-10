@@ -5,11 +5,43 @@ from pathlib import Path
 from sumeragi_v2_multilane_models_test import (
     canonical_contract,
     copy_layout_fixture,
+    copy_stable_generation_diagnostics_fixture,
     load_checker,
     replace_once,
+    replace_once_after,
     swap_ordered_once,
+    swap_ordered_once_after,
     validate_fixture,
+    validate_stable_generation_diagnostics_fixture,
 )
+
+
+def test_stable_generation_diagnostics_rejects_retry_bound_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    replace_once(
+        state,
+        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;",
+        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 40;",
+    )
+    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
+    assert any("four-attempt declaration" in error for error in errors), errors
+
+
+def test_stable_generation_diagnostics_rejects_missing_fail_closed_sink(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    _state, helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    replace_once(helper, "Err(generation_drift_error())", "derive()")
+    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
+    assert any(
+        "stable-generation diagnostics helper token" in error
+        and "generation_drift_error" in error
+        for error in errors
+    ), errors
 
 
 def test_inflight_composed_contract_rejects_tla_rehydrate_guard_omission(
@@ -159,13 +191,21 @@ def test_inflight_layout_contract_rejects_kura_atomic_replace_order_drift(
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/kura.rs"
-    swap_ordered_once(path, ".write_all(bytes)", ".flush()")
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"
+    )
+    swap_ordered_once_after(
+        path,
+        "fn write_atomic_synced_impl_with_prefix(",
+        ".write_all(bytes)",
+        ".flush()",
+    )
 
     errors = validate_fixture(tmp_path, module, contract)
 
     assert any(
-        "ordered in-flight item Kura::write_atomic_synced_impl" in error
+        "ordered in-flight item write_atomic_synced_impl_with_prefix" in error
         and "missing or reorders token" in error
         for error in errors
     ), errors
@@ -200,8 +240,9 @@ def test_inflight_layout_contract_rejects_terminal_fifo_ownership_weakening(
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/queue.rs"
-    replace_once(
+    replace_once_after(
         path,
+        "fn release_barrier_has_exact_fifo_ownership_locked(",
         "let Some(tx) = self.txs.get(&hash) else",
         "let Some(tx) = self.txs.iter().next() else",
     )

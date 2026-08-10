@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import pytest
 import requests
-from iroha_torii_client.client import canonical_request_signature_message
+from iroha_torii_client.client import canonical_request_message
 
 from iroha_python import DataspaceSpec, NetworkId, ToriiClient, plan_dataspace, write_dataspace_plan
 from iroha_python.crypto import Ed25519KeyPair
@@ -339,6 +339,7 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
     key_pair = Ed25519KeyPair.from_private_key(bytes([7] * 32))
 
     headers = ToriiClient.build_operator_signature_headers(
+        network_id=NETWORK_ID,
         method="POST",
         path="/v1/configuration?b=2&a=1",
         body=b'{"retire":[]}',
@@ -347,12 +348,15 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
         nonce="nonce-1",
     )
 
-    message = canonical_request_signature_message(
-        "POST",
-        "/v1/configuration?b=2&a=1",
-        b'{"retire":[]}',
-        timestamp_ms=123456,
-        nonce="nonce-1",
+    message = b"".join(
+        (
+            b"iroha.operator.http-request.network.v1\0",
+            CANONICAL_GENESIS_HASH,
+            canonical_request_message(
+                "POST", "/v1/configuration?b=2&a=1", b'{"retire":[]}'
+            ),
+            b"\n123456\nnonce-1",
+        )
     )
     assert headers["x-iroha-operator-public-key"] == key_pair.public_key_multihash
     assert headers["x-iroha-operator-timestamp-ms"] == "123456"
@@ -361,13 +365,31 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
         message,
         base64.b64decode(headers["x-iroha-operator-signature"]),
     )
+    foreign_message = message.replace(
+        CANONICAL_GENESIS_HASH,
+        bytes([0xA6]) * 32,
+        1,
+    )
+    assert not key_pair.verify(
+        foreign_message,
+        base64.b64decode(headers["x-iroha-operator-signature"]),
+    )
 
 
 def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
     key_pair = Ed25519KeyPair.from_private_key(bytes([8] * 32))
 
+    with pytest.raises(TypeError, match="NetworkId"):
+        ToriiClient.build_operator_signature_headers(
+            network_id="same-label",  # type: ignore[arg-type]
+            method="POST",
+            path="/v1/configuration",
+            key_pair=key_pair,
+        )
+
     with pytest.raises(ValueError, match="exactly one"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=key_pair,
@@ -376,6 +398,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
 
     with pytest.raises(ValueError, match="nonce"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=key_pair,
@@ -384,6 +407,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
 
     with pytest.raises(ValueError, match="nonce"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=key_pair,
@@ -392,6 +416,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
 
     with pytest.raises(ValueError, match="timestamp_ms"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=key_pair,
@@ -404,6 +429,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
 
     with pytest.raises(TypeError, match="public_key_multihash"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=MissingPublicKey(),
@@ -417,6 +443,7 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
 
     with pytest.raises(TypeError, match="return bytes"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             key_pair=BadSignature(),
@@ -428,6 +455,7 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
     key_pair = Ed25519KeyPair.from_private_key(raw_private_key)
 
     hex_headers = ToriiClient.build_operator_signature_headers(
+        network_id=NETWORK_ID,
         method="POST",
         path="/v1/configuration",
         body=b"{}",
@@ -436,6 +464,7 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
         nonce="hex-nonce",
     )
     bytes_headers = ToriiClient.build_operator_signature_headers(
+        network_id=NETWORK_ID,
         method="POST",
         path="/v1/configuration",
         body=b"{}",
@@ -448,12 +477,14 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
     assert bytes_headers["x-iroha-operator-public-key"] == key_pair.public_key_multihash
     with pytest.raises(ValueError, match="private-key multihash or raw Ed25519 hex"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             private_key="not-hex-or-multihash",
         )
     with pytest.raises(ValueError, match="32 bytes"):
         ToriiClient.build_operator_signature_headers(
+            network_id=NETWORK_ID,
             method="POST",
             path="/v1/configuration",
             private_key="00" * 31,

@@ -11,10 +11,13 @@ var networkId = Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID");
 var privateKeySeed = string.IsNullOrWhiteSpace(seedHex)
     ? null
     : Convert.FromHexString(seedHex);
-var toriiOptions = privateKeySeed is null || string.IsNullOrWhiteSpace(canonicalAccountId)
+var toriiOptions = privateKeySeed is null
+    || string.IsNullOrWhiteSpace(canonicalAccountId)
+    || string.IsNullOrWhiteSpace(networkId)
     ? null
     : new ToriiClientOptions
     {
+        LocalSigningContext = new ToriiLocalSigningContext(NetworkId.Parse(networkId)),
         CanonicalRequestCredentials = new CanonicalRequestCredentials(
             canonicalAccountId,
             privateKeySeed),

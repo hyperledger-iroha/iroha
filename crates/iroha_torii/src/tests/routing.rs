@@ -11,7 +11,7 @@ mod tests {
         kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
         telemetry::StateTelemetry,
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
         block::{
             BlockHeader,
@@ -37,6 +37,126 @@ mod tests {
     use crate::mk_app_state_for_tests;
 
     static SUMERAGI_V2_STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn install_passive_diagnostic_lane_artifact(
+        state: &CoreState,
+        kura: &Kura,
+    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        use iroha_data_model::{
+            block::{
+                BlockExecutionContextBundle, SignedBlock,
+                consensus::{
+                    LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
+                    SumeragiLanePayloadOwnership,
+                },
+            },
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            nexus::{DataSpaceId, LaneId},
+            peer::PeerId,
+        };
+
+        let block_signer = checked_routing_fixture_keypair(
+            0xe2,
+            Algorithm::Ed25519,
+            "derive passive diagnostic block signer",
+        );
+        let mut block: SignedBlock =
+            iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
+                .chain(0, None)
+                .sign(block_signer.private_key())
+                .unpack(|_| {})
+                .into();
+        let entrypoint_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        let accepted_transaction_hashes = entrypoint_hashes
+            .iter()
+            .copied()
+            .map(Hash::from)
+            .collect::<Vec<_>>();
+        let accepted_candidate_indices = (0..accepted_transaction_hashes.len())
+            .map(|index| u64::try_from(index).expect("diagnostic fixture index fits u64"))
+            .collect::<Vec<_>>();
+        let validator = checked_routing_fixture_keypair(
+            0xe3,
+            Algorithm::Ed25519,
+            "derive passive diagnostic lane validator",
+        );
+        let validator_set = vec![PeerId::new(validator.public_key().clone())];
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let lane_incarnation = state
+            .lane_incarnation(lane_id)
+            .expect("default diagnostic lane incarnation");
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: block.header().height().get(),
+            proposal_view: block.header().view_change_index(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: "permissioned:torii-passive-diagnostics".to_owned(),
+            accepted_candidate_indices: accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::new(b"passive diagnostic placeholder")),
+            lane_block_descriptor_validator_set: validator_set.clone(),
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        let replay = ownership
+            .compute_replay_hashes()
+            .expect("passive diagnostic ownership replay hashes");
+        ownership.subject_hash = replay.subject_hash;
+        ownership.payload_ownership_hash = replay.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+        let descriptor = LaneBlockDescriptorV1 {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            proposal_height: ownership.proposal_height,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices,
+            accepted_transaction_hashes,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: ownership.qc_mode_tag.clone(),
+            descriptor_hash: replay.lane_block_descriptor_hash,
+        };
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
+                proposal_height: ownership.proposal_height,
+                proposal_view: ownership.proposal_view,
+                proposal_block_hash: block.hash(),
+            }),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        block.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ownership]),
+        ));
+        kura.store_block(Arc::new(block))
+            .expect("store passive diagnostic lane artifact");
+        proposal
+    }
 
     #[test]
     fn openapi_handler_emits_alias_spec() {
@@ -643,15 +763,20 @@ mod tests {
 
     #[tokio::test]
     async fn permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state() {
+        let kura = Kura::blank_kura_for_testing();
         let state = std::sync::Arc::new(CoreState::new_for_testing(
             World::default(),
-            Kura::blank_kura_for_testing(),
+            Arc::clone(&kura),
             LiveQueryStore::start_test(),
         ));
-        let response =
-            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, None, false)
-                .await
-                .expect("diagnostics handler");
+        let response = super::handle_v1_sumeragi_diagnostics(
+            axum::extract::State(Arc::clone(&state)),
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("diagnostics handler");
         assert_eq!(response.status(), StatusCode::OK);
         let body = response
             .into_body()
@@ -689,6 +814,55 @@ mod tests {
                 "leaked canonical field {canonical}"
             );
         }
+
+        let proposal = install_passive_diagnostic_lane_artifact(&state, &kura);
+        let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        );
+        let lane_artifact_dir = lane_config
+            .entry(proposal.descriptor.lane_id)
+            .expect("Torii diagnostic lane entry")
+            .blocks_dir(kura.store_root())
+            .join("lane_artifacts");
+        let ownership_data = lane_artifact_dir.join("ownerships.norito");
+        let ownership_index = lane_artifact_dir.join("ownerships.index");
+        let ownership_data_temp = ownership_data.with_extension("norito.tmp");
+        let ownership_index_temp = ownership_index.with_extension("index.tmp");
+        std::fs::rename(&ownership_data, &ownership_data_temp)
+            .expect("stage Torii diagnostic ownership data");
+        std::fs::rename(&ownership_index, &ownership_index_temp)
+            .expect("stage Torii diagnostic ownership index");
+        let staged_data =
+            std::fs::read(&ownership_data_temp).expect("read staged Torii ownership data");
+        let staged_index =
+            std::fs::read(&ownership_index_temp).expect("read staged Torii ownership index");
+        for _ in 0..2 {
+            let response = super::handle_v1_sumeragi_diagnostics(
+                axum::extract::State(Arc::clone(&state)),
+                None,
+                None,
+                true,
+            )
+            .await
+            .expect("passive diagnostics handler");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert!(!ownership_data.exists());
+        assert!(!ownership_index.exists());
+        assert_eq!(
+            std::fs::read(&ownership_data_temp).expect("reread staged Torii ownership data"),
+            staged_data,
+        );
+        assert_eq!(
+            std::fs::read(&ownership_index_temp).expect("reread staged Torii ownership index"),
+            staged_index,
+        );
+        kura.recover_lane_block_payload(&proposal)
+            .expect("explicitly recover Torii diagnostic ownership evidence");
+        assert!(ownership_data.is_file());
+        assert!(ownership_index.is_file());
+        assert!(!ownership_data_temp.exists());
+        assert!(!ownership_index_temp.exists());
     }
 
     #[test]

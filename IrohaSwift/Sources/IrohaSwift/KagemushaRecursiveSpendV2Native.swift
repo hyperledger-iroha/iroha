@@ -351,14 +351,14 @@ extension NoritoNativeBridge {
 
     func kagemushaRecipientLineageQueryCreateV2(
         chainDiscriminant: UInt16,
-        chainID: Data,
+        networkID: NetworkId,
         recipient: Data,
         receiverDeviceID: Data,
         assetDefinitionID: Data,
         trustedCheckpointHeight: UInt64
     ) throws -> Data? {
-        guard !chainID.isEmpty, chainID.count <= 256,
-              !recipient.isEmpty, recipient.count <= 512,
+        let networkIDLiteral = Data(networkID.literal.utf8)
+        guard !recipient.isEmpty, recipient.count <= 512,
               !receiverDeviceID.isEmpty, receiverDeviceID.count <= 128,
               !assetDefinitionID.isEmpty, assetDefinitionID.count <= 512,
               trustedCheckpointHeight > 0 else {
@@ -371,13 +371,13 @@ extension NoritoNativeBridge {
         ) else { return nil }
         var output: UnsafeMutablePointer<UInt8>?
         var outputLength: CUnsignedLong = 0
-        let status = chainID.withUnsafeBytes { chainBuffer in
+        let status = networkIDLiteral.withUnsafeBytes { networkBuffer in
             recipient.withUnsafeBytes { recipientBuffer in
                 receiverDeviceID.withUnsafeBytes { deviceBuffer in
                     assetDefinitionID.withUnsafeBytes { assetBuffer in
                         function(
-                            chainBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(chainBuffer.count),
+                            networkBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(networkBuffer.count),
                             chainDiscriminant,
                             recipientBuffer.bindMemory(to: UInt8.self).baseAddress,
                             CUnsignedLong(recipientBuffer.count),

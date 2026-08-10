@@ -718,7 +718,6 @@ fn zk_ams_transaction_context(
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
         network_id: client.network_id,
-        chain_id: client.chain.clone(),
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
@@ -771,7 +770,7 @@ fn zk_ams_binding_v1<'a>(
         .digest()
         .wrap_err("derive canonical ZK-AMS statement digest")?;
     Ok(TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        network_id: statement.context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: statement.context.action_index,
         statement_digest: *statement_digest.as_bytes(),
@@ -1294,7 +1293,6 @@ fn build_vega_action(
     let fixture = vega_fixture(trusted_timestamp_ms, challenge_byte)?;
     let context = VegaPrivacyActionTransactionContextV1 {
         network_id: client.network_id,
-        chain_id: client.chain.clone(),
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),

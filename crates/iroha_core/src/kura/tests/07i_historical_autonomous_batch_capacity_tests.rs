@@ -5,7 +5,7 @@ fn historical_capacity_payload_for_kura(
     tag: &str,
     signer: &KeyPair,
 ) -> (Hash, u64, LaneExecutablePayloadV1) {
-    let (chain_id_hash, epoch, source) =
+    let (network_id, epoch, source) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
     let transaction = TransactionBuilder::new(
         test_network_id(b"kura-autonomous-view-checkpoint"),
@@ -62,7 +62,7 @@ fn historical_capacity_payload_for_kura(
         proposal_identity_hash: proposal.proposal_hash,
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         vec![entrypoint],
@@ -73,11 +73,11 @@ fn historical_capacity_payload_for_kura(
         signer.private_key(),
     )
     .expect("historical capacity payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }
 
 fn persist_historical_capacity_payload_fixture(kura: &Kura, payload: &LaneExecutablePayloadV1) {
-    kura.persist_lane_executable_payload(payload, payload.chain_id_hash, payload.epoch)
+    kura.persist_lane_executable_payload(payload, payload.network_id, payload.epoch)
         .expect("persist historical capacity payload dependency");
 }
 
@@ -413,7 +413,7 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = historical_capacity_payload_for_kura(
+    let (network_id, epoch, payload) = historical_capacity_payload_for_kura(
         lane.lane_id,
         lane.dataspace_id,
         1,
@@ -427,7 +427,7 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_capacity_payload_fixture(&kura, &payload);
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover seal-temp execution input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("persist seal-temp execution input dependency");

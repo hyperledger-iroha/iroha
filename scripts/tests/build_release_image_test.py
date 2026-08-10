@@ -37,7 +37,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
     for name in (
-        "irohad",
+        "iroha3d",
         "sorafs_governance_dag",
         "iroha",
         "kagami",
@@ -291,7 +291,7 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
         assert "tar=false" in output
         assert "rewrite-timestamp=true" in output
         assert "save" not in call
-        assert "BINARIES=irohad sorafs_governance_dag iroha kagami attachment_sanitizer" in call
+        assert "BINARIES=iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer" in call
 
 
 def test_image_refuses_stale_output_without_replacement(tmp_path: Path) -> None:

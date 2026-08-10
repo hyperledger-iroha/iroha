@@ -1,7 +1,7 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
 # Render a per-validator config first, then start with:
-# `irohad --sora --config <rendered-validator-config.toml>`
+# `iroha3d --sora --config <rendered-validator-config.toml>`
 # This is the checked-in peer-1 template. Runtime-only validator private keys,
 # SoraNet transport identities, onboarding/faucet authorities, and streaming
 # identity keys must come from a user-local `validator_secrets.local.toml`

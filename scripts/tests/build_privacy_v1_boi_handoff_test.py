@@ -34,7 +34,93 @@ MACOS_HANDOFF_SHA256 = "c" * 64
 COMPILED_CATALOG = b"NRT0canonical-compiled-profile-catalog-v1"
 QUALIFICATION_PUBLIC_KEY = b"q" * 32
 QUALIFICATION_FINGERPRINT = hashlib.sha256(QUALIFICATION_PUBLIC_KEY).hexdigest()
+RELEASE_FINGERPRINT = "a" * 64
 QUALIFICATION_NOW = 1_800_000_000
+
+
+def _production_cli_args(tmp_path: Path) -> list[str]:
+    return [
+        "--artifact-handoff-root",
+        str(tmp_path / "artifacts"),
+        "--candidate-archive",
+        str(tmp_path / "candidate.tar.gz"),
+        "--candidate-authority-dir",
+        str(tmp_path / "authority"),
+        "--candidate-replay-ledger",
+        str(tmp_path / "replay.json"),
+        "--expected-source-commit",
+        SOURCE_COMMIT,
+        "--expected-dpn-validator-release-commit",
+        DPN_COMMIT,
+        "--expected-cargo-lock-sha256",
+        boi.FIXED_CARGO_LOCK_SHA256,
+        "--expected-workspace-source-manifest-sha256",
+        SOURCE_MANIFEST,
+        "--expected-receipt-id",
+        QUALIFICATION_ID,
+        "--trusted-signing-fingerprint",
+        "a" * 64,
+        "--qualification-external-signer",
+        str(tmp_path / "qualification-signer"),
+        "--trusted-qualification-external-signer-sha256",
+        "b" * 64,
+        "--qualification-signing-public-key",
+        str(tmp_path / "qualification.pub"),
+        "--trusted-qualification-signing-fingerprint",
+        QUALIFICATION_FINGERPRINT,
+        "--qualification-host-id",
+        "boi-host",
+        "--qualification-installation-id",
+        "boi-installation",
+        "--controller-closure-digest",
+        "c" * 64,
+        "--workflow-run-id",
+        "123",
+        "--workflow-run-attempt",
+        "1",
+        "--release-manifest-verifier",
+        str(tmp_path / "verifier"),
+        "--trusted-release-manifest-verifier-sha256",
+        "d" * 64,
+        "--output",
+        str(tmp_path / "qualified"),
+    ]
+
+
+def test_production_cli_refuses_before_candidate_authentication_or_native_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    forbidden_calls: list[str] = []
+
+    def forbidden(name: str):
+        def call(*_args, **_kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(f"BOI barrier reached forbidden operation: {name}")
+
+        return call
+
+    monkeypatch.setattr(boi, "authenticate_candidate", forbidden("authenticate"))
+    monkeypatch.setattr(boi, "assemble_boi_handoff", forbidden("assemble"))
+    monkeypatch.setattr(boi, "_validate_abi_runtime", forbidden("abi-probe"))
+    monkeypatch.setattr(boi, "_probe_native_wheel", forbidden("wheel-probe"))
+
+    assert boi.main(_production_cli_args(tmp_path)) == 1
+
+    captured = capsys.readouterr()
+    assert "missing preprovisioned" in captured.err
+    assert boi.BOI_QUALIFICATION_ISOLATION_CONTRACT in captured.err
+    assert "no_new_privs" in captured.err
+    assert "network-denying sandbox" in captured.err
+    assert "authority-UID-authenticated endpoint" in captured.err
+    assert "inaccessible to runtime" in captured.err
+    assert boi.BOI_QUALIFICATION_RUN_BINDING_CONTRACT in captured.err
+    assert "workflow run ID/attempt must not authorize" in captured.err
+    assert boi.BOI_COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in captured.err
+    assert "caller-echoed values are not release authority" in captured.err
+    assert forbidden_calls == []
+    assert not (tmp_path / "qualified").exists()
 
 
 @dataclass
@@ -113,6 +199,48 @@ def _source() -> dict[str, object]:
         "commit": SOURCE_COMMIT,
         "dpn_validator_release_commit": DPN_COMMIT,
         "workspace_source_manifest_sha256": SOURCE_MANIFEST,
+    }
+
+
+def _valid_capability_binding() -> dict[str, object]:
+    manifest_digest = _sha(b"committed Exact12 capability manifest")
+    rows: list[dict[str, object]] = []
+    for index, protocol_id in enumerate(boi.EXACT12_PROTOCOL_IDS):
+        is_jindo = protocol_id == boi.JINDO_PROTOCOL_ID
+        rows.append(
+            {
+                "activation_state": "active",
+                "committed_height": 4242,
+                "compiled_profile_status": "available",
+                "engine_id": "native-test-engine",
+                "engine_manifest_digest": _sha(
+                    f"{protocol_id}:engine-manifest".encode()
+                ),
+                "execution_mode": "native-rust",
+                "limitation": boi.JINDO_LIMITATION if is_jindo else None,
+                "manifest_digest": manifest_digest,
+                "network_available": True,
+                "operation_schema": "privacy-operation-v1",
+                "parameter_digest": _sha(f"{protocol_id}:parameter".encode()),
+                "parameter_id": _sha(f"{protocol_id}:parameter-id".encode()),
+                "privacy_feature_mask": 1 << index,
+                "proof_system_id": "native-test-proof",
+                "protocol_id": protocol_id,
+                "readiness": "available-experimental" if is_jindo else "available",
+                "statement_schema_digest": _sha(
+                    f"{protocol_id}:statement-schema".encode()
+                ),
+                "unavailable_reason": None,
+                "verifier_digest": _sha(f"{protocol_id}:verifier".encode()),
+            }
+        )
+    required_rows = json.loads(json.dumps(rows))
+    return {
+        "manifest_protocol_tuples": rows,
+        "protocol_count": 12,
+        "required_network_protocol_tuples": required_rows,
+        "schema": boi.CAPABILITY_BINDING_SCHEMA,
+        "schema_version": 1,
     }
 
 
@@ -223,6 +351,7 @@ def _candidate(
         archive_info=contract.stable_hash_path(archive),
         authority_dir=authority,
         authority_files=authority_files,
+        release_signer_fingerprint_sha256=RELEASE_FINGERPRINT,
         release_manifest_sha256=authority_files["release_manifest.json"].sha256,
         native_validator_binary_sha256=NATIVE_VALIDATOR_SHA256,
         validator_binary_sha256=VALIDATOR_SHA256,
@@ -348,7 +477,11 @@ def _assemble(
         fixture.output.resolve(),
         fixture.candidate,
         python="python3",
-        wheel_probe=(wheel_probe if callable(wheel_probe) else lambda *_: None),
+        wheel_probe=(
+            wheel_probe
+            if callable(wheel_probe)
+            else lambda *_: _valid_capability_binding()
+        ),
         abi_runtime_validator=(
             abi_probe if callable(abi_probe) else lambda _path: COMPILED_CATALOG
         ),
@@ -378,9 +511,10 @@ def test_assembles_one_closed_source_and_candidate_bound_bundle(tmp_path: Path) 
         _capability: bytes,
         compiled_catalog: bytes,
         _python: str,
-    ) -> None:
+    ) -> dict[str, object]:
         assert compiled_catalog == COMPILED_CATALOG
         calls.append("wheel")
+        return _valid_capability_binding()
 
     def abi_probe(_path: Path) -> bytes:
         calls.append("abi")
@@ -403,6 +537,9 @@ def test_assembles_one_closed_source_and_candidate_bound_bundle(tmp_path: Path) 
         NATIVE_VALIDATOR_SHA256
     )
     assert inventory["candidate"]["macos_validator_binary_sha256"] == (VALIDATOR_SHA256)
+    assert inventory["candidate"]["release_signer_fingerprint_sha256"] == (
+        RELEASE_FINGERPRINT
+    )
     assert inventory["contract"]["privacy_c_exports"] == list(
         abi22.APPROVED_PRIVACY_C_EXPORTS
     )
@@ -441,9 +578,28 @@ def test_assembles_one_closed_source_and_candidate_bound_bundle(tmp_path: Path) 
         "role": "linux-boi-qualification",
     }
     assert envelope["workflow"] == {"run_attempt": 2, "run_id": 101}
+    assert envelope["signer"] == {
+        "algorithm": "ed25519",
+        "qualification_public_key_fingerprint_sha256": QUALIFICATION_FINGERPRINT,
+        "release_public_key_fingerprint_sha256": RELEASE_FINGERPRINT,
+    }
     assert (
         fixture.output / boi.QUALIFICATION_PUBLIC_KEY_PATH
     ).read_bytes() == QUALIFICATION_PUBLIC_KEY
+
+
+def test_qualification_signer_must_be_distinct_from_release_signer(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.candidate = dataclasses.replace(
+        fixture.candidate,
+        release_signer_fingerprint_sha256=QUALIFICATION_FINGERPRINT,
+    )
+
+    with pytest.raises(boi.BoiHandoffError, match="must be distinct"):
+        _assemble(fixture)
+    assert not fixture.output.exists()
 
 
 def test_candidate_authority_static_rebind_covers_the_exact_inventory(
@@ -608,7 +764,7 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
     observed: list[str] = []
 
     def run(
-        arguments: list[str], **_kwargs: object
+        arguments: list[str], **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         observed.append(arguments[0])
         probe_source = arguments[4]
@@ -620,6 +776,10 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
         )
         assert "privacy_exact12_capability_manifest_v1(archive)" in probe_source
         assert "bytes(canonical_archive) != archive" in probe_source
+        assert ".protocol_tuples()" in probe_source
+        assert ".require_network_capability(protocol_id)" in probe_source
+        assert repr(boi.EXACT12_PROTOCOL_IDS) in probe_source
+        assert boi.JINDO_LIMITATION in probe_source
         assert Path(arguments[5]).read_bytes() == _elf_aarch64()
         assert Path(arguments[6]).read_bytes() == capability
         assert Path(arguments[7]).read_bytes() == COMPILED_CATALOG
@@ -628,10 +788,13 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
         )
         assert Path(arguments[9]).read_bytes() == expected_worker
         assert arguments[10] == _sha(expected_worker)
+        stdout = kwargs["stdout"]
+        assert hasattr(stdout, "write")
+        stdout.write(contract.canonical_json_bytes(_valid_capability_binding()))
         return subprocess.CompletedProcess(arguments, 0)
 
     monkeypatch.setattr(boi.subprocess, "run", run)
-    boi._probe_native_wheel(
+    binding = boi._probe_native_wheel(
         fixture.root.resolve(),
         captured,
         native_member,
@@ -640,6 +803,77 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
         "python-native-fixture",
     )
     assert observed == ["python-native-fixture"]
+    assert binding == _valid_capability_binding()
+
+
+@pytest.mark.parametrize(
+    ("attack", "message"),
+    (
+        ("unavailable", "not release-ready"),
+        ("inactive", "not release-ready"),
+        ("profile-substitution", "manifest and local required capability tuples differ"),
+        ("jindo-limitation", "not release-ready"),
+        ("jindo-readiness", "not release-ready"),
+        ("missing-row", "manifest and local required capability tuples differ"),
+        ("duplicate-row", "protocol order differs"),
+        ("reordered-rows", "protocol order differs"),
+        ("unknown-field", "fields differ"),
+        ("differing-manifest-digest", "do not share one manifest digest"),
+        ("noncanonical-numeric", "numeric fields differ"),
+        ("noncanonical-digest", "lowercase SHA-256"),
+    ),
+)
+def test_exact12_runtime_binding_rejects_hostile_capability_rows(
+    attack: str, message: str
+) -> None:
+    binding = _valid_capability_binding()
+    manifest_rows = binding["manifest_protocol_tuples"]
+    required_rows = binding["required_network_protocol_tuples"]
+    assert isinstance(manifest_rows, list)
+    assert isinstance(required_rows, list)
+
+    def set_both(index: int, field: str, value: object) -> None:
+        manifest_rows[index][field] = value
+        required_rows[index][field] = value
+
+    if attack == "unavailable":
+        for rows in (manifest_rows, required_rows):
+            rows[0]["network_available"] = False
+            rows[0]["compiled_profile_status"] = "unavailable"
+            rows[0]["readiness"] = "unavailable"
+            rows[0]["unavailable_reason"] = "engine-unavailable"
+    elif attack == "inactive":
+        set_both(0, "network_available", False)
+        set_both(0, "activation_state", "proposed")
+    elif attack == "profile-substitution":
+        required_rows[0]["parameter_digest"] = "f" * 64
+    elif attack in {"jindo-limitation", "jindo-readiness"}:
+        jindo_index = boi.EXACT12_PROTOCOL_IDS.index(boi.JINDO_PROTOCOL_ID)
+        set_both(
+            jindo_index,
+            "limitation" if attack == "jindo-limitation" else "readiness",
+            None if attack == "jindo-limitation" else "available",
+        )
+    elif attack == "missing-row":
+        manifest_rows.pop()
+        required_rows.pop()
+    elif attack == "duplicate-row":
+        manifest_rows[1] = dict(manifest_rows[0])
+        required_rows[1] = dict(required_rows[0])
+    elif attack == "reordered-rows":
+        manifest_rows[0], manifest_rows[1] = manifest_rows[1], manifest_rows[0]
+        required_rows[0], required_rows[1] = required_rows[1], required_rows[0]
+    elif attack == "unknown-field":
+        set_both(0, "self_reported_pass", True)
+    elif attack == "differing-manifest-digest":
+        set_both(1, "manifest_digest", "f" * 64)
+    elif attack == "noncanonical-numeric":
+        set_both(0, "committed_height", True)
+    else:
+        set_both(0, "parameter_digest", "F" * 64)
+
+    with pytest.raises(boi.BoiHandoffError, match=message):
+        boi._validate_capability_binding_result(binding)
 
 
 @pytest.mark.parametrize(
@@ -789,8 +1023,9 @@ def test_changed_artifact_after_preflight_never_publishes_ready_output(
 ) -> None:
     fixture = _fixture(tmp_path)
 
-    def mutate_after_preflight(*_args: object) -> None:
+    def mutate_after_preflight(*_args: object) -> dict[str, object]:
         (fixture.root / relative).write_bytes(b"changed after preflight\n")
+        return _valid_capability_binding()
 
     with pytest.raises(
         (boi.BoiHandoffError, contract.ReleaseArtifactError),
@@ -983,6 +1218,7 @@ def _verify_qualified(
     expected_run_id: int = 101,
     now_unix: int = QUALIFICATION_NOW,
     reject_signature: bool = False,
+    trusted_release_fingerprint: str = RELEASE_FINGERPRINT,
 ) -> boi.QualifiedBoiSnapshot:
     monkeypatch.setattr(
         boi, "authenticate_candidate", lambda _args: fixture.candidate
@@ -1020,7 +1256,7 @@ def _verify_qualified(
         expected_source=source,
         expected_receipt_id=QUALIFICATION_ID,
         replay_ledger_path=replay_ledger,
-        trusted_signing_fingerprint="a" * 64,
+        trusted_signing_fingerprint=trusted_release_fingerprint,
         trusted_qualification_public_key_path=(
             fixture.root.parent / "qualification-signing.pub"
         ),
@@ -1056,6 +1292,108 @@ def test_qualified_handoff_independently_binds_signed_candidate(
     )
 
 
+def test_recomputed_transcript_hash_cannot_bless_an_inactive_exact12_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    root = fixture.output
+    qualification_dir = root / "qualification"
+    root.chmod(0o755)
+    qualification_dir.chmod(0o755)
+
+    def rewrite(relative: str, value: object, *, compact: bool = False) -> bytes:
+        path = root / relative
+        payload = (
+            (
+                json.dumps(
+                    value,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("ascii")
+            if compact
+            else contract.canonical_json_bytes(value)
+        )
+        path.chmod(0o644)
+        path.write_bytes(payload)
+        path.chmod(0o444)
+        return payload
+
+    transcript = json.loads((root / boi.PROBE_TRANSCRIPT_PATH).read_bytes())
+    wheel_result = transcript["python_wheel"]
+    binding = wheel_result["capability_binding"]
+    for rows_name in (
+        "manifest_protocol_tuples",
+        "required_network_protocol_tuples",
+    ):
+        binding[rows_name][0]["network_available"] = False
+        binding[rows_name][0]["activation_state"] = "proposed"
+    wheel_result["capability_binding_sha256"] = _sha(
+        contract.canonical_json_bytes(binding)
+    )
+    transcript_payload = rewrite(boi.PROBE_TRANSCRIPT_PATH, transcript)
+
+    inventory = json.loads((root / boi.OUTPUT_INVENTORY).read_bytes())
+    transcript_row = next(
+        row
+        for row in inventory["artifacts"]
+        if row["path"] == boi.PROBE_TRANSCRIPT_PATH
+    )
+    transcript_row.update(
+        {"sha256": _sha(transcript_payload), "size": len(transcript_payload)}
+    )
+    inventory_payload = rewrite(boi.OUTPUT_INVENTORY, inventory)
+
+    payload_inventory = json.loads(
+        (root / boi.QUALIFICATION_PAYLOAD_INVENTORY_PATH).read_bytes()
+    )
+    changed_payloads = {
+        boi.OUTPUT_INVENTORY: inventory_payload,
+        boi.PROBE_TRANSCRIPT_PATH: transcript_payload,
+    }
+    for row in payload_inventory["files"]:
+        if row["path"] in changed_payloads:
+            payload = changed_payloads[row["path"]]
+            row.update({"sha256": _sha(payload), "size": len(payload)})
+    payload_inventory_payload = rewrite(
+        boi.QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+        payload_inventory,
+        compact=True,
+    )
+
+    envelope = json.loads((root / boi.QUALIFICATION_ENVELOPE_PATH).read_bytes())
+    envelope["payload"]["boi_inventory_sha256"] = _sha(inventory_payload)
+    envelope["payload"]["qualified_payload_inventory_sha256"] = _sha(
+        payload_inventory_payload
+    )
+    envelope["probes"]["python_wheel_result_sha256"] = _sha(
+        contract.canonical_json_bytes(wheel_result)
+    )
+    envelope["probes"]["transcript_sha256"] = _sha(transcript_payload)
+    envelope_payload = rewrite(boi.QUALIFICATION_ENVELOPE_PATH, envelope)
+
+    transport = json.loads((root / boi.QUALIFIED_HANDOFF_MANIFEST).read_bytes())
+    changed_payloads.update(
+        {
+            boi.QUALIFICATION_PAYLOAD_INVENTORY_PATH: payload_inventory_payload,
+            boi.QUALIFICATION_ENVELOPE_PATH: envelope_payload,
+        }
+    )
+    for row in transport["files"]:
+        if row["path"] in changed_payloads:
+            payload = changed_payloads[row["path"]]
+            row.update({"sha256": _sha(payload), "size": len(payload)})
+    rewrite(boi.QUALIFIED_HANDOFF_MANIFEST, transport, compact=True)
+    qualification_dir.chmod(0o555)
+    root.chmod(0o555)
+
+    with pytest.raises(boi.BoiHandoffError, match="not release-ready"):
+        _verify_qualified(fixture, monkeypatch)
+
+
 def test_qualified_handoff_rejects_invalid_external_signature(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1064,6 +1402,20 @@ def test_qualified_handoff_rejects_invalid_external_signature(
 
     with pytest.raises(boi.BoiHandoffError, match="signature is invalid"):
         _verify_qualified(fixture, monkeypatch, reject_signature=True)
+
+
+def test_qualified_handoff_verifier_rejects_signer_role_collapse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+
+    with pytest.raises(boi.BoiHandoffError, match="must be distinct"):
+        _verify_qualified(
+            fixture,
+            monkeypatch,
+            trusted_release_fingerprint=QUALIFICATION_FINGERPRINT,
+        )
 
 
 @pytest.mark.parametrize(

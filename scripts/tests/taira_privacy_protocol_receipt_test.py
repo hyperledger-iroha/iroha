@@ -241,7 +241,10 @@ def _rechain_case(root: Path, index: int) -> None:
 def validate(root: Path, receipt_id: str | None = None) -> dict[str, object]:
     if receipt_id is None:
         receipt_id = str(_load(root / evidence.RECEIPT_NAME)["receipt_id"])
-    return evidence.validate_evidence_directory(
+    # Unsigned v2 parsing is intentionally structural-only.  Release callers
+    # use validate_evidence_directory(), which is closed on independent
+    # controller-origin authentication.
+    return evidence.validate_unsigned_v2_structure(
         root,
         expected_source=SOURCE,
         expected_validator_binary_sha256=BINDINGS["validator_binary_sha256"],
@@ -255,7 +258,7 @@ def validate(root: Path, receipt_id: str | None = None) -> dict[str, object]:
     )
 
 
-def test_valid_v2_evidence_preserves_six_protocol_cases_and_governance(
+def test_unsigned_v2_structure_preserves_six_protocol_cases_and_governance(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "evidence"
@@ -266,6 +269,32 @@ def test_valid_v2_evidence_preserves_six_protocol_cases_and_governance(
     assert len(result["outcomes"]) == 12
     assert set(artifacts.scan_inventory_paths(root)) == set(evidence.EVIDENCE_NAMES)
     assert all(row["profile"] != "engine-unavailable" for row in result["outcomes"])
+
+    # These bytes are deliberately synthesized libtest text with recomputed
+    # self-hashes.  Structural consistency must never promote them to release
+    # authority, even though every legacy v2 relationship is internally valid.
+    with pytest.raises(
+        evidence.PrivacyProtocolEvidenceError,
+        match=evidence.CONTROLLER_ORIGIN_AUTHORITY_CONTRACT,
+    ):
+        evidence.validate_evidence_directory(
+            root,
+            expected_source=SOURCE,
+            expected_validator_binary_sha256=BINDINGS[
+                "validator_binary_sha256"
+            ],
+            expected_linux_release_archive_sha256=BINDINGS[
+                "linux_release_archive_sha256"
+            ],
+            expected_exact12_matrix_sha256=BINDINGS[
+                "exact12_matrix_sha256"
+            ],
+            expected_artifact_handoff_sha256=BINDINGS[
+                "artifact_handoff_sha256"
+            ],
+            expected_receipt_id=receipt_id,
+            now_unix=NOW,
+        )
 
 
 def test_v1_receipt_is_rejected_without_compatibility(tmp_path: Path) -> None:

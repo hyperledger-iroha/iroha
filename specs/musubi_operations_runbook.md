@@ -402,26 +402,31 @@ snapshot; `invalid` means the supplied cursor failed structural validation.
    repair, recovery, yank, and retention queries remain available.
 2. Inventory only canonical cache `ArchiveId` directories. Query retention in
    sorted, distinct batches of at most 100 exact identities. The first batch
-   establishes the chain ID, genesis hash, and finalized registry snapshot;
-   send that snapshot as `expected_snapshot` on every later batch.
+   establishes the exact genesis-derived `NetworkId` and finalized registry
+   snapshot; send that snapshot as `expected_snapshot` on every later batch.
 3. Abort the whole prune without deleting anything if any batch is stale, has
-   a different chain/genesis/snapshot, omits or reorders an identity, or exposes
+   a different network/snapshot, omits or reorders an identity, or exposes
    inconsistent archive, reverse-reference, release, or availability records.
    Unknown archives retain fail-closed because the user cache is not
    chain-scoped.
 4. Retain archives referenced by any governance-available active or yanked
    release, regardless of replication quorum or availability. Feed only
    explicit `PruneUnreferenced` and `PruneGovernedTakedown` decisions into the
-   point-targeted `prune_exact` operation. Never derive deletion authority from
-   a workspace lock or from absence in a global retained set.
+   reported candidate set. Never derive deletion authority from a workspace
+   lock or from absence in a global retained set.
 5. Run `musubi cache prune --dry-run` first during an incident. It performs and
    reports the same finalized classification but must not rename or delete any
-   cache path. A live prune may remove only the exact queried candidates; a
-   concurrently installed, never-queried archive remains untouched.
-6. Renew or rebalance archive locations before retiring any pin. Confirm every
+   cache path. Every non-empty live prune currently returns an unsupported
+   error before candidate inspection, isolation, permission changes, or
+   removal; there is no operator override.
+6. Retain `.payload.*.partial` files and failed or race-losing
+   `.src.*.partial` trees for inspection. Do not script automatic destructive
+   cleanup; it remains disabled until atomic handle-relative
+   compare-and-delete is available.
+7. Renew or rebalance archive locations before retiring any pin. Confirm every
    active and yanked release retains at least one valid location and fresh
    releases retain quorum.
-7. Record reclaimed bytes, affected immutable IDs, and final availability
+8. Record classified candidates, retained residue, affected immutable IDs, and final availability
    revisions without logging content, credentials, or bearer URLs.
 
 ## Recovery and closure

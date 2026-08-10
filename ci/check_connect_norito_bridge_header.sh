@@ -516,7 +516,7 @@ if swift_proof_exports & swift_protocol_exports:
 expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
 if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
     raise SystemExit(
-        "Swift ABI-21 inventory must contain 4 proof and "
+        "Swift ABI-22 inventory must contain 4 proof and "
         f"{expected_protocol_count} protocol symbols"
     )
 swift_exports = swift_proof_exports | swift_protocol_exports

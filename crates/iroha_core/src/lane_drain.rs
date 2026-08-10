@@ -765,7 +765,11 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"chain"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::new(b"lane-drain-genesis"),
+                    ),
+                ),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: incarnation(),

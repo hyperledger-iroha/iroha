@@ -20,6 +20,7 @@ use iroha_data_model::{
         SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
         TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
+        native_amx_application_manifest_empty_root,
     },
     merge::MergeLedgerEntry,
     peer::PeerId,
@@ -35,9 +36,11 @@ fn peer(seed: u8) -> PeerId {
 }
 
 fn network_id(seed: u8) -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([seed; Hash::LENGTH]),
-    ))
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [seed; Hash::LENGTH],
+        )),
+    )
 }
 
 fn context() -> HeightContext {
@@ -482,7 +485,7 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         "unknown_payload_tag",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
-        "commit_request_invalid_chain_utf8",
+        "commit_request_invalid_network_id",
         "execution_commitment_missing_merge_carrier_field",
     ] {
         assert!(

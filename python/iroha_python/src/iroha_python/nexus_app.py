@@ -7,7 +7,6 @@ advanced callers.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Union
 
@@ -34,7 +33,6 @@ class NexusAppConfig:
     """Static configuration for a Nexus app facade instance."""
 
     network_id: NetworkId
-    chain_id: str
     authority: Optional[str] = None
     base_url: Optional[str] = None
     node: Optional[str] = None
@@ -319,39 +317,6 @@ def _submission_hash_hex(submission: Any) -> Optional[str]:
     return canonical_hash
 
 
-def _tagged_connect_field(tag: str, value: bytes) -> bytes:
-    tag_bytes = tag.encode("utf-8")
-    return len(tag_bytes).to_bytes(2, "little") + tag_bytes + len(value).to_bytes(8, "little") + value
-
-
-def _connect_relay_auth_hash(sid: bytes, relay_token: str) -> bytes:
-    hasher = hashlib.sha256()
-    hasher.update(b"iroha-connect|relay-auth|v1")
-    hasher.update(sid)
-    hasher.update(relay_token.encode("utf-8"))
-    return hasher.digest()
-
-
-def _connect_approval_preimage(
-    *,
-    sid: bytes,
-    app_public_key: bytes,
-    wallet_public_key: bytes,
-    account_id: str,
-    relay_token: Optional[str],
-) -> bytes:
-    parts = [
-        _tagged_connect_field("domain", b"iroha-connect|approve|v1"),
-        _tagged_connect_field("sid", sid),
-        _tagged_connect_field("app_pk", app_public_key),
-        _tagged_connect_field("wallet_pk", wallet_public_key),
-        _tagged_connect_field("account_id", account_id.encode("utf-8")),
-    ]
-    if relay_token:
-        parts.append(_tagged_connect_field("relay_auth", _connect_relay_auth_hash(sid, relay_token)))
-    return b"".join(parts)
-
-
 def _normalize_signature(value: Union[NexusWalletSignature, Mapping[str, Any], BytesLike]) -> NexusWalletSignature:
     if isinstance(value, NexusWalletSignature):
         signature = value
@@ -463,7 +428,7 @@ class DefaultNexusConnectTransport:
         torii_client = ToriiClient(config.base_url)
         bootstrap = bootstrap_connect_preview_session(
             torii_client,
-            chain_id=config.chain_id,
+            network_id=config.network_id,
             node=options.node or config.node,
             register=True,
         )
@@ -495,6 +460,7 @@ class DefaultNexusConnectTransport:
             ConnectPermissions,
             ConnectSession,
             ConnectSessionKeys,
+            build_connect_approve_preimage,
         )
         from .crypto import verify_ed25519
 
@@ -507,7 +473,7 @@ class DefaultNexusConnectTransport:
             sequence=1,
             control=ConnectControlOpen(
                 app_public_key=state.preview.app_key_pair.public_key,
-                chain_id=config.chain_id,
+                network_id=config.network_id,
                 permissions=permissions,
                 metadata=metadata,
             ),
@@ -518,6 +484,15 @@ class DefaultNexusConnectTransport:
             frame = ConnectFrame.from_bytes(self._recv_bytes(ws))
             if not isinstance(frame.control, ConnectControlApprove):
                 continue
+            if (
+                frame.sid != state.preview.sid_bytes
+                or frame.direction != ConnectDirection.WALLET_TO_APP
+                or frame.sequence != 1
+            ):
+                raise NexusAppError(
+                    "connect_approval_replayed",
+                    "Connect approval must be the first wallet frame for this exact session",
+                )
             approval = frame.control
             try:
                 _normalize_algorithm(approval.algorithm)
@@ -529,11 +504,19 @@ class DefaultNexusConnectTransport:
             signing_public_key = config.signing_public_key or _account_ed25519_public_key(
                 approval.account_id
             )
-            preimage = _connect_approval_preimage(
+            if not session.token_relay:
+                raise NexusAppError(
+                    "connect_approval_invalid",
+                    "Connect approval requires the session relay binding",
+                )
+            preimage = build_connect_approve_preimage(
+                network_id=config.network_id,
                 sid=state.preview.sid_bytes,
                 app_public_key=state.preview.app_key_pair.public_key,
                 wallet_public_key=approval.wallet_public_key,
                 account_id=approval.account_id,
+                permissions=approval.permissions,
+                proof=approval.proof,
                 relay_token=session.token_relay,
             )
             if not verify_ed25519(signing_public_key, preimage, approval.signature):

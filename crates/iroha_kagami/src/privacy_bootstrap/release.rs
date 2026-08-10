@@ -16,8 +16,10 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_broker_contract_digest_v1,
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
-use iroha_crypto::sha256;
+use iroha_crypto::{Hash, HashOf, sha256};
 use iroha_data_model::{
+    NetworkId,
+    block::BlockHeader,
     isi::{
         InstructionBox,
         privacy::{
@@ -278,6 +280,7 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
             "issuer_parameter_digest_hex",
             "issuer_parameter_id_hex",
             "issuer_profile_digest_hex",
+            "network_id",
             "policy_id_hex",
             "policy_record_digest_hex",
             "registration_instruction",
@@ -298,6 +301,12 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         "broker public export",
     )?;
     expect_string_v1(fields, "chain_id", CHAIN_ID_V1, "broker public export")?;
+    let network_id = string_field_v1(fields, "network_id", "broker public export")?
+        .parse::<NetworkId>()
+        .wrap_err("broker public export network_id is not canonical")?;
+    if network_id.as_bytes().iter().all(|byte| *byte == 0) {
+        bail!("broker public export network_id must be non-zero");
+    }
     expect_string_v1(
         fields,
         "runtime_provider_handle",
@@ -439,7 +448,7 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
     )?;
     let qualification = derive_taira_bootle_lantern_broker_qualification_digest_v1(
         &TairaBootleLanternBrokerQualificationInputsV1 {
-            chain_id: CHAIN_ID_V1,
+            network_id,
             runtime_provider_handle: PROVIDER_HANDLE_V1,
             runtime_provider_revision: PROVIDER_REVISION_V1,
             issuer_id: registration.policy.issuer_id,
@@ -1424,9 +1433,13 @@ mod tests {
         let instruction_bytes =
             norito::to_bytes(&instruction).expect("encode boxed policy fixture");
         let stable_principal_digest = sha256(b"iroha.taira.release-composer.stable-principal.v1");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed(sha256(b"iroha.taira.release-composer.genesis.v1")),
+            ));
         let qualification = derive_taira_bootle_lantern_broker_qualification_digest_v1(
             &TairaBootleLanternBrokerQualificationInputsV1 {
-                chain_id: CHAIN_ID_V1,
+                network_id,
                 runtime_provider_handle: PROVIDER_HANDLE_V1,
                 runtime_provider_revision: PROVIDER_REVISION_V1,
                 issuer_id: registration.policy.issuer_id,
@@ -1445,6 +1458,10 @@ mod tests {
         fields.insert(
             "chain_id".to_owned(),
             JsonValue::String(CHAIN_ID_V1.to_owned()),
+        );
+        fields.insert(
+            "network_id".to_owned(),
+            JsonValue::String(network_id.to_string()),
         );
         fields.insert(
             "runtime_provider_handle".to_owned(),

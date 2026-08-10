@@ -1,3 +1,10 @@
+"""Post-provisioning qualification-handoff mechanics tests.
+
+The installed production route calls the barriered receipt validator.  These
+tests replace that one authority boundary with the explicitly structural v2
+validator so the closed-copy and TOCTOU mechanics remain independently tested.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +17,22 @@ import pytest
 from scripts import close_taira_qualification_handoff as closer
 from scripts import taira_privacy_protocol_receipt as privacy_evidence
 from scripts.tests.taira_privacy_protocol_receipt_test import build_valid_evidence
+
+
+@pytest.fixture(autouse=True)
+def _exercise_handoff_mechanics_behind_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        closer.privacy_evidence,
+        "validate_evidence_directory",
+        closer.privacy_evidence.validate_unsigned_v2_structure,
+    )
+    monkeypatch.setattr(
+        closer.rollout_admission.taira_release_authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
 
 
 def _canonical(value: object) -> bytes:

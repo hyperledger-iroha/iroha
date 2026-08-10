@@ -710,7 +710,7 @@ object AliasNoritoCodec {
             encodeField(encoder, U8, value.version.toLong())
             encodeField(encoder, ONBOARDING_REQUEST_ADAPTER, value.request)
             encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
-            encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId)
             encodeField(encoder, ANCHOR_ADAPTER, value.anchor)
             encodeField(encoder, PLAN_RESOURCE_ADAPTER, value.resource)
             encodeField(encoder, ACQUISITION_ADAPTER, value.acquisition)
@@ -729,7 +729,7 @@ object AliasNoritoCodec {
                 Math.toIntExact(decodeField(decoder, U8)),
                 decodeField(decoder, ONBOARDING_REQUEST_ADAPTER),
                 decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                decodeField(decoder, CHAIN_ID_ADAPTER),
+                decodeField(decoder, NETWORK_ID_ADAPTER),
                 decodeField(decoder, ANCHOR_ADAPTER),
                 decodeField(decoder, PLAN_RESOURCE_ADAPTER),
                 decodeField(decoder, ACQUISITION_ADAPTER),

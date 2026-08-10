@@ -18,6 +18,12 @@ REPO_ROOT = Path(snapshotter.__file__).resolve().parents[1]
 TAIRA_CONFIG = REPO_ROOT / "configs/soranexus/taira/config.toml"
 TAIRA_GENESIS = REPO_ROOT / "configs/soranexus/taira/genesis.json"
 TAIRA_PLAN = REPO_ROOT / "configs/soranexus/taira/privacy_bootstrap_plan.json"
+TEST_NETWORK_ID = (
+    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+)
+FOREIGN_NETWORK_ID = (
+    "hash:A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A5#E8B5"
+)
 
 
 def _sha256(label: bytes) -> str:
@@ -96,6 +102,7 @@ def _release_payloads() -> dict[str, bytes]:
     broker = {
         "schema": "iroha.taira.privacy.bootle-lantern-broker-public.v1",
         "chain_id": snapshotter.CHAIN_ID,
+        "network_id": TEST_NETWORK_ID,
         "runtime_provider_handle": snapshotter.PROVIDER_HANDLE,
         "runtime_provider_revision": 1,
         "runtime_provider_policy_digest_hex": provider_digest,
@@ -132,6 +139,7 @@ def _release_payloads() -> dict[str, bytes]:
     broker_payload = _compact_json(broker)
 
     plan = json.loads(TAIRA_PLAN.read_bytes())
+    plan["network_id"] = TEST_NETWORK_ID
     bootle = plan["bootle_lantern_issuer"]
     bootle["public_export_sha256"] = hashlib.sha256(broker_payload).hexdigest()
     bootle["runtime_provider"]["qualification_policy_digest_hex"] = provider_digest
@@ -350,6 +358,7 @@ def test_snapshot_rejects_noncanonical_or_unbound_config_before_output(
         "rollout-plan-binding",
         "unknown-policy-field",
         "wrong-chain",
+        "wrong-network",
     ),
 )
 def test_snapshot_rejects_plan_inventory_and_type_drift_before_output(
@@ -372,8 +381,10 @@ def test_snapshot_rejects_plan_inventory_and_type_drift_before_output(
         plan["bootle_lantern_issuer"]["governed_issuer_policy"][
             "trapdoor_seed"
         ] = "secret"
-    else:
+    elif mutation == "wrong-chain":
         plan["chain_id"] = "wrong-chain"
+    else:
+        plan["network_id"] = FOREIGN_NETWORK_ID
     _write_source_json(source, "privacy_bootstrap_plan.json", plan)
 
     _assert_rejected_without_output(source, tmp_path)
@@ -391,6 +402,7 @@ def test_snapshot_rejects_plan_inventory_and_type_drift_before_output(
         "short-public-id",
         "uppercase-instruction-hex",
         "provider-binding",
+        "network-binding",
         "export-binding",
     ),
 )
@@ -424,6 +436,8 @@ def test_snapshot_rejects_broker_shape_and_binding_drift_before_output(
         broker["runtime_provider_policy_digest_hex"] = _sha256(
             b"different provider"
         )
+    elif mutation == "network-binding":
+        broker["network_id"] = FOREIGN_NETWORK_ID
     else:
         rebind = False
         broker["broker_contract_digest_hex"] = _sha256(b"changed contract")

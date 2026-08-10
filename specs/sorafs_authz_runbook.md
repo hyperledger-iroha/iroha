@@ -133,5 +133,6 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 8. Monitor `soranet_privacy_ingest_reject_total{reason}`,
    `soranet_privacy_throttles_total`, and the SoraFS operational gauges to catch
    abuse early. Use finalized `PinManifestPageV1.charged_usage`, not sampled
-   Prometheus inventory, as the authoritative live pin count/byte charge; keep
+   Prometheus inventory, as the authoritative retained-record/live-content
+   charge; keep
    the checklist alongside change tickets for token/allow-list rotations.

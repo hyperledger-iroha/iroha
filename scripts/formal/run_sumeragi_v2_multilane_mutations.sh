@@ -19,7 +19,7 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
@@ -159,7 +159,7 @@ run_mutant native-source-claim-epoch-drift "$NATIVE_MODULE" \
   multilane_native_source_claim_epoch_drift_bug.cfg \
   MLNativeSourceClaimInjective
 run_mutant native-source-claim-chain-drift "$NATIVE_MODULE" \
-  multilane_native_source_claim_chain_id_hash_drift_bug.cfg \
+  multilane_native_source_claim_network_id_drift_bug.cfg \
   MLNativeSourceClaimInjective
 run_mutant native-source-claim-authority-height-drift "$NATIVE_MODULE" \
   multilane_native_source_claim_authority_context_height_drift_bug.cfg \

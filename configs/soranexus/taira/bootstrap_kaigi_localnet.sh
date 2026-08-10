@@ -847,10 +847,10 @@ set -euo pipefail
 setopt null_glob
 
 DIR=\$(cd "\$(dirname "\$0")" && pwd)
-IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
+IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/iroha3d}"
 
 if [[ ! -x "\$IROHAD_BIN" ]]; then
-  echo "irohad binary not executable: \$IROHAD_BIN" >&2
+  echo "iroha3d binary not executable: \$IROHAD_BIN" >&2
   exit 1
 fi
 

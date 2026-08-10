@@ -25,7 +25,9 @@ fn canonical_abi_hex() -> String {
 
 fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &iroha_test_samples::ALICE_ID,
         0,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

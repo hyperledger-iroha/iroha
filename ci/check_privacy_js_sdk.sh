@@ -163,6 +163,7 @@ NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}
 "${NODE_BIN}" --test --test-name-pattern "verifier ids use|complete ProofBox|exact canonical base64|commitments and envelope|support lane privacy|reject empty lane|malformed and impossible|non-canonical lane|invalid ids and extra tails" \
   test/instructionBuilders.test.js
 "${NODE_BIN}" --test test/proofAttachmentParity.test.js
+"${NODE_BIN}" --test test/privacyExact12Network.test.js
 "${NODE_BIN}" --test test/privacyExact12FixtureBundle.test.js
 "${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy compiled-profile catalog bridge|package declarations expose readonly snapshot metadata without retired privacy types" \
   test/package_dist.test.js

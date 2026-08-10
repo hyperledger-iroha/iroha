@@ -216,18 +216,23 @@ let accountId = AccountId.make(publicKey: try signingKey.publicKey())
 let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
 let walletToken = "<wallet-session-token>"
+let networkId = try NetworkId(literal: configuredNetworkIdLiteral)
 let toriiAuth = try ToriiClientAuthentication.bearerToken(
     walletToken,
     accountId: accountId,
     dataspaceId: "mibank.paynet"
 )
-let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
+let torii = ToriiClient(
+    baseURL: toriiURL,
+    authentication: toriiAuth,
+    localSigningContext: ToriiLocalSigningContext(networkId: networkId)
+)
 
 // Account onboarding requires the dedicated route token explicitly. It remains
 // separate from an optional global X-API-Token configured on the client. Plan
 // first, then apply the exact stateless receipt; neither body contains a key or token.
 // The bundled Norito bridge encodes the exact receipt body and verifies its
-// domain-separated hash, pinned chain, and authority signature before either
+// domain-separated hash, exact genesis-derived network, and authority signature before either
 // call returns/submits.
 // An older/missing bridge fails closed; JSON is never used as receipt hash input.
 let onboardingIntent = try ToriiAccountOnboardingPlanRequest(
@@ -238,13 +243,13 @@ let onboardingReceipt = try await torii.planAccountOnboarding(
     onboardingIntent,
     onboardingToken: routeToken,
     expectedAuthority: configuredOnboardingAuthority,
-    expectedChainId: configuredChainId
+    expectedNetworkId: networkId
 )
 let onboarding = try await torii.applyAccountOnboarding(
     onboardingReceipt,
     onboardingToken: routeToken,
     expectedAuthority: configuredOnboardingAuthority,
-    expectedChainId: configuredChainId
+    expectedNetworkId: networkId
 )
 
 // Operator alias setup is plan-only on Torii. The wallet verifies the plan
@@ -252,7 +257,6 @@ let onboarding = try await torii.applyAccountOnboarding(
 // frames, signs one ordinary transaction, and submits it through the existing
 // pipeline endpoint.
 let setupPlan = try await torii.planAliasSetup(setupRequest, canonicalAuth: canonicalAuth)
-let networkId = try NetworkId(literal: configuredNetworkIdLiteral)
 try await sdk.submitAliasSetupPlan(
     setupRequest,
     networkId: networkId,
@@ -272,7 +276,7 @@ torii.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
 }
 
 // List attachments published via the Torii app API
-torii.listAttachments { result in
+torii.listAttachments(canonicalAuth: canonicalAuth) { result in
     print("attachments:", result)
 }
 
@@ -605,7 +609,7 @@ submit the resulting transaction through `submitTransaction` or
 
 ### Canonical request signing
 
-App-facing Torii endpoints accept optional `X-Iroha-Account`,
+Authenticated app-facing Torii endpoints require `X-Iroha-Account`,
 `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
 Use `ToriiCanonicalRequest` to build them; it signs the canonical request plus
 the freshness metadata and auto-generates timestamp/nonce values when you do not
@@ -617,13 +621,19 @@ let headers = try ToriiCanonicalRequest.buildHeaders(
     method: "get",
     url: url,
     accountId: "<account_i105>",
-    privateKey: Data(repeating: 7, count: 32)
+    privateKey: Data(repeating: 7, count: 32),
+    networkId: networkId
 )
 var request = URLRequest(url: url)
 headers.forEach { key, value in
     request.setValue(value, forHTTPHeaderField: key)
 }
 ```
+
+Attachment upload/list/get/delete methods require
+`ToriiCanonicalRequestAuth` in both async and completion-handler forms. They
+sign the exact method, encoded path, body, and immutable genesis-derived
+`NetworkId` from `ToriiLocalSigningContext`, then reject redirects and replay.
 
 ### Sora VPN native lease flow
 
@@ -1237,11 +1247,12 @@ The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
 `PrivacyConfidentialWitnessV1`, typed witness encoders,
 `LocalZkAssetMerklePathProvider`, and
-`ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Default note
-decryption derives the expected owner tag from the supplied spend key;
-diversified notes must use the explicit expected-owner-tag overload. Decrypted
-note plaintext rejects noncanonical length varints before reconstructing the
-opening. Confidential note and witness byte-vector contents keep their raw
+`ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Every note
+decryption requires the configured exact `NetworkId` and derives the expected
+owner tag from the supplied spend key; diversified notes must use the explicit
+expected-owner-tag overload. Decrypted note plaintext rejects noncanonical
+length varints before reconstructing the opening. Confidential note and witness
+byte-vector contents keep their raw
 bytes after the vector length. Direct verifier-record hashes use packed fixed
 arrays, hashes inside `Option` or `Vec` use ConstVec element framing, and all
 Iroha `Hash` values retain their marker bit. The verifier-record `status` field
@@ -2001,7 +2012,7 @@ For contributor setup and Torii mock ledger instructions, refer to
 `/v1/musubi/queries/*` POST routes. Its first-release-only models preserve
 structural package identities, immutable namespace bindings, canonical
 structured SemVer requirements, exact unsigned JSON integers, finalized cursors,
-chain/genesis lock identity, and the authoritative archive commitment. Decoding
+one exact genesis-derived `NetworkId`, and the authoritative archive commitment. Decoding
 rejects unknown fields, unsupported
 ABI/edition versions, noncanonical names, and duplicate parent-local dependency
 aliases instead of accepting legacy or ambiguous forms. Response bodies are

@@ -1491,7 +1491,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountId,
+        AccountId, NetworkId,
         block::{
             BlockHeader,
             consensus::{
@@ -1500,6 +1500,10 @@ mod tests {
         },
         nexus::FeeDebitSource,
     };
+
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
+    }
 
     fn sample_commitment(height: u64, lane_id: u32, dataspace_id: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {
@@ -1807,7 +1811,7 @@ mod tests {
             .push(NativeAmxReceipt {
                 version: NexusFeeReceipt::VERSION,
                 source_id: [0xC7; 32],
-                chain_id_hash: Hash::new(b"receipt-union-chain"),
+                network_id: test_network_id(b"receipt-union-genesis"),
                 plan_digest: Hash::new(b"receipt-union-plan"),
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,
@@ -1844,7 +1848,7 @@ mod tests {
             .push(NativeAmxReceipt {
                 version: 1,
                 source_id: [0x5A; 32],
-                chain_id_hash: Hash::new(b"native-amx-relay-test-chain"),
+                network_id: test_network_id(b"native-amx-relay-test-genesis"),
                 plan_digest: Hash::new(b"native-amx-relay-test-plan"),
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,
@@ -1989,7 +1993,7 @@ mod tests {
         let receipt = NativeAmxReceipt {
             version: 1,
             source_id: [0x31; 32],
-            chain_id_hash: Hash::new(b"relay-native-amx-chain"),
+            network_id: test_network_id(b"relay-native-amx-genesis"),
             plan_digest: Hash::new(b"relay-native-amx-plan"),
             lane_id: envelope.lane_id,
             dataspace_id: envelope.dataspace_id,

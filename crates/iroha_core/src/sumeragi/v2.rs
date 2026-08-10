@@ -37,10 +37,7 @@ use super::{
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
 
-// The wire admission limit and dependency-free reducer bound are one protocol
-// constant. A drift would admit a context that the verified state machine
-// cannot represent, so make it a compile-time error rather than an adapter
-// runtime surprise.
+// Keep wire admission and reducer capacity identical; mismatches fail at compile time.
 const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
 use crate::kura::KuraV2CommitReceipt;
 
@@ -4095,7 +4092,7 @@ impl SumeragiV2Adapter {
         let local_validator = local_validator
             .map(|index| registry.validator_id(index))
             .transpose()?;
-        let chain_hash = *wire_context.network_id.as_bytes();
+        let network_id = *wire_context.network_id.as_bytes();
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
         let candidate_lifecycle_capacity =
             candidate_lifecycle_capacity(wire_context.roster.len(), capacity_geometry);
@@ -4124,7 +4121,7 @@ impl SumeragiV2Adapter {
         let wal = SafetyWal::open(
             wal_path,
             wire::PROTOCOL_VERSION,
-            chain_hash,
+            network_id,
             consensus_key_hash,
         )?;
 
@@ -10865,6 +10862,9 @@ impl WireRegistry {
         &mut self,
         context: &wire::HeightContext,
     ) -> Result<reducer::HeightContext, AdapterError> {
+        if self.context_id != Some(context.id()) {
+            return Err(wire::ValidationError::WrongHeightContext.into());
+        }
         let parent_commit = context
             .parent_commit_qc
             .as_ref()
@@ -10892,7 +10892,7 @@ impl WireRegistry {
             self.context_id
                 .expect("registry is constructed with a height context"),
         );
-        let chain_id = reducer::ChainId::new(*context.network_id.as_bytes());
+        let network_id = reducer::NetworkId::new(*context.network_id.as_bytes());
         let nexus_hash = reducer::Digest::new(*context.nexus_amx_context_hash.as_ref());
         let execution_policy_hash = reducer::Digest::new(*context.execution_policy_hash.as_ref());
         let da_hash = reducer::Digest::new(Hash::new(context.da_layout.encode()).into());
@@ -10900,7 +10900,7 @@ impl WireRegistry {
         if context.snapshot_bootstrap.is_some() {
             reducer::HeightContext::new_snapshot_bootstrap(
                 context_id,
-                chain_id,
+                network_id,
                 context.height,
                 context.epoch,
                 roster,
@@ -10913,7 +10913,7 @@ impl WireRegistry {
         } else {
             reducer::HeightContext::new(
                 context_id,
-                chain_id,
+                network_id,
                 context.height,
                 parent_commit,
                 context.epoch,

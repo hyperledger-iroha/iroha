@@ -5730,7 +5730,9 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,

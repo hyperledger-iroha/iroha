@@ -99,6 +99,21 @@ class NativeAmxV2GroupedFixtureTest {
             application.state,
         )
         validateApplicationEvidence(fixture)
+
+        val invalidGroupUtf8 = assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseReceiptGroup(byteArrayOf(0xff.toByte()))
+        }
+        assertEquals(
+            "Native AMX receipt group must be valid UTF-8",
+            invalidGroupUtf8.message,
+        )
+        val invalidReceiptUtf8 = assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseReceipt(byteArrayOf(0xff.toByte()))
+        }
+        assertEquals(
+            "Native AMX V2 receipt must be valid UTF-8",
+            invalidReceiptUtf8.message,
+        )
     }
 
     @Test

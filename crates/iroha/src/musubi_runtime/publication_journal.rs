@@ -730,8 +730,7 @@ fn validate_candidate_journal(
     for (operation_id, operation_binding) in &journal.operation_bindings {
         if !digest_is_nonzero(operation_id)
             || operation_binding.operation_id != *operation_id
-            || operation_binding.chain_id != binding.chain_id
-            || operation_binding.genesis_block_hash != binding.genesis_block_hash
+            || operation_binding.network_id != binding.network_id
             || operation_binding.validate().is_err()
         {
             return Err(CandidateStateErrorV1::Invalid);
@@ -974,8 +973,7 @@ fn journal_from_state(
         if record.operation_id.iter().all(|byte| *byte == 0)
             || previous_operation_id.is_some_and(|previous| previous >= record.operation_id)
             || record.operation_id != record.binding.operation_id
-            || record.binding.chain_id != expected_binding.chain_id
-            || record.binding.genesis_block_hash != expected_binding.genesis_block_hash
+            || record.binding.network_id != expected_binding.network_id
             || record.binding.validate().is_err()
         {
             return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
@@ -1895,16 +1893,23 @@ fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
+        block::BlockHeader,
         musubi::{ArchiveId, MusubiContentDigestV1},
         sorafs::capacity::ProviderId,
     };
 
     use super::*;
     use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            [seed; 32],
+        )))
+    }
 
     fn private_tempdir() -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("private journal root");
@@ -1920,8 +1925,7 @@ mod tests {
         )
         .expect("derive broker key");
         MusubiPublicationServiceConfigurationV1 {
-            chain_id: ChainId::from("musubi-durable-journal-test"),
-            genesis_block_hash: [0x11; 32],
+            network_id: network_id(0x11),
             ingress_broker: AccountId::new(broker_key.public_key().clone()),
             seed_provider: ProviderId::new([0x12; 32]),
             max_future_clock_skew_ms: 1_000,
@@ -1954,8 +1958,7 @@ mod tests {
         let operation_id = [operation_id; 32];
         let binding = MusubiPublicationOperationBindingV1 {
             operation_id,
-            chain_id: configuration.chain_id.clone(),
-            genesis_block_hash: configuration.genesis_block_hash,
+            network_id: configuration.network_id,
             publisher: configuration.ingress_broker.clone(),
             archive_id: ArchiveId::new([0x21; 32]),
             car_body_digest: MusubiContentDigestV1::new([0x22; 32]),
@@ -2338,7 +2341,7 @@ mod tests {
         let initial_revision = journal.revision();
 
         let mut foreign_chain = attempt(&configuration, 0x65, 0x66);
-        foreign_chain.binding.chain_id = ChainId::from("foreign-chain");
+        foreign_chain.binding.network_id = network_id(0x70);
         assert_eq!(
             journal.begin(&foreign_chain, 10_000),
             Err(MusubiPublicationServiceJournalErrorV1::Invalid)
@@ -2444,7 +2447,7 @@ mod tests {
         drop(journal);
 
         let mut wrong_configuration = configuration.clone();
-        wrong_configuration.genesis_block_hash = [0x71; 32];
+        wrong_configuration.network_id = network_id(0x71);
         assert_eq!(
             DurableMusubiPublicationServiceJournalV1::open(
                 root.path(),

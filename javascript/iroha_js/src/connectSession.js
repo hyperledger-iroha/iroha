@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { blake2b } from "@noble/hashes/blake2b";
+import { networkIdBytes } from "./networkId.js";
 
 const SID_PREFIX = Buffer.from("iroha-connect|sid|");
 const SID_LENGTH = 32;
@@ -10,25 +12,24 @@ const CONNECT_URI_SCHEME = "iroha://connect";
 
 /**
  * Generate a Connect session identifier deterministically.
- * @param {{ chainId: string; appPublicKey: BinaryLike; nonce?: BinaryLike | null }} options
+ * @param {{ networkId: import("./networkId.js").NetworkId; appPublicKey: BinaryLike; nonce?: BinaryLike | null }} options
  * @returns {{ sidBytes: Buffer; sidBase64Url: string; nonce: Buffer }}
  */
 export function generateConnectSid(options = {}) {
   if (!options || typeof options !== "object") {
     throw new TypeError("options must be an object");
   }
-  const chainId = requireNonEmptyString(options.chainId, "chainId");
+  const networkId = options.networkId;
+  const exactNetworkId = networkIdBytes(networkId, "networkId");
   const publicKey = normalizeBinary(options.appPublicKey, "appPublicKey", X25519_KEY_LENGTH);
   const nonce =
     options.nonce === undefined || options.nonce === null
       ? randomBytes(NONCE_LENGTH)
       : normalizeBinary(options.nonce, "nonce", NONCE_LENGTH);
-  const hash = createHash("blake2b512");
-  hash.update(SID_PREFIX);
-  hash.update(Buffer.from(chainId, "utf8"));
-  hash.update(publicKey);
-  hash.update(nonce);
-  const digest = hash.digest().subarray(0, SID_LENGTH);
+  const digest = blake2b(
+    Buffer.concat([SID_PREFIX, Buffer.from(exactNetworkId), publicKey, nonce]),
+    { dkLen: SID_LENGTH },
+  );
   const sidBytes = Buffer.from(digest);
   return {
     sidBytes,
@@ -39,9 +40,9 @@ export function generateConnectSid(options = {}) {
 
 /**
  * Create a Connect session preview by minting an X25519 keypair, nonce, and session URIs.
- * @param {{ chainId: string; node?: string | null; nonce?: BinaryLike | null; appKeyPair?: { publicKey: BinaryLike; privateKey: BinaryLike } }} options
+ * @param {{ networkId: import("./networkId.js").NetworkId; node?: string | null; nonce?: BinaryLike | null; appKeyPair?: { publicKey: BinaryLike; privateKey: BinaryLike } }} options
  * @returns {{
- *   chainId: string;
+ *   networkId: import("./networkId.js").NetworkId;
  *   node: string | null;
  *   sidBytes: Buffer;
  *   sidBase64Url: string;
@@ -55,7 +56,8 @@ export function createConnectSessionPreview(options = {}) {
   if (!options || typeof options !== "object") {
     throw new TypeError("options must be an object");
   }
-  const chainId = requireNonEmptyString(options.chainId, "chainId");
+  const networkId = options.networkId;
+  networkIdBytes(networkId, "networkId");
   const node =
     options.node === undefined || options.node === null
       ? null
@@ -66,19 +68,33 @@ export function createConnectSessionPreview(options = {}) {
       ? randomBytes(NONCE_LENGTH)
       : normalizeBinary(options.nonce, "nonce", NONCE_LENGTH);
   const sidResult = generateConnectSid({
-    chainId,
+    networkId,
     appPublicKey: appKeyPair.publicKey,
     nonce,
   });
   return {
-    chainId,
+    networkId,
     node,
     sidBytes: sidResult.sidBytes,
     sidBase64Url: sidResult.sidBase64Url,
     nonce,
     appKeyPair,
-    walletUri: buildConnectUri(sidResult.sidBase64Url, chainId, node, "wallet"),
-    appUri: buildConnectUri(sidResult.sidBase64Url, chainId, node, "app"),
+    walletUri: buildConnectUri(
+      sidResult.sidBase64Url,
+      networkId,
+      appKeyPair.publicKey,
+      nonce,
+      node,
+      "wallet",
+    ),
+    appUri: buildConnectUri(
+      sidResult.sidBase64Url,
+      networkId,
+      appKeyPair.publicKey,
+      nonce,
+      node,
+      "app",
+    ),
   };
 }
 
@@ -119,10 +135,12 @@ function normalizeConnectRole(role, name = "role") {
   throw new TypeError(`${name} must be 'app' or 'wallet'`);
 }
 
-function buildConnectUri(sidBase64Url, chainId, node, role) {
+function buildConnectUri(sidBase64Url, networkId, appPublicKey, nonce, node, role) {
   const params = new URLSearchParams();
   params.set("sid", sidBase64Url);
-  params.set("chain_id", chainId);
+  params.set("network_id", networkId.toString());
+  params.set("app_pk", toBase64Url(appPublicKey));
+  params.set("nonce", toBase64Url(nonce));
   if (node) {
     params.set("node", node);
   }

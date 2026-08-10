@@ -1241,7 +1241,7 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
 
     use super::*;
-    use crate::{ChainId, nexus::DataSpaceMetadata};
+    use crate::nexus::DataSpaceMetadata;
 
     fn plan_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
@@ -1342,7 +1342,7 @@ mod tests {
         version: u8,
         request: FixtureAccountOnboardingPlanRequestV1,
         authority: AccountId,
-        chain_id: ChainId,
+        network_id: NetworkId,
         anchor: AliasPlanAnchorV1,
         resource: AliasPlanResourceV1,
         acquisition: AliasLeaseAcquisitionV1,
@@ -1481,7 +1481,7 @@ mod tests {
                 permissions: Vec::new(),
             },
             authority: authority.clone(),
-            chain_id: ChainId::from("alias-fixture-chain"),
+            network_id: plan_network_id(0xA1),
             anchor: AliasPlanAnchorV1 {
                 block_height: 11,
                 block_hash: Hash::new(b"account-onboarding-receipt-fixture-anchor"),
@@ -1528,17 +1528,6 @@ mod tests {
             signature_hex: hex::encode_upper(receipt.signature.payload()),
             receipt_json: receipt,
         }
-    }
-
-    #[test]
-    #[ignore = "fixture regeneration helper; the committed vector is checked separately"]
-    fn print_deterministic_account_onboarding_receipt_vector() {
-        let vector = deterministic_account_onboarding_receipt_vector();
-        println!(
-            "{}",
-            norito::json::to_string_pretty(&vector)
-                .expect("render deterministic onboarding receipt vector")
-        );
     }
 
     #[test]

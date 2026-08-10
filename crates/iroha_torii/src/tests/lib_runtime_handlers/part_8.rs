@@ -954,6 +954,7 @@
             .expect("internal proxy URI");
         let signed_headers = operator_signatures::signed_torii_proxy_request_headers(
             &bridge_signer,
+            app.state.network_id_ref(),
             &local_peer_id,
             &crate::Method::POST,
             &uri,
@@ -1031,6 +1032,7 @@
         .expect("encode untrusted proxied read");
         let untrusted_headers = operator_signatures::signed_torii_proxy_request_headers(
             &untrusted_signer,
+            app.state.network_id_ref(),
             &local_peer_id,
             &crate::Method::POST,
             &uri,
@@ -1170,9 +1172,14 @@
         let uri = "/v1/sorafs/capacity/por-proof"
             .parse::<crate::Uri>()
             .expect("PoR proof URI");
-        let signed_headers =
-            operator_signatures::signed_request_headers(&signer, &crate::Method::POST, &uri, &body)
-                .expect("signed PoR headers");
+        let signed_headers = operator_signatures::signed_request_headers(
+            &signer,
+            app.state.network_id_ref(),
+            &crate::Method::POST,
+            &uri,
+            &body,
+        )
+        .expect("signed PoR headers");
         let signed_request = || {
             let mut request = axum::http::Request::builder()
                 .uri(uri.clone())
@@ -2831,6 +2838,8 @@
     ) -> axum::Router {
         use axum::{Router, routing::post};
 
+        seed_sccp_ingress_auth_account(&app);
+
         Router::new()
             .route(
                 "/v1/bridge/proofs/submit",
@@ -2875,6 +2884,8 @@
         operator_max_body_bytes: usize,
     ) -> axum::Router {
         use axum::{Router, routing::post};
+
+        seed_sccp_ingress_auth_account(&app);
 
         Router::new()
             .route(

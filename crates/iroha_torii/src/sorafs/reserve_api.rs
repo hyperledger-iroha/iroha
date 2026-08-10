@@ -1403,11 +1403,21 @@ fn authenticate_reserve_read(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, Response> {
-    if !state.sorafs_node.is_enabled() {
-        return Err(feature_disabled());
-    }
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, &[], None) {
-        Ok(Some(verified)) => Ok(verified.account),
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        &[],
+        None,
+    ) {
+        Ok(Some(verified)) => {
+            if !state.sorafs_node.is_enabled() {
+                return Err(feature_disabled());
+            }
+            Ok(verified.account)
+        }
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
             "SoraFS reserve reads require X-Iroha canonical request authentication",
@@ -1760,6 +1770,28 @@ mod tests {
     use sorafs_manifest::deal::XorQuantity;
 
     use super::*;
+
+    #[test]
+    fn reserve_auth_rejects_foreign_exact_network_before_feature_disclosure() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let method = Method::GET;
+        let uri: Uri = "/v1/sorafs/reserve/policy"
+            .parse()
+            .expect("reserve policy URI");
+        let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
+            &method,
+            &uri,
+            &[],
+            0xD4,
+            0xE4,
+        );
+
+        let response = authenticate_reserve_read(&state, &headers, &method, &uri)
+            .expect_err("foreign-network reserve authorization must fail closed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 
     fn signed_transaction(
         network_id: &NetworkId,

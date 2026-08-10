@@ -71,7 +71,11 @@ fn authenticated_candidate_binding_release() -> (
         source_repo_dirty: false,
         reviewed_source_closure,
         reviewed_source_closure_descriptor_sha256,
-        chain_id: ChainId::from("candidate-binding-chain"),
+        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"candidate-binding-network",
+        ))),
         asset: AssetDefinitionId::derive_from_components(
             DomainId::try_new("candidate", "binding").expect("candidate-binding domain"),
             "asset".parse().expect("candidate-binding asset name"),

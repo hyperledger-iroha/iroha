@@ -22,10 +22,11 @@ ExecStartPre=/usr/bin/test "${TAIRA_VALIDATOR_SLUG}" = taira-validator-1
 ExecStartPre=/usr/bin/test -f /usr/local/bin/taira_bootle_lantern_broker
 ExecStartPre=/usr/bin/test ! -L /usr/local/bin/taira_bootle_lantern_broker
 ExecStartPre=/usr/bin/test -x /usr/local/bin/taira_bootle_lantern_broker
+ExecStartPre=/usr/bin/test -n "${TAIRA_NETWORK_ID}"
 ExecStartPre=/usr/bin/test -f /opt/iroha/configs/soranexus/taira/wait_taira_bootle_lantern_broker_ready.sh
 ExecStartPre=/usr/bin/test ! -L /opt/iroha/configs/soranexus/taira/wait_taira_bootle_lantern_broker_ready.sh
 ExecStartPre=/usr/bin/test -x /opt/iroha/configs/soranexus/taira/wait_taira_bootle_lantern_broker_ready.sh
-ExecStart=/usr/local/bin/taira_bootle_lantern_broker serve --chain-id fc56984b-2be7-431d-840e-21514d1883f0 --handle runtime://privacy/bootle-lantern/taira-primary --revision 1 --issuer-id 1da91b272fd76bb535968aac9c2f203a341de02caad2069759953eb4e2bf2e6e --policy-id 24570ebaa65d9da9d0ac25221f2b6b88d47be519a0d8243130277328f46477eb --authorization-lifetime-blocks 300 --issuer-seed-credential %d/taira-bootle-lantern-issuer-seed --bearer-token-credential %d/taira-bootle-lantern-bearer-token --principal-seed-credential %d/taira-bootle-lantern-principal-seed --expected-policy-record-digest ${TAIRA_BOOTLE_LANTERN_EXPECTED_POLICY_RECORD_DIGEST} --expected-qualification-policy-digest ${TAIRA_BOOTLE_LANTERN_EXPECTED_QUALIFICATION_POLICY_DIGEST}
+ExecStart=/usr/local/bin/taira_bootle_lantern_broker serve --chain-id fc56984b-2be7-431d-840e-21514d1883f0 --network-id ${TAIRA_NETWORK_ID} --handle runtime://privacy/bootle-lantern/taira-primary --revision 1 --issuer-id 1da91b272fd76bb535968aac9c2f203a341de02caad2069759953eb4e2bf2e6e --policy-id 24570ebaa65d9da9d0ac25221f2b6b88d47be519a0d8243130277328f46477eb --authorization-lifetime-blocks 300 --issuer-seed-credential %d/taira-bootle-lantern-issuer-seed --bearer-token-credential %d/taira-bootle-lantern-bearer-token --principal-seed-credential %d/taira-bootle-lantern-principal-seed --expected-policy-record-digest ${TAIRA_BOOTLE_LANTERN_EXPECTED_POLICY_RECORD_DIGEST} --expected-qualification-policy-digest ${TAIRA_BOOTLE_LANTERN_EXPECTED_QUALIFICATION_POLICY_DIGEST}
 ExecStartPost=/opt/iroha/configs/soranexus/taira/wait_taira_bootle_lantern_broker_ready.sh
 Restart=no
 TimeoutStartSec=60

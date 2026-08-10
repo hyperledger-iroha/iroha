@@ -36,7 +36,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 
 ## Step 2 – Bootstrap Cluster Deployment
 1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
+   - Deploy `iroha3d` instances (validators) with persistent volumes.
    - Ensure network firewall rules allow consensus & Torii traffic between nodes.
 2. Start Torii services (REST/WebSocket) on each validator with TLS.
 3. Deploy observer nodes (read-only) for extra resilience.

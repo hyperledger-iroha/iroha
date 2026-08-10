@@ -24,8 +24,6 @@ use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1
 /// P-256 ES256 signing key used by first-release wallet-side device proofs.
 pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
 
-/// Maximum chain-id bytes accepted by a privacy transcript.
-pub const MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1: usize = 255;
 /// Maximum opaque proof bytes accepted before Norito decoding.
 pub const MAX_P256_ENGINE_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
 
@@ -56,14 +54,12 @@ pub enum P256EngineError {
     /// A secret or challenge scalar was zero.
     #[error("zero P-256 scalar is not admitted here")]
     ZeroScalar,
-    /// A transcript chain identifier was empty or exceeded its fixed bound.
-    #[error("transcript chain id length {actual} is outside 1..={max}")]
-    InvalidChainIdLength {
-        /// Supplied chain-id length.
-        actual: usize,
-        /// First-release maximum length.
-        max: usize,
-    },
+    /// A transcript network identity used the reserved all-zero hash.
+    #[error("transcript network id must be non-zero")]
+    ZeroNetworkId,
+    /// The transcript network identity and explicit genesis hash differ.
+    #[error("transcript network id differs from its genesis hash")]
+    NetworkGenesisMismatch,
     /// A mandatory transcript digest consisted entirely of zero bytes.
     #[error("transcript digest `{field}` must be non-zero")]
     ZeroTranscriptDigest {
@@ -318,8 +314,8 @@ impl fmt::Debug for SecretScalarV1 {
 /// Consensus-relevant binding supplied to a versioned privacy transcript.
 #[derive(Clone, Copy, Debug)]
 pub struct TranscriptBindingV1<'a> {
-    /// Exact chain-id bytes.
-    pub chain_id: &'a [u8],
+    /// Exact genesis-header-derived network-identity bytes.
+    pub network_id: &'a [u8; 32],
     /// Hash of the exact genesis block or genesis manifest.
     pub genesis_hash: [u8; 32],
     /// Zero-based privacy action index within its transaction.
@@ -345,14 +341,14 @@ impl TranscriptBindingV1<'_> {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty/oversized chain identifier or a zero
+    /// Returns an error for a zero/mismatched network identity or a zero
     /// mandatory digest.
     pub fn validate(&self) -> Result<(), P256EngineError> {
-        if self.chain_id.is_empty() || self.chain_id.len() > MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1 {
-            return Err(P256EngineError::InvalidChainIdLength {
-                actual: self.chain_id.len(),
-                max: MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1,
-            });
+        if self.network_id.iter().all(|byte| *byte == 0) {
+            return Err(P256EngineError::ZeroNetworkId);
+        }
+        if self.network_id != &self.genesis_hash {
+            return Err(P256EngineError::NetworkGenesisMismatch);
         }
         for (field, digest) in [
             ("genesis_hash", self.genesis_hash),
@@ -395,7 +391,7 @@ impl TranscriptV1 {
         transcript.append_message(b"domain", TRANSCRIPT_DOMAIN_V1)?;
         transcript.append_message(b"transcript_version", &[TRANSCRIPT_VERSION_V1])?;
         transcript.append_message(b"suite", suite)?;
-        transcript.append_message(b"chain_id", binding.chain_id)?;
+        transcript.append_message(b"network_id", binding.network_id)?;
         transcript.append_message(b"genesis_hash", &binding.genesis_hash)?;
         transcript.append_message(b"action_index", &binding.action_index.to_be_bytes())?;
         transcript.append_message(b"statement_digest", &binding.statement_digest)?;
@@ -634,7 +630,7 @@ mod tests {
 
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
-            chain_id: b"taira-test",
+            network_id: &[1; 32],
             genesis_hash: [1; 32],
             action_index: 7,
             statement_digest: [2; 32],
@@ -736,10 +732,8 @@ mod tests {
 
         let mut changed_fields = Vec::new();
         let mut changed = binding();
-        changed.chain_id = b"other";
-        changed_fields.push(changed);
-        let mut changed = binding();
-        changed.genesis_hash[0] ^= 1;
+        changed.network_id = &[8; 32];
+        changed.genesis_hash = [8; 32];
         changed_fields.push(changed);
         let mut changed = binding();
         changed.action_index += 1;
@@ -824,13 +818,20 @@ mod tests {
     }
 
     #[test]
-    fn transcript_rejects_missing_bindings() {
-        let mut empty_chain = binding();
-        empty_chain.chain_id = b"";
+    fn transcript_rejects_missing_or_inconsistent_bindings() {
+        let mut zero_network = binding();
+        zero_network.network_id = &[0; 32];
         assert!(matches!(
-            empty_chain.validate(),
-            Err(P256EngineError::InvalidChainIdLength { actual: 0, .. })
+            zero_network.validate(),
+            Err(P256EngineError::ZeroNetworkId)
         ));
+
+        let mut mismatched_network = binding();
+        mismatched_network.network_id = &[9; 32];
+        assert_eq!(
+            mismatched_network.validate(),
+            Err(P256EngineError::NetworkGenesisMismatch)
+        );
 
         let mut zero_statement = binding();
         zero_statement.statement_digest = [0; 32];
@@ -839,14 +840,6 @@ mod tests {
             Err(P256EngineError::ZeroTranscriptDigest {
                 field: "statement_digest"
             })
-        ));
-
-        let overlong_chain = vec![b'x'; MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1 + 1];
-        let mut overlong = binding();
-        overlong.chain_id = &overlong_chain;
-        assert!(matches!(
-            overlong.validate(),
-            Err(P256EngineError::InvalidChainIdLength { .. })
         ));
 
         let zeroing_mutations: [(&str, fn(&mut TranscriptBindingV1<'_>)); 8] = [

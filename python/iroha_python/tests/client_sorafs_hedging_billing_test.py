@@ -16,13 +16,14 @@ from iroha_python import (
     SorafsBillingAcknowledgementProofV1,
     ToriiCanonicalRequestAuth,
     ToriiClient,
-    canonical_request_signature_message,
+    canonical_network_request_signature_message,
     encode_sorafs_billing_acknowledgement_proof_v1,
 )
 from iroha_python.client import (
     _SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES,
     _SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES,
 )
+from iroha_python.crypto import NetworkId
 
 from .helpers import StubResponse
 
@@ -33,6 +34,7 @@ AFTER_STATEMENT_ID = "33" * 32
 AFTER_PROJECTION = "44" * 32
 REQUEST_NONCE = "91" * 32
 AUTHENTICATION_PROOF = b"\xa5" * 64
+HEDGING_NETWORK_ID = NetworkId.from_bytes(bytes([0xB5]) * 32)
 EXPECTED_PROOF_FRAME_HEX = (
     "4e5254300000fe75acabe03d788012f2e7c556319997006a00000000000000"
     "80460fddbba276090220" + "91" * 32 + "484000000000000000" + "a5" * 64
@@ -115,6 +117,7 @@ def canonical_auth(
     signer: Any = None,
 ) -> ToriiCanonicalRequestAuth:
     return ToriiCanonicalRequestAuth(
+        network_id=HEDGING_NETWORK_ID.literal,
         account_id="billing-reader@sora",
         signer=signer or (lambda _message: b"\x7c" * 64),
     )
@@ -285,7 +288,8 @@ def test_hedging_billing_routes_sign_exact_requests_once_and_bound_responses() -
         query = urlencode(params)
         request_target = path if not query else f"{path}?{query}"
         headers = call["headers"]
-        assert signed_messages[index] == canonical_request_signature_message(
+        assert signed_messages[index] == canonical_network_request_signature_message(
+            HEDGING_NETWORK_ID.literal,
             method,
             request_target,
             body,

@@ -90,7 +90,7 @@ For ad-hoc demos and interoperability tests the CLI now exposes
 - Optionally auto-joins the host (`--auto-join-host`) so viewers can connect immediately.
 - Emits a JSON summary containing Torii URL, call identifiers, privacy/room policy, a ready-to-copy join command, and the spool path testers should monitor (e.g., `storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/*.norito`). Use `--summary-out path/to/file.json` to persist the blob.
 
-This helper does **not** replace the need for a running `irohad --sora` node: privacy routes, spool files, and relay manifests remain ledger-backed. It simply trims boilerplate when spinning up temporary rooms for external parties.
+This helper does **not** replace the need for a running `iroha3d --sora` node: privacy routes, spool files, and relay manifests remain ledger-backed. It simply trims boilerplate when spinning up temporary rooms for external parties.
 
 ### One-command demo script
 
@@ -98,7 +98,7 @@ For an even faster path there is a companion script: `scripts/kaigi_demo.sh`.
 It performs the following for you:
 
 1. Signs the bundled `defaults/nexus/genesis.json` into `target/kaigi-demo/genesis.nrt`.
-2. Launches `irohad --sora` with the signed block (logs under `target/kaigi-demo/irohad.log`) and waits for Torii to expose `http://127.0.0.1:8080/status`.
+2. Launches `iroha3d --sora` with the signed block (logs under `target/kaigi-demo/iroha3d.log`) and waits for Torii to expose `http://127.0.0.1:8080/status`.
 3. Runs `iroha kaigi quickstart --auto-join-host --summary-out target/kaigi-demo/kaigi_summary.json`.
 4. Prints the path to the JSON summary plus the spool directory (`storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/`) so you can share it with external testers.
 
@@ -107,7 +107,7 @@ Environment variables:
 - `TORII_URL` — override the Torii endpoint to poll (default `http://127.0.0.1:8080`).
 - `RUN_DIR` — override the working directory (default `target/kaigi-demo`).
 
-Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `irohad` automatically. The spool files and summary remain on disk so you can hand off artifacts after the process exits.
+Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `iroha3d` automatically. The spool files and summary remain on disk so you can hand off artifacts after the process exits.
 
 ## `CreateKaigi`
 

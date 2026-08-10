@@ -4419,8 +4419,8 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
     let repo_root = repo_root_path();
     let target_dir = resolve_target_dir(&repo_root, env::var("CARGO_TARGET_DIR").ok().as_deref());
     (
-        target_dir.join("debug").join("irohad"),
-        target_dir.join("release").join("irohad"),
+        target_dir.join("debug").join("iroha3d"),
+        target_dir.join("release").join("iroha3d"),
     )
 }
 
@@ -4524,12 +4524,12 @@ fn write_start_script(
     writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
     writeln!(
         start_file,
-        "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN_DEBUG or $DEFAULT_IROHAD_BIN_RELEASE) not found; build irohad or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
+        "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN_DEBUG or $DEFAULT_IROHAD_BIN_RELEASE) not found; build iroha3d or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
     )?;
     writeln!(start_file, "fi")?;
     writeln!(
         start_file,
-        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\nIROHAD_BIN_RESOLVED=\"$(command -v \"$IROHAD_BIN\" 2>/dev/null || true)\"\nif [ -z \"$IROHAD_BIN_RESOLVED\" ]; then\n  echo \"irohad binary not executable: $IROHAD_BIN\" >&2\n  exit 1\nfi\nIROHAD_BIN_DIR=\"$(cd -- \"$(dirname -- \"$IROHAD_BIN_RESOLVED\")\" && pwd)\"\nIROHA_CLI_FROM_IROHAD=\"$IROHAD_BIN_DIR/iroha\""
+        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\nIROHAD_BIN_RESOLVED=\"$(command -v \"$IROHAD_BIN\" 2>/dev/null || true)\"\nif [ -z \"$IROHAD_BIN_RESOLVED\" ]; then\n  echo \"iroha3d binary not executable: $IROHAD_BIN\" >&2\n  exit 1\nfi\nIROHAD_BIN_DIR=\"$(cd -- \"$(dirname -- \"$IROHAD_BIN_RESOLVED\")\" && pwd)\"\nIROHA_CLI_FROM_IROHAD=\"$IROHAD_BIN_DIR/iroha\""
     )?;
     writeln!(start_file, "IROHA_CLI=\"${{IROHA_CLI:-}}\"")?;
     writeln!(start_file, "if [ -z \"$IROHA_CLI\" ]; then")?;
@@ -5100,7 +5100,7 @@ fn write_localnet_readme(
             "- Onboarding signer sidecar: `{onboarding_signer_key}`\n",
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
-            "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
+            "- Offline escrow account: deterministic account derived from the exact genesis network id and asset definition\n",
             "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
             "Run `kagami docker` without `--seed` against this directory to validate the exact ",
@@ -9247,7 +9247,7 @@ mod tests {
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
             contents.contains(
-                "- Offline escrow account: deterministic account derived from the chain id and asset definition"
+                "- Offline escrow account: deterministic account derived from the exact genesis network id and asset definition"
             )
         );
         assert!(!contents.contains("Localnet app authority / escrow account"));

@@ -45,22 +45,26 @@ public enum ToriiCanonicalRequest {
                                                url: URL,
                                                body: Data? = nil) -> Data {
         let query = canonicalQueryString(from: url.query)
-        let path = url.path.isEmpty ? "/" : url.path
+        let encodedPath = URLComponents(url: url, resolvingAgainstBaseURL: true)?.percentEncodedPath
+        let path = encodedPath.flatMap { $0.isEmpty ? nil : $0 } ?? "/"
         let upperMethod = method.uppercased()
         let digest = SHA256.hash(data: body ?? Data())
         let rendered = "\(upperMethod)\n\(path)\n\(query)\n\(hexString(from: digest))"
         return Data(rendered.utf8)
     }
 
-    /// Build canonical request bytes for signing with freshness metadata.
-    public static func signatureMessage(method: String,
+    /// Build canonical request bytes bound to one exact genesis-derived network.
+    public static func signatureMessage(networkId: NetworkId,
+                                        method: String,
                                         url: URL,
                                         body: Data? = nil,
                                         timestampMs: UInt64,
                                         nonce: String) -> Data {
-        let base = canonicalRequestMessage(method: method, url: url, body: body)
-        let rendered = "\(String(decoding: base, as: UTF8.self))\n\(timestampMs)\n\(nonce)"
-        return Data(rendered.utf8)
+        var message = Data("iroha.app.request.network.v1\0".utf8)
+        message.append(networkId.bytes)
+        message.append(canonicalRequestMessage(method: method, url: url, body: body))
+        message.append(Data("\n\(timestampMs)\n\(nonce)".utf8))
+        return message
     }
 
     /// Build canonical signing headers including freshness metadata.
@@ -69,6 +73,7 @@ public enum ToriiCanonicalRequest {
                                     body: Data? = nil,
                                     accountId: String,
                                     privateKey: Data,
+                                    networkId: NetworkId,
                                     timestampMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000),
                                     nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) throws -> [String: String] {
         try validateExactNonEmpty(accountId,
@@ -78,6 +83,7 @@ public enum ToriiCanonicalRequest {
                                   missing: ToriiCanonicalRequestError.missingNonce,
                                   invalid: ToriiCanonicalRequestError.invalidNonce)
         let message = signatureMessage(
+            networkId: networkId,
             method: method,
             url: url,
             body: body,

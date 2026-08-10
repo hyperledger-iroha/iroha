@@ -619,7 +619,7 @@ public final class AliasSetupModelsTests {
             1,
             request,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasSetupModels.AliasPlanResourceV1(
                 intent, AliasSetupModels.AliasPlanDispositionV1.CREATE, null, 0L),
@@ -735,7 +735,7 @@ public final class AliasSetupModelsTests {
   public void onboardingResponseVerifierBindsReceiptAndHttpStatus() throws Exception {
     final AccountOnboardingPlanReceiptV1 createReceipt =
         new AccountOnboardingPlanReceiptV1(
-            onboardingBody(account(0x11), "test-chain"), "03".repeat(32), "AA");
+            onboardingBody(account(0x11), TEST_NETWORK_ID), "03".repeat(32), "AA");
     final AccountOnboardingResponseV1 unchanged =
         new AccountOnboardingResponseV1(
             account(0x22),
@@ -776,7 +776,7 @@ public final class AliasSetupModelsTests {
         new AccountOnboardingPlanReceiptV1(
             onboardingBody(
                 account(0x11),
-                "test-chain",
+                TEST_NETWORK_ID,
                 AliasSetupModels.AliasPlanDispositionV1.NO_OP),
             "04".repeat(32),
             "AA");
@@ -804,7 +804,7 @@ public final class AliasSetupModelsTests {
     final String authority =
         AccountAddress.fromAccount(signer.generatePublicKey().getEncoded(), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final AccountOnboardingPlanBodyV1 body = onboardingBody(authority, "test-chain");
+    final AccountOnboardingPlanBodyV1 body = onboardingBody(authority, TEST_NETWORK_ID);
     final byte[] encoded = AliasNoritoCodec.encodeOnboardingPlanBody(body);
     assert Arrays.equals(
         encoded,
@@ -813,16 +813,17 @@ public final class AliasSetupModelsTests {
                 encoded, AccountAddress.DEFAULT_I105_DISCRIMINANT)));
 
     final AccountOnboardingPlanReceiptV1 receipt = signedOnboardingReceipt(body, signer);
-    assert AccountOnboardingReceiptVerifier.verify(receipt);
+    assert AccountOnboardingReceiptVerifier.verify(receipt, body.networkId(), null);
     assert receipt.equals(
-        AccountOnboardingReceiptVerifier.requireValidForRequest(body.request(), receipt));
+        AccountOnboardingReceiptVerifier.requireValidForRequest(
+            body.request(), receipt, body.networkId(), null));
 
     final AccountOnboardingPlanReceiptV1 tampered =
         new AccountOnboardingPlanReceiptV1(
-            onboardingBody(authority, "other-chain"),
+            onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash(),
             receipt.signature());
-    assert !AccountOnboardingReceiptVerifier.verify(tampered);
+    assert !AccountOnboardingReceiptVerifier.verify(tampered, body.networkId(), null);
 
     final Ed25519PrivateKeyParameters wrongSigner =
         new Ed25519PrivateKeyParameters(filled(0x52), 0);
@@ -830,15 +831,18 @@ public final class AliasSetupModelsTests {
         AccountAddress.fromAccount(wrongSigner.generatePublicKey().getEncoded(), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final AccountOnboardingPlanReceiptV1 wrongAuthorityReceipt =
-        signedOnboardingReceipt(onboardingBody(wrongAuthority, "test-chain"), signer);
-    assert !AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt);
+        signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), signer);
+    assert !AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId(), null);
 
     final AccountOnboardingPlanReceiptV1 substitutedSelfSignedReceipt =
-        signedOnboardingReceipt(onboardingBody(wrongAuthority, "test-chain"), wrongSigner);
-    assert AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt);
-    assert !AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, authority);
+        signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), wrongSigner);
+    assert AccountOnboardingReceiptVerifier.verify(
+        substitutedSelfSignedReceipt, body.networkId(), null);
+    assert !AccountOnboardingReceiptVerifier.verify(
+        substitutedSelfSignedReceipt, body.networkId(), authority);
     try {
-      AccountOnboardingReceiptVerifier.requireValid(substitutedSelfSignedReceipt, authority);
+      AccountOnboardingReceiptVerifier.requireValid(
+          substitutedSelfSignedReceipt, body.networkId(), authority);
       throw new AssertionError("expected configured onboarding authority mismatch to fail");
     } catch (final IllegalArgumentException expected) {
       // Expected.
@@ -871,13 +875,14 @@ public final class AliasSetupModelsTests {
     assert vector.get("authority").equals(receipt.body().authority());
     assert vector.get("signature_hex").equals(receipt.signature());
     assert AccountOnboardingReceiptVerifier.verify(
-        receipt, (String) vector.get("authority"));
+        receipt, receipt.body().networkId(), (String) vector.get("authority"));
 
     final char[] tampered = receipt.signature().toCharArray();
     tampered[0] = tampered[0] == '0' ? '1' : '0';
     assert !AccountOnboardingReceiptVerifier.verify(
         new AccountOnboardingPlanReceiptV1(
             receipt.body(), receipt.planHash(), new String(tampered)),
+        receipt.body().networkId(),
         receipt.body().authority());
   }
 
@@ -928,14 +933,14 @@ public final class AliasSetupModelsTests {
   }
 
   private static AccountOnboardingPlanBodyV1 onboardingBody(
-      final String authority, final String chainId) throws Exception {
+      final String authority, final NetworkId networkId) throws Exception {
     return onboardingBody(
-        authority, chainId, AliasSetupModels.AliasPlanDispositionV1.CREATE);
+        authority, networkId, AliasSetupModels.AliasPlanDispositionV1.CREATE);
   }
 
   private static AccountOnboardingPlanBodyV1 onboardingBody(
       final String authority,
-      final String chainId,
+      final NetworkId networkId,
       final AliasSetupModels.AliasPlanDispositionV1 disposition)
       throws Exception {
     final AliasSetupModels.AccountAliasIntent intent = accountIntent();
@@ -946,7 +951,7 @@ public final class AliasSetupModelsTests {
             account(0x22),
             Collections.emptyList()),
         authority,
-        chainId,
+        networkId,
         new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
         new AliasSetupModels.AliasPlanResourceV1(
             intent,

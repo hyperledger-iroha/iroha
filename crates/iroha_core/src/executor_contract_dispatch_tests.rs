@@ -72,7 +72,9 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
             .expect("encode valid argument fixture");
     *malformed.last_mut().expect("record hash byte") ^= 0x80;
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         19,
         DataSpaceId::UNIVERSAL,
@@ -156,7 +158,9 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let mut tx = block.transaction();
 
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &authority,
         91,
         DataSpaceId::UNIVERSAL,
@@ -202,7 +206,9 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         contract_permission_context(contract_address.clone(), "wrong_entrypoint"),
         contract_permission_context(
             ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
                 &authority,
                 92,
                 DataSpaceId::UNIVERSAL,

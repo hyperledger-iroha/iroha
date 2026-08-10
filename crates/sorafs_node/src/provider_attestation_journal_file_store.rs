@@ -15,7 +15,7 @@
 //! Generic abstract journal store/runtime injection is a trusted internal
 //! boundary. File-backed integrations must consume this adapter through the
 //! explicit asynchronous initialize/open paths, which bind the local store to
-//! the exact chain/genesis/provider/policy checkpoint scope.
+//! the exact network/provider/policy checkpoint scope.
 //!
 //! TODO: before daemon activation, construct this sealed runtime only below the
 //! supervised provider-ingest child, qualify the full crash/corruption matrix,
@@ -27,8 +27,7 @@
 use std::{ffi::OsStr, time::Duration};
 use std::{fmt, io, path::Path, sync::Arc};
 
-use iroha_config::parameters::defaults::sorafs::storage::provider_ingest_runtime::outbox::COMPLETION_CHAIN_ID_MAX_BYTES_V1;
-use iroha_data_model::{ChainId, sorafs::capacity::ProviderId};
+use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::{
@@ -84,8 +83,7 @@ const JOURNAL_INITIALIZATION_RETRY_INTERVAL_V1: Duration = Duration::from_millis
 /// chain/provider journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationJournalFileBindingV1 {
-    chain_id: ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: NetworkId,
     provider_id: ProviderId,
 }
 
@@ -94,37 +92,24 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
     ///
     /// # Errors
     ///
-    /// Returns `StoreRejected` for an empty/overlong chain or a zero genesis
-    /// or provider identity.
+    /// Returns `StoreRejected` for an invalid network or zero provider identity.
     pub fn try_new(
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         provider_id: ProviderId,
     ) -> Result<Self, MusubiProviderAttestationJournalErrorV1> {
-        if chain_id.as_str().is_empty()
-            || chain_id.as_str().len() > COMPLETION_CHAIN_ID_MAX_BYTES_V1
-            || genesis_block_hash == [0; 32]
-            || *provider_id.as_bytes() == [0; 32]
-        {
+        if network_id.as_bytes()[31] & 1 != 1 || *provider_id.as_bytes() == [0; 32] {
             return Err(MusubiProviderAttestationJournalErrorV1::StoreRejected);
         }
         Ok(Self {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             provider_id,
         })
     }
 
-    /// Borrow the exact configured chain identity.
+    /// Borrow the exact configured deployment identity.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    /// Return the exact configured genesis block hash.
-    #[must_use]
-    pub const fn genesis_block_hash(&self) -> [u8; 32] {
-        self.genesis_block_hash
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Return the exact configured provider identity.
@@ -138,26 +123,15 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
     /// The construction cannot fail because this binding was already validated.
     #[must_use]
     pub fn clock_scope(&self) -> MusubiProviderAttestationClockScopeV1 {
-        MusubiProviderAttestationClockScopeV1::try_new(
-            self.chain_id.clone(),
-            self.genesis_block_hash,
-            self.provider_id,
-        )
-        .expect("validated journal file binding yields a valid clock scope")
+        MusubiProviderAttestationClockScopeV1::try_new(self.network_id, self.provider_id)
+            .expect("validated journal file binding yields a valid clock scope")
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn stable_store_nonce(&self) -> [u8; 32] {
-        let chain_bytes = self.chain_id.as_str().as_bytes();
         let mut hasher = blake3::Hasher::new();
         hasher.update(JOURNAL_TWO_SLOT_NONCE_DOMAIN_V1);
-        hasher.update(
-            &u64::try_from(chain_bytes.len())
-                .expect("bounded chain ID length fits u64")
-                .to_be_bytes(),
-        );
-        hasher.update(chain_bytes);
-        hasher.update(&self.genesis_block_hash);
+        hasher.update(self.network_id.as_bytes());
         hasher.update(self.provider_id.as_bytes());
         *hasher.finalize().as_bytes()
     }
@@ -347,9 +321,14 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         let sealed = Arc::new(MusubiProviderAttestationSealedJournalFileStoreV1::new(
             self,
             Arc::clone(&clock),
-            checkpoint_scope,
+            checkpoint_scope.clone(),
         ));
-        MusubiProviderAttestationJournalRuntimeV1::new(sealed, policy, clock)
+        MusubiProviderAttestationJournalRuntimeV1::new_initialized(
+            sealed,
+            policy,
+            clock,
+            checkpoint_scope,
+        )
     }
 
     /// Open an existing externally sealed journal runtime.
@@ -374,13 +353,18 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         let sealed = Arc::new(MusubiProviderAttestationSealedJournalFileStoreV1::new(
             self,
             Arc::clone(&clock),
-            checkpoint_scope,
+            checkpoint_scope.clone(),
         ));
         sealed
             .load_sealed()
             .await
             .map_err(map_store_error_to_journal)?;
-        MusubiProviderAttestationJournalRuntimeV1::new(sealed, policy, clock)
+        MusubiProviderAttestationJournalRuntimeV1::new_opened(
+            sealed,
+            policy,
+            clock,
+            checkpoint_scope,
+        )
     }
 
     fn checkpoint_scope(
@@ -391,8 +375,7 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
     > {
         let policy_digest = self.policy.digest()?;
         MusubiProviderAttestationJournalCheckpointScopeV1::try_new(
-            self.binding.chain_id().clone(),
-            self.binding.genesis_block_hash(),
+            *self.binding.network_id(),
             self.binding.provider_id(),
             policy_digest,
         )
@@ -621,8 +604,7 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         validate_musubi_provider_attestation_journal_checkpoint_bytes_v1(
             bytes,
             self.policy,
-            self.binding.chain_id(),
-            self.binding.genesis_block_hash(),
+            self.binding.network_id(),
             self.binding.provider_id(),
         )
         .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Rejected)
@@ -929,8 +911,7 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             validate_musubi_provider_attestation_journal_checkpoint_metadata_v1(
                 &replacement_checkpoint_bytes,
                 self.local.policy,
-                self.local.binding.chain_id(),
-                self.local.binding.genesis_block_hash(),
+                self.local.binding.network_id(),
                 self.local.binding.provider_id(),
             )
             .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Rejected)?;
@@ -1183,6 +1164,8 @@ mod tests {
         sync::{Arc, Mutex as StdMutex},
     };
 
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
     use tempfile::TempDir;
 
     use super::*;
@@ -1454,9 +1437,9 @@ mod tests {
 
     fn binding(seed: u8) -> MusubiProviderAttestationJournalFileBindingV1 {
         MusubiProviderAttestationJournalFileBindingV1::try_new(
-            ChainId::try_from(format!("musubi-file-store-{seed}"))
-                .expect("canonical test chain ID"),
-            [seed; 32],
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                [seed; 32],
+            ))),
             ProviderId::new([seed.wrapping_add(1); 32]),
         )
         .expect("valid file-store binding")
@@ -1494,8 +1477,7 @@ mod tests {
     fn file_binding_derives_the_exact_clock_scope() {
         let binding = binding(0x30);
         let scope = binding.clock_scope();
-        assert_eq!(scope.chain_id(), binding.chain_id());
-        assert_eq!(scope.genesis_block_hash(), binding.genesis_block_hash());
+        assert_eq!(scope.network_id(), binding.network_id());
         assert_eq!(scope.provider_id(), binding.provider_id());
     }
 
@@ -1619,6 +1601,10 @@ mod tests {
             .expect("matching deployment scope must construct the runtime");
 
         assert_eq!(runtime.policy(), policy);
+        assert!(
+            !runtime.matches_binding(*binding.network_id(), binding.provider_id(), policy),
+            "explicit H0 initialization is never eligible for effect-driver binding"
+        );
         let debug = format!("{runtime:?}");
         assert!(!debug.contains(sensitive_root.to_string_lossy().as_ref()));
         assert!(!debug.contains("operator-secret-state-root"));
@@ -1662,10 +1648,21 @@ mod tests {
             .await
             .expect("explicit initialization provisions empty H0");
         drop(initialized);
-        store(&root_path, binding)
+        let opened = store(&root_path, binding.clone())
             .open_journal_runtime(clock)
             .await
             .expect("ordinary open accepts existing exact H0");
+        let policy = MusubiProviderAttestationJournalPolicyV1::default();
+        assert!(opened.matches_binding(*binding.network_id(), binding.provider_id(), policy));
+        let foreign = self::binding(0x34);
+        assert!(!opened.matches_binding(*foreign.network_id(), foreign.provider_id(), policy));
+        let mut foreign_policy = policy;
+        foreign_policy.max_entries -= 1;
+        assert!(!opened.matches_binding(
+            *binding.network_id(),
+            binding.provider_id(),
+            foreign_policy,
+        ));
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

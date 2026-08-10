@@ -10,6 +10,17 @@ from scripts import finalize_taira_rollout_authority as finalizer
 DPN_COMMIT = "f" * 40
 
 
+@pytest.fixture(autouse=True)
+def _exercise_finalizer_checks_behind_native_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        finalizer,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
+
+
 def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     checkout = tmp_path / "checkout"
     checkout.mkdir()

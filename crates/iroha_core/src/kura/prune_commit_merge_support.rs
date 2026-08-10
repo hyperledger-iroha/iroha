@@ -19,6 +19,13 @@ const PRUNE_STAGE_MEMORY: usize = 13;
 const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
 const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
 
+#[derive(Clone, Copy)]
+enum NativeAmxMergeAssociation<'a> {
+    Live(Option<&'a MergeLedgerEntry>),
+    Startup(Option<&'a MergeLedgerEntry>),
+    CommittedOnly,
+}
+
 /// Clears the in-process prune gate on every return and unwind path.
 #[derive(Debug)]
 struct PruneInProgressGuard<'a> {
@@ -99,6 +106,7 @@ struct KuraPruneSidecarRewriteProjectionV2 {
 }
 
 impl KuraPruneSidecarRewriteProjectionV2 {
+    #[cfg(test)]
     const fn none() -> Self {
         Self {
             pipeline: KuraPruneSidecarPairProjectionV2 {

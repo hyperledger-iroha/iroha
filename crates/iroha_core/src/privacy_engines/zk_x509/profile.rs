@@ -317,7 +317,6 @@ use readiness_certificates::{
     ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
     resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use readiness_certificates::{
     ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
@@ -362,7 +361,6 @@ const fn release_evidence_pins_are_complete_v1(
         && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseCapturePinsV1 {
     kat_proof_bytes: u32,
@@ -378,7 +376,6 @@ struct ZkX509ReleaseCapturePinsV1 {
     maximum_peak_address_space_bytes: u64,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     ZkX509ReleaseCapturePinsV1 {
         kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,

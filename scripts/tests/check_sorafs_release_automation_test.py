@@ -521,6 +521,24 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-14"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "bash ci/sdk_sorafs_orchestrator.sh"),
+        (".github/workflows/sorafs-orchestrator-sdk.yml", "  mobile-parity:"),
+        (".github/workflows/sorafs-orchestrator-sdk.yml", "  csharp-parity:"),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "bash ci/check_kagemusha_jvm_native_bridge.sh",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "check_native_sdk_abi22_artifact.py verify",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "Build and authenticate the exact ABI-22 C# bridge",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
+        ),
     ],
 )
 def test_validate_release_automation_rejects_removed_contract_markers(

@@ -12,6 +12,17 @@ from scripts import capture_taira_privacy_protocol_four_peer_receipt as capture
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _exercise_capture_checks_behind_native_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        capture.admission.taira_release_authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
+
+
 def _executable(path: Path, body: str) -> Path:
     path.write_text("#!/bin/sh\nset -eu\n" + body, encoding="ascii")
     path.chmod(0o700)
@@ -131,7 +142,7 @@ def test_fail_closed_barrier_ignores_caller_claims_and_emits_no_evidence(
 ) -> None:
     paths = {}
     for name in (
-        "irohad",
+        "iroha3d",
         "privacy-exact12-action-driver",
         "network-functional",
         "iroha-core-tests",
@@ -170,7 +181,7 @@ def test_fail_closed_barrier_ignores_caller_claims_and_emits_no_evidence(
         network_driver=paths["network-functional"],
         output_directory=output,
         source_identity=source_identity,
-        validator_binary=paths["irohad"],
+        validator_binary=paths["iroha3d"],
         work_directory=work,
     )
     with pytest.raises(

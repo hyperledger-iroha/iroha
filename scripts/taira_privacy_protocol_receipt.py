@@ -4,8 +4,14 @@
 The macOS build job may produce candidate binaries, but it cannot produce this
 evidence.  A secret-free qualification controller executes the frozen native
 test drivers and preserves their bounded output in the signed candidate.  The
-admission verifier reads, hashes, and parses every transcript and result; a
-receipt row or a self-reported digest is never sufficient by itself.
+unsigned v2 format below is retained only for structural diagnostics.  Its
+self-hashes do not prove that the installed controller produced the libtest
+bytes, so it cannot authorize candidate signing or admission.
+
+Release use remains closed until a separately pinned controller-origin
+authority can authenticate a canonical envelope under the provisioning
+contract named below.  A receipt row, self-reported digest, caller marker, or
+the candidate signing identity is never sufficient by itself.
 """
 
 from __future__ import annotations
@@ -55,6 +61,35 @@ MAX_EVIDENCE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_RECEIPT_LIFETIME_SECONDS = 24 * 60 * 60
 MAX_FUTURE_CLOCK_SKEW_SECONDS = 5 * 60
 PEER_COUNT = 4
+
+CONTROLLER_ORIGIN_AUTHORITY_CONTRACT = (
+    "iroha.taira.privacy-protocol-controller-origin-authority.v1"
+)
+CONTROLLER_ORIGIN_AUTHENTICATED_RUN_CONTRACT = (
+    "iroha.taira.privacy-protocol-authenticated-run-nonce.v1"
+)
+CONTROLLER_ORIGIN_REPLAY_NAMESPACE = (
+    "iroha.taira.privacy-protocol-controller-origin-replay.v1"
+)
+CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER = (
+    "missing preprovisioned "
+    "iroha.taira.privacy-protocol-controller-origin-authority.v1 and "
+    "iroha.taira.privacy-protocol-authenticated-run-nonce.v1: unsigned legacy "
+    "v2 receipts are structural data, not release evidence; an authority-only "
+    "signer and separately pinned trust root, both inaccessible to the capture "
+    "runtime and candidate signer, must authenticate one canonical "
+    "controller-origin envelope binding the exact libtest output bytes and "
+    "digests, preserved driver/transcript/result bytes and digests, the closed "
+    "case/operation/outcome table, candidate and complete source identity "
+    "including source commit, DPN validator release commit, canonical "
+    "Cargo.lock digest, and workspace source-manifest digest, the four-peer "
+    "validator/supervisor and authority host/installation identities, the "
+    "installed controller closure digest, and authority-issued run nonce, "
+    "issue time, expiry, and replay namespace "
+    "iroha.taira.privacy-protocol-controller-origin-replay.v1; no self-hash, "
+    "caller value, marker, or candidate-signing credential may mint or bypass "
+    "that provenance"
+)
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -217,6 +252,12 @@ class PrivacyProtocolEvidenceError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise PrivacyProtocolEvidenceError(message)
+
+
+def require_controller_origin_authority_provisioned() -> NoReturn:
+    """Refuse release use until the independent provenance authority exists."""
+
+    _fail(CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER)
 
 
 def transcript_name(index: int) -> str:
@@ -664,7 +705,7 @@ def _validate_result(
     return result, result_id
 
 
-def validate_evidence_directory(
+def validate_unsigned_v2_structure(
     root: Path,
     *,
     expected_source: Mapping[str, object],
@@ -675,7 +716,13 @@ def validate_evidence_directory(
     expected_receipt_id: str,
     now_unix: int,
 ) -> dict[str, object]:
-    """Independently validate one exact v2 evidence directory."""
+    """Validate unsigned v2 structure without granting release authority.
+
+    This helper exists for capture diagnostics and hostile-format tests.  Code
+    that signs or admits a release must call ``validate_evidence_directory``
+    and therefore remains closed until controller-origin authority is
+    provisioned.
+    """
 
     try:
         inventory = scan_inventory_paths(root)
@@ -903,3 +950,31 @@ def validate_evidence_directory(
         "receipt_id": receipt_id,
         "validator_binary_sha256": candidate["validator_binary_sha256"],
     }
+
+
+def validate_evidence_directory(
+    root: Path,
+    *,
+    expected_source: Mapping[str, object],
+    expected_validator_binary_sha256: str,
+    expected_linux_release_archive_sha256: str,
+    expected_exact12_matrix_sha256: str,
+    expected_artifact_handoff_sha256: str,
+    expected_receipt_id: str,
+    now_unix: int,
+) -> dict[str, object]:
+    """Refuse authoritative validation until controller provenance is trusted."""
+
+    require_controller_origin_authority_provisioned()
+    return validate_unsigned_v2_structure(
+        root,
+        expected_source=expected_source,
+        expected_validator_binary_sha256=expected_validator_binary_sha256,
+        expected_linux_release_archive_sha256=(
+            expected_linux_release_archive_sha256
+        ),
+        expected_exact12_matrix_sha256=expected_exact12_matrix_sha256,
+        expected_artifact_handoff_sha256=expected_artifact_handoff_sha256,
+        expected_receipt_id=expected_receipt_id,
+        now_unix=now_unix,
+    )

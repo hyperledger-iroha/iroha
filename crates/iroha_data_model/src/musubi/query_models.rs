@@ -66,11 +66,8 @@ impl MusubiResolverReleaseRowV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiExactReleaseSnapshotV1 {
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Hash of the first finalized block for the selected chain.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Finalized universal registry snapshot shared by both projections.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Authoritative release record from the stable home dataspace.
@@ -98,8 +95,7 @@ impl MusubiExactReleaseSnapshotV1 {
             MusubiArtifactGovernanceStateV1::Available => 0,
             MusubiArtifactGovernanceStateV1::TakenDown(takedown) => takedown.applied_at_height,
         };
-        if self.chain_id.as_str().is_empty()
-            || digest_is_zero(&self.genesis_hash)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || manifest.release != universal.release
             || self.home_release.release_digest != universal.release_digest
             || manifest.archive_id != universal.archive_id
@@ -120,7 +116,7 @@ impl MusubiExactReleaseSnapshotV1 {
             || takedown_height > self.snapshot.finalized_height
             || storage.finalized_height > self.snapshot.finalized_height
             || (self.snapshot.finalized_height == 1
-                && self.genesis_hash != self.snapshot.finalized_block_hash)
+                && self.network_id.as_bytes() != &self.snapshot.finalized_block_hash)
             || (storage.finalized_height == self.snapshot.finalized_height
                 && storage.finalized_block_hash != self.snapshot.finalized_block_hash)
         {
@@ -428,11 +424,8 @@ impl MusubiMaintainerPageV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveLocationPageV1 {
-    /// Deployment-selected chain identity used by locks and archive admission.
-    pub chain_id: ChainId,
-    /// Hash of the first finalized block used as the genesis identity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_hash: [u8; 32],
+    /// Exact deployment identity used by locks and archive admission.
+    pub network_id: NetworkId,
     /// Current authoritative archive record and full source commitment.
     ///
     /// [`MusubiArchiveRecordV1::registration_projection`] excludes this record's mutable
@@ -602,11 +595,8 @@ impl MusubiArchiveRetentionQueryV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveRetentionPageV1 {
-    /// Deployment-selected chain identity queried for these decisions.
-    pub chain_id: ChainId,
-    /// Hash of the first finalized block for the queried registry.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_hash: [u8; 32],
+    /// Exact deployment identity queried for these decisions.
+    pub network_id: NetworkId,
     /// Decisions in the exact order of the canonical request identities.
     pub items: Vec<MusubiArchiveRetentionDecisionV1>,
     /// Finalized universal registry snapshot shared by every decision.
@@ -627,8 +617,7 @@ impl MusubiArchiveRetentionPageV1 {
     /// oversized, noncanonical, or invalid, or storage anchors exceed the page snapshot.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.snapshot.validate()?;
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.items.is_empty()
             || self.items.len() > MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1
             || self
@@ -664,16 +653,8 @@ impl MusubiArchiveLocationPageV1 {
     pub fn validate(&self) -> Result<(), ParseError> {
         self.archive.validate()?;
         self.snapshot.validate()?;
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_hash.iter().all(|byte| *byte == 0)
-            || self.archive.staging_receipt.payload.binding.chain_id != self.chain_id
-            || self
-                .archive
-                .staging_receipt
-                .payload
-                .binding
-                .genesis_block_hash
-                != self.genesis_hash
+        if self.network_id.as_bytes()[31] & 1 != 1
+            || self.archive.staging_receipt.payload.binding.network_id != self.network_id
             || self.archive.registered_at_height > self.snapshot.finalized_height
             || self.items.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
             || self
@@ -814,11 +795,8 @@ impl MusubiAliasHistoryPageV1 {
 pub struct MusubiResolverIndexPageV1 {
     /// Exact request whose rows this page carries.
     pub query: MusubiResolverIndexQueryV1,
-    /// Deployment-selected chain identity used by generated lockfiles.
-    pub chain_id: ChainId,
-    /// Hash of the first finalized block used as the genesis identity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_hash: [u8; 32],
+    /// Exact deployment identity used by generated lockfiles.
+    pub network_id: NetworkId,
     /// Ordered universal resolver-index rows.
     pub items: Vec<MusubiResolverReleaseRowV1>,
     /// Cursor for the next page, absent at the end.
@@ -836,15 +814,14 @@ impl MusubiResolverIndexPageV1 {
     /// noncanonical or outside the requested package/range, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self
                 .items
                 .windows(2)
                 .any(|pair| pair[0].release >= pair[1].release)
         {
             return Err(ParseError::new(
-                "Musubi resolver page has an invalid chain identity or item bound",
+                "Musubi resolver page has an invalid network identity or item bound",
             ));
         }
         for row in &self.items {
@@ -965,11 +942,8 @@ impl MusubiOrderedPackageEntryV1 {
 pub struct MusubiOrderedPackagePageV1 {
     /// Exact request whose directory rows this page carries.
     pub query: MusubiOrderedPrefixQueryV1,
-    /// Deployment-selected chain identity used by generated lockfiles.
-    pub chain_id: ChainId,
-    /// Hash of the first finalized block used as the genesis identity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_hash: [u8; 32],
+    /// Exact deployment identity used by generated lockfiles.
+    pub network_id: NetworkId,
     /// Authoritative immutable namespace binding, present even when no package matches.
     pub namespace_binding: MusubiNamespaceBindingV1,
     /// Ordered public-directory entries.
@@ -991,8 +965,7 @@ impl MusubiOrderedPackagePageV1 {
         self.query.validate()?;
         self.namespace_binding.validate()?;
         let (namespace, _) = self.query.prefix.components()?;
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || namespace != self.namespace_binding.namespace
             || self
                 .items
@@ -1000,7 +973,7 @@ impl MusubiOrderedPackagePageV1 {
                 .any(|pair| pair[0].selector >= pair[1].selector)
         {
             return Err(ParseError::new(
-                "Musubi directory page has an invalid chain identity or item bound",
+                "Musubi directory page has an invalid network identity or item bound",
             ));
         }
         for item in &self.items {

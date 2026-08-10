@@ -7,7 +7,8 @@ root-frozen macOS build handoff, records their complete bounded output, and
 can preserve those bytes for diagnosis.  Whole-test execution is not release
 authority: v2 issuance remains deliberately closed until this controller uses
 the narrow action-driver IPC to own submission, direct peer queries, restarts,
-and outcome validation for all seven cases.
+and outcome validation for every retained protocol plus the independent
+full-governance case.
 """
 
 from __future__ import annotations
@@ -69,6 +70,15 @@ class PrivacyProtocolReceiptError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise PrivacyProtocolReceiptError(message)
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        admission._require_independent_native_evidence_authority()
+    except admission.TairaRolloutAdmissionError as exc:
+        raise PrivacyProtocolReceiptError(str(exc)) from exc
 
 
 def _canonical_file(path: Path, label: str, *, executable: bool = False) -> Path:
@@ -350,6 +360,10 @@ def _write_case_evidence(
 
 
 def capture(args: argparse.Namespace) -> dict[str, object]:
+    # The Linux archive is part of the receipt candidate; refuse before reading
+    # it or any native driver and before creating diagnostic/output state.
+    _require_independent_native_evidence_authority()
+
     validator = _canonical_file(
         args.validator_binary, "candidate validator binary"
     )
@@ -366,15 +380,15 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
     exact12 = _canonical_file(args.exact12_matrix, "Exact12 matrix")
     source_identity_path = _canonical_file(args.source_identity, "source identity")
     source = _source_identity(source_identity_path)
-    # This compiled operation registry, not a caller flag or libtest marker, is
-    # the issuance barrier.  It currently names only the genuine VeRange action
-    # operation, so the legacy whole-test capture below is unreachable and can
-    # never attest semantic success.
+    # The separate complete controller-case registry, not the native
+    # constructor table, a caller flag, or a libtest marker, is the issuance
+    # barrier.  It remains empty, so the legacy whole-test capture below is
+    # unreachable and cannot attest semantic success.
     try:
         sealed_controller.require_complete_release_operation_surface()
     except sealed_controller.SealedPrivacyControllerError as exc:
         raise PrivacyProtocolReceiptError(
-            "sealed controller does not yet own every retained action operation: "
+            "sealed controller does not yet own every retained protocol case: "
             f"{exc}"
         ) from exc
     _fail(
@@ -438,7 +452,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
     executable_root.mkdir(mode=0o700)
     installed_validator = _install_runtime_executable(
         validator,
-        executable_root / "irohad",
+        executable_root / "iroha3d",
         before["validator"].sha256,
     )
     driver_paths = {

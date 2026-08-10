@@ -243,7 +243,8 @@ three-replica publication through every hook without synthetic storage state:
 each cut receives a fresh four-peer DA/RBC network, a canonical paid pin,
 three admitted providers and governed completion authorities, one canonical
 three-assignment replication order, three completions bound to a real finalized
-chain anchor, and provider-owner signatures over the exact parsed bundle. The
+anchor on the exact genesis-derived `NetworkId`, and provider-owner signatures
+over the exact parsed bundle. The
 PrepareQC and CommitQC cuts target the deterministic autonomous universal-lane
 author derived from the durable lane frontier; the other three peers must keep
 the release absent until that sole author restarts. The pre-world-commit cut
@@ -300,10 +301,10 @@ remains present when no package matches. Search echoes the original bounded
 query text, preserving first-page identity before a search cursor exists.
 
 Cache pruning uses a separate exact archive-retention query, bounded to 100
-sorted, distinct `ArchiveId` values. The first response establishes the chain,
-genesis hash, and finalized registry snapshot; every later request carries that
-snapshot as `expected_snapshot`, and the client rejects any deployment, anchor,
-or response-identity mismatch before changing the cache. The response also
+sorted, distinct `ArchiveId` values. The first response establishes the exact
+genesis-derived `NetworkId` and finalized registry snapshot; every later
+request carries that snapshot as `expected_snapshot`, and the client rejects
+any network, anchor, or response-identity mismatch before changing the cache. The response also
 carries the consensus-committed creation time of that exact finalized block;
 publication may use it only with an exact `RetainUnknown` decision and never as
 a local-clock substitute. The query performs
@@ -365,17 +366,34 @@ include additions.
 A declared test target may name one `.ko` file or a directory. Directory
 targets expand to a bytewise-sorted, portable set of direct `.ko` roots under
 the package, bounded by the V1 file/source limits. The runner reads each stable
-regular source once and passes its text through the structured compiler API;
-it never reopens the diagnostic path or discovers ambient siblings. Symlinks,
-reparse points, hardlinks, special files, portable-name collisions, sensitive
-paths, and generated/VCS/config roots follow the same fail-closed positive-set
-policy as packaging.
+regular source once through a singly linked, no-follow final-component
+descriptor and passes its text through the structured compiler API; it never
+reopens the diagnostic path or discovers ambient siblings. The named-path and
+descriptor identities must match before and after the bounded read, so a raced
+regular-file replacement is rejected. Each source is at
+most 16 MiB, the complete declared set is at most 64 MiB and 4,096 filesystem
+entries, and traversal is at most 64 directory levels. A raced Unix FIFO is
+opened nonblockingly and rejected by descriptor type before any byte read;
+qualified Unix opens also reject a raced final-component symlink without
+following it. Windows and other targets fail closed before reading until a
+stable handle-identity implementation is available. Symlinks, reparse points,
+hardlinks, special files, portable-name collisions, sensitive paths, and
+generated/VCS/config roots follow the same fail-closed positive-set policy as
+packaging.
 
 A workspace root may be virtual or also contain a package. It supports
 portable member, default-member, and exclude paths plus
 `[workspace.package]` and `[workspace.dependencies]`. A workspace has exactly
 one root `Musubi.lock`. Commands discover the nearest ancestor manifest and
 then the owning workspace.
+
+Every local `Musubi.toml` source read is capped at 1 MiB and, on qualified Unix,
+uses the same singly linked, no-follow, nonblocking final-component reader
+before UTF-8 and strict TOML parsing. Other targets fail closed before reading.
+A final-component identity swap or special-file substitution is rejected
+without contributing parser input. Canonical and no-symlink ancestor checks remain
+path-based: they detect ordinary drift but do not claim to close a deliberately
+timed ancestor-directory ABA on every supported host.
 
 V1 dependency kinds are registry, path, and development. A dependency may be
 renamed and may inherit with `{ workspace = true }`. V1 rejects git, optional,
@@ -409,8 +427,8 @@ schema = "musubi-lock"
 version = 1
 ```
 
-It records chain/genesis identity and the finalized registry height/hash and
-index revision at which the graph last changed. Nodes contain exact structural
+It records one exact genesis-derived `network-id` and the finalized registry
+height/hash and index revision at which the graph last changed. Nodes contain exact structural
 package id and version, immutable release digest, `ArchiveId`, source and
 interface digests, and ABI binding. Parent-local edges contain the import
 alias, child node, and dependency kind. Aliases are unique within each parent;
@@ -424,6 +442,40 @@ The lock contains no cache paths, source plans, timestamps, credentials,
 provider URLs, bearer tokens, or process-local data. Parsing any pre-release
 lock format returns a regenerate instruction. `--locked` never rewrites an
 invalid or stale lock.
+
+The first-release consumer-lock corridor is bounded independently from
+published verification locks: the UTF-8 document is at most 128 MiB, contains
+at most 257 total local roots, and contains at most 512 dependency edges in
+total, in addition to the per-parent 256-edge, 1,024-node, and depth-64 graph
+limits. Selected workspace members and every recursively reachable local path
+package share the 257-root budget; path packages do not extend it. `parse`
+rejects the byte ceiling before TOML allocation. Local-package collection and
+direct resolver input enforce the root ceiling. Resolver search shares heavy
+branch payloads and accounts for exact edges branch by branch, so its recursive
+depth cannot exceed 512 edge-bearing calls plus one terminal call, and an
+oversized preferred release can backtrack to a valid lower-edge release.
+One resolution evaluates at most 16,384 candidate branches; exhausting that
+deterministic fuel corridor is a resource-limit failure, not an assertion that
+the version graph was exhaustively proven unsatisfiable. One unit is charged
+when each ordered candidate-loop iteration begins, including candidates then
+rejected for cycle, depth, node, or edge limits. Zero-candidate terminal tasks
+consume no unit, and failed branches never restore fuel.
+Sparse-index collection and direct resolver input independently cap candidate
+row occurrences and candidate dependency occurrences at 16,384; duplicate
+rows still consume the live collection-work budget. Construction preflights
+collection counts before sorting, and canonical rendering uses a bounded
+formatter that cannot grow beyond the rendered-byte ceiling. Publication
+packaging caps the semantic-release Norito payload, deterministic
+verification-lock TOML, and exact verification-lock Norito payload at 2 MiB
+each, matching provider verification and immutable-cache metadata admission.
+The TOML formatter stops at that aggregate ceiling, and package admission
+counts each exact canonical bare Norito payload before allocating its encoded
+buffer or computing a bound digest.
+On qualified Unix, filesystem reads use the shared singly linked,
+nonblocking/no-follow descriptor boundary and revalidate the final component
+before and after the bounded read; other targets fail closed before reading.
+The separate retained-ancestor/open-beneath roadmap gate still applies to a
+deliberately timed ancestor-directory ABA.
 
 Lock writes use a same-directory private temporary file, flush and fsync the
 file, atomically rename, and fsync the parent directory. The previous complete
@@ -479,7 +531,7 @@ Workspace selection follows default members, `--workspace`, `--exclude`, and
 `-p`.
 
 Offline resolver snapshots are canonical, bounded, and committed under a
-domain-separated digest after all captured pages agree on one chain, genesis,
+domain-separated digest after all captured pages agree on one exact `NetworkId`,
 finalized block, and index revision. Within one deployment, cached index
 revisions must be nondecreasing as finalized height advances; a higher block
 with a lower revision is rejected and can never satisfy a lock freshness check.
@@ -512,7 +564,7 @@ result has `status = "detached"`, the operation id, `phase = "seed-ingress"`,
 the canonical namespaced `namespace/package@version` release label, and its
 separately named `structural_release`. A completed result has
 `status = "complete"` and retains both release forms, then exposes the operation
-id, chain and genesis identity, finalized snapshot, immutable release digest,
+id, exact genesis-derived `NetworkId`, finalized snapshot, immutable release digest,
 `ArchiveId`, both canonical projection digests, checkpoint digest, and the AMX
 instruction digest, payload transaction hash, and applied height. Digests and
 hashes are lowercase fixed-width hexadecimal. Heights and revisions are exact
@@ -559,20 +611,33 @@ requirement, and exact selected node. Semantic manifests, exact proof nodes,
 resolver rows, and consumer lock roots all reject duplicate parent-local
 aliases instead of depending on map overwrite behavior.
 
+Every mandatory metadata file is nonempty. The artifact descriptor is capped at
+64 KiB; the semantic release and exact verification lock are each capped at
+2 MiB. Their data-model entry points decode one exact bare-Norito slice under
+fixed field, element, allocation, and depth limits, validate the typed value,
+and compare its canonical re-encoding directly with the input without first
+materializing a second complete top-level metadata vector. The derived encoder
+can transiently buffer one length-delimited field, bounded by the same file
+ceiling. Providers and immutable-cache readers use only these shared entry
+points. Malformed, trailing, noncanonical, length-bomb, and oversized inputs
+collapse to stable payload-free boundary errors before any cross-binding or
+cache mutation.
+
 Authenticated fetches reject oversized JSON nesting, token inventories,
 strings, and unquoted scalar literals before constructing a Norito JSON DOM.
 On an online cache miss, an exact locked fetch also binds the finalized
-archive-location page to the lock's chain id, genesis hash, and snapshot floor
+archive-location page to the lock's `NetworkId` and snapshot floor
 before contacting a provider. Equal finalized heights require the exact lock
 snapshot; later heights must not regress the resolver-index revision. A valid
 global content-addressed cache hit remains registry-independent because the
 exact bundle is revalidated against every locked node that consumes it.
-Online resolution anchors the selected `client.toml` path once, then reads one
-bounded, singly linked image through a nonblocking, no-follow stable descriptor
-and parses both the public registry context and the secret-free fetch
-configuration from those exact bytes. Provider token files, DNS answers, and
-HTTP clients are loaded only after an immutable-cache miss; the raw
-configuration image is not retained in the graph.
+On qualified Unix, online resolution anchors the selected `client.toml` path
+once, then reads one bounded, singly linked image through a nonblocking,
+no-follow stable descriptor and parses both the public registry context and the
+secret-free fetch configuration from those exact bytes. Other targets fail
+closed before that read. Provider token files, DNS answers, and HTTP clients
+are loaded only after an immutable-cache miss; the raw configuration image is
+not retained in the graph.
 Fresh publication retains only process-local, nonserializable provenance for
 that anchored image. After clean-package validation it securely rereads the
 file, compares a domain-separated digest before parsing any signer or mutation
@@ -596,23 +661,25 @@ registry-v1/<archive-id>/src
 
 Extraction streams into a private sibling with no-follow/create-new file
 creation, verifies every commitment, fsyncs files and directories, then
-renames into an absent immutable destination. Repair validates the finalized
-commitment and file plan before classifying any local entry as corrupt, and
+renames into an absent immutable destination. Verified `.payload.*.partial`
+files and failed or race-losing `.src.*.partial` trees are retained: safe
+automatic destructive cleanup requires an atomic handle-relative
+compare-and-delete primitive that `std` does not expose. Repair validates the
+finalized commitment and file plan before classifying any local entry as corrupt, and
 quarantines only structurally validated descendants; invalid registry inputs
 leave the cache untouched. Lock-controlled deletion, arbitrary replacement,
 and cache import do not exist.
 
-On Windows, cache roots, archive directories, source-tree ancestors, and
-regular files are protected by stable file identities and retained
-non-delete-sharing handles, so existing entries can be read and verified
-without admitting path substitution. Publication, quarantine, and prune remain
-fail-closed on Windows: safe Rust currently exposes no handle-relative,
-no-replace directory rename, and dropping the pin to use a path rename would
-reopen the substitution race. Those mutation paths may be enabled only after a
-safe workspace-owned primitive preserves the retained-handle invariant.
+Cache access is qualified only on Unix. Windows and other non-Unix targets
+return `UnsupportedPlatform` before inspecting or creating the requested cache
+root; package planning and workspace-test execution use their dedicated
+unsupported-platform errors at the same pre-I/O boundary. Safe stable Rust does
+not currently expose the handle identity, single-link, no-follow, and
+handle-relative no-replace primitives needed to preserve the same contract on
+those targets. No weaker pathname or metadata surrogate is accepted.
 
 Unix install has a subprocess abrupt-exit matrix at the payload write and
-sync, source chunk and file sync, payload removal, source-tree verification and
+sync, source chunk and file sync, verified-payload retention, source-tree verification and
 sync, directory publication, and archive-directory sync boundaries. Reopen
 must either find no published `src` or fully reverify it, and retry must
 converge. This is process-crash evidence, not yet the complete power-loss,
@@ -621,13 +688,12 @@ release blocker: replace its advisory-lock plus path-based `rename` with a safe
 descriptor-relative no-replace directory primitive. A second path absence
 check does not close the same-UID destination-planting race.
 
-`musubi cache prune` inventories canonical cache identities, obtains the
-bounded finalized decisions above, and passes only explicit prune identities to
-the point-targeted cache deletion primitive. It never treats absence from a
-workspace lock or retained set as deletion authority, so an archive installed
-concurrently after inventory cannot be removed accidentally. All batches are
-validated before the first deletion. `--dry-run` reports the same decisions and
-candidates without renaming or deleting any cache path.
+`musubi cache prune` inventories canonical cache identities and obtains the
+bounded finalized decisions above. `--dry-run` reports the complete decisions
+and explicit candidates without mutation. A non-empty live prune fails after
+classification but before inspecting, isolating, chmodding, or removing any
+candidate on every platform; automatic deletion remains disabled until the
+workspace has atomic handle-relative compare-and-delete.
 
 ## Publication state machine
 
@@ -635,7 +701,8 @@ Production publication is resumable and idempotent:
 
 1. Validate and compiler-check the clean package and exact proof graph.
 2. Stage the CAR through admitted authenticated SoraFS seed ingress and obtain
-   a signed expiring receipt bound to chain, publisher, broker/provider,
+   a signed expiring receipt bound to the exact genesis-derived `NetworkId`,
+   publisher, broker/provider,
    manifest, archive, body digest and length, nonce, and expiry.
 3. Register or reuse the exact archive and permanent registry-grade pin.
 4. Wait for finalized approval and distinct provider validations/completions;
@@ -658,7 +725,7 @@ restaged.
 The publication proof resolver may retain an existing lock edge only while its
 row remains fresh-selectable; yanked, below-quorum, unavailable, or governed
 takedown rows require a new proof graph (and make `--locked` fail). The proof's
-snapshot must be a canonical finalized ancestor on the current chain, and its
+snapshot must be a canonical finalized ancestor on the exact network, and its
 index revision must match the sparse finalized checkpoint for that ancestor.
 This permits replication and readback blocks to finalize without invalidating
 the operation. Core exposes this exact ancestor and revision-activation check
@@ -687,7 +754,7 @@ never replaced. An attempt becomes replaceable only with a finalized
 consensus-committed finalized block time strictly after the exact signed
 transaction/receipt validity deadline. A cache-only expiry observation is not
 terminal evidence, and an authoritative generic rejection remains permanent.
-Pin coordination authenticates the finalized transaction hash, chain/genesis,
+Pin coordination authenticates the finalized transaction hash, exact `NetworkId`,
 snapshot, immutable archive-registration projection, and verification-lock
 digest rather than a new live seed receipt, and it rejects fewer than three
 finalized parsed-bundle attestations. Each proof is an
@@ -700,11 +767,17 @@ the complete finalized SoraFS completion set before accepting a location Add.
 The projection contains the archive id,
 commitment, original staging receipt, registrant, and registration height but
 deliberately excludes the renewable location revision and location identities.
-The coordinator independently retrieves the exact transaction, proves that its
-sole instruction is the matching archive registration finalized by the named
-snapshot, then may reproduce the projection from any later finalized exact
-archive read; its response separately carries the current mutable archive
-record used for location CAS.
+The daemon-owned read-only finality adapter captures one coherent Core query
+view, applies the consensus snapshot-history validator, loads the exact
+registration-height Kura block and canonical hash, and requires one unique,
+non-rejected signed transaction whose sole native instruction, authority,
+`NetworkId`, receipt, commitment, and policy revision reproduce the evidence.
+It then compares the immutable projection from the current exact archive read
+and returns that current mutable record for location CAS. Only a snapshot
+height or resolver revision beyond the captured local view is retryable;
+missing, rejected, forked, or substituted evidence fails permanently. The
+adapter performs no SoraFS or registry mutation and does not activate the stock
+service.
 
 Archive locations use a separate append-only journal of at most eight one-based
 generations. Before submitting a location Add, the publisher persists the
@@ -773,7 +846,7 @@ poll and never overwrites the journal; the exact journaled record or a higher
 revision at a non-regressing page and location height may resume.
 A healthy same-ID renewal resumes from its current finalized pin, order, epochs,
 provider identities, and attestation-set digest. Core resolves their immutable records and
-requires the full proofs to still bind the exact chain, archive, bundle, source,
+requires the full proofs to still bind the exact `NetworkId`, archive, bundle, source,
 semantic manifest, verification lock, and replication order. Production
 qualification still must exercise the real fee-quote and
 submission transport at every location-generation crash boundary.
@@ -782,7 +855,7 @@ Before a release transaction may be sent, the publisher must durably append a
 compact exact-signed intent. The envelope retains every non-derived payload and
 authorization field (creation time, non-zero lifetime, nonce, fee intent,
 primary signature, and the optional canonical multisig proof) and reconstructs
-the chain, publisher, sole `PublishMusubiReleaseV1` instruction, empty metadata,
+the exact `NetworkId`, publisher, sole `PublishMusubiReleaseV1` instruction, empty metadata,
 and absent attachments from the immutable operation request. The intent binds
 both the payload-only transaction hash and a domain-separated digest of the
 complete fixed-V1 signed wire. The registry's authoritative status identifies
@@ -817,7 +890,7 @@ The current 16 MiB journal enforces derived, disjoint budgets for non-release
 state, eight release attempts, and final submission plus a compact completion
 checkpoint. The full paired home/universal response is bounded and validated at
 finality but is not copied into the durable frame. Completion instead retains
-the request-derived operation id, chain and genesis identity, the covering
+the request-derived operation id, exact genesis-derived `NetworkId`, the covering
 snapshot, structural release and archive identity, the complete immutable
 release-manifest digest,
 domain-separated canonical digests of both verified projections, and a
@@ -853,11 +926,11 @@ Descriptor-relative filesystem qualification of the publisher sidecars, real
 fee-quote/submission transport exercises, crash/fault injection, and
 rollback-resistant checkpoint storage remain release gates.
 
-Final verification retains the resolver page's chain and genesis identities in
-the operation evidence and requires both to match the immutable publication
-request. It also journals the Native AMX transaction's authoritative applied
+Final verification requires the exact-release response's `NetworkId` to match
+the immutable publication request before retaining that one exact identity in
+operation evidence. It also journals the Native AMX transaction's authoritative applied
 height and requires the final snapshot to cover it. An exact-looking release
-row returned by another chain incarnation, or from before that application, is
+row returned by another network incarnation, or from before that application, is
 rejected even when its package, version, and content digests happen to match. A
 row revision may precede the page's current global index revision when an
 unrelated later mutation did not rewrite that exact row.
@@ -882,7 +955,7 @@ canonical Norito `MusubiNamespaceDelegationV1` whose delegate must be the
 configured publisher; it is public authorization material, not a signing key.
 
 Every private request uses a fixed route and a short-lived, domain-separated,
-bounded controller-approval set over the chain, publisher, operation id,
+bounded controller-approval set over the exact `NetworkId`, publisher, operation id,
 operation kind, typed request digest, and validity window. Approvals are
 strictly key-ordered and distinct; a single controller requires its one exact
 key, while a multisig controller requires valid member signatures meeting its
@@ -922,19 +995,21 @@ On qualified Unix targets, journal, staged-CAR, plan, and operation-lock reads
 use architecture-specific no-follow plus nonblocking opens before descriptor
 metadata is trusted. Immutable readback and directory synchronization use the
 same policy, so a post-inspection FIFO or device substitution fails instead of
-blocking the publisher.
+blocking the publisher. Windows and other non-Unix targets return the exact
+unsupported-platform error before metadata access to journal roots, staged
+CARs, plans, or operation locks.
 
 The server counterpart is a transport-independent, closed three-route core.
 It accepts only exact `POST` routes and canonical bounded Norito authorization
 and request encodings,
-checks chain/genesis/publisher/operation identity and bounded clock skew,
+checks exact `NetworkId`/publisher/operation identity and bounded clock skew,
 authenticates before parsing the bounded envelope, then canonically
 decodes/re-encodes the plan and reproduces the CAR, root, chunk-plan, PoR,
 source-tree, descriptor, semantic-manifest, verification-lock, and bundle
 commitments before any journal reservation or backend call. It returns only
 canonical typed success or redacted error bodies. Its injected
 crash-safe journal atomically consumes authorizations, binds each operation ID
-to one chain/genesis incarnation, publisher, and immutable archive/CAR
+to one genesis-derived `NetworkId`, publisher, and immutable archive/CAR
 commitment, rejects equivocation, and reuses an exact completed result. When
 only a completed seed receipt has expired, a fresh exact
 authorization may atomically reopen that same request: ingress idempotently
@@ -965,7 +1040,7 @@ controller threshold.
 
 Stock `irohad` opens no listener for these routes. An injecting launcher supplies
 a one-shot deployment factory. After trusted startup replay and SoraFS node
-construction, `irohad` passes that factory the exact chain/genesis identity and
+construction, `irohad` passes that factory the exact genesis-derived `NetworkId` and
 live finalized-state, transaction-queue, and SoraFS handles. The factory must
 assemble the service core, crash-safe journal, concrete HSM/KMS signing provider,
 SoraFS backends, and qualified private HTTPS/TLS ingress; its runner then joins
@@ -973,15 +1048,15 @@ the daemon supervisor. TLS material and backend credentials never enter
 argv, project files, publication journals, Torii, or the daemon-private runtime
 provider broker. Hostname binding to deployment-signed provider adverts and
 the concrete HSM/storage adapters remain deployment qualification gates.
-The stock tree does not yet supply the authoritative storage/finality backend:
-an implementation must prove that the exact transaction contains the matching
-archive-registration instruction and was included by the named finalized
-snapshot, then match the immutable registration projection against a finalized
-exact archive read before coordinating SoraFS. The latest-state
-public archive query is sufficient for that projection because Core never
-mutates its fields after registration; historical mutable location state is no
-longer part of the request contract. Trait injection and authenticated
-requester bytes alone are not finality evidence.
+The stock tree now supplies the read-only authoritative finalized
+archive-registration reader described above, bound to the factory context's
+exact `NetworkId` and `Arc<State>`. It still does not supply the effectful
+storage coordinator or production pin/replication backend that must consume
+that result before coordinating SoraFS. The latest-state archive record is
+sufficient for the immutable projection because Core never mutates those
+fields after registration; historical mutable location state is no longer
+part of the request contract. Trait injection and authenticated requester
+bytes alone are not finality evidence.
 
 The production adapter dependency order is therefore explicit and fail-closed.
 The plan-bearing seed boundary is implemented in the stock service core. A
@@ -1005,9 +1080,13 @@ between-pass substitution fail closed without materializing the CAR. This path
 is for an authenticated extraction or an admitted chunk store; a raw provider
 CAR must still cross the complete canonical-CAR verifier because payload-only
 readers cannot observe noncanonical container headers, indexes, or trailing CAR
-bytes. Both the generic 512 MiB chunk-store admission ceiling and the largest
-normalized-lock decode allocation exceed the complete 64 MiB provider memory
-gate and remain separately documented qualification items.
+bytes. The shared semantic-release and lock decoders each admit at most 48 MiB
+of cumulative Norito allocation accounting, including nested field charges and
+whole-input realignment. The provider drops its 32 MiB PoR store before bundle
+parsing in both entry points. Those deterministic controls do not by themselves
+prove whole-process RSS below 64 MiB; supported-target measurement remains a
+release qualification item. The generic 512 MiB chunk-store admission ceiling
+is separate from this provider path.
 The embedded SoraFS node exposes the matching digest-selected read boundary as
 a callback-scoped lifecycle lease. It reveals no storage path, blocks eviction
 for the callback, admits and accounts every verified chunk through the local
@@ -1034,10 +1113,11 @@ marker, and, for active or retired records, the exact completed-provider set.
 Generic SoraFS orders carry neither the marker nor a Musubi binding.
 
 The durable and runtime-only bindings must not be conflated. The
-provider-indexed archive record binds the archive commitment to chain/genesis
-identity, an exact finalized anchor, and current completion state. The outbox
+provider-indexed archive projection retains its configuration label for lookup,
+an exact finalized anchor, and current completion state; that label is not a
+signing or replay domain. The outbox
 authorization separately persists a bounded
-`FinalizedProviderIngestMusubiContextV1` containing chain, genesis, and
+`FinalizedProviderIngestMusubiContextV1` containing the exact `NetworkId` and
 `ArchiveId`; that context participates in the job ID and immutable binding, so
 a generic job cannot be upgraded with an informational Musubi value and a
 Musubi job cannot be downgraded by omitting one. The V5 checkpoint is the sole
@@ -1045,8 +1125,8 @@ receipt-bearing layout and rejects every other discriminator, including the
 retired V4 layout whose public receipt codec could be used to fabricate
 field-shaped verifier evidence.
 
-The runtime's opaque pre-completion claim binds the configured chain and
-genesis, local provider, finalized archive cursor, replication order,
+The runtime's opaque pre-completion claim binds the exact `NetworkId`, local
+provider, finalized archive cursor, replication order,
 `ArchiveId`, and complete commitment. Its factory authenticates the configured
 finalized-ledger implementation boundary, not arbitrary bytes. Production
 wiring gives that capability only to the qualified archive-backed reader. The
@@ -1059,7 +1139,7 @@ or equal-height fork is rejected.
 Both existing and newly ingested Musubi payloads are then selected by canonical
 manifest digest, held under the callback-scoped lifecycle lease, reconstructed
 with the exact registered CAR plan, and passed through all three fresh-reader
-verifier passes. The resulting bounded receipt retains chain/genesis/provider,
+verifier passes. The resulting bounded receipt retains exact network/provider,
 the admission cursor, order/manifest/archive/commitment, and the parsed semantic
 release and verification-lock digests. The V5 provider-ingest checkpoint carries
 that receipt through local and finalized states. The public receipt has no
@@ -1080,17 +1160,21 @@ path leaves a durable `SourceClaimed` row waiting only for lease expiry.
 After the local provider's completion is finalized, the finalized reader can
 seal a distinct opaque `ProviderIngestFinalizedMusubiCompletionClaimV1` only
 from that exact completed order row. It has no public constructor or wire
-codec. The sole public request-minting boundary is
-`AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle`: it accepts the
+codec. The only downstream-visible request-minting boundary is the doc-hidden
+`NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`. It first
+rejects an unbound or foreign process-local store-instance marker, then enters
+the callback-scoped lifecycle lease. The lease's crate-private
+`AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle` accepts the
 retained authorization, opaque completed claim, and exact reconstruction plan,
 checks them against the lifecycle-leased admitted manifest and payload digest,
-and opens all three verifier readers itself. The raw verifier-evidence
-constructor is crate-private, so evidence retained before completion cannot be
-combined with a later claim by daemon or downstream code. The resulting
+and opens all three verifier readers itself; `NodeHandle` also rechecks the
+marker on the returned request. The raw verifier-evidence constructor is
+crate-private, so evidence retained before completion cannot be combined with
+a later claim by daemon or downstream code. The resulting
 `ProviderIngestMusubiAttestationApprovalRequestV1` binds the unsigned
 attestation payload, a stable completed-row evidence digest, the separately
 retained observation cursor, and governed signer policy. The digest covers the
-exact chain, genesis, provider, order, archive commitment, and finalized
+exact `NetworkId`, provider, order, archive commitment, and finalized
 completion row but deliberately excludes only the observation cursor. A fresh
 request for the same row at a later finalized head therefore reuses the same
 approval identity and may satisfy the retained intent; the stored cursor is a
@@ -1100,40 +1184,92 @@ inert: constructing it performs no signing, registration, or runtime handoff.
 
 `ProviderIngestCompletedMusubiCaptureScannerV1` is the effect-free bridge from
 finalized completion rows to those opaque claims. The capture-only
-`ProviderIngestCompletedMusubiCaptureLedgerV1` receives no claim factory and
-cannot return a claim. It returns an opaque, non-codec raw projection containing
-the chain/provider identity, finalized cursor/time, pin record, canonical order
-record, archive binding/commitment, and completion authority fields. The
-scanner validates the complete bounded page and every raw row before privately
-creating a fresh factory, sealing the rows, and revalidating the resulting
-assignments and claims. Scanner progress is committed only after that succeeds.
-Its builder remains crate-private on `NodeHandle`: those fields can be checked
-for internal consistency but do not by themselves authenticate that an
-arbitrary trait implementation read the daemon-owned archive. Construction and
-sealing must therefore move beside that concrete archive, or authenticated
-archive verification must move under `sorafs_node`, before activation.
+`ProviderIngestCompletedMusubiSignedCaptureLedgerV1` receives no claim factory
+and cannot return a claim. It accepts only the scanner's exact bounded request
+and returns an untrusted signed page. The scanner pins one immutable reader
+session binding: the V1 domain, exact `NetworkId`, provider ID, ephemeral
+Ed25519 public key, and a non-zero reader-session epoch. Every request also
+binds the exact finalized cursor, continuation order ID, checked `u16` limit,
+and a scanner-owned non-zero generation. The signed transcript uses canonical
+Norito components with explicit field tags, row indices, and lengths under one
+16 MiB cumulative bound. It commits the request, complete page header, every
+pin/order/archive/owner/authority/epoch/transaction field in row order, and the
+continuation. The scanner reconstructs and verifies that transcript before it
+validates or seals any row, then privately creates a fresh factory and
+revalidates the resulting assignments and claims. It commits its generation
+and cursors only after the full operation succeeds; rollback restores both.
+
+The concrete daemon reader owns the corresponding private ephemeral key and
+creates it lazily, so ordinary provider-ingest startup remains unchanged while
+activation is closed. Its blocking read/sign section serializes requests and
+retains one exact signed response. A lost or cancelled response can therefore
+retry the same request and generation byte-for-byte even if the archive head
+advances; a different request at the same generation, an old generation, or a
+skipped generation fails. A successful next generation performs a fresh
+replay-safe archive read. The private key and an unbound raw-page accessor
+never cross this boundary; the resulting private-field projection travels only
+inside the untrusted signed envelope that the scanner independently verifies.
+
+The generic production scanner builder is gone. A private, clone-shared `Arc`
+identity is created only for a handle with both storage and the provider-ingest
+outbox, and identifies that process-local `NodeHandle` incarnation through the
+completed claim, capture candidate, and unsigned approval request. Its atomic
+capture tenure can be taken only once across all handle clones and never resets
+after failure or drop; a separately constructed handle or restart gets a fresh,
+independent marker and tenure. Generic finalized-ledger claims are unbound and
+cannot mint a request. Reconciliation rejects a foreign scanner before a signed
+page request, while a foreign or unbound claim fails before lifecycle-lease or
+payload-reader I/O. The marker has no codec, stable bytes, hash, or Debug
+disclosure and is excluded from the completion digest and approval ID. Those
+stable identities can therefore be rederived after restart, but the
+marker-bearing claim and request must be freshly reconstructed.
+
+`PreparedProviderIngestFinalizedArchiveV1` now owns its capture reader as one
+movable concrete value with no cloneable accessor. A private `irohad` composer
+moves that exact reader into the doc-hidden non-generic
+`ProviderIngestCompletedMusubiCaptureCoordinatorV1` and retains the tenure on
+`Iroha`. Acquisition does not consult the reader. Scanner/session binding is
+lazy, so height-zero startup can remain pending; retry uses the same retained
+reader and its lazy signer session, while a second caller cannot substitute
+another reader. The coordinator exposes no public page, claim, approval, or
+effect-driving operation. The marker alone still does not authenticate Kura,
+State, or runtime-provider slots, and a custom launcher remains its own outer
+trust root. Qualified effects, broker readiness, supervision, and deployment
+gates remain separate.
 
 A crate-private one-page reconciliation primitive snapshots scanner progress,
 reconstructs the exact admitted CAR plan by manifest digest, reruns all bundle
-verification under the callback-scoped lifecycle lease, and idempotently
-enqueues the resulting approval intent. A plan, verification, or journal
-failure restores scanner progress so replay cannot skip a partially enqueued
-suffix. It has no signing, inventory, transaction, or registry effect and is
-not wired to a daemon child while the archive-provenance boundary remains open.
+verification under the callback-scoped lifecycle lease, classifies any retained
+journal intent, and performs a qualified exact slot-59 inventory lookup before
+enqueue. The inventory qualification is sampled before and after its exact
+`get` under one timeout. A valid existing attestation whose payload exactly
+matches the request suppresses enqueue, absence proceeds, and conflict,
+qualification drift, rejection, or timeout fails closed. Only an absent request
+is idempotently enqueued. A drop guard restores scanner progress, including its
+generation, on cancellation and on every plan, verification, inventory, or
+journal failure, so replay cannot skip a partially enqueued suffix. This is not
+a durable deduplication boundary:
+delivered rows may be pruned for capacity, and scanner progress is process-local.
+The primitive performs no signing, inventory mutation, transaction submission,
+or registry mutation and is not wired to a daemon child while qualified effect
+composition remains open.
 
 `irohad` prepares a third finalized-archive reader specifically for capture,
-separate from the public and provider-ingest runtime readers. Its replay-safe
-mode is stateless: a fresh read selects the visible finalized archive key, while
+separate from the public and provider-ingest runtime readers. The underlying
+archive lookup is replay-safe and does not advance the adapter's stateful
+`active` cursor: a fresh read selects the visible finalized archive key, while
 a continuation resolves the exact height/hash and reconstructs its core cursor
-through a bounded first-page provider-state-root lookup. It never advances the
-adapter's stateful `active` cursor, and the stateful and replay-safe APIs reject
-cross-use. It emits only raw capture pages and never receives the private claim
-factory, so cancellation or a post-read validation failure can retry the same
-request. The scanner separately retains the in-progress page cursor, a
-monotonic finalized high-water, and the last completely scanned cursor. After
-a terminal page, the same finalized head receives one bounded fully validated
-probe whose candidates are suppressed into an empty terminal page; a later
-head resumes ordinary paging.
+through a bounded first-page provider-state-root lookup. The stateful and
+replay-safe APIs reject cross-use. The private signed-reader session wraps that
+lookup with the exact-generation response cache described above and exposes no
+raw capture accessor. The scanner separately retains the in-progress page
+cursor, a monotonic finalized high-water, the last completely scanned cursor,
+and its request generation. During one scanner lifetime, every subsequent
+fresh scan at the same finalized head performs one bounded fully validated
+first-page probe whose candidates are suppressed into an empty terminal page;
+the successful probe still advances the generation, and a later head resumes
+ordinary paging. This is not a persisted no-work watermark: restart creates a
+new scanner and rescans the current finalized head.
 
 The provider-attestation foundation is also implemented as an inert library
 boundary. `MusubiProviderAttestationSignerV1` can approve only an opaque request
@@ -1150,7 +1286,7 @@ controller-key-sorted approval set for an exact retry, so timeout recovery
 cannot choose another otherwise-valid multisig subset. This is a contract for
 a deployment signer, not a stock software HSM/KMS implementation. A private
 daemon wrapper now pins the exact configured handle/revision/adapter-policy
-digest, chain ID, genesis block hash, and local provider ID. It also reads the
+digest, genesis-derived `NetworkId`, and local provider ID. It also reads the
 finalized `State::provider_owners()` authority before and after the external
 approval and rejects owner or adapter drift and substituted output. The sealed-
 clock journal signing driver remains crate-private, and the wrapper is not
@@ -1191,8 +1327,8 @@ non-test production grammar, revisions and digests must be non-zero, and the
 digests must be canonical lowercase hexadecimal. The triplets have no defaults
 and every binding field is forbidden while the table is disabled. Paths,
 deployment nonces, endpoints, credentials, tokens, and keys remain absent.
-The three bindings project to runtime-provider slots 55--57 in durability,
-signer, inventory order. Slot 55 is one combined durability provider with
+The three bindings project to runtime-provider slots 57--59 in durability,
+signer, inventory order. Slot 57 is one combined durability provider with
 separate authenticated small-record namespaces for the monotonic UNIX-time
 floor and journal checkpoint head, plus immutable content-addressed checkpoint
 blob storage. Its single qualification covers all three surfaces; it does not
@@ -1201,14 +1337,17 @@ resolved objects are all-or-none. Registry resolution compares each production
 handle and public qualification with the configured binding both before and
 after a second metadata snapshot. It does not invoke readiness or any storage,
 signing, or inventory effect. The stock broker has no implementation for these
-slots. Enabling the table requires provider ingest, but stock `irohad` then
-rejects the activation request before supervisor startup. No capture child or
-external effect is created from this configuration today.
+slots, so the standard stock launcher fails during pre-Tokio provider
+resolution when it encounters the unsupported roles. If an injected registry
+resolves and qualifies all three roles, the shared
+`Iroha::start_with_runtime_deps` activation gate still rejects the configured
+journal before supervisor startup. No capture child or durability, signing, or
+inventory mutation is created from this configuration today.
 
 `MusubiProviderAttestationJournalFileStoreV1` is the inert public local-store
 adapter for that CAS contract. On Linux and macOS it binds one root-fenced
 two-slot layout with a fixed 128 MiB checkpoint/payload ceiling to the exact
-chain ID, genesis block hash, and provider ID. Descriptor-relative identity
+genesis-derived `NetworkId` and provider ID. Descriptor-relative identity
 checks, canonical checkpoint and generation validation, durable two-slot
 commits, process-local single flight, and nonblocking normal-operation OS locks
 reject online path/link substitution, torn writes, divergent lineage, and
@@ -1223,9 +1362,9 @@ lease spans the external operation and local reconciliation, returns
 after cancellation can finish the bounded local repair. Unlink/recreate cannot
 split cooperating writers onto two accepted lock identities.
 
-Slot 55's time namespace binds a small canonical generation/predecessor/floor
-record to the exact chain, genesis, and provider scope. Its separate
-checkpoint namespace binds chain, genesis, provider, and the exact
+Slot 57's time namespace binds a small canonical generation/predecessor/floor
+record to the exact `NetworkId` and provider scope. Its separate
+checkpoint namespace binds that `NetworkId`, provider, and the exact
 `MusubiProviderAttestationJournalPolicyV1::digest()` into a canonical scope,
 then links canonical checkpoint-head records by their domain-separated Norito
 digests. Hashing uses canonical encoding rather than ambient codec flags. The
@@ -1265,7 +1404,7 @@ approved attestation. Operators can generation-fence either requeue or explicit
 acknowledgement; handoff recovery reuses the retained attestation without
 signing again.
 
-Canonical inventory items bind chain/genesis, archive/order, provider key,
+Canonical inventory items bind exact `NetworkId`, archive/order, provider key,
 complete attestation digest, and a stable handoff ID. The public sink contract
 is idempotent: an exact replay returns the same non-zero inventory revision and
 a different digest at the same immutable scope/key conflicts. Only the journal
@@ -1280,7 +1419,7 @@ private daemon inventory wrapper now compares the exact configured
 handle/revision/policy digest before and after every fallible call, including
 readiness. It restricts put/get items and keys to the local provider and
 validates every scope and returned value against the exact configured
-chain/genesis and requested archive/order. It intentionally performs no
+`NetworkId` and requested archive/order. It intentionally performs no
 `State::provider_owners()` lookup; ownership fencing belongs to the approval
 signer. The wrapper and driver remain uninstantiated. The public contracts are
 not an active network handoff or remote-authentication implementation, and
@@ -1288,17 +1427,28 @@ expose no transaction, queue, or registry mutation surface. Public readback
 construction performs structural validation only; the deployment adapter
 remains responsible for authenticating its source.
 
+The reconciliation primitive uses the qualified slot-59 reader to authenticate
+an exact scope/key result after rederiving and verifying the request. It samples
+qualification before and after one exact `get` under the journal timeout. An
+existing valid attestation must carry the exact current request payload to
+suppress admission, absence permits enqueue, and any other item at that
+immutable key, qualification drift, rejection, or timeout fails closed. This
+still is not a long-lived deduplication guarantee once both the journal entry
+and external inventory item are absent. The existing handoff driver performs
+`put` followed by authenticated exact readback after approval.
+
 The remaining deployment dependencies are:
 
-1. give one non-generic, daemon-owned coordinator exclusive construction of the
-   crate-private scanner and effect drivers and ownership of authenticated
-   daemon-archive provenance by sealing it to the concrete qualified reader,
-   then wire its finalized-completion
-   capture/reconciliation child to enqueue and rediscover journal work. The
-   child must rederive each
-   request through the lifecycle lease, operate claims and dead-letter recovery,
-   provision the local two-slot adapter, and bind it to a qualified combined
-   slot-55 provider for the separate sealed time/head namespaces and immutable
+1. extend the retained non-generic daemon coordinator from its implemented
+   take-once `NodeHandle` plus exact prepared-reader tenure to exclusive
+   ownership of the crate-private effect drivers, then wire the signed reader's
+   finalized-completion capture/reconciliation child to enqueue and rediscover
+   journal work. The
+   child must rederive each request through the lifecycle lease, exact-read the
+   authenticated slot-59 inventory before enqueue with the match, absence, and
+   conflict behavior above, operate claims and dead-letter recovery, provision
+   the local two-slot adapter, and bind it to a qualified combined slot-57
+   provider for the separate sealed time/head namespaces and immutable
    checkpoint blobs;
 2. provide and qualify the real approval-only HSM/KMS or threshold signer
    adapter, including replay stability, timeout, revocation, and controller
@@ -1314,8 +1464,9 @@ The remaining deployment dependencies are:
    sharing the same state root;
 4. provide the authenticated and qualified provider-inventory/coordinator
    transport and activate the crate-private delivery driver. The coordinator
-   independently retrieves
-   and verifies the exact finalized archive-registration transaction, submits
+   independently retrieves a cryptographically verified V2-finality artifact,
+   requires its execution commitment to match the exact result-bearing Kura
+   block wire, and verifies the exact finalized archive-registration transaction, submits
    or reconciles canonical pin and replication operations, waits for each
    distinct provider completion, and returns the complete bounded provider
    attestations plus authoritative current archive/location state; the publisher
@@ -1328,8 +1479,9 @@ The remaining deployment dependencies are:
    restart/shutdown behavior, and crash, cancellation, revocation, corruption,
    concurrent-resume, and platform chaos qualification. Resolve public policy
    and identity bindings through `iroha_config`, resolve credentials and
-   signing keys only from deployment runtime providers, and remove the stock
-   pre-supervisor rejection only after the coordinator owns these boundaries.
+   signing keys only from deployment runtime providers, and remove the shared
+   daemon pre-supervisor rejection only after the coordinator owns these
+   boundaries.
 
 `run_with_musubi_publication` is only the late-bound factory and supervisor
 injection boundary; it is

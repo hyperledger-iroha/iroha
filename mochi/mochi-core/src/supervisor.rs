@@ -1,7 +1,7 @@
-//! Process supervision primitives for managing local `irohad` peers.
+//! Process supervision primitives for managing local `iroha3d` peers.
 //!
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
-//! default genesis manifest, and can launch or stop child `irohad` processes.
+//! default genesis manifest, and can launch or stop child `iroha3d` processes.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -910,8 +910,8 @@ fn default_binary_entry(
 
 fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
     const ENV_OVERRIDE: &str = "MOCHI_IROHAD";
-    const CARGO_ENV: &str = "CARGO_BIN_EXE_irohad";
-    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "irohad")
+    const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha3d";
+    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha3d")
 }
 
 fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
@@ -962,7 +962,7 @@ fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
 }
 
 impl BinaryPaths {
-    /// Override the path to the `irohad` executable.
+    /// Override the path to the `iroha3d` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
         self.irohad = path.into();
         self.irohad_verified = false;
@@ -1021,7 +1021,7 @@ impl BinaryPaths {
         let iroha_cli_source = self.iroha_cli_source.clone();
 
         let entries = [
-            ("irohad", irohad, irohad_source),
+            ("iroha3d", irohad, irohad_source),
             ("kagami", kagami, kagami_source),
             ("iroha_cli", iroha_cli, iroha_cli_source),
         ];
@@ -1105,20 +1105,20 @@ impl BinaryPaths {
 
         let message = if self.irohad_auto {
             format!(
-                "looked for `{}` and searched on PATH; run `cargo build -p irohad` \
+                "looked for `{}` and searched on PATH; run `cargo build -p irohad --bin iroha3d` \
                  or set `MOCHI_IROHAD`/`binaries.irohad` to the executable",
                 self.irohad.display()
             )
         } else {
             format!(
                 "configured path `{}` is not executable; adjust \
-                 `MOCHI_IROHAD`/`binaries.irohad` to point at a valid `irohad` binary",
+                 `MOCHI_IROHAD`/`binaries.irohad` to point at a valid `iroha3d` binary",
                 self.irohad.display()
             )
         };
 
         Err(SupervisorError::BinaryUnavailable {
-            binary: "irohad",
+            binary: "iroha3d",
             message,
         })
     }
@@ -1433,20 +1433,24 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         .arg("build")
         .arg("-p")
         .arg("irohad")
+        .arg("--bin")
+        .arg("iroha3d")
         .stdout(Stdio::null());
 
     // Preserve stderr so build failures surface in the parent console.
     let status = command
         .status()
         .map_err(|err| SupervisorError::BinaryUnavailable {
-            binary: "irohad",
+            binary: "iroha3d",
             message: format!("failed to invoke `{}`: {err}", cargo.display()),
         })?;
 
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
-            binary: "irohad",
-            message: format!("`cargo build -p irohad` exited with status {status}"),
+            binary: "iroha3d",
+            message: format!(
+                "`cargo build -p irohad --bin iroha3d` exited with status {status}"
+            ),
         });
     }
 
@@ -1455,7 +1459,7 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
 
-    let exe_name = format!("irohad{}", env::consts::EXE_SUFFIX);
+    let exe_name = format!("iroha3d{}", env::consts::EXE_SUFFIX);
     let candidates = [
         target_root.join("debug").join(&exe_name),
         target_root.join("release").join(&exe_name),
@@ -1468,9 +1472,9 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
     }
 
     Err(SupervisorError::BinaryUnavailable {
-        binary: "irohad",
+        binary: "iroha3d",
         message: format!(
-            "built `irohad` but could not find an executable under `{}`",
+            "built `iroha3d` but could not find an executable under `{}`",
             target_root.display()
         ),
     })
@@ -1739,7 +1743,7 @@ impl SupervisorBuilder {
         self
     }
 
-    /// Override just the `irohad` binary path.
+    /// Override just the `iroha3d` binary path.
     pub fn irohad_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().irohad(path);
         self
@@ -2768,7 +2772,7 @@ impl Supervisor {
         &self.genesis.manifest_path
     }
 
-    /// Path to the generated signed genesis wire file consumed by `irohad`.
+    /// Path to the generated signed genesis wire file consumed by `iroha3d`.
     pub fn genesis_block_file(&self) -> &Path {
         &self.genesis.block_path
     }
@@ -3458,7 +3462,7 @@ impl Drop for Supervisor {
     }
 }
 
-/// Lightweight metadata and state for a child `irohad` process.
+/// Lightweight metadata and state for a child `iroha3d` process.
 pub struct PeerHandle {
     spec: PeerSpec,
     log_path: PathBuf,
@@ -3665,7 +3669,7 @@ impl PeerHandle {
             .arg("--config")
             .arg(config_path)
             // Mochi reserves managed-peer stdin for an inherited duplicate of
-            // the ownership descriptor. An orphaned `irohad` therefore keeps
+            // the ownership descriptor. An orphaned `iroha3d` therefore keeps
             // the network root fenced until that peer exits.
             .stdin(ownership_lock.child_stdin()?)
             .stdout(Stdio::piped())
@@ -3675,8 +3679,8 @@ impl PeerHandle {
             let source = match err.kind() {
                 io::ErrorKind::NotFound => {
                     let message = format!(
-                        "{} (looked for `{}`); build `irohad` with \
-                         `cargo build -p irohad` or set `MOCHI_IROHAD`/`binaries.irohad` \
+                        "{} (looked for `{}`); build `iroha3d` with \
+                         `cargo build -p irohad --bin iroha3d` or set `MOCHI_IROHAD`/`binaries.irohad` \
                          to an absolute path",
                         err,
                         irohad.display()

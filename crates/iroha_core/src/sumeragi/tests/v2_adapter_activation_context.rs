@@ -85,6 +85,37 @@ fn executable_leader_rotation_matches_the_canonical_wire_context() {
 }
 
 #[test]
+fn core_context_rejects_same_label_foreign_genesis_network() {
+    let display_label = iroha_data_model::ChainId::from("shared-display-label");
+    let foreign_display_label = iroha_data_model::ChainId::from("shared-display-label");
+    assert_eq!(display_label, foreign_display_label);
+
+    let canonical = context();
+    let mut foreign = canonical.clone();
+    foreign.network_id = test_network_id(0x7B);
+    foreign
+        .validate()
+        .expect("foreign context remains structural");
+    assert_ne!(canonical.network_id, foreign.network_id);
+    assert_ne!(canonical.id(), foreign.id());
+
+    let mut registry = WireRegistry::new(&canonical).expect("canonical wire registry");
+    let core = registry
+        .core_context(&canonical)
+        .expect("canonical exact-network context");
+    assert_eq!(
+        core.network_id().as_bytes(),
+        canonical.network_id.as_bytes()
+    );
+    assert!(matches!(
+        registry.core_context(&foreign),
+        Err(AdapterError::WireValidation(
+            wire::ValidationError::WrongHeightContext
+        ))
+    ));
+}
+
+#[test]
 fn successor_core_context_preserves_the_parent_certificate_binding() {
     let parent_context = context();
     let parent_round = wire::ConsensusRound {

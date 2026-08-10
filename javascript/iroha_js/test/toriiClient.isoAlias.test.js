@@ -4,11 +4,22 @@ import test from "node:test";
 
 import {
   AccountAddress,
-  ToriiClient,
+  LocalSigningContext,
+  NetworkId,
+  ToriiClient as BaseToriiClient,
   canonicalRequestSignatureMessage,
   generateKeyPair,
   verifyEd25519,
 } from "../src/index.js";
+
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+
+class ToriiClient extends BaseToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, { localSigningContext: LOCAL_SIGNING_CONTEXT, ...options });
+  }
+}
 
 function ed25519PublicKeyBytes() {
   const { publicKey } = generateKeyPairSync("ed25519");
@@ -129,6 +140,7 @@ test("resolveAlias attaches canonical auth when provided", async () => {
   const timestampMs = Number(lastRequest.init.headers["X-Iroha-Timestamp-Ms"]);
   const nonce = lastRequest.init.headers["X-Iroha-Nonce"];
   const message = canonicalRequestSignatureMessage({
+    networkId: NETWORK_ID,
     method: lastRequest.init.method,
     path: url.pathname,
     body: lastRequest.init.body,

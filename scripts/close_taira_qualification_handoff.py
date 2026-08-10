@@ -27,6 +27,7 @@ from release_artifact_contract import (
     stable_read_relative,
 )
 import taira_privacy_protocol_receipt as privacy_evidence
+import taira_rollout_admission as rollout_admission
 from taira_rollout_admission import (
     MACOS_RECEIPT_SCHEMA,
     MACOS_RECEIPT_SCHEMA_VERSION,
@@ -42,6 +43,15 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 class QualificationHandoffError(RuntimeError):
     """The qualification result could not cross the authority boundary."""
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        rollout_admission._require_independent_native_evidence_authority()
+    except rollout_admission.TairaRolloutAdmissionError as exc:
+        raise QualificationHandoffError(str(exc)) from exc
 
 
 def _compact_json_bytes(value: object) -> bytes:
@@ -202,6 +212,9 @@ def close_handoff(
     source_identity: Path,
     output: Path,
 ) -> dict[str, object]:
+    # Refuse before reading qualification bytes or creating the authority handoff.
+    _require_independent_native_evidence_authority()
+
     receipt_value, receipt_payload = _canonical_payload(
         receipt, "qualification receipt", 4 * 1024 * 1024, compact=False
     )

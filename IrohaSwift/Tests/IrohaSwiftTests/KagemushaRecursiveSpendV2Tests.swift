@@ -1077,7 +1077,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let output = try note(seed: 0xE0, amount: "1")
         let payload = try KagemushaRecipientPaymentRequestSigningPayload(
-            chainID: output.chainID,
+            networkID: output.networkID,
             assetDefinitionID: output.assetDefinitionID,
             amount: output.amount,
             recipient: recipient,
@@ -1388,7 +1388,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
     private func note(seed: UInt8, amount: String) throws -> KagemushaSpendableNoteDescriptor {
         try KagemushaSpendableNoteDescriptor(
-            chainID: "swift-kagemusha-v2",
+            networkID: TestNetworkIds.canonical,
             assetDefinitionID: assetDefinitionID(),
             noteCommitment: fixed32(seed),
             spendNullifier: fixed32(seed &+ 1),

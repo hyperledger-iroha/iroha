@@ -118,6 +118,8 @@ export interface BrowserExecutableBatchInput {
 }
 
 export interface BrowserTransactionSignable {
+  /** Application-pinned exact NetworkId expected in payloadBytes. */
+  networkId: NetworkId;
   payloadBytes: BrowserTransactionBytes;
   payloadHashHex?: string;
   authority: string;
@@ -126,11 +128,13 @@ export interface BrowserTransactionSignable {
 }
 
 export interface BrowserTransactionSignableConstraints {
+  networkId?: NetworkId | null;
   authority?: string | null;
   signingPublicKey?: BrowserTransactionBytes | string | null;
 }
 
 export interface ValidatedBrowserTransactionSignable {
+  networkId: NetworkId;
   payloadBytes: Uint8Array;
   payloadHashHex: string;
   authority: string;

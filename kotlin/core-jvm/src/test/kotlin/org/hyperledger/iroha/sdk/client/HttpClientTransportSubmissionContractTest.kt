@@ -2,13 +2,17 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 /** Focused transaction-submission wire and capability-probe contract tests. */
 class HttpClientTransportSubmissionContractTest {
@@ -53,6 +57,43 @@ class HttpClientTransportSubmissionContractTest {
         assertEquals(RequestReplayPolicy.ONE_SHOT, signedQuery.replayPolicy)
     }
 
+    @Test
+    fun canonicalAuthRedirectStatusAndNetworkFailuresAreOneShot() {
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_717_171_717_000L,
+            "canonical-one-shot-nonce",
+        )
+        for (status in listOf(307, 308, 503)) {
+            assertCanonicalAliasFailsOnce(auth, OutcomeExecutor(status = status))
+        }
+        assertCanonicalAliasFailsOnce(
+            auth,
+            OutcomeExecutor(failure = RuntimeException("ambiguous network failure")),
+        )
+    }
+
+    private fun assertCanonicalAliasFailsOnce(
+        auth: ToriiCanonicalRequestAuth,
+        executor: OutcomeExecutor,
+    ) {
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://127.0.0.1:8080"))
+                .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical()))
+                .build(),
+        )
+
+        assertFailsWith<CompletionException> {
+            transport.resolveAccountAlias("merchant@private", auth).join()
+        }
+        assertEquals(1, executor.callCount)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.lastRequest.replayPolicy)
+    }
+
     private class CapturingExecutor : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest
 
@@ -67,6 +108,31 @@ class HttpClientTransportSubmissionContractTest {
                     .setBody(byteArrayOf())
                     .build(),
             )
+        }
+    }
+
+    private class OutcomeExecutor(
+        private val status: Int? = null,
+        private val failure: RuntimeException? = null,
+    ) : HttpTransportExecutor {
+        var callCount = 0
+        lateinit var lastRequest: TransportRequest
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            callCount += 1
+            lastRequest = request
+            val future = CompletableFuture<TransportResponse>()
+            if (failure != null) {
+                future.completeExceptionally(failure)
+            } else {
+                future.complete(
+                    TransportResponse.builder()
+                        .setStatusCode(requireNotNull(status))
+                        .setBody(byteArrayOf())
+                        .build(),
+                )
+            }
+            return future
         }
     }
 

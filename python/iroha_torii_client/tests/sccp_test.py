@@ -1785,7 +1785,6 @@ def test_torii_sccp_streaming_rejects_non_utf8_json_and_closes() -> None:
         client.get_sccp_capabilities()
     assert response.was_closed is True
 
-
 def test_torii_sccp_error_response_uses_the_same_actual_byte_bound() -> None:
     response = StubResponse(status_code=400, raw=b" " * (64 * 1024 + 1))
     client = ToriiClient(

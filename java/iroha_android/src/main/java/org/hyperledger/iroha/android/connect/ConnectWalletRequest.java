@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Parsed wallet-role request from an {@code iroha://connect?...} deep link. */
 public final class ConnectWalletRequest {
@@ -18,12 +19,15 @@ public final class ConnectWalletRequest {
   private static final String HOST = "connect";
   private static final String LAUNCH_HOST = "wc";
   private static final int SID_LENGTH = 32;
+  private static final byte[] SID_DOMAIN = "iroha-connect|sid|".getBytes(StandardCharsets.UTF_8);
 
   private final String sidBase64Url;
   private final byte[] sessionId;
   private final String token;
   private final String relayToken;
-  private final String chainId;
+  private final NetworkId networkId;
+  private final byte[] appPublicKey;
+  private final byte[] nonce;
   private final URI baseUri;
   private final URI webSocketUri;
 
@@ -32,14 +36,18 @@ public final class ConnectWalletRequest {
       final byte[] sessionId,
       final String token,
       final String relayToken,
-      final String chainId,
+      final NetworkId networkId,
+      final byte[] appPublicKey,
+      final byte[] nonce,
       final URI baseUri,
       final URI webSocketUri) {
     this.sidBase64Url = sidBase64Url;
     this.sessionId = sessionId.clone();
     this.token = token;
     this.relayToken = relayToken;
-    this.chainId = chainId;
+    this.networkId = Objects.requireNonNull(networkId, "networkId");
+    this.appPublicKey = appPublicKey.clone();
+    this.nonce = nonce.clone();
     this.baseUri = baseUri;
     this.webSocketUri = webSocketUri;
   }
@@ -61,7 +69,7 @@ public final class ConnectWalletRequest {
     if (sid == null || sid.isBlank()) {
       throw new ConnectProtocolException("Missing required query parameter: sid");
     }
-    final byte[] sessionId = decodeBase64Url(sid);
+    final byte[] sessionId = decodeBase64Url(sid, "sid");
     if (sessionId.length != SID_LENGTH) {
       throw new ConnectProtocolException("Connect sid must decode to 32 bytes");
     }
@@ -77,11 +85,44 @@ public final class ConnectWalletRequest {
       throw new ConnectProtocolException("Missing required query parameter: relay");
     }
 
-    final String chainId = trimToNull(firstPresent(query, "chain_id"));
+    if (query.containsKey("chain_id")) {
+      throw new ConnectProtocolException("chain_id is retired; provide exact network_id");
+    }
+    final String networkIdLiteral = trimToNull(firstPresent(query, "network_id"));
+    if (networkIdLiteral == null) {
+      throw new ConnectProtocolException("Missing required query parameter: network_id");
+    }
+    final NetworkId networkId;
+    try {
+      networkId = NetworkId.parse(networkIdLiteral);
+    } catch (final IllegalArgumentException ex) {
+      throw new ConnectProtocolException("Connect network_id is not canonical", ex);
+    }
+    final String appPkLiteral = trimToNull(firstPresent(query, "app_pk"));
+    final String nonceLiteral = trimToNull(firstPresent(query, "nonce"));
+    if (appPkLiteral == null || nonceLiteral == null) {
+      throw new ConnectProtocolException("Connect deep link requires app_pk and nonce");
+    }
+    final byte[] appPublicKey = decodeBase64Url(appPkLiteral, "app_pk");
+    final byte[] nonce = decodeBase64Url(nonceLiteral, "nonce");
+    if (appPublicKey.length != 32 || nonce.length != 16) {
+      throw new ConnectProtocolException("Connect app_pk and nonce must decode to 32 and 16 bytes");
+    }
+    final byte[] sidPreimage =
+        java.nio.ByteBuffer.allocate(SID_DOMAIN.length + NetworkId.BYTE_LENGTH + 32 + 16)
+            .put(SID_DOMAIN)
+            .put(networkId.bytes())
+            .put(appPublicKey)
+            .put(nonce)
+            .array();
+    if (!java.util.Arrays.equals(sessionId, Blake2b.digest256(sidPreimage))) {
+      throw new ConnectProtocolException("Connect sid does not match network_id, app_pk, and nonce");
+    }
     final URI baseUri = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri);
     final URI wsUri = buildWalletWebSocketUri(baseUri, sid);
 
-    return new ConnectWalletRequest(sid, sessionId, token, relayToken, chainId, baseUri, wsUri);
+    return new ConnectWalletRequest(
+        sid, sessionId, token, relayToken, networkId, appPublicKey, nonce, baseUri, wsUri);
   }
 
   public static ConnectWalletRequest parse(final String rawUri, final URI defaultBaseUri)
@@ -110,8 +151,16 @@ public final class ConnectWalletRequest {
     return relayToken;
   }
 
-  public String chainId() {
-    return chainId;
+  public NetworkId networkId() {
+    return networkId;
+  }
+
+  public byte[] appPublicKey() {
+    return appPublicKey.clone();
+  }
+
+  public byte[] nonce() {
+    return nonce.clone();
   }
 
   public URI baseUri() {
@@ -224,16 +273,23 @@ public final class ConnectWalletRequest {
     return URLDecoder.decode(value, StandardCharsets.UTF_8);
   }
 
-  private static byte[] decodeBase64Url(final String value) throws ConnectProtocolException {
+  private static byte[] decodeBase64Url(final String value, final String field)
+      throws ConnectProtocolException {
     try {
       String normalized = value.replace('-', '+').replace('_', '/');
       final int remainder = normalized.length() % 4;
       if (remainder != 0) {
         normalized = normalized + "=".repeat(4 - remainder);
       }
-      return java.util.Base64.getDecoder().decode(normalized);
+      final byte[] decoded = java.util.Base64.getDecoder().decode(normalized);
+      final String canonical = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(decoded);
+      if (!canonical.equals(value)) {
+        throw new ConnectProtocolException(
+            "Connect " + field + " must use canonical base64url without padding");
+      }
+      return decoded;
     } catch (final IllegalArgumentException ex) {
-      throw new ConnectProtocolException("Connect sid is not valid base64url", ex);
+      throw new ConnectProtocolException("Connect " + field + " is not valid base64url", ex);
     }
   }
 

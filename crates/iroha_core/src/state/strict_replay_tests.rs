@@ -367,7 +367,6 @@ impl StrictReplayFixture {
             Arc::clone(&kura),
             None,
             None,
-            chain_id.clone(),
             Duration::from_secs(1),
             genesis_account.clone(),
             events_sender,

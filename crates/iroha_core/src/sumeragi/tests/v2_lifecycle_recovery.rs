@@ -211,11 +211,11 @@ fn lifecycle_payload_for_validators_with_count(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
-    let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let network_id = context.network_id;
     let epoch = context.epoch;
     let (reservation_owner_hash, proposal_identity_hash) =
         autonomous_lane_reservation_identity_hashes_for_proposal(
-            chain_id_hash,
+            network_id,
             context.id(),
             epoch,
             &proposal,
@@ -252,7 +252,7 @@ fn lifecycle_payload_for_validators_with_count(
         })
         .collect::<Vec<_>>();
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         entrypoints,
@@ -263,7 +263,7 @@ fn lifecycle_payload_for_validators_with_count(
         producer_signer.private_key(),
     )
     .expect("signed lifecycle recovery payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }
 
 fn lifecycle_binding_and_live_state(
@@ -529,7 +529,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         .iter()
         .map(|validator| validator.validator.clone())
         .collect();
-    let (chain_id_hash, epoch, payload) = lifecycle_payload_for_validators(
+    let (network_id, epoch, payload) = lifecycle_payload_for_validators(
         &producer_signer,
         &context,
         validator_set,
@@ -545,9 +545,9 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind initial local peer");
     let generation_one = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim first process generation");
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist lifecycle payload before its first Live cursor");
     let initial_live = sign_lifecycle_cursor(
         &signer,
@@ -596,7 +596,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         .bind_local_peer_id(local_peer.clone())
         .expect("rebind restarted local peer");
     let generation_two = restarted
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim second process generation");
     assert_eq!(generation_two.generation(), 2);
     let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
@@ -743,7 +743,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .iter()
         .map(|validator| validator.validator.clone())
         .collect();
-    let (chain_id_hash, epoch, payload) = lifecycle_payload_for_validators(
+    let (network_id, epoch, payload) = lifecycle_payload_for_validators(
         &producer_signer,
         &context,
         validator_set,
@@ -759,9 +759,9 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind initial interruption peer");
     let generation_one = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim first interruption generation");
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist interruption payload");
     let initial_live = sign_lifecycle_cursor(
         &signer,
@@ -795,7 +795,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .bind_local_peer_id(local_peer.clone())
         .expect("bind second-generation interruption peer");
     let generation_two = restarted
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim second interruption generation");
     assert_eq!(generation_two.generation(), 2);
     let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &restarted_state);
@@ -887,7 +887,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .bind_local_peer_id(local_peer.clone())
         .expect("bind post-interruption peer");
     let generation_three = reopened
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim post-interruption generation");
     assert_eq!(generation_three.generation(), 3);
     let reopened_queue = open_empty_lifecycle_recovery_queue(&queue_dir, &reopened_state);

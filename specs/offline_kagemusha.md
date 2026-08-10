@@ -31,11 +31,12 @@ command's validation result rather than changing node admission.
 
 ## Amounts and assets
 
-Every request binds the chain id, asset definition, authoritative asset scale,
-and an unsigned `u128` atomic-unit amount. The scale is read from the live asset
-definition. Decimal conversion is exact: excess precision, negative values,
-zero payments, and overflow are rejected. Top-up debit, note conservation, and
-redemption credit use the same scaled `Quantity` value.
+Every request binds the exact genesis-derived network id, asset definition,
+authoritative asset scale, and an unsigned `u128` atomic-unit amount. The scale
+is read from the live asset definition. Decimal conversion is exact: excess
+precision, negative values, zero payments, and overflow are rejected. Top-up
+debit, note conservation, and redemption credit use the same scaled `Quantity`
+value.
 
 A spend consumes one or two canonically ordered parent notes and creates one
 recipient output plus optional sender change. The transition proves, and every
@@ -112,7 +113,7 @@ active top-up-shield verifier record, and committed block context. It builds the
 zero-input shield proof, signs the complete top-up request with its registered
 device authority, and submits it to Torii. Core atomically:
 
-1. validates authorization, operation replay state, chain, scale, and policy;
+1. validates authorization, operation replay state, exact network, scale, and policy;
 2. recomputes the authoritative root and leaf index;
 3. rejects the new note commitment and spend nullifier if either overlaps an
    existing commitment or spent-nullifier namespace;
@@ -147,8 +148,8 @@ identity remains derived only from the recipient bundle's authenticated split
 transition. The payload never carries a spend key, sender change, or local key
 reference.
 
-The receiver runs `verifySpendV4` and checks the signed request, chain, asset,
-scale, exact amount, recipient commitment, hop limit, verifier activation
+The receiver runs `verifySpendV4` and checks the signed request, exact network,
+asset, scale, exact amount, recipient commitment, hop limit, verifier activation
 window, finalized top-up origin, recursive proof validity, and branch
 disjointness. It atomically persists the received note before signing a durable
 acknowledgement receipt. The receipt is evidence only, not acceptance or a
@@ -195,7 +196,8 @@ hardware-backed spend key. The displayed balance is derived from available
 notes. Pending, reserved, spent, quarantined, and redeeming notes are not
 silently reclassified.
 
-The authenticated V4 manifest binds source commit, chain, asset, scale,
+The authenticated V4 manifest binds source commit, exact genesis-derived
+`NetworkId`, asset, scale,
 activation and withdrawal heights, exact bridge ABI 22, proof size, transcript,
 backend, and benchmark evidence. It contains exactly two Pasta-cycle profiles
 in Eq-then-Ep order. Each profile carries exactly four external artifacts:
@@ -401,7 +403,7 @@ the two values must be non-zero and distinct.
 Create a seal only with the no-bind validation command:
 
 ```text
-sudo irohad --check-config \
+sudo iroha3d --check-config \
   --config /absolute/path/config.toml \
   --genesis-manifest-json /absolute/path/genesis.json \
   --write-kagemusha-catalog-qualification-seal /absolute/root-owned/seals/catalog.norito
@@ -441,12 +443,25 @@ Wallets and provers install all eight artifacts, including both proving keys.
 Generated `dist/kagemusha/v4/*`, raw parameters, keys, device logs, and signing
 inputs remain untracked runtime material.
 
+Taira provisioning has a strict two-boundary sequence. First,
+`kagami kagemusha prepare-taira-testnet-base-genesis-v4` may add only
+network-independent accounts, permissions, base verifier records, asset
+registration, aliasing, and fee liquidity to the unsigned genesis. Sign that
+base genesis and publish its `genesis.expected_hash`; this hash is the sole
+`NetworkId`. Only then may operators build the finality roster and recursive
+release for that exact `NetworkId`, qualify it, and use
+`prepare-activation-v4` to prepare the governed height-two activation. The
+exact-network escrow is materialized by Core from the live `NetworkId` and
+asset definition. A recursive release, release-derived escrow account, or
+device policy must never be embedded back into genesis: doing so would change
+the genesis hash that those artifacts authenticate.
+
 A validator that will validate a transaction against a particular locally
 cached candidate must have that candidate before the transaction is submitted.
 This is command material availability, not offline capability or node
 readiness. `ActivateKagemushaRecursiveReleaseV4` authenticates
 the release-policy digest, signed release and evidence, exact-eight inventory,
-chain/asset/scale and future issuance window, distinct inline Eq/Ep verifier
+`NetworkId`/asset/scale and future issuance window, distinct inline Eq/Ep verifier
 records, matching local cached material, and the embedded production iOS and
 Android device-attestation policy. The instruction requires both release-
 activation and device-policy governance permissions, then publishes the exact

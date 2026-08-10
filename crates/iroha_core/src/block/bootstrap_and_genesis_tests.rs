@@ -45,7 +45,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
                     .into(),
                 ];
                 let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    &network_id,
                     authority,
                     0,
                     DataSpaceId::UNIVERSAL,
@@ -284,8 +284,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
 
 #[tokio::test]
 async fn genesis_public_key_is_checked() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     // Predefined world state
     let genesis_correct_key = crate::block::checked_keypair();
     let genesis_wrong_key = crate::block::checked_keypair();
@@ -341,7 +339,6 @@ async fn genesis_public_key_is_checked() {
     let (_, error) = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_correct_account_id,
         &time_source,
         &mut state_block,
@@ -359,8 +356,6 @@ async fn genesis_public_key_is_checked() {
 
 #[tokio::test]
 async fn genesis_asset_definition_registration_is_not_domain_gated() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let genesis_key_pair = crate::block::checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let alice_key_pair = crate::block::checked_keypair();
@@ -413,7 +408,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let _valid = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_account_id,
         &time_source,
         &mut state_block,
@@ -425,8 +419,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
 
 #[tokio::test]
 async fn genesis_domain_registration_bootstraps_domain_name_lease() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let genesis_key_pair = crate::block::checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let wonderland_domain_id: DomainId =
@@ -462,7 +454,6 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     let _valid = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_account_id,
         &time_source,
         &mut state_block,

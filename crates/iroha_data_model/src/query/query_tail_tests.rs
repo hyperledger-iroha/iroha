@@ -69,7 +69,7 @@ mod certified_merge_inclusion_tests {
                 7,
                 5,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                Hash::new(b"chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&validators),
                 validators,

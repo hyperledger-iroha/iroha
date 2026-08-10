@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.VERIFYING_KEY_NETWORK_ID;
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.assertCanonicalSignature;
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.signedClientConfig;
 import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.compatibleCapabilitiesResponse;
 import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.isCapabilitiesRequest;
 
@@ -80,9 +83,6 @@ public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
-  private static final NetworkId VERIFYING_KEY_NETWORK_ID =
-      NetworkId.parse(
-          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
   private static final NetworkId OTHER_NETWORK_ID =
       NetworkId.parse(
           "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
@@ -2252,7 +2252,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
 
     final VpnQuote quote =
         transport.createVpnQuote(new VpnQuoteCreateRequest("low-latency", "0x" + meteringKey), auth)
@@ -2326,7 +2326,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
     final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
     unsignedPayload.put(
         "domain",
@@ -2405,7 +2405,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
 
     final FeeSponsorProgramResponse program =
         transport
@@ -2475,7 +2475,7 @@ public final class HttpClientTransportTests {
       final HttpClientTransport transport =
           HttpClientTransport.withExecutor(
               executor,
-              ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+              signedClientConfig("https://torii.example"));
       final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
       unsignedPayload.put(
           "domain",
@@ -2502,7 +2502,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            signedClientConfig("https://torii.example"));
 
     expectCompletionIllegalArgument(
         transport.getFeeSponsorProgram(
@@ -2530,7 +2530,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            signedClientConfig("https://torii.example"));
 
     final VpnSession session =
         transport
@@ -3681,7 +3681,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
 
     final KeyPair keyPair;
     try {
@@ -3763,7 +3763,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
         canonicalAuth("alice", keyPair, 1_700_000_000_000L, "alias-resolve-nonce-1");
@@ -3845,7 +3845,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            signedClientConfig("https://torii.example/api"));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
         canonicalAuth(authority, keyPair, 1_700_000_000_000L, "alias-plan-nonce-1");
@@ -5829,23 +5829,6 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
     transport.invalidateAndCancel();
     assert executor.invalidated : "invalidateAndCancel should reach the executor";
-  }
-
-  private static void assertCanonicalSignature(
-      final TransportRequest request,
-      final java.security.PublicKey publicKey,
-      final long timestampMs,
-      final String nonce) throws Exception {
-    final byte[] signature =
-        Base64.getDecoder()
-            .decode(request.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE).get(0));
-    final byte[] message =
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            request.method(), request.uri(), request.body(), timestampMs, nonce);
-    final Signature verifier = Signature.getInstance("Ed25519");
-    verifier.initVerify(publicKey);
-    verifier.update(message);
-    assert verifier.verify(signature) : "canonical request signature mismatch";
   }
 
   private static ToriiCanonicalRequestAuth canonicalAuth(

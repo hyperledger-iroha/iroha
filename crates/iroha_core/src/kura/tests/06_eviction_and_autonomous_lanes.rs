@@ -1323,7 +1323,6 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         let block_genesis = ValidBlock::validate_with_events(
             genesis.0.clone(),
             &topology,
-            &chain_id,
             &genesis_id,
             &time_source,
             &mut state_block,
@@ -1365,7 +1364,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     let crypto_cfg = state.crypto();
     let tx1 = AcceptedTransaction::accept(
         tx1,
-        &chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -1373,7 +1372,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     .unwrap();
     let tx2 = AcceptedTransaction::accept(
         tx2,
-        &chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -2052,7 +2051,7 @@ fn autonomous_lane_payload_for_kura(
         ),
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let chain_id_hash = Hash::new(b"kura-autonomous-chain");
+    let network_id = test_network_id(b"kura-autonomous-genesis");
     let epoch = 7;
     let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
     let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -2078,7 +2077,7 @@ fn autonomous_lane_payload_for_kura(
         proposal_identity_hash: proposal.proposal_hash,
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         vec![entrypoint],
@@ -2089,7 +2088,7 @@ fn autonomous_lane_payload_for_kura(
         signer.private_key(),
     )
     .expect("autonomous payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }
 
 fn write_autonomous_claim_inventory_fixture(
@@ -2107,7 +2106,7 @@ fn write_autonomous_claim_inventory_fixture(
     }
     let path = Kura::autonomous_lane_entrypoint_claim_path(
         store_root,
-        &claim.chain_id_hash,
+        &claim.network_id,
         &claim.entrypoint_hash,
     );
     let path = if staged {
@@ -2214,7 +2213,7 @@ fn rebind_autonomous_lane_payload_for_kura(
         .collect();
     let receipt_slots = vec![None; source.entrypoints.len()];
     LaneExecutablePayloadV1::new_signed_with_reservations(
-        source.chain_id_hash,
+        source.network_id,
         source.epoch,
         proposal,
         source.entrypoints.clone(),
@@ -2266,7 +2265,7 @@ fn repropose_autonomous_lane_payload_for_kura(
         })
         .collect();
     LaneExecutablePayloadV1::new_signed_with_reservations(
-        source.chain_id_hash,
+        source.network_id,
         source.epoch,
         proposal,
         source.entrypoints.clone(),
@@ -2283,7 +2282,7 @@ fn next_durable_lane_view_certificate_for_kura(
     source: &LaneBlockProposalV1,
     payload: &LaneExecutablePayloadV1,
     signer: &KeyPair,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     epoch: u64,
 ) -> DurableLaneBlockNewViewCertificateV1 {
     let target_view = source
@@ -2295,7 +2294,7 @@ fn next_durable_lane_view_certificate_for_kura(
         source,
         payload,
         target_view,
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("NewView body");
@@ -2333,7 +2332,7 @@ fn durable_lane_payload_availability_for_kura(
     let availability_body = crate::lane_consensus::lane_payload_availability_body(
         payload,
         proposal,
-        payload.chain_id_hash,
+        payload.network_id,
         payload.epoch,
     )
     .expect("availability body");
@@ -2367,11 +2366,11 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("seed autonomous payload");
     let availability =
         durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
@@ -2379,12 +2378,12 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
         lane_id,
         1,
         availability.clone(),
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("seed availability certificate");
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover autonomous input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("seed execution input");
@@ -2395,7 +2394,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
         &payload.origin_proposal,
         &payload,
         &signer,
-        chain_id_hash,
+        network_id,
         epoch,
     );
     let (session, signer_pops) =
@@ -2407,7 +2406,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
         Err(Error::PruneRecoveryRequired)
     ));
     assert!(matches!(
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch),
+        kura.persist_lane_executable_payload(&payload, network_id, epoch),
         Err(Error::PruneRecoveryRequired)
     ));
     assert!(matches!(
@@ -2415,13 +2414,13 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
             lane_id,
             1,
             availability,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         Err(Error::PruneRecoveryRequired)
     ));
     assert!(matches!(
-        kura.persist_lane_new_view_certificate(lane_id, 1, next_view, chain_id_hash, epoch,),
+        kura.persist_lane_new_view_certificate(lane_id, 1, next_view, network_id, epoch,),
         Err(Error::PruneRecoveryRequired)
     ));
     assert!(matches!(
@@ -2433,7 +2432,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
         Err(Error::PruneRecoveryRequired)
     ));
     assert!(
-        kura.read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch,)
+        kura.read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch,)
             .is_none(),
         "prune poison must fail closed instead of serving autonomous lane sidecars"
     );
@@ -2449,7 +2448,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
         "poisoned certified-session write must leave no sidecar"
     );
     let autonomous = kura
-        .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+        .read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch)
         .expect("original autonomous payload remains readable");
     assert!(
         autonomous.new_view_certificates.is_empty(),
@@ -2470,7 +2469,7 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
@@ -2480,7 +2479,7 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
     let writer_kura = Arc::clone(&kura);
     let writer = thread::spawn(move || {
         started_tx.send(()).expect("announce sidecar writer");
-        let result = writer_kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch);
+        let result = writer_kura.persist_lane_executable_payload(&payload, network_id, epoch);
         done_tx.send(result).expect("report sidecar writer result");
     });
     started_rx.recv().expect("sidecar writer started");
@@ -2509,7 +2508,7 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
         .expect("writer persists on the current geometry");
     writer.join().expect("sidecar writer thread");
     assert!(
-        kura.read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+        kura.read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch)
             .is_some(),
         "writer must publish only after the current geometry becomes available"
     );
@@ -2523,16 +2522,16 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist payload before READY");
     assert!(
         !kura.autonomous_lane_payload_availability_delivered(
             &payload.origin_proposal,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         "payload bytes alone are not an availability DELIVER certificate"
@@ -2544,7 +2543,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         lane_id,
         1,
         deliver.clone(),
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("persist availability DELIVER");
@@ -2552,13 +2551,13 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         lane_id,
         1,
         deliver.clone(),
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("exact availability replay is idempotent");
     assert!(kura.autonomous_lane_payload_availability_delivered(
         &payload.origin_proposal,
-        chain_id_hash,
+        network_id,
         epoch,
     ));
 
@@ -2566,12 +2565,18 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         &payload.origin_proposal,
         &payload,
         &signer,
-        chain_id_hash,
+        network_id,
         epoch,
     );
-    let cursor = kura
-        .persist_lane_new_view_certificate(lane_id, 1, new_view, chain_id_hash, epoch)
-        .expect("persist synthetic NewView cursor");
+    let cursor = match kura
+        .persist_lane_new_view_certificate(lane_id, 1, new_view, network_id, epoch)
+        .expect("persist synthetic NewView cursor")
+    {
+        LaneBlockNewViewPersistenceOutcome::Persisted(cursor) => cursor,
+        LaneBlockNewViewPersistenceOutcome::AlreadyTerminal => {
+            panic!("non-terminal NewView fixture unexpectedly reached a terminal receipt")
+        }
+    };
     assert_eq!(cursor.descriptor.lane_block_view, 1);
     let next_view_deliver = durable_lane_payload_availability_for_kura(&payload, &cursor, &signer);
     assert!(
@@ -2579,7 +2584,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
             lane_id,
             1,
             next_view_deliver,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .is_err(),
@@ -2587,19 +2592,19 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     );
     assert!(kura.autonomous_lane_payload_availability_delivered(
         &payload.origin_proposal,
-        chain_id_hash,
+        network_id,
         epoch,
     ));
     assert!(
-        !kura.autonomous_lane_payload_availability_delivered(&cursor, chain_id_hash, epoch,),
+        !kura.autonomous_lane_payload_availability_delivered(&cursor, network_id, epoch,),
         "the synthetic cursor is not a second availability subject",
     );
     let (_, recovered_cursor) = kura
-        .current_autonomous_lane_payload(lane_id, 1, chain_id_hash, epoch)
+        .current_autonomous_lane_payload(lane_id, 1, network_id, epoch)
         .expect("recover current NewView cursor");
     assert_eq!(recovered_cursor, cursor);
     let (_, certification_proposal) = kura
-        .autonomous_lane_certification_payload(lane_id, 1, chain_id_hash, epoch)
+        .autonomous_lane_certification_payload(lane_id, 1, network_id, epoch)
         .expect("recover immutable certification subject");
     assert_eq!(certification_proposal, payload.origin_proposal);
 
@@ -2616,7 +2621,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
             lane_id,
             1,
             conflicting,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .is_err(),
@@ -2627,11 +2632,11 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert!(reopened.autonomous_lane_payload_availability_delivered(
         &payload.origin_proposal,
-        chain_id_hash,
+        network_id,
         epoch,
     ));
     let reopened_artifact = reopened
-        .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+        .read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch)
         .expect("reopen origin-certified autonomous payload");
     assert_eq!(
         reopened_artifact.availability_certificate.as_ref(),
@@ -2648,7 +2653,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     assert!(
         !reopened.autonomous_lane_payload_availability_delivered(
             &payload.origin_proposal,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         "malformed durable availability state must fail closed after restart"
@@ -2663,11 +2668,11 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let availability =
         durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
@@ -2675,7 +2680,7 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         lane_id,
         1,
         availability,
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("persist availability before retirement");
@@ -2684,39 +2689,39 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
 
     assert_eq!(
-        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
+        kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch,)
             .expect("persist terminal slot retirement"),
         retirement,
     );
     assert_eq!(
-        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
+        kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch,)
             .expect("exact retirement retry is idempotent"),
         retirement,
     );
     assert_eq!(
-        kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+        kura.read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)
             .expect("read durable retirement"),
         Some(retirement.clone()),
     );
     assert!(
-        kura.read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+        kura.read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch)
             .is_none(),
         "retired payload must be hidden from autonomous recovery",
     );
     assert!(
-        kura.latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 1, |_| epoch)
+        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| epoch)
             .expect("load bounded route-latest snapshot")
             .is_empty(),
         "retired payload must be ineligible for startup merge recovery",
     );
     assert!(matches!(
-        kura.recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch,),
+        kura.recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch,),
         Err(LaneBlockPayloadAvailability::MissingLaneArtifact)
     ));
     let reservation_group =
         autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let classified = kura
-        .classify_autonomous_lane_reservation_groups(&[reservation_group], chain_id_hash, &[epoch])
+        .classify_autonomous_lane_reservation_groups(&[reservation_group], network_id, &[epoch])
         .expect("classify tombstoned reservation through the strict grouped predicate");
     assert!(matches!(
         classified.as_slice(),
@@ -2727,7 +2732,7 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         }] if exact_payload == &payload && exact_retirement == &retirement
     ));
     assert_eq!(
-        kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
         Err("retired autonomous lane slot is not merge eligible"),
         "a locally supplied delayed QC cannot make a retired slot merge eligible",
     );
@@ -2742,7 +2747,7 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         "rejected delayed certification must leave no certified sidecar",
     );
     assert!(
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+        kura.persist_lane_executable_payload(&payload, network_id, epoch)
             .is_err(),
         "the same payload cannot reclaim a terminal slot",
     );
@@ -2751,13 +2756,13 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert_eq!(
         reopened
-            .read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+            .read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)
             .expect("revalidate retirement after restart"),
         Some(retirement),
     );
     assert!(
         reopened
-            .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+            .read_autonomous_lane_block_artifact(lane_id, 1, network_id, epoch)
             .is_none(),
         "restart must not resurrect the retired executable payload",
     );

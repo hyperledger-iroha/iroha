@@ -122,8 +122,9 @@ and minimum are `134283264`, so a block admitted by the canonical schema cannot
 be rejected only by the service transport setting. Per-variant semantic
 collection/string ceilings are enforced before nested validation.
 
-The `sorafs_governance_dag` implementation, exposed through the public
-`run_governance_dag_service` launcher, is the always-on publisher. It loads
+The `sorafs_governance_dag` service implementation, exposed through the public
+`run_governance_dag_service` library launcher, is the always-on production
+service. It loads
 policy from `iroha_config` and accepts a local signed DAG only when the
 producer's separate sealed checkpoint authenticates the exact canonical root,
 signer/store qualifications, block count, head, and index digests and no
@@ -131,16 +132,19 @@ producer write-ahead intent is active. The service performs this check on both
 sides of its bounded source read so a concurrent producer cannot expose source
 state before its checkpoint CAS commits.
 
-Objects are published through one deterministic Kubo UnixFS profile. Files up
-to 1 MiB use a raw CIDv1 SHA-256 block; larger files use fixed 1 MiB raw leaves
+Objects are published through one deterministic Kubo UnixFS profile. The
+service uploads and recursively pins every new block plus the signed head, then
+reads each object back against its locally derived CID. Files up to 1 MiB use a
+raw CIDv1 SHA-256 block; larger files use fixed 1 MiB raw leaves
 under one canonical DAG-PB UnixFS file root, with at most 1,024 links. The Kubo
 request fixes CID version, hash, chunker, raw leaves, link limit, directory
 wrapping, and trickle behavior. The service derives the expected root locally,
 rejects any different Kubo result, pins the object, and reads the exact bytes
-back. The public head has one transport: an authenticated signed-HTTP endpoint
-with strong-ETag compare-and-swap and readback verification.
+back. Head publication uses authenticated HTTP compare-and-swap or IPNS
+resolve/publish/readback, selected by the closed V1 service configuration; both
+paths authenticate the exact qualified endpoint and verify the published head.
 
-A service-specific sealed checkpoint and write-ahead publish intent occupy
+A service-specific authenticated checkpoint and write-ahead publish intent occupy
 distinct slots in the deployment-injected monotonic store. The typed mirror
 candidate binds the sealed intent digest before publication; restart either
 continues that exact intent or reconstructs byte-identical mirror JSON from the
@@ -176,6 +180,9 @@ backend-dispatch capability has the authentication headers removed and its URI
 normalized to origin form, so a downstream proxy cannot reinterpret an
 absolute request target. The in-memory replay cache is an isolated-test utility
 and is not production qualification evidence.
+The standard outbound path already consumes verified nonces through separate
+sealed IPFS and signed-head slots; these slots preserve the authenticated
+request namespace across process restart.
 Immediately before signing and again after final request construction, the
 client requires the signed-head URL to equal its qualified endpoint exactly;
 Kubo requests must retain the same scheme, host, effective port, and normalized
@@ -197,8 +204,9 @@ Each read reopens the typed mirror and sealed checkpoint, verifies both retained
 roots and all provider bindings, and checks one shared readiness epoch before
 and after the read. Reconciliation failure and runner drop withdraw that epoch,
 so retained clones cannot serve a cached generation after service liveness is
-lost. The process also serves bounded mirror, head, block, node, checkpoint,
-health, readiness, and Prometheus routes.
+lost. The process also serves a bounded public mirror, head, block, node,
+checkpoint, health, and Prometheus surface, with readiness withdrawn whenever
+the supervised service loses its authenticated authority.
 
 SF-12 deployment qualification still requires the supervised broker and
 genuine HSM, sealed-store, exclusive authenticated Kubo/head receivers with one
@@ -518,7 +526,8 @@ Still outstanding:
   control plane and reject revoked/stale policy internally. Their live
   `ingress_qualification` probes must bind the exact configured endpoints to an
   exclusive `GovernanceDagHttpRequestReceiverV1` ingress backed by one sealed
-  atomic replay namespace shared by the complete replica set. The generic
+  atomic replay namespace shared by the complete replica set. The deployment
+  must provide the receiver-side sealed cross-replica replay adapter. The generic
   packaged binary now lives with `irohad`, requires a canonical public chain ID,
   projects only the Kubo authenticator, signed-head authenticator, and sealed
   checkpoint-store roles, and resolves them through the stock fixed local

@@ -949,7 +949,9 @@ mod tests {
         let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1053,7 +1055,9 @@ mod tests {
         let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -1075,7 +1079,9 @@ mod tests {
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1291,7 +1297,9 @@ seiyaku LifecycleTwo {
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"one-execution-two-lifecycle-transitions"));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             80,
             DataSpaceId::UNIVERSAL,
@@ -1326,7 +1334,9 @@ seiyaku LifecycleTwo {
     fn stale_hajimari_completion_rejects_deactivate_reactivate_aba() {
         let (state, authority, keypair) = test_state();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             81,
             DataSpaceId::UNIVERSAL,
@@ -1425,7 +1435,9 @@ seiyaku LifecycleAba {
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,
@@ -1610,7 +1622,9 @@ seiyaku LifecycleAba {
     fn subject_binding_initialization_builds_reverse_index() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1640,7 +1654,9 @@ seiyaku LifecycleAba {
         let authority_keypair = checked_keypair();
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,

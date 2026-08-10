@@ -236,9 +236,9 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     assert!(matches!(
         evidence.effects(),
         [AdapterEffect::ReportEquivocation {
-            kind: reducer::EquivocationKind::Vote,
-            ..
+            evidence
         }]
+            if matches!(evidence.as_ref(), wire::SumeragiV2Equivocation::PhaseVote { .. })
     ));
     assert_eq!(
         adapter

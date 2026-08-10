@@ -42,6 +42,12 @@ require_source_manifest() {
     echo "workspace sources changed during the seed matrix at ${checkpoint}: expected ${source_manifest_sha256}, observed ${observed}" >&2
     return 1
   fi
+  if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]] \
+    && ! python3 scripts/seal_workspace_source.py \
+      --verify --root "$repo_root" --no-writable-paths; then
+    echo "workspace source seal changed during the seed matrix at ${checkpoint}" >&2
+    return 1
+  fi
 }
 
 sha256_file() {
@@ -55,35 +61,7 @@ sha256_file() {
   fi
 }
 
-wait_for_external_cargo() {
-  local active_compilers
-  while true; do
-    ps -axo pid,etime,command
-    active_compilers="$(
-      ps -axo pid=,command= | awk '
-        {
-          executable = $2
-          sub(/^.*\//, "", executable)
-          if (executable == "cargo" || executable == "rustc") {
-            print
-          }
-        }
-      '
-    )"
-    if [[ -z "$active_compilers" ]]; then
-      return
-    fi
-    printf '%s\n' \
-      "waiting for active Cargo/rustc processes before seed-matrix command:" \
-      "$active_compilers" >&2
-    sleep 10
-  done
-}
-
-run_cargo() {
-  wait_for_external_cargo
-  command cargo "$@"
-}
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
 
 source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
 
@@ -132,9 +110,37 @@ if [[ "$profile" == "release" ]]; then
   fi
 fi
 readonly release_head_commit release_head_tree release_cargo_lock_sha256
-readonly source_bound_root="${repo_root}/target/sumeragi-v2-release/${source_manifest_sha256}"
+release_root_input_count=0
+for release_root_name in \
+  CARGO_TARGET_DIR \
+  IROHA_RELEASE_ARTIFACT_ROOT \
+  IROHA_RELEASE_CANCEL_REQUEST_PATH; do
+  if [[ -n "${!release_root_name:-}" ]]; then
+    release_root_input_count=$((release_root_input_count + 1))
+  fi
+done
+if ((release_root_input_count != 0 && release_root_input_count != 3)); then
+  echo "CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and IROHA_RELEASE_CANCEL_REQUEST_PATH must be supplied all-or-none" >&2
+  exit 2
+fi
+if ((release_root_input_count == 0)); then
+  seed_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-seed-matrix.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$seed_invocation_root/target" \
+    "$seed_invocation_root/artifacts"
+  export CARGO_TARGET_DIR="$seed_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$seed_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$seed_invocation_root/cancel-request.json"
+fi
+require_external_cargo_target_dir "$repo_root"
+require_external_release_artifact_root "$repo_root"
+require_disjoint_release_roots "$repo_root"
+release_gate_boundary "seed-matrix:entry" || exit $?
+readonly source_bound_root="${IROHA_RELEASE_ARTIFACT_ROOT:?IROHA_RELEASE_ARTIFACT_ROOT is required}/sumeragi-v2-release/${source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
-export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
+require_source_manifest "release entry" || exit 1
 # A release/PR corridor must fail if the real four-peer network cannot start;
 # sandbox skips are useful for ad-hoc developer runs but are not gate evidence.
 export IROHA_TEST_REQUIRE_NETWORK=1
@@ -144,7 +150,7 @@ export IROHA_TEST_NETWORK_START_ATTEMPTS=1
 # Explicit binary paths bypass the test-network freshness check. Clear them in
 # this standalone runner as well as in the parent release gate. All binaries
 # are prebuilt and attested before Cargo starts a test process.
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export IROHA_TEST_SKIP_BUILD=1
@@ -159,8 +165,10 @@ export CARGO_NET_OFFLINE=true
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
 export IROHA_TEST_PROCESS_TIMEOUT_MS=300
 export IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300
+release_gate_boundary "seed-matrix:prebuilt-publication:before" || exit $?
 ensure_source_bound_localnet_binaries
 export_source_bound_localnet_binaries
+release_gate_boundary "seed-matrix:prebuilt-publication:after" || exit $?
 # This source-bound corridor is deliberately the fixed five-scenario,
 # four-validator acceptance matrix. The independent nine-peer signed-observer
 # pressure test is useful stress coverage, but is not one of these 32-by-5
@@ -177,9 +185,11 @@ readonly scenarios=(
 # The override names an evidence *root*, not one invocation directory. An
 # atomic lock rejects concurrent writers to that root, while mktemp preserves
 # every completed or partial invocation instead of erasing earlier evidence.
-evidence_root="${SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR:-${repo_root}/target/sumeragi-v2-seed-matrix/${profile}/${source_manifest_sha256}}"
+evidence_root="${SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR:-${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-seed-matrix/${profile}/${source_manifest_sha256}}"
+require_release_artifact_path "$evidence_root" || exit $?
 mkdir -p -- "$evidence_root"
 evidence_root="$(cd -- "$evidence_root" && pwd -P)"
+require_release_artifact_directory "$evidence_root" || exit $?
 readonly evidence_root
 readonly evidence_lock="${evidence_root}/.seed-matrix.lock"
 if ! mkdir -- "$evidence_lock"; then
@@ -234,6 +244,7 @@ echo "seed-matrix command evidence: ${summary}" >&2
 # `cargo test <filter>` exits successfully when the filter matches no tests.
 # Pin the inventory first so a rename, cfg exclusion, or accidental `#[ignore]`
 # cannot turn the real-network corridor into zero-test success.
+release_gate_boundary "seed-matrix:inventory-harness:before" || exit $?
 set +e
 run_cargo test --locked --offline -p integration_tests --test "${target}" -- --list \
   >"$inventory_log" 2>&1
@@ -242,6 +253,7 @@ run_cargo test --locked --offline -p integration_tests --test "${target}" -- --l
   >"$ignored_inventory_log" 2>&1
 ignored_inventory_status=$?
 set -e
+release_gate_boundary "seed-matrix:inventory-harness:after" || exit $?
 if ((inventory_status != 0 || ignored_inventory_status != 0)); then
   echo "seed-matrix inventory failed (inventory=${inventory_status}, ignored=${ignored_inventory_status}); output: ${inventory_log}, ${ignored_inventory_log}" >&2
   exit 1
@@ -294,6 +306,7 @@ for scenario_spec in "${scenarios[@]}"; do
     command="CARGO_TARGET_DIR=${CARGO_TARGET_DIR} IROHA_TEST_TARGET_DIR=${IROHA_TEST_TARGET_DIR} IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${source_manifest_sha256} IROHA_RELEASE_PREBUILT_MANIFEST_SHA256=${IROHA_RELEASE_PREBUILT_MANIFEST_SHA256} TEST_NETWORK_BIN_IROHAD=${TEST_NETWORK_BIN_IROHAD} TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=${TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL} TEST_NETWORK_BIN_IROHA=${TEST_NETWORK_BIN_IROHA} KAGAMI_BIN=${KAGAMI_BIN} CARGO_NET_OFFLINE=true IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1 IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_ALLOW_REENTRANT_BUILD=0 IROHA_TEST_BUILD_PROFILE=release PROFILE=release IROHA_TEST_BUILD_TIMEOUT_MS=3600 IROHA_TEST_PROCESS_TIMEOUT_MS=300 IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 IROHA_TEST_NETWORK_BASE_SEED=${seed} TEST_NETWORK_TMP_DIR=\${SEED_MATRIX_EVIDENCE_DIRECTORY}/${localnet_output} IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test --locked --offline -p integration_tests --test ${target} ${module}::${test_name} -- ${test_args[*]}"
     ((run_index += 1))
 
+    release_gate_boundary "seed-matrix:test-harness-${run_index}:before" || exit $?
     set +e
     TEST_NETWORK_TMP_DIR="$localnet_dir" IROHA_TEST_NETWORK_KEEP_DIRS=1 \
       run_cargo test --locked --offline -p integration_tests --test "${target}" \
@@ -301,6 +314,7 @@ for scenario_spec in "${scenarios[@]}"; do
       2>&1 | tee "$run_log"
     pipeline_status=("${PIPESTATUS[@]}")
     set -e
+    release_gate_boundary "seed-matrix:test-harness-${run_index}:after" || exit $?
     run_log_sha256="$(sha256_file "$run_log")"
     if [[ ! "$run_log_sha256" =~ ^[0-9a-f]{64}$ ]]; then
       echo "failed to hash seed-matrix run log ${run_log}" >&2
@@ -434,12 +448,26 @@ marker_publish_args=(
   --maximum-bytes 131072
 )
 if [[ -n "${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE:-}" ]]; then
+  completion_pointer_parent="${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE%/*}"
+  require_release_artifact_path "$completion_pointer_parent" || exit $?
+  require_release_artifact_directory "$completion_pointer_parent" || exit $?
   marker_publish_args+=(
     --pointer "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
   )
 fi
+release_gate_boundary "seed-matrix:completion-publication:before" || exit $?
 printf '%s\n' "$completion_body" |
   python3 -I -S "${repo_root}/scripts/publish_release_marker.py" \
     "${marker_publish_args[@]}"
+publication_status=0
+release_gate_boundary "seed-matrix:completion-publication:after" \
+  || publication_status=$?
+if ((publication_status != 0)); then
+  rm -f -- "$completion_attestation"
+  if [[ -n "${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE:-}" ]]; then
+    rm -f -- "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
+  fi
+  exit "$publication_status"
+fi
 
 echo "seed-matrix completed ${run_index} command runs; evidence: ${summary}; completion: ${completion_attestation}" >&2

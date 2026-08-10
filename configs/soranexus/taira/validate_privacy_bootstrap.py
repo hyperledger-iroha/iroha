@@ -33,6 +33,7 @@ DEFAULT_GENESIS = HERE / "genesis.json"
 DEFAULT_MATRIX = REPO_ROOT / "fixtures/privacy/exact12_v1.tsv"
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 EXPECTED_MATRIX_FILE_SHA256 = "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
 EXPECTED_ROLLOUT_PLAN_SHA256 = "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
 EXPECTED_GENESIS_AUTHORITY = (
@@ -43,6 +44,7 @@ EXPECTED_PLAN_KEYS = {
     "schema",
     "schema_version",
     "chain_id",
+    "network_id",
     "chain_discriminant",
     "genesis_authority",
     "governance_permission",
@@ -116,6 +118,7 @@ EXPECTED_BROKER_PUBLIC_KEYS = {
     "authorization_lifetime_blocks",
     "broker_contract_digest_hex",
     "chain_id",
+    "network_id",
     "issuer_id_hex",
     "issuer_parameter_digest_hex",
     "issuer_parameter_id_hex",
@@ -150,6 +153,36 @@ EXPECTED_PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
 
 class PrivacyBootstrapValidationError(RuntimeError):
     """The checked bootstrap is incomplete, ambiguous, or non-canonical."""
+
+
+def _crc16_ccitt_false(payload: bytes) -> int:
+    checksum = 0xFFFF
+    for byte in payload:
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ 0x1021) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return checksum
+
+
+def _canonical_network_id(value: Any, label: str, *, required: bool) -> str | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, str):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    match = NETWORK_ID_RE.fullmatch(value)
+    if match is None:
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    identity = bytes.fromhex(match.group(1))
+    prefix = value[:69]
+    if identity[-1] & 1 == 0 or _crc16_ccitt_false(prefix.encode("ascii")) != int(
+        match.group(2), 16
+    ):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    return value
 
 
 @dataclass(frozen=True)
@@ -391,6 +424,11 @@ def _validate_plan(plan: dict[str, Any], matrix: MatrixContract, *, release: boo
         _fail("privacy bootstrap plan schema must be exact V1")
     if plan["chain_id"] != EXPECTED_CHAIN_ID:
         _fail("privacy bootstrap plan targets the wrong chain")
+    _canonical_network_id(
+        plan["network_id"], "privacy bootstrap plan network_id", required=release
+    )
+    if not release and plan["network_id"] is not None:
+        _fail("staging plan must not bind a genesis-derived network_id")
     if not _exact_integer(plan["chain_discriminant"], 369):
         _fail("privacy bootstrap plan targets the wrong chain discriminant")
     if plan["genesis_authority"] != EXPECTED_GENESIS_AUTHORITY:
@@ -525,6 +563,7 @@ def _validate_broker_public(
     if (
         broker["schema"] != EXPECTED_BROKER_SCHEMA
         or broker["chain_id"] != EXPECTED_CHAIN_ID
+        or broker["network_id"] != plan["network_id"]
         or broker["runtime_provider_handle"] != EXPECTED_PROVIDER_HANDLE
         or not _exact_integer(broker["runtime_provider_revision"], 1)
         or not _exact_integer(broker["authorization_lifetime_blocks"], 300)
@@ -541,6 +580,9 @@ def _validate_broker_public(
         != policy_plan["instruction_norito_sha256"]
     ):
         _fail("broker public export differs from the checked Taira plan bindings")
+    _canonical_network_id(
+        broker["network_id"], "broker public export network_id", required=True
+    )
     for field in (
         "runtime_provider_policy_digest_hex",
         "issuer_parameter_id_hex",

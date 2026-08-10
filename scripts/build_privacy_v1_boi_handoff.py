@@ -3,11 +3,12 @@
 
 The input artifact handoff is inert data from an untrusted build job.  This
 command is intended to run in the sealed, secret-free qualification
-environment.  It independently re-admits the signed Taira candidate, requires
-that candidate's distinct authenticated BOI inventory digest and bytes to name
-the exact input inventory, replays the wheel and ABI-22 native validators, and
-only then creates an immutable BOI directory.  The macOS build-handoff digest
-is retained as qualification evidence but is never accepted as the BOI binding.
+environment.  Qualification issuance is deliberately disabled until the
+installed controller provides the pinned runtime-sandbox and authority-only
+signer-broker contract named below.  Once provisioned, the runtime side must
+independently re-admit the signed Taira candidate, replay the wheel and ABI-22
+native validators, and return only bounded results to the authority side before
+the immutable BOI directory can be signed.
 
 No signing key, wallet witness, network credential, or deployment endpoint is
 accepted.  Missing release evidence is a hard failure; this command cannot
@@ -115,6 +116,33 @@ QUALIFICATION_ENVELOPE_SCHEMA_VERSION = 1
 QUALIFICATION_REPLAY_DOMAIN = b"iroha.taira.linux-boi-qualification-replay.v1\0"
 QUALIFICATION_LIFETIME_SECONDS = 6 * 60 * 60
 QUALIFICATION_CLOCK_SKEW_SECONDS = 5 * 60
+BOI_QUALIFICATION_ISOLATION_CONTRACT = (
+    "iroha.taira.boi-native-isolation-broker.v1"
+)
+BOI_QUALIFICATION_RUN_BINDING_CONTRACT = (
+    "iroha.taira.boi-authenticated-run-nonce.v1"
+)
+BOI_COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
+    "iroha.taira.complete-source-identity-attestation.v1"
+)
+BOI_QUALIFICATION_ISSUANCE_BARRIER = (
+    "missing preprovisioned iroha.taira.boi-native-isolation-broker.v1: "
+    "candidate archive parsing, ABI loading/symbol inspection, wheel and worker "
+    "probes must run under the attested runtime UID/GID with no_new_privs, "
+    "closed inherited fds, a scrubbed environment, RLIMIT and stdout/stderr "
+    "bounds, a network-denying sandbox, a new session/process-group kill, and "
+    "residual-descendant validation; the distinct pinned qualification signer "
+    "must be reachable only through an authority-UID-authenticated endpoint "
+    "inaccessible to runtime, after every runtime child has exited and candidate "
+    "hashes have been rechecked; missing preprovisioned "
+    "iroha.taira.boi-authenticated-run-nonce.v1: caller workflow run ID/attempt "
+    "must not authorize qualification or replay identity; missing preprovisioned "
+    "iroha.taira.complete-source-identity-attestation.v1: a root-owned authority "
+    "record must independently bind source commit, DPN validator release commit, "
+    "the exact canonical Cargo.lock digest, and workspace source-manifest digest "
+    "(or one stronger immutable candidate identity); caller-echoed values are not "
+    "release authority"
+)
 FIXED_CARGO_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
@@ -135,6 +163,37 @@ MAX_NATIVE_RECEIPT_BYTES = 64 * 1024 * 1024
 MAX_HANDOFF_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_WHEEL_MEMBERS = 100_000
 MAX_WHEEL_LOGICAL_BYTES = 2 * 1024 * 1024 * 1024
+MAX_WHEEL_PROBE_RESULT_BYTES = 256 * 1024
+
+EXACT12_PROTOCOL_IDS = tuple(row[0] for row in privacy_evidence.OUTCOMES)
+JINDO_PROTOCOL_ID = "iroha-jindo-polynomial-commitment-v0"
+JINDO_LIMITATION = "missing-distribution-wide-knowledge-soundness-evidence"
+CAPABILITY_BINDING_SCHEMA = "iroha.taira.exact12-runtime-capability-binding"
+CAPABILITY_TUPLE_FIELDS = frozenset(
+    {
+        "activation_state",
+        "committed_height",
+        "compiled_profile_status",
+        "engine_id",
+        "engine_manifest_digest",
+        "execution_mode",
+        "limitation",
+        "manifest_digest",
+        "network_available",
+        "operation_schema",
+        "parameter_digest",
+        "parameter_id",
+        "privacy_feature_mask",
+        "proof_system_id",
+        "protocol_id",
+        "readiness",
+        "statement_schema_digest",
+        "unavailable_reason",
+        "verifier_digest",
+    }
+)
+if len(EXACT12_PROTOCOL_IDS) != 12 or len(set(EXACT12_PROTOCOL_IDS)) != 12:
+    raise RuntimeError("BOI Exact12 runtime binding protocol order differs")
 
 CAPABILITY_PATH = "capability/exact12-capability-manifest-v1.norito"
 WHEEL_PATH = "sdk/iroha_python_privacy_v1.whl"
@@ -211,6 +270,7 @@ class AuthenticatedCandidate:
     archive_info: StableFile
     authority_dir: Path
     authority_files: Mapping[str, StableFile]
+    release_signer_fingerprint_sha256: str
     release_manifest_sha256: str
     native_validator_binary_sha256: str
     validator_binary_sha256: str
@@ -252,6 +312,15 @@ def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
     if nonzero and value == "0" * 64:
         _fail(f"{label} must not be all zero")
     return value
+
+
+def require_boi_qualification_isolation(
+    trusted_qualification_external_signer_sha256: object,
+) -> NoReturn:
+    """Refuse issuance until every named installed authority contract exists."""
+
+    del trusted_qualification_external_signer_sha256
+    _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
 
 
 def _json_sha256(value: object, label: str) -> str:
@@ -428,6 +497,9 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
         _sha256(args.expected_workspace_source_manifest_sha256, "source manifest"),
     )
     _source_identity(source.as_dict())
+    release_signer_fingerprint = _sha256(
+        args.trusted_signing_fingerprint, "release signer fingerprint"
+    )
     archive = Path(os.path.abspath(args.candidate_archive))
     authority_dir = _canonical_directory(
         Path(os.path.abspath(args.candidate_authority_dir)),
@@ -456,9 +528,7 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
                 args.expected_receipt_id, "qualification receipt ID"
             ),
             replay_ledger_path=replay_ledger,
-            trusted_signing_fingerprint=_sha256(
-                args.trusted_signing_fingerprint, "release signer fingerprint"
-            ),
+            trusted_signing_fingerprint=release_signer_fingerprint,
             release_manifest_verifier_path=verifier,
             trusted_release_manifest_verifier_sha256=_sha256(
                 args.trusted_release_manifest_verifier_sha256,
@@ -468,7 +538,12 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
         )
     except Exception as exc:
         raise BoiHandoffError(f"signed candidate admission failed: {exc}") from exc
-    if result.get("verified") is not True or result.get("source") != source.as_dict():
+    if (
+        result.get("verified") is not True
+        or result.get("source") != source.as_dict()
+        or result.get("signer_fingerprint_sha256")
+        != release_signer_fingerprint
+    ):
         _fail("candidate admission did not return the exact verified source identity")
 
     with tempfile.TemporaryDirectory(prefix="privacy-v1-boi-candidate-") as raw:
@@ -547,6 +622,7 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
         archive_info=archive_info,
         authority_dir=authority_dir,
         authority_files=authority_files,
+        release_signer_fingerprint_sha256=release_signer_fingerprint,
         release_manifest_sha256=_sha256(
             result.get("release_manifest_sha256"), "candidate release manifest digest"
         ),
@@ -824,6 +900,102 @@ def _wheel_layout(root: Path, captured: Mapping[str, StableFile]) -> tuple[str, 
         raise BoiHandoffError(f"cannot inspect native Python wheel: {exc}") from exc
 
 
+def _validate_capability_binding_result(value: object) -> dict[str, object]:
+    """Require one bounded canonical all-12 runtime/network binding result."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "manifest_protocol_tuples",
+        "protocol_count",
+        "required_network_protocol_tuples",
+        "schema",
+        "schema_version",
+    }:
+        _fail("Exact12 runtime capability binding fields differ")
+    if (
+        value.get("schema") != CAPABILITY_BINDING_SCHEMA
+        or value.get("schema_version") != 1
+        or value.get("protocol_count") != len(EXACT12_PROTOCOL_IDS)
+    ):
+        _fail("Exact12 runtime capability binding identity differs")
+    manifest_rows = value.get("manifest_protocol_tuples")
+    required_rows = value.get("required_network_protocol_tuples")
+    if (
+        not isinstance(manifest_rows, list)
+        or not isinstance(required_rows, list)
+        or len(manifest_rows) != len(EXACT12_PROTOCOL_IDS)
+        or len(required_rows) != len(EXACT12_PROTOCOL_IDS)
+        or manifest_rows != required_rows
+    ):
+        _fail("Exact12 manifest and local required capability tuples differ")
+    manifest_digest: str | None = None
+    for index, (row, protocol_id) in enumerate(
+        zip(manifest_rows, EXACT12_PROTOCOL_IDS)
+    ):
+        if not isinstance(row, dict) or set(row) != CAPABILITY_TUPLE_FIELDS:
+            _fail(f"Exact12 capability tuple {index} fields differ")
+        if row.get("protocol_id") != protocol_id:
+            _fail(f"Exact12 capability tuple {index} protocol order differs")
+        digest = _sha256(
+            row.get("manifest_digest"),
+            f"Exact12 capability tuple {index} manifest digest",
+        )
+        if manifest_digest is None:
+            manifest_digest = digest
+        elif digest != manifest_digest:
+            _fail("Exact12 capability tuples do not share one manifest digest")
+        committed_height = row.get("committed_height")
+        feature_mask = row.get("privacy_feature_mask")
+        if (
+            not isinstance(committed_height, int)
+            or isinstance(committed_height, bool)
+            or committed_height <= 0
+            or not isinstance(feature_mask, int)
+            or isinstance(feature_mask, bool)
+            or not 0 <= feature_mask <= (1 << 64) - 1
+        ):
+            _fail(f"Exact12 capability tuple {index} numeric fields differ")
+        for field in (
+            "operation_schema",
+            "execution_mode",
+            "proof_system_id",
+            "engine_id",
+        ):
+            if (
+                not isinstance(row.get(field), str)
+                or TRUST_ID_RE.fullmatch(str(row[field])) is None
+            ):
+                _fail(f"Exact12 capability tuple {index} {field} differs")
+        for field in (
+            "parameter_id",
+            "parameter_digest",
+            "verifier_digest",
+            "statement_schema_digest",
+            "engine_manifest_digest",
+        ):
+            _sha256(
+                row.get(field),
+                f"Exact12 capability tuple {index} {field}",
+            )
+        expected_readiness = (
+            "available-experimental"
+            if protocol_id == JINDO_PROTOCOL_ID
+            else "available"
+        )
+        expected_limitation = (
+            JINDO_LIMITATION if protocol_id == JINDO_PROTOCOL_ID else None
+        )
+        if (
+            row.get("network_available") is not True
+            or row.get("compiled_profile_status") != "available"
+            or row.get("readiness") != expected_readiness
+            or row.get("activation_state") != "active"
+            or row.get("unavailable_reason") is not None
+            or row.get("limitation") != expected_limitation
+        ):
+            _fail(f"Exact12 capability tuple {protocol_id} is not release-ready")
+    return value
+
+
 def _probe_native_wheel(
     root: Path,
     captured: Mapping[str, StableFile],
@@ -831,10 +1003,11 @@ def _probe_native_wheel(
     capability_payload: bytes,
     compiled_catalog_payload: bytes,
     python: str,
-) -> None:
+) -> dict[str, object]:
     source = r"""
 import importlib.machinery
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -874,6 +1047,70 @@ if not isinstance(canonical_archive, (bytes, bytearray, memoryview)):
     raise SystemExit("native wheel admission omitted canonical manifest bytes")
 if bytes(canonical_archive) != archive:
     raise SystemExit("native wheel compiled capability bytes differ")
+expected_protocol_ids = __EXACT12_PROTOCOL_IDS__
+jindo_protocol_id = __JINDO_PROTOCOL_ID__
+jindo_limitation = __JINDO_LIMITATION__
+tuple_fields = frozenset(__CAPABILITY_TUPLE_FIELDS__)
+
+def require_tuple_semantics(row, protocol_id):
+    if not isinstance(row, dict) or set(row) != tuple_fields:
+        raise SystemExit("native wheel capability tuple fields differ")
+    if row.get("protocol_id") != protocol_id:
+        raise SystemExit("native wheel capability tuple order differs")
+    readiness = (
+        "available-experimental"
+        if protocol_id == jindo_protocol_id
+        else "available"
+    )
+    limitation = jindo_limitation if protocol_id == jindo_protocol_id else None
+    if (
+        row.get("network_available") is not True
+        or row.get("compiled_profile_status") != "available"
+        or row.get("readiness") != readiness
+        or row.get("activation_state") != "active"
+        or row.get("unavailable_reason") is not None
+        or row.get("limitation") != limitation
+    ):
+        raise SystemExit("native wheel capability tuple is not release-ready")
+
+def normalize(value):
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise SystemExit("native wheel capability tuple key is not text")
+        return {key: normalize(value[key]) for key in sorted(value)}
+    if isinstance(value, (list, tuple)):
+        return [normalize(item) for item in value]
+    raise SystemExit("native wheel capability tuple value is not canonical")
+
+manifest_rows = [dict(row) for row in admitted_manifest.protocol_tuples()]
+if [row.get("protocol_id") for row in manifest_rows] != list(expected_protocol_ids):
+    raise SystemExit("native wheel capability tuple protocol order differs")
+required_rows = []
+for protocol_id, row in zip(expected_protocol_ids, manifest_rows):
+    require_tuple_semantics(row, protocol_id)
+    required = dict(admitted_manifest.require_network_capability(protocol_id))
+    require_tuple_semantics(required, protocol_id)
+    if required != row:
+        raise SystemExit("native wheel local profile differs from committed tuple")
+    required_rows.append(required)
+binding = {
+    "manifest_protocol_tuples": normalize(manifest_rows),
+    "protocol_count": len(expected_protocol_ids),
+    "required_network_protocol_tuples": normalize(required_rows),
+    "schema": "iroha.taira.exact12-runtime-capability-binding",
+    "schema_version": 1,
+}
+sys.stdout.write(json.dumps(
+    binding,
+    indent=2,
+    sort_keys=True,
+    ensure_ascii=True,
+    allow_nan=False,
+) + "\n")
 controller_loader = importlib.machinery.SourceFileLoader(
     "iroha_privacy_wallet_worker_controller", str(controller_path)
 )
@@ -890,6 +1127,15 @@ with controller_module.PrivacyWalletWorkerControllerV1(
 ) as controller:
     controller.ping()
 """
+    source = (
+        source.replace("__EXACT12_PROTOCOL_IDS__", repr(EXACT12_PROTOCOL_IDS))
+        .replace("__JINDO_PROTOCOL_ID__", repr(JINDO_PROTOCOL_ID))
+        .replace("__JINDO_LIMITATION__", repr(JINDO_LIMITATION))
+        .replace(
+            "__CAPABILITY_TUPLE_FIELDS__",
+            repr(tuple(sorted(CAPABILITY_TUPLE_FIELDS))),
+        )
+    )
     with tempfile.TemporaryDirectory(prefix="privacy-v1-boi-wheel-") as raw:
         temporary = Path(raw).resolve(strict=True)
         extension = temporary / PurePosixPath(native_member).name
@@ -975,14 +1221,27 @@ with controller_module.PrivacyWalletWorkerControllerV1(
                 raise BoiHandoffError(
                     f"native wheel probe could not complete: {exc}"
                 ) from exc
+            stderr.seek(0, os.SEEK_END)
+            stderr_size = stderr.tell()
+            if stderr_size > 64 * 1024:
+                _fail("native wheel probe emitted excessive diagnostic output")
+            stderr.seek(0)
+            diagnostic = stderr.read()
             if result.returncode != 0:
-                stderr.seek(0, os.SEEK_END)
-                size = stderr.tell()
-                if size > 64 * 1024:
-                    _fail("native wheel probe emitted excessive diagnostic output")
-                stderr.seek(0)
-                detail = stderr.read().decode("utf-8", "replace").strip()
+                detail = diagnostic.decode("utf-8", "replace").strip()
                 _fail("native wheel probe failed" + (f": {detail}" if detail else ""))
+            if diagnostic:
+                _fail("native wheel probe emitted diagnostics on success")
+            stdout.seek(0, os.SEEK_END)
+            stdout_size = stdout.tell()
+            if not 1 <= stdout_size <= MAX_WHEEL_PROBE_RESULT_BYTES:
+                _fail("native wheel probe result violates its byte bound")
+            stdout.seek(0)
+            binding_payload = stdout.read()
+            binding = _canonical_object(
+                binding_payload, "native wheel Exact12 capability binding"
+            )
+            return _validate_capability_binding_result(binding)
 
 
 def _validate_abi_runtime(path: Path) -> bytes:
@@ -1076,9 +1335,11 @@ def _validate_artifacts(
     exact12_matrix_sha256: str,
     python: str,
     wheel_probe: Callable[
-        [Path, Mapping[str, StableFile], str, bytes, bytes, str], None
-    ],
-    abi_runtime_validator: Callable[[Path], bytes],
+        [Path, Mapping[str, StableFile], str, bytes, bytes, str],
+        Mapping[str, object],
+    ] | None,
+    abi_runtime_validator: Callable[[Path], bytes] | None,
+    require_native_execution: bool = True,
 ) -> dict[str, object]:
     source = _source_identity(source)
     cargo = _read_captured(root, CARGO_LOCK_PATH, captured)
@@ -1126,19 +1387,32 @@ def _validate_artifacts(
     _validate_elf_aarch64(
         _read_captured(root, ABI_LIBRARY_PATH, captured)[:64], "ABI22 native library"
     )
-    compiled_catalog = abi_runtime_validator(root / ABI_LIBRARY_PATH)
-    if stable_hash_relative(root, ABI_LIBRARY_PATH) != captured[ABI_LIBRARY_PATH]:
-        _fail("ABI22 native library changed during replay")
-
     _validate_elf_aarch64(
         _read_captured(root, WORKER_PATH, captured)[:64], "IPWW native worker"
     )
     native_member, _controller = _wheel_layout(root, captured)
-    wheel_probe(root, captured, native_member, capability, compiled_catalog, python)
-    if stable_hash_relative(root, WHEEL_PATH) != captured[WHEEL_PATH]:
-        _fail("native Python wheel changed during replay")
-    if stable_hash_relative(root, WORKER_PATH) != captured[WORKER_PATH]:
-        _fail("IPWW native worker changed during replay")
+    compiled_catalog = b""
+    capability_binding: dict[str, object] = {}
+    if require_native_execution:
+        if wheel_probe is None or abi_runtime_validator is None:
+            _fail("native BOI validation callbacks are absent")
+        compiled_catalog = abi_runtime_validator(root / ABI_LIBRARY_PATH)
+        if stable_hash_relative(root, ABI_LIBRARY_PATH) != captured[ABI_LIBRARY_PATH]:
+            _fail("ABI22 native library changed during replay")
+        capability_binding = _validate_capability_binding_result(
+            wheel_probe(
+                root,
+                captured,
+                native_member,
+                capability,
+                compiled_catalog,
+                python,
+            )
+        )
+        if stable_hash_relative(root, WHEEL_PATH) != captured[WHEEL_PATH]:
+            _fail("native Python wheel changed during replay")
+        if stable_hash_relative(root, WORKER_PATH) != captured[WORKER_PATH]:
+            _fail("IPWW native worker changed during replay")
 
     _validate_schema(
         _read_captured(root, CAPABILITY_SCHEMA_PATH, captured),
@@ -1151,6 +1425,8 @@ def _validate_artifacts(
         "IPWW JSON Schema",
     )
     _validate_sample_config(_read_captured(root, CONFIG_PATH, captured), captured)
+    if not require_native_execution:
+        return {}
     catalog_sha256 = hashlib.sha256(compiled_catalog).hexdigest()
     return {
         "abi22": {
@@ -1161,6 +1437,10 @@ def _validate_artifacts(
             "result": "passed",
         },
         "python_wheel": {
+            "capability_binding": capability_binding,
+            "capability_binding_sha256": hashlib.sha256(
+                canonical_json_bytes(capability_binding)
+            ).hexdigest(),
             "capability_manifest_sha256": captured[CAPABILITY_PATH].sha256,
             "compiled_profile_catalog_sha256": catalog_sha256,
             "native_member": native_member,
@@ -1434,8 +1714,9 @@ def validate_candidate_boi_artifact_handoff(
         source=normalized_source,
         exact12_matrix_sha256=normalized_matrix,
         python=sys.executable,
-        wheel_probe=lambda *_args: None,
-        abi_runtime_validator=lambda _path: b"",
+        wheel_probe=None,
+        abi_runtime_validator=None,
+        require_native_execution=False,
     )
     return captured
 
@@ -1447,7 +1728,8 @@ def assemble_boi_handoff(
     *,
     python: str = sys.executable,
     wheel_probe: Callable[
-        [Path, Mapping[str, StableFile], str, bytes, bytes, str], None
+        [Path, Mapping[str, StableFile], str, bytes, bytes, str],
+        Mapping[str, object],
     ] = _probe_native_wheel,
     abi_runtime_validator: Callable[[Path], bytes] = _validate_abi_runtime,
     qualification_external_signer: Path,
@@ -1473,6 +1755,12 @@ def assemble_boi_handoff(
         trusted_qualification_signing_fingerprint,
         "trusted BOI qualification signing fingerprint",
     )
+    release_fingerprint = _sha256(
+        candidate.release_signer_fingerprint_sha256,
+        "authenticated candidate release signing fingerprint",
+    )
+    if qualification_fingerprint == release_fingerprint:
+        _fail("release and BOI qualification signing identities must be distinct")
     controller_digest = _sha256(
         controller_closure_digest, "BOI qualification controller closure digest"
     )
@@ -1642,6 +1930,7 @@ def assemble_boi_handoff(
                     "macos_validator_binary_sha256": candidate.validator_binary_sha256,
                     "privacy_protocol_receipt_id": candidate.privacy_protocol_receipt_id,
                     "qualification_receipt_id": candidate.qualification_receipt_id,
+                    "release_signer_fingerprint_sha256": release_fingerprint,
                     "release_manifest_sha256": candidate.release_manifest_sha256,
                     "authority_directory": CANDIDATE_AUTHORITY_DIRECTORY,
                     "validator_binary_sha256": candidate.validator_binary_sha256,
@@ -1728,7 +2017,10 @@ def assemble_boi_handoff(
                 "schema_version": QUALIFICATION_ENVELOPE_SCHEMA_VERSION,
                 "signer": {
                     "algorithm": "ed25519",
-                    "public_key_fingerprint_sha256": qualification_fingerprint,
+                    "qualification_public_key_fingerprint_sha256": (
+                        qualification_fingerprint
+                    ),
+                    "release_public_key_fingerprint_sha256": release_fingerprint,
                 },
                 "source": source,
                 "workflow": {
@@ -1950,6 +2242,11 @@ def verify_qualified_boi_handoff(
         trusted_qualification_signing_fingerprint,
         "trusted BOI qualification signing fingerprint",
     )
+    release_fingerprint = _sha256(
+        trusted_signing_fingerprint, "trusted release signing fingerprint"
+    )
+    if qualification_fingerprint == release_fingerprint:
+        _fail("release and BOI qualification signing identities must be distinct")
     expected_host_id = _trust_id(
         expected_qualification_host_id, "expected BOI qualification host ID"
     )
@@ -2196,7 +2493,8 @@ def verify_qualified_boi_handoff(
     signer = envelope.get("signer")
     if not isinstance(signer, dict) or signer != {
         "algorithm": "ed25519",
-        "public_key_fingerprint_sha256": qualification_fingerprint,
+        "qualification_public_key_fingerprint_sha256": qualification_fingerprint,
+        "release_public_key_fingerprint_sha256": release_fingerprint,
     }:
         _fail("signed BOI qualification signer policy differs")
     issued_at = envelope.get("issued_at_unix")
@@ -2240,6 +2538,8 @@ def verify_qualified_boi_handoff(
         "result",
     }
     wheel_probe_fields = {
+        "capability_binding",
+        "capability_binding_sha256",
         "capability_manifest_sha256",
         "compiled_profile_catalog_sha256",
         "native_member",
@@ -2257,6 +2557,12 @@ def verify_qualified_boi_handoff(
         abi_probe.get("compiled_profile_catalog_sha256"),
         "signed standalone compiled catalog digest",
     )
+    capability_binding = _validate_capability_binding_result(
+        wheel_probe.get("capability_binding")
+    )
+    capability_binding_sha256 = hashlib.sha256(
+        canonical_json_bytes(capability_binding)
+    ).hexdigest()
     native_member, _controller_member = _wheel_layout(root, captured)
     if (
         abi_probe.get("abi_version") != 22
@@ -2266,6 +2572,8 @@ def verify_qualified_boi_handoff(
         or abi_probe.get("result") != "passed"
         or wheel_probe.get("capability_manifest_sha256")
         != captured[CAPABILITY_PATH].sha256
+        or wheel_probe.get("capability_binding_sha256")
+        != capability_binding_sha256
         or wheel_probe.get("compiled_profile_catalog_sha256") != catalog_sha256
         or wheel_probe.get("native_member") != native_member
         or wheel_probe.get("result") != "passed"
@@ -2317,6 +2625,7 @@ def verify_qualified_boi_handoff(
         "exact12_matrix_sha256", "linux_validator_binary_sha256",
         "macos_validator_binary_sha256", "privacy_protocol_receipt_id",
         "qualification_receipt_id", "release_manifest_sha256",
+        "release_signer_fingerprint_sha256",
         "validator_binary_sha256",
     }
     if not isinstance(candidate_value, dict) or set(candidate_value) != candidate_fields:
@@ -2377,6 +2686,9 @@ def verify_qualified_boi_handoff(
         "macos_validator_binary_sha256": embedded.validator_binary_sha256,
         "privacy_protocol_receipt_id": embedded.privacy_protocol_receipt_id,
         "qualification_receipt_id": embedded.qualification_receipt_id,
+        "release_signer_fingerprint_sha256": (
+            embedded.release_signer_fingerprint_sha256
+        ),
         "release_manifest_sha256": embedded.release_manifest_sha256,
         "validator_binary_sha256": embedded.validator_binary_sha256,
     }
@@ -2582,6 +2894,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trusted-signing-fingerprint", required=True)
     parser.add_argument("--qualification-external-signer", type=Path, required=True)
     parser.add_argument(
+        "--trusted-qualification-external-signer-sha256", required=True
+    )
+    parser.add_argument(
         "--qualification-signing-public-key", type=Path, required=True
     )
     parser.add_argument(
@@ -2603,6 +2918,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        require_boi_qualification_isolation(
+            args.trusted_qualification_external_signer_sha256
+        )
         candidate = authenticate_candidate(args)
         result = assemble_boi_handoff(
             Path(os.path.abspath(args.artifact_handoff_root)),

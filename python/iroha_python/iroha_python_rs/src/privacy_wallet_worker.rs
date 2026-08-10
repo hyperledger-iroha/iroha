@@ -18,9 +18,7 @@ use std::{
 
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    metadata::Metadata,
-    prelude::{AccountId, ChainId},
-    privacy::PrivacyProtocolIdV1,
+    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
     transaction::FeePaymentIntent,
 };
 use rand_core_06::{OsRng, RngCore};
@@ -54,7 +52,6 @@ const AUTH_TAG_BYTES: usize = 32;
 const HANDLE_BYTES: usize = 32;
 const DIGEST_BYTES: usize = 32;
 const NONCE_BYTES: usize = 32;
-const MAX_CHAIN_ID_BYTES: usize = 512;
 const MAX_SIGNER_BYTES: usize = 512;
 const MAX_PROTOCOL_BYTES: usize = 96;
 const MAX_PATH_BYTES: usize = 4_096;
@@ -112,8 +109,7 @@ impl WitnessHandle {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct WitnessBinding {
-    pub chain_id: String,
-    pub genesis_digest: [u8; DIGEST_BYTES],
+    pub network_id: [u8; DIGEST_BYTES],
     pub signer: String,
     pub protocol: String,
     pub profile_digest: [u8; DIGEST_BYTES],
@@ -125,11 +121,11 @@ pub struct WitnessBinding {
 
 impl WitnessBinding {
     pub fn validate(&self) -> Result<(), WorkerError> {
-        validate_text("chain id", &self.chain_id, MAX_CHAIN_ID_BYTES)?;
         validate_text("signer", &self.signer, MAX_SIGNER_BYTES)?;
         validate_text("protocol", &self.protocol, MAX_PROTOCOL_BYTES)?;
         retained_protocol(&self.protocol)?;
-        if self.genesis_digest == [0; DIGEST_BYTES]
+        if self.network_id == [0; DIGEST_BYTES]
+            || self.network_id[DIGEST_BYTES - 1] & 1 != 1
             || self.profile_digest == [0; DIGEST_BYTES]
             || self.public_intent_digest == [0; DIGEST_BYTES]
             || self.nonce == [0; NONCE_BYTES]
@@ -145,8 +141,7 @@ impl WitnessBinding {
     #[must_use]
     fn digest(&self) -> [u8; DIGEST_BYTES] {
         let mut encoded = Vec::with_capacity(512);
-        put_text(&mut encoded, &self.chain_id);
-        encoded.extend_from_slice(&self.genesis_digest);
+        encoded.extend_from_slice(&self.network_id);
         put_text(&mut encoded, &self.signer);
         put_text(&mut encoded, &self.protocol);
         encoded.extend_from_slice(&self.profile_digest);
@@ -653,7 +648,7 @@ enum CommandResponse {
 struct SignedActionResponseV1 {
     protocol_id: String,
     operation_schema: String,
-    chain_id: String,
+    network_id: [u8; DIGEST_BYTES],
     authority: String,
     authority_public_key: String,
     adaptive_signed_transaction: Vec<u8>,
@@ -835,8 +830,7 @@ fn execute_native_action_v1(
     )?;
     let manifest = lease.manifest;
     let expected_public_action = plan.public_action;
-    let chain_id = plan.context.chain_id.to_string();
-    let canonical_genesis_hash = request.binding.genesis_digest;
+    let network_id = request.binding.network_id;
     let signed = vault
         .consume_with(request.handle, &request.binding, |material| {
             let decoded =
@@ -851,7 +845,7 @@ fn execute_native_action_v1(
             build_signed_privacy_native_action_v1(
                 plan.context,
                 decoded.request,
-                canonical_genesis_hash,
+                network_id,
                 &decoded.signer_private_key,
             )
             .map_err(|_| WorkerError::NativeActionFailed)
@@ -859,17 +853,22 @@ fn execute_native_action_v1(
         .map_err(|error| match error {
             ConsumeError::Custody(error) | ConsumeError::Operation(error) => error,
         })?;
-    signed_action_response_v1(signed, &manifest, &chain_id)
+    signed_action_response_v1(signed, &manifest, network_id)
 }
 
 fn signed_action_response_v1(
     signed: SignedPrivacyActionV1,
     manifest: &PrivacyWalletExecutionBundleManifestV1,
-    chain_id: &str,
+    network_id: [u8; DIGEST_BYTES],
 ) -> Result<SignedActionResponseV1, WorkerError> {
     let inspected = inspect_signed_privacy_native_action_v1(signed.signed_transaction())
         .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
     if inspected.protocol_id() != manifest.protocol_id
+        || signed
+            .signed_transaction()
+            .network_id()
+            .map(|id| id.as_bytes())
+            != Some(&network_id)
         || inspected.transaction_hash() != signed.transaction_hash()
         || inspected.transaction_intent_digest() != signed.transaction_intent_digest()
         || inspected.statement_digest() != signed.statement_digest()
@@ -909,7 +908,7 @@ fn signed_action_response_v1(
     Ok(SignedActionResponseV1 {
         protocol_id: manifest.protocol_id.canonical_label().to_owned(),
         operation_schema: manifest.operation_schema.to_owned(),
-        chain_id: chain_id.to_owned(),
+        network_id,
         authority: manifest.authority.to_string(),
         authority_public_key: manifest.public_key.to_string(),
         adaptive_signed_transaction,
@@ -929,8 +928,7 @@ fn signed_action_response_v1(
 }
 
 fn encode_binding(output: &mut Vec<u8>, binding: &WitnessBinding) {
-    put_text(output, &binding.chain_id);
-    output.extend_from_slice(&binding.genesis_digest);
+    output.extend_from_slice(&binding.network_id);
     put_text(output, &binding.signer);
     put_text(output, &binding.protocol);
     output.extend_from_slice(&binding.profile_digest);
@@ -941,8 +939,7 @@ fn encode_binding(output: &mut Vec<u8>, binding: &WitnessBinding) {
 
 fn decode_binding(cursor: &mut Cursor<'_>) -> Result<WitnessBinding, WorkerError> {
     let binding = WitnessBinding {
-        chain_id: cursor.text(MAX_CHAIN_ID_BYTES)?,
-        genesis_digest: cursor.array()?,
+        network_id: cursor.array()?,
         signer: cursor.text(MAX_SIGNER_BYTES)?,
         protocol: cursor.text(MAX_PROTOCOL_BYTES)?,
         profile_digest: cursor.array()?,
@@ -974,7 +971,7 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
             output.push(3);
             put_text(&mut output, &signed.protocol_id);
             put_text(&mut output, &signed.operation_schema);
-            put_text(&mut output, &signed.chain_id);
+            output.extend_from_slice(&signed.network_id);
             put_text(&mut output, &signed.authority);
             put_text(&mut output, &signed.authority_public_key);
             put_bytes_u32(&mut output, &signed.adaptive_signed_transaction)
@@ -1363,10 +1360,9 @@ fn validate_execution_plan_v1(
     const FIELDS: &[&str] = &[
         "authority",
         "authority_public_key",
-        "canonical_genesis_hash_hex",
-        "chain_id",
         "creation_time_ms",
         "fee_payment",
+        "network_id_hex",
         "nonce",
         "operation_schema",
         "protocol_id",
@@ -1396,13 +1392,11 @@ fn validate_execution_plan_v1(
             .and_then(norito::json::Value::as_str)
             .ok_or(WorkerError::InvalidExecutionPlan)
     };
-    let chain_label = text("chain_id")?;
     let protocol_label = text("protocol_id")?;
     let operation_schema = text("operation_schema")?;
     let authority_label = text("authority")?;
     let authority_public_key = text("authority_public_key")?;
-    if chain_label != binding.chain_id
-        || protocol_label != binding.protocol
+    if protocol_label != binding.protocol
         || protocol_label != manifest.protocol_id.canonical_label()
         || operation_schema != public_intent.operation_schema
         || operation_schema != manifest.operation_schema
@@ -1411,23 +1405,20 @@ fn validate_execution_plan_v1(
     {
         return Err(WorkerError::WrongBinding);
     }
-    let genesis_hex = text("canonical_genesis_hash_hex")?;
-    if genesis_hex.len() != DIGEST_BYTES * 2
-        || !genesis_hex
+    let network_id_hex = text("network_id_hex")?;
+    if network_id_hex.len() != DIGEST_BYTES * 2
+        || !network_id_hex
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(WorkerError::InvalidExecutionPlan);
     }
-    let mut genesis = [0_u8; DIGEST_BYTES];
-    hex::decode_to_slice(genesis_hex, &mut genesis)
+    let mut network_id = [0_u8; DIGEST_BYTES];
+    hex::decode_to_slice(network_id_hex, &mut network_id)
         .map_err(|_| WorkerError::InvalidExecutionPlan)?;
-    if !constant_time_eq(&genesis, &binding.genesis_digest) {
+    if !constant_time_eq(&network_id, &binding.network_id) {
         return Err(WorkerError::WrongBinding);
     }
-    let chain_id = chain_label
-        .parse::<ChainId>()
-        .map_err(|_| WorkerError::InvalidExecutionPlan)?;
     let authority = AccountId::parse_encoded(authority_label)
         .map(|parsed| parsed.into_account_id())
         .map_err(|_| WorkerError::InvalidExecutionPlan)?;
@@ -1487,8 +1478,7 @@ fn validate_execution_plan_v1(
     }
     Ok(ValidatedExecutionPlanV1 {
         context: PrivacyActionTransactionContextV1 {
-            network_id: network_id_from_genesis_hash_bytes(genesis),
-            chain_id,
+            network_id: network_id_from_genesis_hash_bytes(network_id),
             authority,
             creation_time: Duration::from_millis(creation_time_ms),
             time_to_live: Some(Duration::from_millis(ttl_ms)),
@@ -1726,8 +1716,7 @@ mod tests {
 
     fn binding() -> WitnessBinding {
         WitnessBinding {
-            chain_id: "taira-testnet".to_owned(),
-            genesis_digest: [1; 32],
+            network_id: [1; 32],
             signer: "alice@wonderland".to_owned(),
             protocol: "iroha-jindo-polynomial-commitment-v0".to_owned(),
             profile_digest: [2; 32],
@@ -1806,10 +1795,9 @@ mod tests {
             concat!(
                 "{{\"authority\":\"{}\",",
                 "\"authority_public_key\":\"{}\",",
-                "\"canonical_genesis_hash_hex\":\"{}\",",
-                "\"chain_id\":\"taira-testnet\",",
                 "\"creation_time_ms\":{},",
                 "\"fee_payment\":{{\"payer\":\"authority\",\"value\":{{\"charge_limits\":[],\"gas_limit\":10000000}}}},",
+                "\"network_id_hex\":\"{}\",",
                 "\"nonce\":7,",
                 "\"operation_schema\":\"jindo_polynomial_evaluation_v1\",",
                 "\"protocol_id\":\"iroha-jindo-polynomial-commitment-v0\",",
@@ -1820,8 +1808,8 @@ mod tests {
             ),
             authority,
             public_key,
-            "01".repeat(32),
             now,
+            "01".repeat(32),
         );
         let value = norito::json::parse_value(&raw).expect("execution plan JSON");
         norito::json::to_json(&value)
@@ -1916,8 +1904,7 @@ mod tests {
         let directory = TempDir::new().expect("temp dir");
         let path = execution_bundle_file(&directory, "credential", JINDO_WITNESS);
         let mut mutations: Vec<Box<dyn Fn(&mut WitnessBinding)>> = vec![
-            Box::new(|value| value.chain_id.push_str("-other")),
-            Box::new(|value| value.genesis_digest[0] ^= 1),
+            Box::new(|value| value.network_id[0] ^= 1),
             Box::new(|value| value.signer.push_str("-other")),
             Box::new(|value| value.protocol = "verange-transparent-range-v1".to_owned()),
             Box::new(|value| value.profile_digest[0] ^= 1),
@@ -2009,6 +1996,12 @@ mod tests {
                 Err(WorkerError::InvalidTtl)
             ));
         }
+        let mut invalid = binding();
+        invalid.network_id[DIGEST_BYTES - 1] &= !1;
+        assert!(matches!(
+            invalid.validate(),
+            Err(WorkerError::InvalidBinding(_))
+        ));
         let mut invalid = binding();
         invalid.nonce = [0; 32];
         assert!(matches!(
@@ -2228,7 +2221,7 @@ mod tests {
         let (_, expected_public_key, expected_authority) = test_signer();
         assert_eq!(signed.protocol_id, "iroha-jindo-polynomial-commitment-v0");
         assert_eq!(signed.operation_schema, "jindo_polynomial_evaluation_v1");
-        assert_eq!(signed.chain_id, "taira-testnet");
+        assert_eq!(signed.network_id, [1; 32]);
         assert_eq!(signed.authority, expected_authority.to_string());
         assert_eq!(signed.authority_public_key, expected_public_key.to_string());
         assert_eq!(signed.signature.len(), 64);
@@ -2302,9 +2295,12 @@ mod tests {
         let valid_path = execution_bundle_file(&directory, "valid", JINDO_WITNESS);
         let mut vault = WitnessVault::default();
         let valid_lease = import_now(&mut vault, &valid_path);
+        let first_display_label = "same-privacy-network-label";
+        let second_display_label = "same-privacy-network-label";
+        assert_eq!(first_display_label, second_display_label);
         let wrong_plan = std::str::from_utf8(&canonical_execution_plan())
             .expect("plan utf8")
-            .replace("taira-testnet", "taira-testnet-foreign")
+            .replace(&"01".repeat(32), &"02".repeat(32))
             .into_bytes();
         let wrong_plan_payload = encode_execute_payload(
             valid_lease.handle,

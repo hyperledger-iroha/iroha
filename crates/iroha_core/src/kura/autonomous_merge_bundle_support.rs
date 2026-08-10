@@ -116,7 +116,7 @@ impl AutonomousLaneExecutionInputPersistenceAuthorization {
 #[must_use = "an autonomous READY-QC authorization must be consumed by Kura"]
 struct AutonomousLaneReadyQcPersistenceAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     epoch: u64,
     executable_payload_hash: Hash,
     origin_proposal_hash: Hash,
@@ -133,7 +133,7 @@ impl AutonomousLaneReadyQcPersistenceAuthorization {
         let reservation_group =
             lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
                 .ok()?;
-        if self.chain_id_hash != payload.chain_id_hash
+        if self.network_id != payload.network_id
             || self.epoch != payload.epoch
             || self.executable_payload_hash != payload.payload_hash
             || self.origin_proposal_hash != payload.origin_proposal.proposal_hash
@@ -508,7 +508,7 @@ impl AutonomousLaneReleaseProjectionContext {
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> std::result::Result<Self, String> {
         payload
-            .validate(payload.chain_id_hash, payload.epoch)
+            .validate(payload.network_id, payload.epoch)
             .map_err(|error| error.to_string())?;
         if !retirement.matches_payload(payload) {
             return Err("autonomous release retirement differs from its payload".to_owned());
@@ -1188,9 +1188,9 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         input: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<AutonomousLaneExecutionInputPersistenceAuthorization, String> {
-        let chain_id_hash = input
-            .autonomous_chain_id_hash
-            .ok_or_else(|| "autonomous execution input lacks its chain identity".to_owned())?;
+        let network_id = input
+            .autonomous_network_id
+            .ok_or_else(|| "autonomous execution input lacks its network identity".to_owned())?;
         let epoch = input
             .autonomous_epoch
             .ok_or_else(|| "autonomous execution input lacks its epoch".to_owned())?;
@@ -1198,13 +1198,13 @@ impl Kura {
             "autonomous execution input lacks its executable payload hash".to_owned()
         })?;
         payload
-            .validate(chain_id_hash, epoch)
+            .validate(network_id, epoch)
             .map_err(|error| error.to_string())?;
         if payload.payload_hash != payload_hash {
             return Err("autonomous execution input names another executable payload".to_owned());
         }
         let expected =
-            Self::autonomous_lane_block_execution_input_candidate(payload, chain_id_hash, epoch)
+            Self::autonomous_lane_block_execution_input_candidate(payload, network_id, epoch)
                 .map_err(|error| format!("{error:?}"))?;
         if expected != *input {
             return Err("autonomous execution input differs from its canonical payload".to_owned());
@@ -1335,13 +1335,13 @@ impl Kura {
     fn authorize_lane_payload_availability_certificate_persistence(
         payload: &LaneExecutablePayloadV1,
         certificate: &DurableLanePayloadAvailabilityCertificateV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<AutonomousLaneReadyQcPersistenceAuthorization, String> {
         crate::lane_consensus::validate_lane_payload_availability_certificate(
             certificate,
             payload,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )
         .map_err(|error| error.to_string())?;
@@ -1471,7 +1471,7 @@ impl Kura {
         };
         Ok(AutonomousLaneReadyQcPersistenceAuthorization {
             projection,
-            chain_id_hash: payload.chain_id_hash,
+            network_id: payload.network_id,
             epoch: payload.epoch,
             executable_payload_hash: payload.payload_hash,
             origin_proposal_hash: payload.origin_proposal.proposal_hash,
@@ -1499,9 +1499,9 @@ impl Kura {
             .ok_or_else(|| {
                 "autonomous lane-Commit artifact lacks its READY certificate".to_owned()
             })?;
-        let chain_id_hash = availability_qc.body.chain_id_hash;
+        let network_id = availability_qc.body.network_id;
         let epoch = availability_qc.body.epoch;
-        Self::validate_autonomous_lane_merge_bundle(&source.bundle, chain_id_hash, epoch)
+        Self::validate_autonomous_lane_merge_bundle(&source.bundle, network_id, epoch)
             .map_err(str::to_owned)?;
         let canonical_source_bundle = source
             .bundle
@@ -1520,7 +1520,7 @@ impl Kura {
         }
         let expected_input = Self::autonomous_lane_block_execution_input_candidate(
             source.bundle.executable_payload(),
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .map_err(|error| format!("{error:?}"))?;
@@ -1744,7 +1744,7 @@ impl Kura {
 
     fn validate_autonomous_lane_block_artifact(
         artifact: &AutonomousLaneBlockArtifact,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<LaneBlockProposalV1, &'static str> {
         artifact
@@ -1755,7 +1755,7 @@ impl Kura {
         }
         artifact
             .executable_payload
-            .validate(expected_chain_id_hash, expected_epoch)
+            .validate(expected_network_id, expected_epoch)
             .map_err(|_| "invalid autonomous executable payload")?;
         if artifact
             .executable_payload
@@ -1773,7 +1773,7 @@ impl Kura {
             crate::lane_consensus::validate_lane_payload_availability_certificate(
                 certificate,
                 &artifact.executable_payload,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
             )
             .map_err(|_| "invalid autonomous lane payload availability certificate")?;
@@ -1784,7 +1784,7 @@ impl Kura {
             crate::lane_consensus::validate_lane_block_view_checkpoint(
                 checkpoint,
                 &artifact.executable_payload,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
             )
             .map_err(|_| "invalid autonomous lane view checkpoint")?;
@@ -1801,7 +1801,7 @@ impl Kura {
                 &target,
                 &artifact.executable_payload,
                 durable,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
             )
             .map_err(|_| "invalid autonomous lane NewView transition")?;
@@ -1814,7 +1814,7 @@ impl Kura {
     /// committee state or local sidecars.
     pub(crate) fn validate_autonomous_lane_merge_bundle(
         bundle: &AutonomousLaneMergeBundleV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<(), &'static str> {
         if bundle.version != AutonomousLaneMergeBundleV1::VERSION {
@@ -1833,7 +1833,7 @@ impl Kura {
         }
         let _cursor = Self::validate_autonomous_lane_block_artifact(
             &bundle.autonomous,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )?;
         Self::validate_certified_lane_block_artifact(&bundle.certified)?;
@@ -1857,7 +1857,7 @@ impl Kura {
     /// Decode exact canonical framed bundle bytes and verify all embedded proofs.
     pub(crate) fn decode_autonomous_lane_merge_bundle(
         bytes: &[u8],
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<AutonomousLaneMergeBundleV1, &'static str> {
         if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
@@ -1872,11 +1872,7 @@ impl Kura {
                     _ => "autonomous lane merge bundle is not valid framed Norito",
                 }
             })?;
-        Self::validate_autonomous_lane_merge_bundle(
-            &bundle,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
+        Self::validate_autonomous_lane_merge_bundle(&bundle, expected_network_id, expected_epoch)?;
         Ok(bundle)
     }
 
@@ -2029,7 +2025,7 @@ impl Kura {
         let bundle = norito::decode_canonical::<AutonomousLaneMergeBundleV1>(&bytes)
             .map_err(|_| "autonomous merge bundle entry is not canonical framed Norito")?;
         let payload = bundle.executable_payload();
-        Self::validate_autonomous_lane_merge_bundle(&bundle, payload.chain_id_hash, payload.epoch)
+        Self::validate_autonomous_lane_merge_bundle(&bundle, payload.network_id, payload.epoch)
             .map_err(|_| "autonomous merge bundle entry is invalid")?;
         let descriptor = &bundle.certified.proposal.descriptor;
         if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
@@ -2053,7 +2049,7 @@ impl Kura {
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         certified_override: Option<&CertifiedLaneBlockArtifact>,
         require_persisted_bundle: bool,
@@ -2075,7 +2071,7 @@ impl Kura {
                 &entry,
                 lane_id,
                 lane_block_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
                 None,
             )
@@ -2211,14 +2207,10 @@ impl Kura {
             autonomous,
             certified,
         };
-        Self::validate_autonomous_lane_merge_bundle(
-            &bundle,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
+        Self::validate_autonomous_lane_merge_bundle(&bundle, expected_network_id, expected_epoch)?;
         let expected_input = Self::autonomous_lane_block_execution_input_candidate(
             bundle.executable_payload(),
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )
         .map_err(|_| "autonomous payload cannot reconstruct its canonical execution input")?;
@@ -2262,7 +2254,7 @@ impl Kura {
             }
             Self::validate_autonomous_lane_merge_bundle(
                 &persisted.0,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
             )
             .map_err(|_| "persisted autonomous merge bundle is invalid")?;
@@ -2471,14 +2463,14 @@ impl Kura {
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<DurableAutonomousLaneMergeSource, &'static str> {
         let _prune_guard = self.prune_lock.lock();
         self.durable_autonomous_lane_merge_source_under_prune_guard(
             lane_id,
             lane_block_height,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             None,
             true,
@@ -2499,7 +2491,7 @@ impl Kura {
         let descriptor = &source.bundle.certified.proposal.descriptor;
         Self::validate_autonomous_lane_merge_bundle(
             &source.bundle,
-            source.bundle.executable_payload().chain_id_hash,
+            source.bundle.executable_payload().network_id,
             source.bundle.executable_payload().epoch,
         )
         .map_err(|message| {
@@ -2929,7 +2921,7 @@ impl Kura {
                     let expected_input =
                         Self::autonomous_lane_block_execution_input_candidate(
                             bundle.executable_payload(),
-                            availability.body.chain_id_hash,
+                            availability.body.network_id,
                             availability.body.epoch,
                         )
                         .map_err(|_| {
@@ -2948,7 +2940,7 @@ impl Kura {
                         .durable_autonomous_lane_merge_source_under_prune_guard(
                             entry.lane_id,
                             lane_block_height,
-                            availability.body.chain_id_hash,
+                            availability.body.network_id,
                             availability.body.epoch,
                             None,
                             true,
@@ -2970,7 +2962,7 @@ impl Kura {
                     .durable_autonomous_lane_merge_source_under_prune_guard(
                         entry.lane_id,
                         lane_block_height,
-                        availability.body.chain_id_hash,
+                        availability.body.network_id,
                         availability.body.epoch,
                         None,
                         false,
@@ -2994,7 +2986,7 @@ impl Kura {
                     .durable_autonomous_lane_merge_source_under_prune_guard(
                         entry.lane_id,
                         lane_block_height,
-                        availability.body.chain_id_hash,
+                        availability.body.network_id,
                         availability.body.epoch,
                         None,
                         true,
@@ -3045,7 +3037,7 @@ impl Kura {
             return Err("READY payload does not name the exact proposal");
         }
         let expected_availability =
-            lane_payload_availability_body(payload, proposal, payload.chain_id_hash, payload.epoch)
+            lane_payload_availability_body(payload, proposal, payload.network_id, payload.epoch)
                 .map_err(|_| "READY payload or proposal is invalid")?;
         if expected_availability != *availability_body {
             return Err("READY body differs from the exact payload and proposal");
@@ -3076,7 +3068,7 @@ impl Kura {
         if durable.proposal != *proposal {
             return Err("READY execution input names another proposal or incarnation");
         }
-        if durable.autonomous_chain_id_hash != Some(payload.chain_id_hash)
+        if durable.autonomous_network_id != Some(payload.network_id)
             || durable.autonomous_epoch != Some(payload.epoch)
             || durable.autonomous_payload_hash != Some(payload.payload_hash)
             || durable.entrypoint_hashes != payload.entrypoint_hashes
@@ -3092,7 +3084,7 @@ impl Kura {
                 .map_err(|_| "READY execution input has an invalid reservation group")?;
         let (reservation_owner_hash, proposal_identity_hash) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
-                payload.chain_id_hash,
+                payload.network_id,
                 height_context_id,
                 payload.epoch,
                 proposal,

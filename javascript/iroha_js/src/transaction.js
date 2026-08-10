@@ -592,22 +592,30 @@ export function hashInstructionBatch(instructions, options = {}) {
 }
 
 /**
- * Re-sign a Norito-encoded transaction with the provided Ed25519 private key.
+ * Re-sign a Norito-encoded ordinary transaction for one exact NetworkId with
+ * the provided Ed25519 private key. Foreign-network and genesis payloads are
+ * rejected by the native boundary before signing.
+ * @param {import("./networkId.js").NetworkId} networkId
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.
  * @returns {Buffer}
  */
-export function resignSignedTransaction(signedTransaction, privateKey) {
+export function resignSignedTransaction(networkId, signedTransaction, privateKey) {
   const native = resolveNativeBinding();
   if (!native || typeof native.signTransaction !== "function") {
     throw new Error("native binding 'signTransaction' is unavailable");
   }
+  const expectedNetworkId = Buffer.from(
+    networkIdBytes(networkId, "networkId"),
+  );
   const txBuffer = toBuffer(signedTransaction);
   const keyBuffer = toBuffer(privateKey);
   if (keyBuffer.byteLength !== 32 && keyBuffer.byteLength !== 64) {
     throw new Error("private key must be a 32- or 64-byte Ed25519 key");
   }
-  return Buffer.from(native.signTransaction(txBuffer, keyBuffer));
+  return Buffer.from(
+    native.signTransaction(expectedNetworkId, txBuffer, keyBuffer),
+  );
 }
 
 /**
@@ -931,6 +939,7 @@ export function buildExecutableBatchTransactionPayload(input) {
  * payer or exact sponsor program and revision.
  *
  * @param {{
+ *   networkId: import("./networkId.js").NetworkId,
  *   payload: object | {payload?: object, payloadJson?: string},
  *   quotedFeePayment: object | string,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -939,6 +948,7 @@ export function buildExecutableBatchTransactionPayload(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.signQuotedTransactionPayload !== "function") {
     throw new Error(
@@ -958,6 +968,7 @@ export function signQuotedTransactionPayload(input) {
         ? JSON.stringify(quoted)
         : feePaymentIntentToNoritoJson(quoted);
   const result = native.signQuotedTransactionPayload(
+    networkId,
     payloadJson,
     quotedFeePaymentJson,
     toBuffer(input?.privateKey),
@@ -1004,6 +1015,7 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
     signal: options.signal,
   });
   const signed = signQuotedTransactionPayload({
+    networkId: draftInput.networkId,
     payload: draft,
     quotedFeePayment: quote.intent,
     privateKey,
@@ -1269,6 +1281,7 @@ export function buildIvmProvedTransactionPayload(input) {
  * Apply a quote to an exact proved-IVM draft, reattach its proof, and sign it.
  *
  * @param {{
+ *   networkId: import("./networkId.js").NetworkId,
  *   payload: object | {payload?: object, payloadJson?: string, attachment?: object | string},
  *   attachment?: object | string,
  *   quotedFeePayment: object | string,
@@ -1278,6 +1291,7 @@ export function buildIvmProvedTransactionPayload(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedIvmProvedTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (
     !native ||
@@ -1301,6 +1315,7 @@ export function signQuotedIvmProvedTransactionPayload(input) {
         ? JSON.stringify(quoted)
         : feePaymentIntentToNoritoJson(quoted);
   const result = native.signQuotedIvmProvedTransactionPayload(
+    networkId,
     payloadJson,
     normalizeJsonObjectPayload(attachment, "attachment"),
     quotedFeePaymentJson,
@@ -2480,7 +2495,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     bytecode: deployedBytecode,
     gasLimit,
   };
-  const derived = await client.deriveIvmProved(proofRequest, requestOptions);
+  const derived = await client.deriveIvmProved(proofRequest, canonicalRequestOptions);
   assertIvmProvedBytecodeBinding(
     derived?.proved,
     deployedBytecode,
@@ -2544,6 +2559,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   });
   throwIfSubmissionAborted(signal);
   const built = signQuotedIvmProvedTransactionPayload({
+    networkId,
     payload: { payloadJson: feeQuotePayloadJson },
     attachment: feeQuoteAttachmentJson,
     quotedFeePayment: feeQuote.intent,
@@ -4056,377 +4072,11 @@ export function buildEndKaigiTransaction(input) {
   });
 }
 
-function normalizeInlineVerifyingKeyRecord(value, context) {
-  const record =
-    value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  if (!record) {
-    throw new TypeError(`${context}.verifyingKey must be an object`);
-  }
-  const inlineKey = record.inline_key ?? record.inlineKey ?? null;
-  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
-    throw new TypeError(`${context}.verifyingKey.inline_key must be present`);
-  }
-  const bytesBase64 = String(
-    inlineKey.bytes_b64 ?? inlineKey.bytesBase64 ?? "",
-  ).trim();
-  if (!bytesBase64) {
-    throw new TypeError(
-      `${context}.verifyingKey.inline_key.bytes_b64 must be present`,
-    );
-  }
-  const backend = normalizeExactMetadataString(
-    record.id?.backend ?? record.backend,
-    `${context}.verifyingKey.id.backend`,
-  );
-  const circuitId = normalizeExactMetadataString(
-    record.record?.circuit_id ?? record.circuit_id ?? record.circuitId,
-    `${context}.verifyingKey.record.circuit_id`,
-  );
-  return {
-    record,
-    backend,
-    circuitId,
-    bytes: Buffer.from(bytesBase64, "base64"),
-  };
-}
-
-function normalizeExactMetadataString(value, context) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a string`);
-  }
-  if (!value.trim()) {
-    throw new TypeError(`${context} must be present`);
-  }
-  if (value.trim() !== value) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
-  return value;
-}
-
-function normalizeWholeNumberLiteral(value, context) {
-  const normalized = String(value ?? "");
-  if (normalized.trim() !== normalized) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
-  if (!/^\d+$/.test(normalized)) {
-    throw new TypeError(`${context} must be a whole-number string`);
-  }
-  return normalized;
-}
-
-function normalizeFixed32HexInput(value, context) {
-  if (typeof value === "string") {
-    if (value.trim() !== value) {
-      throw new TypeError(`${context} must not contain surrounding whitespace`);
-    }
-    const normalized = value.replace(/^0x/i, "").toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(normalized)) {
-      throw new TypeError(`${context} must be a 32-byte hex string`);
-    }
-    return normalized;
-  }
-  const buffer = toNamedBuffer(value, context);
-  if (buffer.length !== 32) {
-    throw new TypeError(`${context} must be 32 bytes`);
-  }
-  return Buffer.from(buffer).toString("hex");
-}
-
-function normalizeConfidentialInputDiversifierHex(input, index) {
-  const context = `inputs[${index}].diversifier`;
-  if (input?.diversifier_hex !== undefined || input?.diversifier !== undefined) {
-    throw new TypeError(`${context} must use canonical diversifierHex`);
-  }
-  if (input?.diversifierHex === undefined) {
-    throw new TypeError(`${context} is required`);
-  }
-  return normalizeFixed32HexInput(input.diversifierHex, context);
-}
-
-function toNamedBuffer(value, context) {
-  if (Buffer.isBuffer(value)) {
-    return value;
-  }
-  if (ArrayBuffer.isView(value)) {
-    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (value instanceof ArrayBuffer) {
-    return Buffer.from(value);
-  }
-  throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
-}
-
-/**
- * Build a confidential transfer v2 proof envelope.
- */
-export function buildConfidentialTransferProofV2({
-  chainId: confidentialChainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialTransferProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialTransferProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialTransferProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedOutputs = Array.isArray(outputs)
-    ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          output?.amount,
-          `outputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          output?.rhoHex ?? output?.rho,
-          `outputs[${index}].rho`,
-        ),
-        ownerTagHex: normalizeFixed32HexInput(
-          output?.ownerTagHex ?? output?.owner_tag_hex ?? output?.ownerTag,
-          `outputs[${index}].ownerTag`,
-        ),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialTransferProofV2(
-    normalizeExactMetadataString(
-      confidentialChainId,
-      "confidentialTransferProofV2.chainId",
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialTransferProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    outputCommitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build a confidential unshield v2 proof envelope.
- */
-export function buildConfidentialUnshieldProofV2({
-  chainId: confidentialChainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialUnshieldProofV2(
-    normalizeExactMetadataString(
-      confidentialChainId,
-      "confidentialUnshieldProofV2.chainId",
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build a confidential unshield v3 proof envelope with optional private change.
- */
-export function buildConfidentialUnshieldProofV3({
-  chainId: confidentialChainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV3 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV3",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedOutputs = Array.isArray(outputs)
-    ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          output?.amount,
-          `outputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          output?.rhoHex ?? output?.rho,
-          `outputs[${index}].rho`,
-        ),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialUnshieldProofV3(
-    normalizeExactMetadataString(
-      confidentialChainId,
-      "confidentialUnshieldProofV3.chainId",
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV3.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    outputCommitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
+export {
+  buildConfidentialTransferProofV2,
+  buildConfidentialUnshieldProofV2,
+  buildConfidentialUnshieldProofV3,
+} from "./confidentialProofBuilders.js";
 
 /**
  * Build a transaction containing a `Kaigi::RecordKaigiUsage` instruction.
@@ -5035,7 +4685,7 @@ export function buildRemoveSmartContractBytesTransaction(input) {
  * Submit a signed transaction and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} [options]
+ * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, networkId?: import("./networkId.js").NetworkId, privateKey?: ArrayBufferView | ArrayBuffer | Buffer }} [options]
  * @returns {Promise<{hash: string, submission: any, status?: any}>}
  */
 export async function submitSignedTransaction(
@@ -5046,14 +4696,25 @@ export async function submitSignedTransaction(
   if (!(client instanceof ToriiClient)) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
+  for (const field of RETIRED_TRANSACTION_DOMAIN_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(options, field)) {
+      throw new TypeError(
+        `options.${field} is unsupported; provide networkId when re-signing`,
+      );
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(options, "scope")) {
     throw new TypeError(
       "options.scope is unsupported; finality waits always use global scope",
     );
   }
   let txBuffer = toBuffer(signedTransaction);
-  if (options.privateKey) {
-    txBuffer = resignSignedTransaction(txBuffer, options.privateKey);
+  if (Object.prototype.hasOwnProperty.call(options, "privateKey")) {
+    txBuffer = resignSignedTransaction(
+      options.networkId,
+      txBuffer,
+      options.privateKey,
+    );
   }
   const hashHex = hashSignedTransaction(txBuffer);
   const submission = await client.submitTransaction(txBuffer);

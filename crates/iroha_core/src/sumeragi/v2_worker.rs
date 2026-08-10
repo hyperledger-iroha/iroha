@@ -12848,7 +12848,7 @@ fn durable_history_source_covers(
                         .current_autonomous_lane_payload(
                             descriptor.lane_id,
                             descriptor.lane_block_height,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             expected_epoch,
                         )
                         .ok_or_else(|| {
@@ -12858,7 +12858,7 @@ fn durable_history_source_covers(
                         .read_autonomous_lane_block_artifact(
                             descriptor.lane_id,
                             descriptor.lane_block_height,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             expected_epoch,
                         )
                         .and_then(|artifact| artifact.availability_certificate);
@@ -12968,7 +12968,7 @@ fn durable_history_source_covers(
 fn autonomous_new_view_body_matches_durable_payload(
     body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
 ) -> bool {
     let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
@@ -12981,7 +12981,7 @@ fn autonomous_new_view_body_matches_durable_payload(
         &source,
         payload,
         body.target_view,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )
     .is_ok_and(|expected| expected == *body)
@@ -13035,7 +13035,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     {
         return Err("autonomous-lane output differs from its canonical Kura carrier".to_owned());
     }
-    let network_id_hash = Hash::prehashed(*source_artifact.height_context.network_id.as_bytes());
+    let network_id = source_artifact.height_context.network_id;
     let epoch = source_artifact.height_context.epoch;
     let autonomous_envelopes = source_block
         .execution_context()
@@ -13046,7 +13046,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .map(|envelope| {
             crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                 envelope,
-                network_id_hash,
+                network_id,
                 epoch,
             )
             .and_then(|payload| {
@@ -13056,7 +13056,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         proposal_view: source_block.header().view_change_index(),
                         proposal_block_hash: source_artifact.block_hash,
                     },
-                    network_id_hash,
+                    network_id,
                     epoch,
                 )
             })
@@ -13126,7 +13126,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         match envelope.as_message() {
             BlockMessage::LaneExecutablePayload(payload) => {
                 payload
-                    .validate(network_id_hash, epoch)
+                    .validate(network_id, epoch)
                     .map_err(|error| error.to_string())?;
                 let descriptor = &payload.origin_proposal.descriptor;
                 if payload.producer != *local_peer
@@ -13142,7 +13142,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        network_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13162,7 +13162,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .current_autonomous_lane_payload(
                         body.lane_id,
                         body.lane_block_height,
-                        network_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13172,7 +13172,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     || !autonomous_new_view_body_matches_durable_payload(
                         body,
                         &payload,
-                        network_id_hash,
+                        network_id,
                         epoch,
                     )
                     || body.proposal_height != proposal_height
@@ -13195,7 +13195,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         &current,
                         &payload,
                         body.target_view,
-                        network_id_hash,
+                        network_id,
                         epoch,
                     )
                     .map_err(|error| error.to_string())?;
@@ -13213,7 +13213,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         body.lane_id,
                         body.lane_block_height,
-                        network_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13223,7 +13223,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                 if !autonomous_new_view_body_matches_durable_payload(
                     body,
                     payload,
-                    network_id_hash,
+                    network_id,
                     epoch,
                 ) || body.proposal_height != proposal_height
                     || payload != canonical_payload
@@ -13779,14 +13779,12 @@ impl ProductionV2Services {
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
-        let business_chain_id = state.chain_id.clone();
         let apply_service = V2ApplyService::new(
             state,
             queue,
             Arc::clone(&kura),
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
-            business_chain_id,
             block_cadence,
             genesis_account,
             events_sender,
@@ -20334,7 +20332,7 @@ pub(super) mod tests {
         let payload_hash = Hash::new(b"non-retireable lane transport payload");
         let payload = crate::lane_consensus::LaneExecutablePayloadV1 {
             version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            chain_id_hash: Hash::new(b"non-retireable lane transport chain"),
+            network_id: crate::sumeragi::synthetic_network_id("non-retireable-lane-transport"),
             epoch: 0,
             origin_proposal: proposal,
             entrypoint_hashes: Vec::new(),
@@ -20348,7 +20346,7 @@ pub(super) mod tests {
         };
         let new_view_body = crate::lane_consensus::LaneBlockNewViewBodyV1 {
             version: 1,
-            chain_id_hash: payload.chain_id_hash,
+            network_id: payload.network_id,
             epoch: payload.epoch,
             lane_id: body.lane_id,
             dataspace_id: body.dataspace_id,
@@ -20428,7 +20426,7 @@ pub(super) mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"v2-worker-drain-chain"),
+                    network_id: crate::sumeragi::synthetic_network_id("v2-worker-drain"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(5),
                     lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),
@@ -20470,7 +20468,7 @@ pub(super) mod tests {
                     view: 0,
                 },
                 epoch: context.epoch,
-                chain_id_hash: Hash::prehashed(*context.network_id.as_bytes()),
+                network_id: context.network_id,
                 source_id: [0x31; 32],
                 tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"worker Native AMX entrypoint",
@@ -31048,7 +31046,7 @@ pub(super) mod tests {
                 9,
                 1,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
-                Hash::new(b"chain id"),
+                crate::sumeragi::synthetic_network_id("v2-worker-merge-sidecar"),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

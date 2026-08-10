@@ -56,7 +56,7 @@ reviewed full Cargo lock, verifies its checksum and Rust toolchain, rejects a
 dirty source tree, and supplies reviewed build provenance to this script.
 
 The bundle contains:
-  - `irohad` and `iroha` from `target/<profile>/`
+  - `iroha3d` and `iroha` from `target/<profile>/`
   - the peer-1-only native `taira_bootle_lantern_broker`
   - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the feature-separated `taira_privacy_release_runner`
@@ -732,7 +732,7 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     --locked
     -p irohad
     -p iroha_cli
-    --bin irohad
+    --bin iroha3d
     --bin iroha
     --bin "$BOOTLE_LANTERN_BROKER_BIN"
     --features "$IROHAD_RELEASE_FEATURES"
@@ -780,7 +780,7 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in iroha3d iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
@@ -880,7 +880,7 @@ privacy_runner_common_args=(
   --x509-resource-norito "$PRIVACY_X509_RESOURCE_NORITO"
   --x509-resource-json "$PRIVACY_X509_RESOURCE_JSON"
   --cargo-lock "$validator_lock_path"
-  --validator-binary "${binary_dir}/irohad"
+  --validator-binary "${binary_dir}/iroha3d"
 )
 "$privacy_runner_path" generate \
   "${privacy_runner_common_args[@]}" \
@@ -919,7 +919,7 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in iroha3d iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   cp "${binary_dir}/${binary}" "${bundle_dir}/bin/${binary}"
 done
 
@@ -1025,7 +1025,7 @@ privacy_x509_resource_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_x509
 privacy_x509_resource_json_sha256="$(sha256_file "${bundle_dir}/${privacy_x509_resource_json_relative_path}")"
 privacy_exact12_matrix_sha256="$(sha256_file "${bundle_dir}/${privacy_exact12_matrix_relative_path}")"
 privacy_workspace_source_manifest_file_sha256="$(sha256_file "${bundle_dir}/${privacy_workspace_source_manifest_relative_path}")"
-validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/irohad")"
+validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/iroha3d")"
 bootle_lantern_broker_binary_sha256="$(sha256_file "${bundle_dir}/bin/${BOOTLE_LANTERN_BROKER_BIN}")"
 privacy_runner_binary_sha256="$(sha256_file "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}")"
 
@@ -1038,7 +1038,7 @@ bundled_privacy_runner_common_args=(
   --x509-resource-norito "${bundle_dir}/${privacy_x509_resource_norito_relative_path}"
   --x509-resource-json "${bundle_dir}/${privacy_x509_resource_json_relative_path}"
   --cargo-lock "${bundle_dir}/provenance/Cargo.lock"
-  --validator-binary "${bundle_dir}/bin/irohad"
+  --validator-binary "${bundle_dir}/bin/iroha3d"
 )
 "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify \
   "${bundled_privacy_runner_common_args[@]}" \
@@ -1268,7 +1268,7 @@ payload = {
         },
         "binary_identities": {
             "validator": {
-                "path": "bin/irohad",
+                "path": "bin/iroha3d",
                 "sha256": os.environ["VALIDATOR_BINARY_SHA256"],
             },
             "bootle_lantern_broker": {
@@ -1322,7 +1322,7 @@ payload = {
     },
     "bundle_name": os.environ["BUNDLE_NAME"],
     "binaries": [
-        "bin/irohad",
+        "bin/iroha3d",
         "bin/iroha",
         f'bin/{os.environ["BOOTLE_LANTERN_BROKER_BIN"]}',
         "bin/sorafs_manifest_builder",

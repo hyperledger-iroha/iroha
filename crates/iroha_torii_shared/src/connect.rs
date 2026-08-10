@@ -7,6 +7,7 @@
 //! in server/client crates.
 
 use iroha_crypto::{Algorithm, Signature};
+use iroha_data_model::NetworkId;
 use norito::{
     codec::{Decode, Encode},
     core::{DecodeFlagsGuard, Error, Header},
@@ -352,6 +353,12 @@ pub struct ConnectRelayEnvelopeV1 {
 pub struct ConnectSessionClaimV1 {
     /// Connect session identifier.
     pub sid: [u8; 32],
+    /// Exact deployment identity for this session.
+    pub network_id: NetworkId,
+    /// X25519 application public key committed by the canonical session id.
+    pub app_pk: [u8; 32],
+    /// Fresh nonce committed by the canonical session id.
+    pub nonce: [u8; 16],
     /// Hash authorizing the application role's one-time token.
     pub token_app_hash: [u8; 32],
     /// Hash authorizing the wallet role's one-time token.
@@ -360,6 +367,8 @@ pub struct ConnectSessionClaimV1 {
     pub token_management_hash: [u8; 32],
     /// Relay MAC key used to authenticate P2P relay envelopes.
     pub relay_mac_key: [u8; 32],
+    /// Canonical approval-preimage binding for the session relay token.
+    pub relay_auth_hash: [u8; 32],
     /// Wall-clock expiry timestamp in Unix milliseconds.
     pub expires_at_ms: u64,
 }
@@ -808,7 +817,7 @@ pub enum ConnectControlV1 {
         app_pk: [u8; 32],
         /// Optional application metadata for display.
         app_meta: Option<AppMeta>,
-        /// Constraints such as chain id.
+        /// Exact deployment constraints enforced before approval.
         constraints: Constraints,
         /// Requested permissions/namespaces. Wallet may narrow in Approve.
         permissions: Option<PermissionsV1>,
@@ -1013,8 +1022,8 @@ pub enum ServerEventV1 {
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
 pub struct Constraints {
-    /// Target chain identifier.
-    pub chain_id: String,
+    /// Exact target deployment identity derived from its genesis block.
+    pub network_id: NetworkId,
 }
 
 /// Requested/accepted permissions (WalletConnect‑style namespaces).
@@ -1080,8 +1089,14 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::*;
-    use iroha_crypto::PublicKey;
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_crypto::{Hash, HashOf, PublicKey};
+    use iroha_data_model::{account::AccountId, block::BlockHeader, domain::DomainId};
+
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
 
     fn sample_open_frame() -> ConnectFrameV1 {
         let sid = [0xAB; 32];
@@ -1097,7 +1112,7 @@ mod tests {
                     icon_hash: None,
                 }),
                 constraints: Constraints {
-                    chain_id: "testnet".into(),
+                    network_id: test_network_id(b"connect-testnet-genesis"),
                 },
                 permissions: Some(PermissionsV1 {
                     methods: vec!["SIGN_REQUEST_RAW".into(), "SIGN_REQUEST_TX".into()],

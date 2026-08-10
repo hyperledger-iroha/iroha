@@ -19,7 +19,7 @@ pub mod isi {
 
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
-        ChainId, IntoKeyValue,
+        IntoKeyValue, NetworkId,
         account::{
             AccountController,
             curve::{CurveId, CurveRegistryError},
@@ -702,10 +702,10 @@ pub mod isi {
 
     /// Derive the deterministic offline escrow account for an asset definition.
     pub(crate) fn offline_escrow_account_id(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        iroha_data_model::offline::offline_escrow_account_id(chain_id, definition_id)
+        iroha_data_model::offline::offline_escrow_account_id(network_id, definition_id)
     }
 
     pub(crate) fn ensure_offline_escrow_account(
@@ -714,7 +714,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
+        let derived = offline_escrow_account_id(state_transaction.network_id(), definition_id);
         let escrow_account = match state_transaction
             .settlement
             .offline
@@ -1650,13 +1650,13 @@ pub mod isi {
                 )
                 .into());
             }
-            let chain_id = state_transaction.chain_id().clone();
+            let network_id = *state_transaction.network_id();
             if let Some(definition_id) = state_transaction
                 .world
                 .assets_in_account_iter(&account_id)
                 .find_map(|asset| {
                     let definition_id = asset.id().definition();
-                    (offline_escrow_account_id(&chain_id, definition_id) == account_id)
+                    (offline_escrow_account_id(&network_id, definition_id) == account_id)
                         .then(|| definition_id.clone())
                 })
             {
@@ -2189,13 +2189,7 @@ pub mod isi {
                 .world
                 .da_pin_intents_by_ticket
                 .iter()
-                .find(|(_, record)| {
-                    record
-                        .intent
-                        .owner
-                        .as_ref()
-                        .is_some_and(|owner| owner == &account_id)
-                })
+                .find(|(_, record)| record.intent.authorization.owner == account_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -3913,12 +3907,18 @@ mod tests {
         )
     }
 
+    fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical validation-fee guard network id")
+    }
+
     fn validation_fee_guard_payout_binding(
         rules: &ValidationFeePlainElectorateRulesV1,
     ) -> ValidationFeeTreasuryPayoutBindingV1 {
         let controller = fixture_account(0xA0);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &validation_fee_guard_network_id(),
             &controller,
             91,
             DataSpaceId::UNIVERSAL,
@@ -3961,8 +3961,7 @@ mod tests {
             ValidationFeeProposalFixtureKind::Policy => {
                 let policy = ValidationFeePolicyV1 {
                     schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-                    chain_id: ChainId::from("validation-fee-unregister-guard"),
-                    genesis_hash: [0x77; 32],
+                    network_id: validation_fee_guard_network_id(),
                     policy_version: 1,
                     previous_policy_hash: None,
                     ds_asset_id: validation_fee_guard_sbd_asset_id(),
@@ -8803,7 +8802,7 @@ mod tests {
             super::isi::ensure_offline_escrow_account(&asset_definition, &authority, &mut first_tx)
                 .expect("materialize deterministic offline escrow account");
             escrow_account_id =
-                super::isi::offline_escrow_account_id(first_tx.chain_id(), &asset_definition_id);
+                super::isi::offline_escrow_account_id(first_tx.network_id(), &asset_definition_id);
             escrow_asset_id = AssetId::new(asset_definition_id.clone(), escrow_account_id.clone());
             Mint::asset_quantity(5_u32, escrow_asset_id.clone())
                 .execute(&authority, &mut first_tx)
@@ -8842,7 +8841,12 @@ mod tests {
 
     #[test]
     fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
-        let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
+        let chain_id = ChainId::from("offline-escrow-testnet");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"offline-escrow-test-network"),
+        ));
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -8850,7 +8854,7 @@ mod tests {
             "usd".parse().expect("asset definition name"),
         );
         let escrow_account_id =
-            iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
+            iroha_data_model::offline::offline_escrow_account_id(&network_id, &asset_definition_id);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -8873,7 +8877,9 @@ mod tests {
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query, chain_id);
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world, kura, query, chain_id, network_id,
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -9849,6 +9855,7 @@ mod tests {
 
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
+        let network_id = *state.network_id_ref();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -9869,7 +9876,14 @@ mod tests {
                         [0xE2; 32],
                     ),
                     alias: None,
-                    owner: Some(account_id.clone()),
+                    authorization: crate::da::signed_test_ingest_authorization(
+                        network_id,
+                        &keypair,
+                        LaneId::new(1),
+                        1,
+                        1,
+                        1,
+                    ),
                 },
                 location: iroha_data_model::da::commitment::DaCommitmentLocation {
                     block_height: 1,
@@ -11157,7 +11171,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11201,7 +11217,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let benefit_dataspace = DataSpaceId::new(42);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             benefit_dataspace,
@@ -11241,7 +11259,9 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11282,7 +11302,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace = DataSpaceId::new(4_242);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11317,7 +11339,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11370,7 +11394,9 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11416,7 +11442,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::new(4_242),
@@ -11445,7 +11473,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::new(4_242),
@@ -11476,7 +11506,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11517,7 +11549,9 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,

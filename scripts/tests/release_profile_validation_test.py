@@ -174,7 +174,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             "x86_64-unknown-linux-gnu",
             "linux/amd64",
             unusual,
-            "irohad iroha kagami",
+            "iroha3d iroha kagami",
             "closed-prebuilt",
             json.dumps({"file_count": 1, "sha256": "b" * 64}),
             f"registry.example/builder@sha256:{'c' * 64}",

@@ -251,10 +251,10 @@ async fn genesis_transactions_are_validated_by_executor() {
     ) else {
         return;
     };
-    // Build `irohad` ahead of the timeout so the initial binary compilation does not consume the limit.
+    // Build `iroha3d` ahead of the timeout so the initial binary compilation does not consume the limit.
     iroha_test_network::Program::Irohad
         .resolve()
-        .expect("irohad binary should be buildable");
+        .expect("iroha3d binary should be buildable");
     let genesis = network.genesis();
     let peer = network.peer();
 

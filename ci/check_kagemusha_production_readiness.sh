@@ -1045,14 +1045,14 @@ if self_test:
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
     )
     if not static_errors({MODEL: mutated}):
-        errors.append("self-test failed to reject ABI-19 substitution")
+        errors.append("self-test failed to reject ABI-21 substitution")
     shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
         1,
     )
     if not static_errors({PRIVACY_PROTOCOL: shared_bridge_abi_drift}):
-        errors.append("self-test failed to reject shared bridge ABI-20 substitution")
+        errors.append("self-test failed to reject shared bridge ABI-21 substitution")
     detached_protocol_surface = baseline[PRIVACY].replace(
         'include!("privacy/protocol.rs");',
         "// protocol include removed",

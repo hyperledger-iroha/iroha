@@ -933,6 +933,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network.reply_route_source_capacity(),
             consensus_frame_byte_capacity,
             block_sync_frame_byte_capacity,
+            retransmit_interval,
+            round_timeout,
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
@@ -991,7 +993,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&kura),
             provider_ingest_finalized_archive.clone(),
             reputation_finalized_archive.clone(),
-            state.chain_id.clone(),
             block_cadence,
             genesis_account.clone(),
             events_sender.clone(),
@@ -4824,7 +4825,7 @@ fn claim_runner_lifecycle_process_generation(
         NodeRole::Observer => Ok(None),
         NodeRole::Validator => kura
             .claim_autonomous_lifecycle_process_generation(
-                Hash::prehashed(*context.network_id.as_bytes()),
+                context.network_id,
                 local_peer,
             )
             .map(Some)
@@ -4880,6 +4881,8 @@ fn lane_work_limits(
     reply_source_capacity: usize,
     consensus_frame_byte_capacity: usize,
     block_sync_frame_byte_capacity: usize,
+    historical_recovery_retry_floor: Duration,
+    historical_recovery_retry_ceiling: Duration,
 ) -> Result<V2LaneWorkLimits, V2RunnerError> {
     let non_zero = |value: u64| {
         usize::try_from(value)
@@ -4944,6 +4947,8 @@ fn lane_work_limits(
         merge_leader_body_frame_headroom_bytes,
         non_zero(config.limits.autonomous_carrier_headroom_bytes)?,
         Duration::from_millis(autonomous_producer_recheck_ms.get()),
+        historical_recovery_retry_floor,
+        historical_recovery_retry_ceiling,
         non_zero_u32(config.limits.historical_recovery_stuck_attempts)?,
         non_zero_u32(config.limits.historical_recovery_retry_tier_attempts)?,
         non_zero_u32(config.limits.historical_recovery_max_retry_tier)?,
@@ -5353,16 +5358,6 @@ fn drain_lane_relay_ingress(
         let _ = lane_work.service_next_historical_recovery()?;
     }
     Ok(())
-}
-
-/// Advance one retained historical lane owner on the ordinary retransmission
-/// cadence, even when no lane or relay ingress arrives to trigger recovery.
-fn service_historical_recovery_tick(
-    lane_work: &mut V2LaneWorkAdapter,
-) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
-    lane_work
-        .service_next_historical_recovery()
-        .map_err(V2RunnerError::from)
 }
 
 /// Fail-closed live-runner error.

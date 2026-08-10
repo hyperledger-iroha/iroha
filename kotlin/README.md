@@ -37,8 +37,9 @@ exact canonical checksummed 32-byte genesis-header hash literal. The Norito code
 `TransactionDomain::Network`; the genesis-only domain is not constructible through the SDK and is
 rejected while decoding. JSON transaction surfaces use
 `"domain":{"kind":"network","value":"<canonical NetworkId>"}` and reject the retired `chain`,
-`chainId`, and `chain_id` identity fields. Protocol-specific chain identifiers used by Connect,
-privacy, Musubi, or SCCP remain separate and are never substituted for `NetworkId`.
+`chainId`, and `chain_id` identity fields. Security-sensitive SDK payloads and canonical HTTP
+signatures use this exact `NetworkId`; human-readable deployment labels are display-only and are
+never accepted as a signing domain.
 
 `SignedTransactionHasher` computes the first-release external transaction ID
 from `TransactionEntrypoint::External` plus the canonical signed
@@ -55,6 +56,9 @@ nonce are dispatched at most once. The default URLConnection transport does not 
 redirects or retry connection/status failures. Custom `HttpTransportExecutor` implementations must
 honor `TransportRequest.replayPolicy`: only unsigned, bodyless `GET`, `HEAD`, and `OPTIONS` requests
 are `RETRY_SAFE`; all other requests are `ONE_SHOT`.
+
+Raw `witness_base64` body authentication is not an SDK surface. Multisig writes must use a
+canonical signed transaction or a closed typed signed intent.
 
 If `submitTransaction` cannot obtain an authoritative admission result, it fails with
 `AmbiguousTransactionSubmissionException`. Use its `hashHex` or `reconcileWith(client)` to query
@@ -109,6 +113,33 @@ fields, malformed transparent byte wrappers, invalid checksummed hashes,
 contradictory verification responses, and Merkle paths whose direction/length
 does not match the advertised bundle location. Requests are capped at 64 KiB
 and buffered responses at 8 MiB.
+
+### Authoritative Sumeragi status and operational diagnostics
+
+`HttpClientTransport.getSumeragiStatus()` reads only
+`GET /v1/sumeragi/status` into the closed protocol-v4
+`SumeragiV2Status` model. `getSumeragiDiagnostics()` separately reads
+`GET /v1/sumeragi/diagnostics` into `SumeragiDiagnosticsStatus`; diagnostics
+are durable operational evidence and must not be treated as consensus
+authority.
+
+```kotlin
+val status = transport.getSumeragiStatus().join()
+check(status.protocolVersion == 4)
+println("height=${status.height} view=${status.view} leader=${status.leader}")
+
+val diagnostics = transport.getSumeragiDiagnostics().join()
+diagnostics.nativeAmxParticipantApplications.forEach { row ->
+    println("lane=${row.laneId} height=${row.participantHeight} state=${row.state}")
+}
+```
+
+Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
+at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
+type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
+fields and tags, and current Native AMX V2 evidence. The parsers reject
+status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
+participant rows, and inconsistent carrier identities.
 
 ### Offline peer transports
 
@@ -778,7 +809,7 @@ the record.
 `/v1/musubi/queries/*` POST routes. The `sdk.musubi` models preserve structural
 package IDs, immutable namespace bindings, canonical structured SemVer
 requirements, exact unsigned integers, finalized cursors, archive commitments,
-and chain/genesis identity without legacy aliases or compatibility decoding.
+and one exact genesis-derived `NetworkId` without legacy aliases or compatibility decoding.
 Unknown fields, unsupported ABI/edition versions, and noncanonical names or
 requirements are rejected. Each manifest, verification-lock parent, and
 resolver row must use a distinct parent-local alias for every dependency.

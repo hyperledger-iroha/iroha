@@ -1,7 +1,7 @@
 fn validate_operation_payload(
     request: &OperationRequestV1,
     session_chain_id: Option<&str>,
-    session_network_id: Option<&NetworkId>,
+    session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
     let moderation_quarantine_slot =
         IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
@@ -154,7 +154,11 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
             )?;
-            validate_bootle_lantern_prepare_request(&prepare, &request.binding, session_chain_id)?;
+            validate_bootle_lantern_prepare_request(
+                &prepare,
+                &request.binding,
+                session_network_id,
+            )?;
         }
         (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1)
             if slot == bootle_lantern_issuance_slot =>
@@ -162,7 +166,7 @@ fn validate_operation_payload(
             decode_bootle_lantern_issue_request(
                 &request.payload,
                 &request.binding,
-                session_chain_id,
+                session_network_id,
             )?;
         }
         (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1)
@@ -171,7 +175,7 @@ fn validate_operation_payload(
             decode_bootle_lantern_issue_request(
                 &request.payload,
                 &request.binding,
-                session_chain_id,
+                session_network_id,
             )?;
         }
         (slot, OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1) if slot == privacy_cycle_prf_slot => {
@@ -263,7 +267,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
             )?;
-            validate_moderation_handoff_request(&handoff, slot)?;
+            validate_moderation_handoff_request(&handoff, slot, Some(session_network_id))?;
         }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1)
             if slot == moderation_publication_handoff_slot =>
@@ -273,7 +277,7 @@ fn validate_operation_payload(
             >(&request.payload, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)?;
             validate_moderation_panel_notification_archive_head_publish_request(
                 &publish,
-                session_chain_id.ok_or(BrokerError::BindingMismatch)?,
+                session_network_id,
             )?;
         }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1)
@@ -288,7 +292,10 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
             )?;
-            validate_moderation_panel_notification_request(&notification)?;
+            validate_moderation_panel_notification_request(
+                &notification,
+                Some(session_network_id),
+            )?;
         }
         (slot, OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1)
             if slot == reputation_journal_slot =>
@@ -386,7 +393,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_query_position(query.position)?;
+            validate_billing_query_position(query.position, *session_network_id)?;
             if query.max_events == 0
                 || query.max_events
                     > sorafs_node::hedging_billing_service::HEDGING_BILLING_MAX_EVENTS_PER_PAGE_V1
@@ -399,7 +406,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_query_position(query.position)?;
+            validate_billing_query_position(query.position, *session_network_id)?;
             if query.period_end_unix == 0 {
                 return Err(BrokerError::Rejected);
             }
@@ -409,13 +416,14 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_chain_id(&verify.chain_id)?;
             validate_billing_page_shape(&verify.page, None)?;
-            if verify.page.chain_id != verify.chain_id {
+            if verify.network_id != *session_network_id
+                || verify.page.network_id != verify.network_id
+            {
                 return Err(BrokerError::Rejected);
             }
             if let Some(previous) = verify.previous {
-                validate_billing_journal_commitment(previous)?;
+                validate_billing_journal_commitment(previous, verify.network_id)?;
             }
         }
         (slot, OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1)
@@ -425,9 +433,10 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_chain_id(&verify.chain_id)?;
             validate_billing_period_close_shape(&verify.close, None)?;
-            if verify.close.chain_id != verify.chain_id {
+            if verify.network_id != *session_network_id
+                || verify.close.network_id != verify.network_id
+            {
                 return Err(BrokerError::Rejected);
             }
         }
@@ -438,13 +447,13 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_chain_id(&verify.chain_id)?;
             verify
                 .transition
                 .verify()
                 .map_err(|_| BrokerError::Rejected)?;
-            if verify.transition.previous_service_policy.chain_id != verify.chain_id
-                || verify.transition.next_service_policy.chain_id != verify.chain_id
+            if verify.network_id != *session_network_id
+                || verify.transition.previous_service_policy.network_id != verify.network_id
+                || verify.transition.next_service_policy.network_id != verify.network_id
             {
                 return Err(BrokerError::Rejected);
             }
@@ -467,7 +476,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_publish_request(&publish)?;
+            validate_billing_publish_request(&publish, *session_network_id)?;
         }
         (slot, OPERATION_BILLING_LOOKUP_PUBLICATION_V1)
             if slot == billing_statement_publisher_slot =>
@@ -486,7 +495,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
             )?;
-            validate_billing_acknowledgement_request(&acknowledgement)?;
+            validate_billing_acknowledgement_request(&acknowledgement, *session_network_id)?;
         }
         (slot, OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1)
             if slot == billing_acknowledgement_authority_slot =>
@@ -1053,7 +1062,9 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_OPERATION_FRAME_BYTES_V1,
             )?;
-            validate_provider_ingest_chain_id(&load.chain_id)?;
+            if session_network_id != &load.network_id {
+                return Err(BrokerError::BindingMismatch);
+            }
         }
         (slot, OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1)
             if slot == provider_ingest_retention_slot =>
@@ -1062,7 +1073,9 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_OPERATION_FRAME_BYTES_V1,
             )?;
-            validate_provider_ingest_chain_id(&compare.chain_id)?;
+            if session_network_id != &compare.network_id {
+                return Err(BrokerError::BindingMismatch);
+            }
             if compare.expected_revision == Some([0; 32]) {
                 return Err(BrokerError::Rejected);
             }
@@ -1089,7 +1102,9 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
             )?;
-            validate_provider_ingest_chain_id(&load.chain_id)?;
+            if session_network_id != &load.network_id {
+                return Err(BrokerError::BindingMismatch);
+            }
         }
         (slot, OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1)
             if slot == reputation_retention_slot =>
@@ -1098,7 +1113,9 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
             )?;
-            validate_provider_ingest_chain_id(&compare.chain_id)?;
+            if session_network_id != &compare.network_id {
+                return Err(BrokerError::BindingMismatch);
+            }
             if compare.expected_revision == Some([0; 32])
                 || compare.next_record.is_empty()
                 || compare.next_record.len() > MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1
@@ -1265,7 +1282,11 @@ fn validate_operation_payload(
             if compare.expected_revision == Some([0; 32]) {
                 return Err(BrokerError::Rejected);
             }
-            decode_moderation_checkpoint_record(&compare.next_record, &request.binding)?;
+            decode_moderation_checkpoint_record(
+                &compare.next_record,
+                &request.binding,
+                Some(session_network_id),
+            )?;
         }
         (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1) if slot == evidence_archive_slot => {
             let install = decode_canonical::<EvidenceViewerArchiveInstallRequestWireV1>(
@@ -1306,8 +1327,8 @@ fn validate_operation_payload(
             validate_moderation_panel_notification_archive_wire_scope(
                 qualify.version,
                 qualify.slot,
-                &qualify.chain_id,
-                session_chain_id,
+                &qualify.network_id,
+                session_network_id,
             )?;
         }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1)
@@ -1320,8 +1341,8 @@ fn validate_operation_payload(
             validate_moderation_panel_notification_archive_wire_scope(
                 install.version,
                 install.slot,
-                &install.chain_id,
-                session_chain_id,
+                &install.network_id,
+                session_network_id,
             )?;
             let max_bytes = usize::try_from(
                 request
@@ -1349,8 +1370,8 @@ fn validate_operation_payload(
             validate_moderation_panel_notification_archive_wire_scope(
                 read.version,
                 read.slot,
-                &read.chain_id,
-                session_chain_id,
+                &read.network_id,
+                session_network_id,
             )?;
             if read.operation_id == [0; 32] {
                 return Err(BrokerError::Rejected);
@@ -1366,15 +1387,15 @@ fn validate_operation_payload(
             validate_moderation_panel_notification_source_attest_wire_scope(
                 attest.version,
                 attest.slot,
-                &attest.chain_id,
-                session_chain_id,
+                &attest.network_id,
+                session_network_id,
             )?;
             let statement = &attest.statement;
             if statement.version
                 != sorafs_node::moderation_orchestrator::
                     MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
                 || statement.attestor_slot != slot
-                || statement.chain_id != attest.chain_id
+                || statement.network_id != attest.network_id
                 || statement.checkpoint_namespace_digest == [0; 32]
                 || statement.checkpoint_generation == 0
                 || statement.checkpoint_revision == [0; 32]
@@ -1422,19 +1443,14 @@ fn validate_operation_payload(
 fn validate_moderation_panel_notification_archive_wire_scope(
     version: u16,
     slot: u16,
-    chain_id: &str,
-    session_chain_id: Option<&str>,
+    network_id: &NetworkId,
+    session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
-    let authenticated_chain_id = session_chain_id.ok_or(BrokerError::BindingMismatch)?;
     if version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
         || slot != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
         || slot != sorafs_node::moderation_orchestrator::
             MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1
-        || chain_id != authenticated_chain_id
-        || chain_id.is_empty()
-        || chain_id.len() > MAX_CHAIN_ID_BYTES_V1
-        || chain_id.as_bytes().contains(&0)
-        || chain_id.parse::<iroha_data_model::ChainId>().is_err()
+        || network_id != session_network_id
     {
         return Err(BrokerError::BindingMismatch);
     }
@@ -1444,17 +1460,15 @@ fn validate_moderation_panel_notification_archive_wire_scope(
 fn validate_moderation_panel_notification_source_attest_wire_scope(
     version: u16,
     slot: u16,
-    chain_id: &str,
-    session_chain_id: Option<&str>,
+    network_id: &NetworkId,
+    session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
-    let authenticated_chain_id = session_chain_id.ok_or(BrokerError::BindingMismatch)?;
     if version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
         || slot != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
         || slot
             != sorafs_node::moderation_orchestrator::
                 MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1
-        || chain_id != authenticated_chain_id
-        || chain_id.parse::<iroha_data_model::ChainId>().is_err()
+        || network_id != session_network_id
     {
         return Err(BrokerError::BindingMismatch);
     }

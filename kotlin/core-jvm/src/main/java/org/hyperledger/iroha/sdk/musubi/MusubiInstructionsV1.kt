@@ -1107,8 +1107,7 @@ private fun encodeSeedIngressBinding(
     encoder: NoritoEncoder,
     binding: MusubiSeedIngressReceiptBindingV1,
 ) {
-    encodeField(encoder) { field -> encodeChainId(field, binding.chainId) }
-    encodeField(encoder) { field -> field.writeBytes(binding.genesisBlockHash()) }
+    encodeField(encoder) { field -> field.writeBytes(binding.networkId.bytes()) }
     encodeField(encoder) { field -> field.writeBytes(binding.publisherPayload) }
     encodeField(encoder) { field -> field.writeBytes(binding.ingressBrokerPayload) }
     encodeField(encoder) { field -> encodeFixed32Newtype(field, binding.seedProviderPayload) }
@@ -1153,8 +1152,7 @@ private fun encodeProviderBinding(
     encoder: NoritoEncoder,
     binding: MusubiProviderBundleVerificationBindingV1,
 ) {
-    encodeField(encoder) { field -> encodeChainId(field, binding.chainId) }
-    encodeField(encoder) { field -> field.writeBytes(binding.genesisBlockHash()) }
+    encodeField(encoder) { field -> field.writeBytes(binding.networkId.bytes()) }
     encodeField(encoder) { field -> encodeFixed32Newtype(field, binding.providerIdPayload) }
     encodeField(encoder) { field -> field.writeBytes(binding.completedByPayload) }
     encodeField(encoder) { field ->
@@ -1428,10 +1426,6 @@ private fun encodeAliasPricingPolicy(
     encodeField(encoder) { field -> encodeU64(field, policy.length3Xor) }
     encodeField(encoder) { field -> encodeU64(field, policy.length4Xor) }
     encodeField(encoder) { field -> encodeU64(field, policy.length5To32Xor) }
-}
-
-private fun encodeChainId(encoder: NoritoEncoder, chainId: String) {
-    encodeField(encoder) { field -> encodeString(field, chainId) }
 }
 
 private fun encodeName(encoder: NoritoEncoder, name: String) {

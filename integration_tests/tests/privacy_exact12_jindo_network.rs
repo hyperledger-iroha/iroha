@@ -194,7 +194,6 @@ fn build_jindo_action(
         .wrap_err("system clock is before the Unix epoch")?;
     let context = JindoPrivacyActionTransactionContextV1 {
         network_id: client.network_id,
-        chain_id: client.chain.clone(),
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(Duration::from_secs(3_600)),

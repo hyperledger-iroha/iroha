@@ -90,10 +90,10 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .iter()
         .find(|keypair| keypair.public_key() == producer.public_key())
         .expect("fixture retains the deterministic producer key");
-    let chain_id_hash = Hash::new(state.chain_id.clone().into_inner().as_bytes());
+    let network_id = state.network_id;
     let epoch = crate::sumeragi::epoch_for_height_from_world(&state.world.view(), proposal_height);
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal.clone(),
         vec![entrypoint.clone()],
@@ -130,7 +130,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     let availability_body = crate::lane_consensus::lane_payload_availability_body(
         &payload,
         &proposal,
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("fixture availability body");
@@ -212,7 +212,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     let source_bundle = bundle
         .encode_framed()
         .expect("fixture autonomous bundle encoding");
-    crate::kura::Kura::validate_autonomous_lane_merge_bundle(&bundle, chain_id_hash, epoch)
+    crate::kura::Kura::validate_autonomous_lane_merge_bundle(&bundle, network_id, epoch)
         .expect("fixture autonomous bundle validation");
     let (proposal_block_hash, proposal_view) =
         crate::kura::Kura::autonomous_lane_execution_anchor(&proposal, payload.payload_hash);
@@ -242,7 +242,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         crate::kura::LaneBlockExecutionInputArtifact::new(crate::kura::RecoveredLaneBlockPayload {
             proposal: proposal.clone(),
             artifact: crate::kura::LaneBlockArtifact::new(proposal_block_hash, ownership),
-            autonomous_chain_id_hash: Some(chain_id_hash),
+            autonomous_network_id: Some(network_id),
             autonomous_epoch: Some(epoch),
             autonomous_payload_hash: Some(payload.payload_hash),
             entrypoints: vec![entrypoint],
@@ -261,7 +261,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
 
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.chain_id,
+        &state.network_id,
         certificate,
     )
     .expect("fixture QueuePlan admission certificate");
@@ -294,7 +294,7 @@ fn queue_plan_pending_obligation_for_test(
     certificate: &[u8],
 ) -> QueuePlanPendingObligationV1 {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.chain_id,
+        &state.network_id,
         certificate,
     )
     .expect("fixture QueuePlan admission certificate");
@@ -304,7 +304,7 @@ fn queue_plan_pending_obligation_for_test(
 
 fn clear_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.chain_id,
+        &state.network_id,
         certificate,
     )
     .expect("fixture QueuePlan admission certificate");
@@ -313,7 +313,7 @@ fn clear_exact_queue_plan_admission_state_for_test(state: &State, certificate: &
     assert!(
         State::resolve_queue_plan_pending_obligation_in_storage(
             &mut world.smart_contract_state,
-            binding.chain_id_digest,
+            binding.network_id_digest,
             binding.entrypoint_hash.clone(),
         )
         .expect("resolve fixture pending QueuePlan obligation")
@@ -360,7 +360,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             "fixture finality must form one contiguous chain",
         );
         let context = HeightContext {
-            chain_id: state.chain_id.clone(),
+            network_id: *state.network_id_ref(),
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,

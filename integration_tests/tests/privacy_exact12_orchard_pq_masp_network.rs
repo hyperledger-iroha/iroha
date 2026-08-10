@@ -542,7 +542,7 @@ fn action_context(
     nonce: u32,
 ) -> PrivacyReleaseTransactionContextV1 {
     PrivacyReleaseTransactionContextV1 {
-        chain_id: client.chain.clone(),
+        network_id: client.network_id,
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from sumeragi_v2_multilane_models_test import (
     ROOT_DIR,
     canonical_models,
+    copy_reviewed_source_fixture_with_includes,
     load_checker,
     replace_once_after,
     swap_ordered_once_after,
@@ -40,10 +40,13 @@ def copy_autonomous_terminal_recovery_fixture(
         Path(relative)
         for relative, _, _ in module.AUTONOMOUS_TERMINAL_RAW_TEST_CHECKS
     )
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    relatives.update(
+        {
+            module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
+            module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
+        }
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -202,8 +205,8 @@ def test_autonomous_terminal_recovery_rejects_unsorted_committed_carriers(
     replace_once_after(
         path,
         "fn finalize_startup_committed_canonical_carriers(",
-        "source_authorized_carriers\n"
-        "        .sort_by_key(|(height, entry_hash, _, _, _)| (*height, *entry_hash));",
+        "source_authorized_carriers.sort_by_key("
+        "|(height, entry_hash, _, _, _)| (*height, *entry_hash));",
         "source_authorized_carriers.reverse();",
     )
     errors = validate_autonomous_terminal_recovery_fixture(

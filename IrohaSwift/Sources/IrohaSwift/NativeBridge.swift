@@ -630,7 +630,7 @@ enum NativeBridgeError: Error, Equatable {
     case accountOnboardingBody
     case aliasInstruction
     case verifyingKeyId
-    case zkAssetMode
+    case zkAssetPolicy
     case secpParse
     case secpSign
     case secpVerify
@@ -689,7 +689,7 @@ enum NativeBridgeError: Error, Equatable {
         case -408: return .accountOnboardingBody
         case -409: return .aliasInstruction
         case -403: return .verifyingKeyId
-        case -404: return .zkAssetMode
+        case -404: return .zkAssetPolicy
         case -501: return .detachedTransactionScaffold
         case -502: return .detachedTransactionSignature
         case -503: return .canonicalJSON
@@ -1260,7 +1260,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, UInt8, UInt64,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
@@ -1565,7 +1565,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt8>?
     ) -> Int32
 
-    private typealias DecodeControlOpenChainIdFn = @convention(c) (
+    private typealias DecodeControlOpenNetworkIdFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
@@ -1641,14 +1641,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Int32
 
     private typealias DecodeControlPongFn = DecodeControlPingFn
-
-    typealias DaProofSummaryFn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        CUnsignedLong, UInt64,
-        UnsafePointer<CUnsignedLong>?, CUnsignedLong,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
 
     private typealias SorafsLocalFetchFn = @convention(c) (
         UnsafePointer<CChar>?, CUnsignedLong,
@@ -1913,7 +1905,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeControlKindFn: DecodeControlKindFn? = nil
     private var decodeCiphertextFrameFn: DecodeCiphertextFrameFn? = nil
     private var decodeControlOpenPubFn: DecodeControlOpenPubFn? = nil
-    private var decodeControlOpenChainIdFn: DecodeControlOpenChainIdFn? = nil
+    private var decodeControlOpenNetworkIdFn: DecodeControlOpenNetworkIdFn? = nil
     private var decodeControlOpenAppMetadataFn: DecodeControlOpenAppMetadataFn? = nil
     private var decodeControlOpenPermissionsFn: DecodeControlOpenPermissionsFn? = nil
     private var decodeControlApprovePubFn: DecodeControlApprovePubFn? = nil
@@ -2041,7 +2033,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let decodeControlKindFn: Any? = nil
     private let decodeCiphertextFrameFn: Any? = nil
     private let decodeControlOpenPubFn: Any? = nil
-    private let decodeControlOpenChainIdFn: Any? = nil
+    private let decodeControlOpenNetworkIdFn: Any? = nil
     private let decodeControlOpenAppMetadataFn: Any? = nil
     private let decodeControlOpenPermissionsFn: Any? = nil
     private let decodeControlApprovePubFn: Any? = nil
@@ -2756,10 +2748,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.decodeControlOpenPubFn = nil
             }
-            if let decodeControlOpenChainSymbol = dlsym(handle, "connect_norito_decode_control_open_chain_id") {
-                self.decodeControlOpenChainIdFn = unsafeBitCast(decodeControlOpenChainSymbol, to: DecodeControlOpenChainIdFn.self)
+            if let decodeControlOpenNetworkSymbol = dlsym(handle, "connect_norito_decode_control_open_network_id") {
+                self.decodeControlOpenNetworkIdFn = unsafeBitCast(decodeControlOpenNetworkSymbol, to: DecodeControlOpenNetworkIdFn.self)
             } else {
-                self.decodeControlOpenChainIdFn = nil
+                self.decodeControlOpenNetworkIdFn = nil
             }
             if let decodeControlOpenMetadataSymbol = dlsym(handle, "connect_norito_decode_control_open_app_metadata_json") {
                 self.decodeControlOpenAppMetadataFn = unsafeBitCast(decodeControlOpenMetadataSymbol, to: DecodeControlOpenAppMetadataFn.self)
@@ -3138,7 +3130,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.decodeControlKindFn = nil
             self.decodeCiphertextFrameFn = nil
             self.decodeControlOpenPubFn = nil
-            self.decodeControlOpenChainIdFn = nil
+            self.decodeControlOpenNetworkIdFn = nil
             self.decodeControlOpenAppMetadataFn = nil
             self.decodeControlOpenPermissionsFn = nil
             self.decodeControlApprovePubFn = nil
@@ -3609,7 +3601,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             decodeControlKindFn != nil
             && decodeCiphertextFrameFn != nil
             && decodeControlOpenPubFn != nil
-            && decodeControlOpenChainIdFn != nil
+            && decodeControlOpenNetworkIdFn != nil
             && decodeControlOpenAppMetadataFn != nil
             && decodeControlOpenPermissionsFn != nil
             && decodeControlApprovePubFn != nil
@@ -7996,7 +7988,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 guard let pkBase = pkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -2 }
                 return withOptionalBytes(appMetadataData) { metaPtr, metaLen in
                     withOptionalBytes(permissionsData) { permsPtr, permsLen in
-                        open.constraints.chainID.withCString { chainPtr in
+                        open.constraints.networkID.bytes.withUnsafeBytes { networkBuffer in
+                            guard let networkPtr = networkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -3 }
                             var outPtr: UnsafeMutablePointer<UInt8>? = nil
                             var outLen: UInt = 0
                             let dirRaw: UInt8 = frame.direction == .appToWallet ? 0 : 1
@@ -8008,7 +8001,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 UInt(open.appPublicKey.count),
                                 metaPtr,
                                 metaLen,
-                                chainPtr,
+                                networkPtr,
+                                UInt(open.constraints.networkID.bytes.count),
                                 permsPtr,
                                 permsLen,
                                 &outPtr,
@@ -8284,7 +8278,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private func decodeControlOpenFrame(data: Data, sessionID: Data, direction: ConnectDirection, sequence: UInt64) -> ConnectFrame? {
         guard let decodeControlOpenPubFn,
-              let decodeControlOpenChainIdFn,
+              let decodeControlOpenNetworkIdFn,
               let decodeControlOpenPermissionsFn else { return nil }
         var publicKeyBytes = [UInt8](repeating: 0, count: 32)
         let pubStatus = data.withUnsafeBytes { buffer -> Int32 in
@@ -8293,13 +8287,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         guard pubStatus == 0 else { return nil }
 
-        var chainPtr: UnsafeMutablePointer<UInt8>? = nil
-        var chainLen: UInt = 0
-        let chainStatus = data.withUnsafeBytes { buffer -> Int32 in
+        var networkPtr: UnsafeMutablePointer<UInt8>? = nil
+        var networkLen: UInt = 0
+        let networkStatus = data.withUnsafeBytes { buffer -> Int32 in
             guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-            return decodeControlOpenChainIdFn(base, UInt(data.count), &chainPtr, &chainLen)
+            return decodeControlOpenNetworkIdFn(base, UInt(data.count), &networkPtr, &networkLen)
         }
-        guard chainStatus == 0, let chainID = takeString(pointer: chainPtr, length: chainLen) else { return nil }
+        guard networkStatus == 0,
+              let networkData = takeData(pointer: networkPtr, length: networkLen),
+              let networkID = try? NetworkId(bytes: networkData) else { return nil }
 
         var permissionsPtr: UnsafeMutablePointer<UInt8>? = nil
         var permissionsLen: UInt = 0
@@ -8345,7 +8341,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let open = ConnectOpen(
             appPublicKey: Data(publicKeyBytes),
             appMetadata: appMetadata,
-            constraints: ConnectConstraints(chainID: chainID),
+            constraints: ConnectConstraints(networkID: networkID),
             permissions: permissions
         )
         return ConnectFrame(sessionID: sessionID, direction: direction, sequence: sequence, kind: .control(.open(open)))

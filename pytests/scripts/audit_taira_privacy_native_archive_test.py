@@ -25,7 +25,7 @@ def _stage(tmp_path: Path) -> Path:
     root = (tmp_path / "stage").resolve()
     (root / "bin").mkdir(parents=True)
     (root / "provenance").mkdir()
-    (root / "bin/irohad").write_bytes(b"validator-binary\n")
+    (root / "bin/iroha3d").write_bytes(b"validator-binary\n")
     (root / "provenance/invocation.json").write_bytes(b'{"schema":"test"}\n')
     files = sorted(path for path in root.rglob("*") if path.is_file())
     (root / "provenance/SHA256SUMS").write_text(
@@ -138,13 +138,13 @@ def test_rejects_absolute_and_parent_traversal_members(
 def test_rejects_duplicate_member_names(tmp_path: Path) -> None:
     root = _stage(tmp_path)
     archive = (tmp_path / "duplicate.tar.gz").resolve()
-    duplicate = _regular_extra("./bin/irohad", (root / "bin/irohad").read_bytes())
+    duplicate = _regular_extra("./bin/iroha3d", (root / "bin/iroha3d").read_bytes())
     _write_archive(root, archive, extras=(duplicate,))
 
     result = _run(root, archive)
 
     assert result.returncode != 0
-    assert "repeats member bin/irohad" in result.stderr
+    assert "repeats member bin/iroha3d" in result.stderr
 
 
 @pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE])
@@ -157,7 +157,7 @@ def test_rejects_symbolic_and_hard_link_members(tmp_path: Path, kind: bytes) -> 
     info.uid = 0
     info.gid = 0
     info.mtime = 0
-    info.linkname = "./bin/irohad"
+    info.linkname = "./bin/iroha3d"
     _write_archive(root, archive, extras=((info, None),))
 
     result = _run(root, archive)
@@ -186,7 +186,7 @@ def test_rejects_special_file_members(tmp_path: Path) -> None:
 def test_rejects_archive_content_that_differs_from_stage(tmp_path: Path) -> None:
     root = _stage(tmp_path)
     archive = (tmp_path / "tampered-archive.tar.gz").resolve()
-    _write_archive(root, archive, replacements={"bin/irohad": b"tampered-binary!\n"})
+    _write_archive(root, archive, replacements={"bin/iroha3d": b"tampered-binary!\n"})
 
     result = _run(root, archive)
 
@@ -198,9 +198,9 @@ def test_rejects_stage_tamper_after_archive_creation(tmp_path: Path) -> None:
     root = _stage(tmp_path)
     archive = (tmp_path / "stale-archive.tar.gz").resolve()
     _write_archive(root, archive)
-    (root / "bin/irohad").write_bytes(b"changed-after-archive\n")
+    (root / "bin/iroha3d").write_bytes(b"changed-after-archive\n")
 
     result = _run(root, archive)
 
     assert result.returncode != 0
-    assert "staged checksum mismatch for bin/irohad" in result.stderr
+    assert "staged checksum mismatch for bin/iroha3d" in result.stderr

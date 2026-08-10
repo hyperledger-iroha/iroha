@@ -1524,6 +1524,7 @@ class TransactionDraft:
         quote = client.quote_fees(
             draft_payload,
             canonical_auth=ToriiCanonicalRequestAuth(
+                network_id=self._config.network_id.literal,
                 account_id=authority,
                 signer=keypair.sign,
             ),

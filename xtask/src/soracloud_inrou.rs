@@ -58,7 +58,7 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             "--features",
             "embedded-soracloud-runtime",
             "--bin",
-            "irohad",
+            "iroha3d",
             "build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay",
             "--",
             "--nocapture",
@@ -75,7 +75,7 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
                 "--features",
                 "embedded-soracloud-runtime",
                 "--bin",
-                "irohad",
+                "iroha3d",
                 "ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file",
                 "--",
                 "--nocapture",
@@ -92,7 +92,7 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             "--features",
             "embedded-soracloud-runtime",
             "--bin",
-            "irohad",
+            "iroha3d",
             "inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck",
             "--",
             "--ignored",
@@ -201,7 +201,7 @@ fn run_mixed_host(inventory_path: &Path) -> Result<(), Box<dyn Error>> {
             .command
             .as_deref()
             .unwrap_or(
-                "cargo test -p irohad --features embedded-soracloud-runtime --bin irohad proxy_only_inrou_host -- --nocapture",
+                "cargo test -p irohad --features embedded-soracloud-runtime --bin iroha3d proxy_only_inrou_host -- --nocapture",
             ),
         inventory.proxy_only_host.env.as_ref(),
     )?;

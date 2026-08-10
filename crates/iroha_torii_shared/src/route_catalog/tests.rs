@@ -4,6 +4,50 @@
 mod tests {
     use super::*;
 
+    #[test]
+    fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
+        let route = mcp_transport::JSON_RPC;
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::TargetRoute);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::NestedRouteAuthentication
+        );
+        assert_eq!(RouteCatalog::new(mcp_transport::ROUTES).validate(), Ok(()));
+    }
+
+    #[test]
+    fn nested_route_authentication_rejects_mismatched_admission_or_surface() {
+        let missing_auth = RouteDescriptor::new(
+            "test.target_route_without_nested_auth",
+            HttpMethod::Post,
+            "/v1/tests/target-route-without-nested-auth",
+            ApiSurface::Protocol,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::TargetRoute,
+        );
+        let wrong_surface = RouteDescriptor::new(
+            "test.nested_auth_on_public_surface",
+            HttpMethod::Post,
+            "/v1/tests/nested-auth-on-public-surface",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::TargetRoute,
+        )
+        .with_authentication(AuthenticationPolicy::NestedRouteAuthentication);
+        let errors = validate_catalog(&[missing_auth, wrong_surface]).expect_err("invalid pairs");
+        assert!(errors.iter().any(|error| {
+            error.kind
+                == CatalogValidationErrorKind::TargetRouteAdmissionRequiresNestedAuthentication
+        }));
+        assert!(errors.iter().any(|error| {
+            error.kind
+                == CatalogValidationErrorKind::NestedAuthenticationRequiresProtocolTargetRoute
+        }));
+    }
+
     const FEATURED_ROUTES: &[RouteDescriptor] = &[
         RouteDescriptor::new(
             "test.always",
@@ -876,6 +920,106 @@ mod tests {
     }
 
     #[test]
+    fn contract_post_routes_close_effect_admission_and_authentication_axes() {
+        for route in contracts_and_verification_keys::ROUTES {
+            if matches!(
+                route.effect(),
+                RouteEffect::Mutation | RouteEffect::ExpensiveCompute
+            ) {
+                assert_ne!(
+                    route.admission(),
+                    AdmissionPolicy::Public,
+                    "{} exposes protected work through public admission",
+                    route.stable_route_id()
+                );
+                assert!(
+                    !matches!(
+                        route.authentication(),
+                        AuthenticationPolicy::ToriiDefault
+                            | AuthenticationPolicy::RequiredApiToken
+                            | AuthenticationPolicy::Unauthenticated
+                    ),
+                    "{} relies on an open or API-token-only authentication policy",
+                    route.stable_route_id()
+                );
+            }
+        }
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
+            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+        }
+
+        for route in [
+            contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalSignedBody
+            );
+        }
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
+            contracts_and_verification_keys::ZK_VK_REGISTER_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+        }
+
+        let public_posts = contracts_and_verification_keys::ROUTES
+            .iter()
+            .filter(|route| {
+                route.method() == HttpMethod::Post && route.admission() == AdmissionPolicy::Public
+            })
+            .map(RouteDescriptor::stable_route_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            public_posts,
+            vec![
+                "contracts.sorafs_appeals_pricing_quote_post",
+                "contracts.sorafs_appeals_finance_settle_post",
+                "contracts.sorafs_appeals_finance_disburse_post",
+            ]
+        );
+        for route in [
+            contracts_and_verification_keys::SORAFS_APPEALS_PRICING_QUOTE_POST,
+            contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_SETTLE_POST,
+            contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DISBURSE_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        }
+    }
+
+    #[test]
+    fn pin_registration_is_a_closed_signed_body_mutation() {
+        assert_eq!(sorafs::PIN_REGISTER.effect(), RouteEffect::Mutation);
+        assert_eq!(
+            sorafs::PIN_REGISTER.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            sorafs::PIN_REGISTER.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+    }
+
+    #[test]
     fn contract_and_application_route_projections_are_explicit() {
         for route in [
             contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -958,6 +1102,17 @@ mod tests {
         assert!(sumeragi::STATUS.projections().mcp());
         assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
+        for route in [
+            telemetry::SORANET_PRIVACY_EVENT,
+            telemetry::SORANET_PRIVACY_SHARE,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::Operator);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::SoranetCollectorCredential
+            );
+        }
 
         let catalog = RouteCatalog::new(&routes);
         let without_features = catalog.project(CatalogProjection::Mounted, EnabledFeatures::none());

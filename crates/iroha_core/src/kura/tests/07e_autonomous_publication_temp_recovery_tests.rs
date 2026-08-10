@@ -255,7 +255,21 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         fs::remove_file(&target).expect("remove bootstrap temporary symlink target");
     }
 
-    let wrong_lane = lane_config.entry(LaneId::new(0)).expect("lane zero");
+    let bootstrap_lane_id = Kura::decode_autonomous_lifecycle_bootstrap(
+        bootstrap_path,
+        bootstrap_bytes,
+    )
+    .expect("decode bootstrap route for swapped-path control")
+    .body
+    .executable_payload
+    .origin_proposal
+    .descriptor
+    .lane_id;
+    let wrong_lane = lane_config
+        .entries()
+        .iter()
+        .find(|entry| entry.lane_id != bootstrap_lane_id)
+        .expect("bootstrap route-swap control requires another configured lane");
     let wrong_parent = Kura::lane_artifact_dir(&wrong_lane.blocks_dir(store_root));
     fs::create_dir_all(&wrong_parent).expect("create swapped bootstrap parent");
     let wrong_path = wrong_parent.join(format!(
@@ -293,7 +307,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let local_peer = PeerId::new(signer.public_key().clone());
-    let chain_id_hash = Hash::new(b"process-generation-real-writer-crash-boundary");
+    let network_id = test_network_id(b"process-generation-real-writer-crash-genesis");
     let stable_path = Kura::autonomous_lifecycle_process_generation_path_for(temp_dir.path());
 
     let (crashing, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
@@ -308,7 +322,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     crashing.fail_next_atomic_write_after_temporary_sync_for_test();
     assert!(
         crashing
-            .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+            .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
             .is_err(),
         "the injected writer boundary must fail before process-generation rename",
     );
@@ -401,7 +415,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         .bind_local_peer_id(local_peer.clone())
         .expect("bind local peer after cleanup");
     let claim = recovered
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("retry initial process-generation publication");
     assert_eq!(claim.generation(), 1);
     let stable_bytes = fs::read(&stable_path).expect("read stable generation one");
@@ -419,7 +433,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     fs::remove_file(&oversized).expect("remove rejected oversized temporary");
 
     let successor =
-        AutonomousLifecycleProcessGenerationRecordV1::new(chain_id_hash, local_peer.clone(), 2)
+        AutonomousLifecycleProcessGenerationRecordV1::new(network_id, local_peer.clone(), 2)
             .expect("construct exact generation-two successor")
             .encode_framed()
             .expect("encode exact generation-two successor");
@@ -477,7 +491,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     fs::remove_file(&malformed_quarantine).expect("remove malformed process-generation quarantine");
 
     let skipped =
-        AutonomousLifecycleProcessGenerationRecordV1::new(chain_id_hash, local_peer.clone(), 3)
+        AutonomousLifecycleProcessGenerationRecordV1::new(network_id, local_peer.clone(), 3)
             .expect("construct skipped process generation")
             .encode_framed()
             .expect("encode skipped process generation");

@@ -499,7 +499,7 @@ def _assert_docker_sealed_source_and_final_verify_contract(
     final_entrypoint = dockerfile.index('ENTRYPOINT ["docker_entrypoint.sh"]')
     assert final_verify < final_user < final_entrypoint
     final_block = dockerfile[final_verify:final_user]
-    assert "--validator-binary /usr/local/bin/irohad" in final_block
+    assert "--validator-binary /usr/local/bin/iroha3d" in final_block
     assert "--cargo-lock /opt/iroha/provenance/Cargo.lock" in final_block
     for stem in ("command-manifest", "stage-artifacts", "receipt"):
         assert f"/opt/iroha/provenance/privacy-native/{stem}-v1.norito" in final_block
@@ -528,8 +528,8 @@ def test_docker_recomputes_sealed_source_and_verifies_final_runtime_paths() -> N
             1,
         ),
         lambda source: source.replace(
-            "--validator-binary /usr/local/bin/irohad",
-            "--validator-binary /outbin/irohad",
+            "--validator-binary /usr/local/bin/iroha3d",
+            "--validator-binary /outbin/iroha3d",
             1,
         ),
         lambda source: source.replace(
@@ -802,7 +802,7 @@ def _assert_portable_signed_taira_authority_contract(
     assert "os.system" not in finalizer
     assert "subprocess." not in finalizer
     assert "taira_privacy_release_runner" not in finalizer
-    assert "bin/irohad" not in finalizer
+    assert "bin/iroha3d" not in finalizer
     assert "target/release" not in finalizer
     linux_snapshot = workflow.index("Snapshot only the four public privacy inputs")
     linux_build = workflow.index("Reconstruct source and build the unsigned Linux archive")
@@ -811,7 +811,9 @@ def _assert_portable_signed_taira_authority_contract(
     sign = workflow.index("macos-candidate-authority:")
     boi = workflow.index("linux-boi-qualification:")
     direct = workflow.index("macos-deploy:")
-    public = workflow.index("Require exact-four public advancement without signer or OCI credentials")
+    public = workflow.index(
+        "Require exact-four advancement and the controller-owned privacy cutover record"
+    )
     publish = workflow.index("Publish through the sealed installed authority controller")
     assert (
         linux_snapshot

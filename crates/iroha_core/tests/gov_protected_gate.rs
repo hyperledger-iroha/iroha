@@ -13,7 +13,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::nexus::DataSpaceId;
+use iroha_data_model::{NetworkId, nexus::DataSpaceId};
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 
@@ -58,10 +58,11 @@ fn compute_proposal_id(
 }
 
 fn sample_contract_address(
+    network_id: &NetworkId,
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        network_id,
         authority,
         0,
         DataSpaceId::UNIVERSAL,
@@ -143,7 +144,7 @@ seiyaku ProtectedGate {
     let abi_hash = verified.abi_hash;
     let exact_manifest = verified.manifest;
 
-    let contract_address = sample_contract_address(&authority);
+    let contract_address = sample_contract_address(&network_id, &authority);
 
     // Build tx with metadata for protected namespace
     let mut md = iroha_data_model::metadata::Metadata::default();

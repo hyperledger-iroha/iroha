@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.validationfee
 
+import org.hyperledger.iroha.sdk.core.model.NetworkId
+
 /**
  * Native boundary for the Parliament-governed validation-fee consensus proof.
  *
@@ -53,8 +55,7 @@ class ValidationFeeConsensusProofBridge private constructor() {
         @JvmStatic
         fun verifyCurrentPolicyProofV1(
             proofNorito: ByteArray,
-            chainId: String,
-            boundGenesisHash: ByteArray,
+            networkId: NetworkId,
             policyChainGenesisHash: ByteArray,
             trustedCheckpointHeight: Long,
             trustedCheckpointContextId: ByteArray,
@@ -62,15 +63,6 @@ class ValidationFeeConsensusProofBridge private constructor() {
             require(proofNorito.isNotEmpty() && proofNorito.size <= MAX_PROOF_BYTES) {
                 "proofNorito must contain 1..$MAX_PROOF_BYTES bytes"
             }
-            require(
-                chainId.isNotEmpty() &&
-                    chainId.length <= 256 &&
-                    chainId == chainId.trim() &&
-                    chainId.none(Char::isISOControl),
-            ) {
-                "chainId must be canonical bounded text"
-            }
-            requireIrohaHash(boundGenesisHash, "boundGenesisHash")
             requireIrohaHash(policyChainGenesisHash, "policyChainGenesisHash")
             require(trustedCheckpointHeight > 0) {
                 "trustedCheckpointHeight must be positive"
@@ -79,8 +71,7 @@ class ValidationFeeConsensusProofBridge private constructor() {
             requireNative()
             val json = nativeVerifyCurrentPolicyProofV1(
                 proofNorito.copyOf(),
-                chainId.toByteArray(Charsets.UTF_8),
-                boundGenesisHash.copyOf(),
+                networkId.bytes(),
                 policyChainGenesisHash.copyOf(),
                 trustedCheckpointHeight,
                 trustedCheckpointContextId.copyOf(),
@@ -116,8 +107,7 @@ class ValidationFeeConsensusProofBridge private constructor() {
         @JvmStatic
         private external fun nativeVerifyCurrentPolicyProofV1(
             proofNorito: ByteArray,
-            chainId: ByteArray,
-            boundGenesisHash: ByteArray,
+            networkId: ByteArray,
             policyChainGenesisHash: ByteArray,
             trustedCheckpointHeight: Long,
             trustedCheckpointContextId: ByteArray,

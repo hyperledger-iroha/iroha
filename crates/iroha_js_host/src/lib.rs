@@ -78,7 +78,7 @@ use iroha_crypto::{
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
-    ChainId, HasMetadata, NetworkId,
+    HasMetadata, NetworkId,
     account::{
         Account, AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -359,8 +359,7 @@ pub fn validation_fee_current_policy_proof_request_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn validation_fee_verify_current_policy_proof_v1(
     proof_norito: Uint8Array,
-    chain_id: String,
-    bound_genesis_hash: Uint8Array,
+    network_id: Uint8Array,
     policy_chain_genesis_hash: Uint8Array,
     trusted_checkpoint_height: JsU64,
     trusted_checkpoint_context_id: Uint8Array,
@@ -372,23 +371,9 @@ pub fn validation_fee_verify_current_policy_proof_v1(
             format!("proofNorito must contain 1..{MAX_PROOF_BYTES} bytes"),
         ));
     }
-    if chain_id.is_empty()
-        || chain_id.len() > 256
-        || chain_id.trim() != chain_id
-        || chain_id.chars().any(char::is_control)
-    {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "chainId must be canonical bounded text",
-        ));
-    }
-    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("chainId is invalid: {error}"),
-        )
-    })?;
-    let bound_genesis_hash = validation_fee_iroha_hash(&bound_genesis_hash, "boundGenesisHash")?;
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed(validation_fee_iroha_hash(&network_id, "networkId")?),
+    ));
     let policy_chain_genesis_hash =
         validation_fee_iroha_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
     let trusted_checkpoint_height = trusted_checkpoint_height.0;
@@ -416,8 +401,7 @@ pub fn validation_fee_verify_current_policy_proof_v1(
     }
     let projection = proof
         .verify_with_immutable_binding(
-            chain_id,
-            bound_genesis_hash,
+            network_id,
             policy_chain_genesis_hash,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
@@ -2429,26 +2413,16 @@ pub fn derive_confidential_note_v2(
     Ok(Buffer::from(commitment.to_vec()))
 }
 
-/// Validate the exact chain identifier used by confidential-v2 derivation.
-fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
-    if value.is_empty() || value.trim() != value {
-        Err("chain_id must be non-empty and contain no surrounding whitespace")
-    } else {
-        Ok(value)
-    }
-}
-
 /// Derive a confidential v2 nullifier from spend key material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn derive_confidential_nullifier_v2(
-    chain_id: String,
+    network_id: Uint8Array,
     asset_definition_id: String,
     spend_key: Uint8Array,
     rho_hex: String,
 ) -> napi::Result<Buffer> {
-    strict_confidential_chain_id(&chain_id)
-        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
         return Err(napi::Error::new(
@@ -2466,10 +2440,10 @@ pub fn derive_confidential_nullifier_v2(
     let asset_tag =
         confidential_v2::derive_confidential_asset_tag_v3(&asset_definition_id.to_string())
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
-    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(&chain_id)
+    let network_tag = confidential_v2::derive_confidential_network_tag_v3(&network_id)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     let nullifier =
-        confidential_v2::derive_confidential_nullifier_v3(spend_key, rho, asset_tag, chain_tag)
+        confidential_v2::derive_confidential_nullifier_v3(spend_key, rho, asset_tag, network_tag)
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(Buffer::from(nullifier.to_vec()))
 }
@@ -2478,7 +2452,7 @@ pub fn derive_confidential_nullifier_v2(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_confidential_transfer_proof_v2(
-    chain_id: String,
+    network_id: Uint8Array,
     asset_definition_id: String,
     spend_key: Uint8Array,
     tree_commitments_hex: Vec<String>,
@@ -2489,9 +2463,7 @@ pub fn build_confidential_transfer_proof_v2(
     vk_circuit_id: String,
     vk_bytes: Uint8Array,
 ) -> napi::Result<JsConfidentialTransferProofEnvelopeV2> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -2514,7 +2486,7 @@ pub fn build_confidential_transfer_proof_v2(
         vk_bytes.to_vec(),
     );
     let proof = confidential_v2::build_confidential_transfer_proof_v2(
-        &chain_id,
+        &network_id,
         &asset_definition_id.to_string(),
         spend_key,
         &tree_commitments,
@@ -2545,7 +2517,7 @@ pub fn build_confidential_transfer_proof_v2(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_confidential_unshield_proof_v2(
-    chain_id: String,
+    network_id: Uint8Array,
     asset_definition_id: String,
     spend_key: Uint8Array,
     tree_commitments_hex: Vec<String>,
@@ -2556,9 +2528,7 @@ pub fn build_confidential_unshield_proof_v2(
     vk_circuit_id: String,
     vk_bytes: Uint8Array,
 ) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV2> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -2581,7 +2551,7 @@ pub fn build_confidential_unshield_proof_v2(
         vk_bytes.to_vec(),
     );
     let proof = confidential_v2::build_confidential_unshield_proof_v2(
-        &chain_id,
+        &network_id,
         &asset_definition_id.to_string(),
         spend_key,
         &tree_commitments,
@@ -2607,7 +2577,7 @@ pub fn build_confidential_unshield_proof_v2(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_confidential_unshield_proof_v3(
-    chain_id: String,
+    network_id: Uint8Array,
     asset_definition_id: String,
     spend_key: Uint8Array,
     tree_commitments_hex: Vec<String>,
@@ -2619,9 +2589,7 @@ pub fn build_confidential_unshield_proof_v3(
     vk_circuit_id: String,
     vk_bytes: Uint8Array,
 ) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV3> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -2645,7 +2613,7 @@ pub fn build_confidential_unshield_proof_v3(
         vk_bytes.to_vec(),
     );
     let proof = confidential_v2::build_confidential_unshield_proof_v3(
-        &chain_id,
+        &network_id,
         &asset_definition_id.to_string(),
         spend_key,
         &tree_commitments,
@@ -7775,8 +7743,7 @@ fn validation_fee_policy_from_json_value(
 ) -> napi::Result<ValidationFeePolicyV1> {
     const POLICY_FIELDS: &[&str] = &[
         "schema_version",
-        "chain_id",
-        "genesis_hash",
+        "network_id",
         "policy_version",
         "previous_policy_hash",
         "ds_asset_id",
@@ -12021,17 +11988,23 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
 
 /// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
-/// Genesis-domain payloads are rejected because this host signs runtime transactions only.
+///
+/// The caller must provide the exact expected genesis-derived network identity;
+/// foreign-network and genesis-domain payloads are rejected before signing.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<Buffer> {
+pub fn sign_transaction(
+    network_id: Uint8Array,
+    bytes: Uint8Array,
+    secret: Uint8Array,
+) -> napi::Result<Buffer> {
+    let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let tx = decode_signed_transaction(bytes.as_ref())?;
-    if tx.network_id().is_none() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "JavaScript host cannot re-sign a genesis-domain transaction",
-        ));
-    }
+    require_expected_transaction_network_id(
+        tx.network_id(),
+        &expected_network_id,
+        "JavaScript transaction re-signer",
+    )?;
     let builder = TransactionBuilder::from_payload(tx.payload().clone()).map_err(norito_to_napi)?;
 
     let private_key =
@@ -12243,6 +12216,8 @@ pub struct JsTransactionPayloadDraft {
 /// Input accepted by the external-signature transaction finalizer.
 #[napi(object)]
 pub struct JsExternalTransactionSignature {
+    /// Exact expected genesis-derived network identity.
+    pub network_id: Buffer,
     /// Bare adaptive-Norito payload previously returned by the payload builder.
     pub payload_bytes: Buffer,
     /// Optional lowercase hexadecimal copy of the expected payload hash.
@@ -12526,6 +12501,24 @@ fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
     ))
 }
 
+fn require_expected_transaction_network_id(
+    actual: Option<&NetworkId>,
+    expected: &NetworkId,
+    context: &str,
+) -> napi::Result<()> {
+    match actual {
+        Some(actual) if actual == expected => Ok(()),
+        Some(_) => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} payload NetworkId does not match the expected NetworkId"),
+        )),
+        None => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} cannot accept a genesis-domain transaction"),
+        )),
+    }
+}
+
 fn require_matching_i105_discriminant(
     expected: u16,
     account: &str,
@@ -12684,11 +12677,13 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
 }
 
 /// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
+/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn finalize_signed_transaction(
     input: JsExternalTransactionSignature,
 ) -> napi::Result<JsSignedTransaction> {
+    let expected_network_id = parse_transaction_network_id_bytes(input.network_id.as_ref())?;
     if input.payload_bytes.is_empty()
         || input.payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES
     {
@@ -12704,6 +12699,11 @@ pub fn finalize_signed_transaction(
                 format!("invalid canonical transaction payload: {err}"),
             )
         })?;
+    require_expected_transaction_network_id(
+        builder.payload().network_id(),
+        &expected_network_id,
+        "JavaScript external transaction finalizer",
+    )?;
     let payload_hash = builder.payload_hash_bytes();
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
@@ -12965,20 +12965,28 @@ fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent)
 }
 
 /// Replace only an unsigned payload's fee limits with the quote result and sign it.
+/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_transaction_payload(
+    network_id: Uint8Array,
     payload_json: String,
     quoted_fee_payment_json: String,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid transaction payload JSON: {err}"),
         )
     })?;
+    require_expected_transaction_network_id(
+        payload.network_id(),
+        &expected_network_id,
+        "quoted JavaScript transaction signer",
+    )?;
     let quoted_fee_payment = parse_fee_payment_intent(&quoted_fee_payment_json)?;
     if !same_fee_payer_selection(&payload.fee_payment, &quoted_fee_payment) {
         return Err(napi::Error::new(
@@ -12999,21 +13007,29 @@ pub fn sign_quoted_transaction_payload(
 }
 
 /// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
+/// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_ivm_proved_transaction_payload(
+    network_id: Uint8Array,
     payload_json: String,
     attachment_json: String,
     quoted_fee_payment_json: String,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid transaction payload JSON: {err}"),
         )
     })?;
+    require_expected_transaction_network_id(
+        payload.network_id(),
+        &expected_network_id,
+        "quoted proved-IVM JavaScript transaction signer",
+    )?;
     if !matches!(payload.instructions, Executable::IvmProved(_)) {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -13962,14 +13978,16 @@ mod tests {
     }
 
     #[test]
-    fn confidential_chain_ids_reject_aliasing_whitespace() {
-        assert_eq!(
-            strict_confidential_chain_id("00000000-0000-0000-0000-000000000001"),
-            Ok("00000000-0000-0000-0000-000000000001")
+    fn confidential_network_tags_bind_the_exact_network() {
+        let first = test_network_id(b"same-label-first-genesis");
+        let second = test_network_id(b"same-label-second-genesis");
+        assert_ne!(
+            confidential_v2::derive_confidential_network_tag_v3(&first)
+                .expect("first exact network tag"),
+            confidential_v2::derive_confidential_network_tag_v3(&second)
+                .expect("second exact network tag"),
+            "equal display labels must not collapse distinct genesis identities"
         );
-        for invalid in ["", " ", " chain", "chain ", "\tchain", "chain\n"] {
-            assert!(strict_confidential_chain_id(invalid).is_err());
-        }
     }
 
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
@@ -17518,8 +17536,9 @@ seiyaku Privacy {
         );
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            chain_id: ChainId::from("validation-fee-js-test"),
-            genesis_hash: [0x12; 32],
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x13; 32])),
+            ),
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: validation_fee_asset("cbsi", "sbd"),
@@ -17582,8 +17601,9 @@ seiyaku Privacy {
             "decoded JSON must rebuild the exact native instruction bytes"
         );
 
+        let network_id = test_network_id(b"validation-fee-js-test");
         let draft = build_transaction_payload_from_instructions_json(
-            ChainId::from("validation-fee-js-test"),
+            network_id,
             validation_fee_account(7),
             vec![json_payload],
             authority_fee_payment_json(),
@@ -17595,6 +17615,11 @@ seiyaku Privacy {
         .expect("build validation-fee transaction payload");
         let payload: TransactionPayload =
             json::from_json(&draft.payload_json).expect("decode validation-fee draft payload");
+        assert_eq!(
+            payload.domain,
+            iroha_data_model::transaction::TransactionDomain::Network(network_id),
+            "validation-fee draft must bind the exact requested NetworkId"
+        );
         let Executable::Instructions(batch) = &payload.instructions else {
             panic!("validation-fee draft must contain an instruction batch")
         };
@@ -17656,13 +17681,17 @@ seiyaku Privacy {
             .and_then(|value| value.get_mut("policy"))
             .and_then(json::Value::as_object_mut)
             .expect("validation-fee policy fields");
-        policy.remove("chain_id");
+        policy.remove("network_id");
         policy.insert(
-            "network_id".to_owned(),
+            "chain_id".to_owned(),
             json::Value::String("legacy".to_owned()),
         );
+        policy.insert(
+            "genesis_hash".to_owned(),
+            json::Value::String("13".repeat(32)),
+        );
         let error =
-            value_to_instruction(value).expect_err("legacy network_id alias must be rejected");
+            value_to_instruction(value).expect_err("legacy dual identity fields must be rejected");
         assert!(error.reason.contains("must contain exactly"));
     }
 
@@ -18661,8 +18690,9 @@ seiyaku Privacy {
             &instruction_to_json_value(&instruction).expect("instruction JSON value"),
         )
         .expect("instruction JSON");
+        let network_id = test_network_id(b"quote-flow-network");
         let draft = build_transaction_payload(
-            test_network_id_bytes(b"quote-flow-network"),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             authority_i105,
             vec![instruction_json],
             authority_fee_payment_json(),
@@ -18689,8 +18719,9 @@ seiyaku Privacy {
         let quoted_intent_json = json::to_json(&quoted_intent).expect("quote intent JSON");
         let (_, secret) = keypair.private_key().to_bytes();
         let result = sign_quoted_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json.clone(),
-            quoted_intent_json,
+            quoted_intent_json.clone(),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
         )
@@ -18703,7 +18734,32 @@ seiyaku Privacy {
             .verify_signature()
             .expect("quoted signature verifies");
 
+        let foreign_error = sign_quoted_transaction_payload(
+            test_network_id_bytes(b"foreign-quote-flow-network"),
+            draft.payload_json.clone(),
+            quoted_intent_json,
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quoted signer must reject a foreign NetworkId");
+        assert!(foreign_error.reason.contains("does not match"));
+
+        let genesis_payload = TransactionBuilder::new_genesis(
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        let genesis_error = sign_quoted_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
+            json::to_json(genesis_payload.payload()).expect("genesis payload JSON"),
+            authority_fee_payment_json(),
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quoted signer must reject the genesis domain");
+        assert!(genesis_error.reason.contains("genesis-domain"));
+
         let gas_error = match sign_quoted_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json.clone(),
             authority_fee_payment_json_with_gas(1),
             Uint8Array::from(secret.clone()),
@@ -18724,6 +18780,7 @@ seiyaku Privacy {
             None,
         );
         let error = match sign_quoted_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json,
             json::to_json(&substituted).expect("substituted intent JSON"),
             Uint8Array::from(secret),
@@ -18756,8 +18813,9 @@ seiyaku Privacy {
             .expect("asset definition address");
         let source = AssetId::new(definition, authority.clone()).canonical_literal();
 
+        let network_id = test_network_id(b"browser-native-parity");
         let built = build_transfer_asset_payload(
-            test_network_id_bytes(b"browser-native-parity"),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             authority_i105.clone(),
             source,
             "1.25".to_owned(),
@@ -18788,6 +18846,7 @@ seiyaku Privacy {
             .try_to_bytes()
             .expect("raw Ed25519 public key");
         let finalized = finalize_signed_transaction(JsExternalTransactionSignature {
+            network_id: Buffer::from(network_id.as_bytes().to_vec()),
             payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
             payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
             signature: Buffer::from(signature.payload().to_vec()),
@@ -18837,9 +18896,10 @@ seiyaku Privacy {
         let source = AssetId::new(definition.clone(), authority.clone()).canonical_literal();
         let other_source = AssetId::new(definition, other.clone()).canonical_literal();
 
+        let network_id = test_network_id(b"browser-native-adversarial");
         assert!(
             build_transfer_asset_payload(
-                test_network_id_bytes(b"browser-native-adversarial"),
+                Uint8Array::from(network_id.as_bytes().to_vec()),
                 authority_i105.clone(),
                 source.clone(),
                 "1".to_owned(),
@@ -18861,7 +18921,7 @@ seiyaku Privacy {
         ] {
             assert!(
                 build_transfer_asset_payload(
-                    test_network_id_bytes(b"browser-native-adversarial"),
+                    Uint8Array::from(network_id.as_bytes().to_vec()),
                     authority_i105.clone(),
                     source.clone(),
                     invalid_quantity.clone(),
@@ -18878,7 +18938,7 @@ seiyaku Privacy {
         }
         assert!(
             build_transfer_asset_payload(
-                test_network_id_bytes(b"browser-native-adversarial"),
+                Uint8Array::from(network_id.as_bytes().to_vec()),
                 authority_i105.clone(),
                 other_source,
                 "1".to_owned(),
@@ -18893,7 +18953,7 @@ seiyaku Privacy {
         );
         assert!(
             build_transfer_asset_payload(
-                test_network_id_bytes(b"browser-native-adversarial"),
+                Uint8Array::from(network_id.as_bytes().to_vec()),
                 authority_i105.clone(),
                 source.clone(),
                 "0".to_owned(),
@@ -18908,7 +18968,7 @@ seiyaku Privacy {
         );
 
         let built = build_transfer_asset_payload(
-            test_network_id_bytes(b"browser-native-adversarial"),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             authority_i105.clone(),
             source,
             "1".to_owned(),
@@ -18932,6 +18992,7 @@ seiyaku Privacy {
             .try_to_bytes()
             .expect("other public key bytes");
         let valid_input = || JsExternalTransactionSignature {
+            network_id: Buffer::from(network_id.as_bytes().to_vec()),
             payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
             payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
             signature: Buffer::from(signature.payload().to_vec()),
@@ -18963,6 +19024,35 @@ seiyaku Privacy {
         overlong_payload.payload_bytes = Buffer::from(overlong);
         overlong_payload.payload_hash_hex = None;
         assert!(finalize_signed_transaction(overlong_payload).is_err());
+
+        let mut foreign_network = valid_input();
+        foreign_network.network_id = Buffer::from(
+            test_network_id(b"foreign-browser-network")
+                .as_bytes()
+                .to_vec(),
+        );
+        let error = finalize_signed_transaction(foreign_network)
+            .expect_err("external finalizer must reject a foreign NetworkId");
+        assert!(error.reason.contains("does not match"));
+
+        let genesis_builder = TransactionBuilder::new_genesis(
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        let genesis_payload_hash = genesis_builder.payload_hash_bytes();
+        let genesis_signature =
+            Signature::try_new(authority_key.private_key(), genesis_payload_hash.as_slice())
+                .expect("genesis payload signature");
+        let genesis_error = finalize_signed_transaction(JsExternalTransactionSignature {
+            network_id: Buffer::from(network_id.as_bytes().to_vec()),
+            payload_bytes: Buffer::from(genesis_builder.encode_payload()),
+            payload_hash_hex: Some(hex::encode(genesis_payload_hash)),
+            signature: Buffer::from(genesis_signature.payload().to_vec()),
+            public_key: Buffer::from(public_key_bytes.to_vec()),
+            authority: Some(authority_i105.clone()),
+        })
+        .expect_err("external finalizer must reject the genesis domain");
+        assert!(genesis_error.reason.contains("genesis-domain"));
 
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
@@ -19042,6 +19132,7 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
 
         let resigned = sign_transaction(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&original)),
             Uint8Array::from(secret),
         )
@@ -19056,9 +19147,16 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn sign_transaction_rejects_genesis_domain() {
+    fn sign_transaction_rejects_foreign_and_genesis_domains() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
+        let network_id = test_network_id(b"sign-transaction-network");
+        let foreign = TransactionBuilder::new(
+            test_network_id(b"foreign-sign-transaction-network"),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let transaction = TransactionBuilder::new_genesis(
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
@@ -19066,7 +19164,17 @@ seiyaku Privacy {
         .sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
 
+        let foreign_error = sign_transaction(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
+            Uint8Array::from(Encode::encode(&foreign)),
+            Uint8Array::from(secret.clone()),
+        )
+        .expect_err("JavaScript host must reject a foreign NetworkId");
+        assert_eq!(foreign_error.status, napi::Status::InvalidArg);
+        assert!(foreign_error.reason.contains("does not match"));
+
         let error = sign_transaction(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&transaction)),
             Uint8Array::from(secret),
         )
@@ -19075,7 +19183,7 @@ seiyaku Privacy {
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert_eq!(
             error.reason,
-            "JavaScript host cannot re-sign a genesis-domain transaction"
+            "JavaScript transaction re-signer cannot accept a genesis-domain transaction"
         );
     }
 
@@ -19113,7 +19221,7 @@ seiyaku Privacy {
     fn activate_contract_instance_instruction_json_roundtrip() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &test_network_id(b"activate-contract-instance"),
             &authority,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -19228,16 +19336,17 @@ seiyaku Privacy {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
+        let network_id = test_network_id(b"js-contract-call");
         let expected_code_hash = Hash::new(b"js-decoder-contract-code");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             3,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let transaction = TransactionBuilder::new(
-            test_network_id(b"js-contract-call"),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -19330,8 +19439,9 @@ seiyaku Privacy {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
+        let network_id = test_network_id(b"mixed-batch-network");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             9,
             DataSpaceId::UNIVERSAL,
@@ -19360,7 +19470,7 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
 
         let result = build_executable_batch_transaction(
-            test_network_id_bytes(b"mixed-batch-network"),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
             vec![instruction_entry.clone(), call_entry, instruction_entry],
             authority_fee_payment_json_with_gas(10_000),
@@ -19472,7 +19582,32 @@ seiyaku Privacy {
             )],
             NonZeroU64::new(1_000),
         );
+        let foreign_error = sign_quoted_ivm_proved_transaction_payload(
+            test_network_id_bytes(b"foreign-ivm-proved-network"),
+            draft.payload_json.clone(),
+            attachment_json.clone(),
+            json::to_json(&quoted).expect("quote json"),
+            Uint8Array::from(secret_bytes.clone()),
+            None,
+        )
+        .expect_err("proved-IVM signer must reject a foreign NetworkId");
+        assert!(foreign_error.reason.contains("does not match"));
+
+        let mut genesis_payload = draft_payload.clone();
+        genesis_payload.domain = iroha_data_model::transaction::TransactionDomain::Genesis;
+        let genesis_error = sign_quoted_ivm_proved_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
+            json::to_json(&genesis_payload).expect("genesis proved-IVM payload JSON"),
+            attachment_json.clone(),
+            json::to_json(&quoted).expect("quote json"),
+            Uint8Array::from(secret_bytes.clone()),
+            None,
+        )
+        .expect_err("proved-IVM signer must reject the genesis domain");
+        assert!(genesis_error.reason.contains("genesis-domain"));
+
         let quoted_result = sign_quoted_ivm_proved_transaction_payload(
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json,
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),

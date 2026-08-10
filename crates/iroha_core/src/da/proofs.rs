@@ -539,12 +539,24 @@ mod tests {
 
     fn sample_pin_intent(lane: u32, sequence: u64) -> DaPinIntent {
         let tag = u8::try_from(sequence).expect("test sequence fits u8");
+        let lane_id = LaneId::new(lane);
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xD5; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic DA proof key");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::prehashed([0xD6; 32]),
+        ));
         DaPinIntent::new(
-            LaneId::new(lane),
+            lane_id,
             1,
             sequence,
             StorageTicketId::new([tag; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([tag; 32]),
+            crate::da::signed_test_ingest_authorization(
+                network_id, &key_pair, lane_id, 1, sequence, 1,
+            ),
         )
     }
 

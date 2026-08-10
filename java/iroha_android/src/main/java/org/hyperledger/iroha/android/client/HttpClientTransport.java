@@ -43,6 +43,10 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
+import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
+import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
@@ -438,6 +442,26 @@ public final class HttpClientTransport implements IrohaClient {
     final TransportRequest request =
         buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
+  }
+
+  /** Fetches the authoritative protocol-v4 Sumeragi status snapshot. */
+  @Override
+  public CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
+    return fetchExactJson(
+        buildExactJsonGetRequest(
+            "/v1/sumeragi/status", SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
+        SumeragiStatusModels::parseStatus,
+        "Sumeragi status");
+  }
+
+  /** Fetches operational Sumeragi evidence from its separate diagnostics route. */
+  @Override
+  public CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
+    return fetchExactJson(
+        buildExactJsonGetRequest(
+            "/v1/sumeragi/diagnostics", SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
+        SumeragiDiagnosticsModels::parseDiagnostics,
+        "Sumeragi diagnostics");
   }
 
   /** Fetch the exact result-bearing {@code SignedBlockWire} committed at {@code height}. */
@@ -1067,15 +1091,18 @@ public final class HttpClientTransport implements IrohaClient {
 
   @Override
   public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
-      final AccountOnboardingPlanRequestV1 requestBody, final String onboardingToken) {
-    return planSponsoredAccountOnboarding(requestBody, onboardingToken, null);
+      final AccountOnboardingPlanRequestV1 requestBody,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
+    return planSponsoredAccountOnboarding(requestBody, onboardingToken, null, expectedNetworkId);
   }
 
   @Override
   public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 requestBody,
       final String onboardingToken,
-      final String expectedAuthority) {
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
     final byte[] body =
         JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
     return fetchJson(
@@ -1084,6 +1111,7 @@ public final class HttpClientTransport implements IrohaClient {
             AccountOnboardingReceiptVerifier.requireValidForRequest(
                 requestBody,
                 AccountOnboardingJsonParser.parseReceipt(response),
+                expectedNetworkId,
                 expectedAuthority),
         "sponsored account onboarding plan",
         200);
@@ -1091,16 +1119,19 @@ public final class HttpClientTransport implements IrohaClient {
 
   @Override
   public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
-      final AccountOnboardingPlanReceiptV1 receipt, final String onboardingToken) {
-    return applySponsoredAccountOnboarding(receipt, onboardingToken, null);
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
+    return applySponsoredAccountOnboarding(receipt, onboardingToken, null, expectedNetworkId);
   }
 
   @Override
   public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
       final AccountOnboardingPlanReceiptV1 receipt,
       final String onboardingToken,
-      final String expectedAuthority) {
-    AccountOnboardingReceiptVerifier.requireValid(receipt, expectedAuthority);
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
+    AccountOnboardingReceiptVerifier.requireValid(receipt, expectedNetworkId, expectedAuthority);
     final byte[] body =
         JsonEncoder.encode(new AccountOnboardingApplyRequestV1(receipt).toJsonMap())
             .getBytes(StandardCharsets.UTF_8);
@@ -1890,11 +1921,12 @@ public final class HttpClientTransport implements IrohaClient {
     return value;
   }
 
-  private static Map<String, String> buildCanonicalHeaders(
+  private Map<String, String> buildCanonicalHeaders(
       final String method,
       final URI target,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    final NetworkId networkId = config.requireLocalSigningContext().networkId();
     final Long timestampMs = canonicalAuth.timestampMs();
     final String nonce = canonicalAuth.nonce();
     if ((timestampMs == null) != (nonce == null)) {
@@ -1902,10 +1934,10 @@ public final class HttpClientTransport implements IrohaClient {
     }
     if (timestampMs == null) {
       return CanonicalRequestSigner.buildHeaders(
-          method, target, body, canonicalAuth);
+          networkId, method, target, body, canonicalAuth);
     }
     return CanonicalRequestSigner.buildHeaders(
-        method, target, body, canonicalAuth, timestampMs, nonce);
+        networkId, method, target, body, canonicalAuth, timestampMs, nonce);
   }
 
   private URI resolvePath(final String path) {
@@ -2239,8 +2271,17 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, List<String>> headers,
       final int actualBytes,
       final String errorContext) {
-    final List<String> values = headerValues(headers, "Content-Length");
-    if (values.isEmpty()) {
+    final List<String> values = new ArrayList<>();
+    boolean matchingHeaderPresent = false;
+    for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      if (entry.getKey() != null && entry.getKey().equalsIgnoreCase("Content-Length")) {
+        matchingHeaderPresent = true;
+        if (entry.getValue() != null) {
+          values.addAll(entry.getValue());
+        }
+      }
+    }
+    if (!matchingHeaderPresent) {
       return;
     }
     if (values.size() != 1) {

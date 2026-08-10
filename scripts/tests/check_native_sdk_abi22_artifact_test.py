@@ -79,18 +79,36 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
     },
     "sorafs-orchestrator-sdk.yml": {
         ".github/workflows/sorafs-orchestrator-sdk.yml",
+        ".github/workflows/mobile_sdk_artifacts.yml",
+        ".github/workflows/pr_csharp.yml",
         "IrohaSwift/**",
+        "ci/check_kagemusha_jvm_native_bridge.sh",
         "ci/check_sorafs_python_native_sdk.sh",
         "ci/sdk_sorafs_orchestrator.sh",
+        "crates/iroha_cli/**",
+        "crates/iroha_config/**",
+        "crates/iroha_core/**",
+        "crates/iroha_data_model/**",
+        "crates/iroha_kagami/**",
+        "crates/iroha_torii/**",
+        "crates/irohad/**",
         "crates/iroha_js_host/**",
+        "csharp/**",
+        "gradle/mobile-sdk-external-android-build.settings.gradle.kts",
         "javascript/iroha_js/**",
+        "java/iroha_android/**",
+        "java/norito_java/**",
+        "kotlin/**",
         "python/iroha_python/**",
         "scripts/build_norito_xcframework.sh",
         "scripts/check_mobile_sdk_artifact_pin_commit.py",
         "scripts/check_mobile_sdk_artifacts.sh",
+        "scripts/check_sorafs_release_automation.py",
+        "scripts/deploy_localnet.sh",
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/run_mobile_hermetic_command.py",
+        "scripts/tests/check_sorafs_release_automation_test.py",
         "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh",
     },
 }
@@ -1424,8 +1442,10 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 5" in kotlin_signer
     assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5" in java_signer
     roadmap = read("roadmap.md")
-    assert "`NativeSignerBridge` JNI contract revision 5" in roadmap
-    assert "`NativeSignerBridge` JNI contract revision 1" not in roadmap
+    normalized_roadmap = " ".join(roadmap.split())
+    assert "`NativeSignerBridge` JNI contract revision 5" in normalized_roadmap
+    assert "`NativeSignerBridge` JNI contract revision 1" not in normalized_roadmap
+    assert "`NativeSignerBridge` JNI contract revision 2" not in normalized_roadmap
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in kotlin_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in java_signer
     assert (

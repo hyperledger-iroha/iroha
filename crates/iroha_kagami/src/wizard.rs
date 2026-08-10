@@ -244,7 +244,7 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
         let guide_path = answers.output_dir.join("README.md");
         let next_command = format!(
-            "cd {} && irohad {}--config {} --genesis-manifest-json {}",
+            "cd {} && iroha3d {}--config {} --genesis-manifest-json {}",
             answers.output_dir.display(),
             if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
                 "--sora "
@@ -275,7 +275,7 @@ impl<T: Write> RunArgs<T> for Args {
         writeln!(writer, "genesis: {}", genesis_path.display())?;
         writeln!(writer, "guide: {}", guide_path.display())?;
         if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
-            writeln!(writer, "sora profile: pass --sora when starting irohad")?;
+            writeln!(writer, "sora profile: pass --sora when starting iroha3d")?;
         }
         writeln!(writer, "next: {next_command}")?;
         Ok(())

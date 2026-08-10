@@ -858,6 +858,24 @@ struct NativeParticipantCarrierRepair {
     block: Arc<SignedBlock>,
 }
 
+fn planned_merge_entries_by_carrier(
+    repairs: &[FinalizedMergeCarrierRepair],
+) -> Result<BTreeMap<(u64, HashOf<BlockHeader>), &MergeLedgerEntry>, V2LaneWorkError> {
+    let mut entries = BTreeMap::new();
+    for repair in repairs {
+        let block = repair.block();
+        let carrier_height = block.header().height().get();
+        let carrier_hash = block.hash();
+        let key = (carrier_height, carrier_hash);
+        if entries.insert(key, repair.entry()).is_some() {
+            return Err(V2LaneWorkError::Persistence(format!(
+                "more than one finalized merge repair names carrier {carrier_height} ({carrier_hash})"
+            )));
+        }
+    }
+    Ok(entries)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LaneApplicationEvidenceRepairSummary {
     pub(crate) ordinary_pairs: usize,
@@ -954,6 +972,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
         )
         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
         .into_parts();
+    let planned_merge_entries = planned_merge_entries_by_carrier(&merge_carriers)?;
     for (height, block_hash) in missing_merge_carrier_bodies {
         let need =
             canonical_executed_block_need_for_height(context, state, kura, height, block_hash)?;
@@ -1065,8 +1084,15 @@ pub(crate) fn plan_lane_application_evidence_repair(
                 "Native AMX recovered carrier conflicts with committed State".to_owned(),
             ));
         }
-        kura.preflight_native_amx_participant_application_evidence_repair(&block, &markers)
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let planned_merge_entry = planned_merge_entries
+            .get(&(application_block_height, application_block_hash))
+            .copied();
+        kura.preflight_native_amx_participant_application_evidence_repair(
+            &block,
+            &markers,
+            planned_merge_entry,
+        )
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         native_carriers.push(NativeParticipantCarrierRepair {
             application_block_height,
             application_block_hash,
@@ -1074,6 +1100,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             block,
         });
     }
+    drop(planned_merge_entries);
 
     if !needs.is_empty() {
         return Ok(
@@ -1082,7 +1109,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             ),
         );
     }
-    let chain_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let network_id = context.network_id;
     let mut merge_carrier_repair_authorizations = Vec::new();
     merge_carrier_repair_authorizations
         .try_reserve_exact(merge_carriers.len())
@@ -1115,7 +1142,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             post_carrier_evidence_repair_authorizations(
                 reference,
                 entry,
-                chain_hash,
+                network_id,
                 height,
                 block.hash(),
             )
@@ -1190,6 +1217,7 @@ pub(crate) fn apply_lane_application_evidence_repair(
             ));
         }
     }
+    let planned_merge_entries = planned_merge_entries_by_carrier(&plan.merge_carriers)?;
     for carrier in &plan.native_carriers {
         if carrier.block.header().height().get() != carrier.application_block_height
             || carrier.block.hash() != carrier.application_block_hash
@@ -1203,9 +1231,16 @@ pub(crate) fn apply_lane_application_evidence_repair(
         kura.preflight_native_amx_participant_application_evidence_repair(
             &carrier.block,
             &carrier.markers,
+            planned_merge_entries
+                .get(&(
+                    carrier.application_block_height,
+                    carrier.application_block_hash,
+                ))
+                .copied(),
         )
         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     }
+    drop(planned_merge_entries);
     let (current_merge_carriers, missing_merge_bodies) = kura
         .preflight_finalized_merge_carrier_repairs(
             u64::try_from(plan.state_tip_height).map_err(|error| {

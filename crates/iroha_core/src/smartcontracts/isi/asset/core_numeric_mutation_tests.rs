@@ -2083,6 +2083,11 @@ fn transfer_rejects_configured_offline_escrow_source() {
 #[test]
 fn transfer_rejects_deterministically_derived_offline_escrow_source() {
     let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"offline-escrow-source-test-network"),
+    ));
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -2090,7 +2095,7 @@ fn transfer_rejects_deterministically_derived_offline_escrow_source() {
             "rose".parse().unwrap(),
         );
     let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-        &chain_id,
+        &network_id,
         &asset_def_id,
     );
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -2117,7 +2122,13 @@ fn transfer_rejects_deterministically_derived_offline_escrow_source() {
     );
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, kura, query_store, chain_id);
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query_store,
+        chain_id,
+        network_id,
+    );
     state
         .settlement
         .offline

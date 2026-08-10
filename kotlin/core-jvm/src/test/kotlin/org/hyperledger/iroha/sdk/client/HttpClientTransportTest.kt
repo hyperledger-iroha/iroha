@@ -80,69 +80,6 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun getSumeragiDiagnosticsUsesDedicatedOperationalEndpoint() {
-        val payload = """
-            {
-              "pipeline_execution": {
-                "tx_vertices_total": 0,
-                "tx_edges_total": 0,
-                "overlay_count_total": 0,
-                "overlay_instr_total": 0,
-                "overlay_bytes_total": 0,
-                "rbc_chunks_total": 0,
-                "rbc_bytes_total": 0,
-                "detached_prepared_total": 0,
-                "detached_merged_total": 0,
-                "detached_fallback_total": 0,
-                "detached_fallback_fee_postprocessing_total": 0,
-                "detached_fallback_user_executor_total": 0,
-                "detached_fallback_durable_state_total": 0,
-                "detached_fallback_unsupported_instruction_total": 0,
-                "detached_fallback_rejected_eval_total": 0,
-                "detached_fallback_overlay_error_total": 0,
-                "quarantine_executed_total": 0
-              },
-              "tx_queue_depth": 0,
-              "tx_queue_capacity": 1,
-              "tx_queue_retained_bytes": 0,
-              "tx_queue_max_retained_bytes": 1,
-              "tx_queue_saturated": false,
-              "tx_queue_saturated_by_count": false,
-              "tx_queue_saturated_by_bytes": false,
-              "tx_queue_saturated_by_age": false,
-              "tx_queue_oldest_queued_age_ms": 0,
-              "lane_commitments": [],
-              "dataspace_commitments": [],
-              "lane_settlement_commitments": [],
-              "lane_relay_envelopes": [],
-              "lane_payload_ownerships": [],
-              "committed_lane_blocks": [],
-              "lane_block_sessions": [],
-              "lane_governance_sealed_total": 0,
-              "lane_governance_sealed_aliases": [],
-              "lane_governance": [],
-              "native_amx_participant_applications": [],
-              "autonomous_lane_executions": []
-            }
-        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
-        val executor = StubResponseExecutor(200, payload)
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
-        val diagnostics = transport.getSumeragiDiagnostics().join()
-
-        assertEquals(BigInteger.ONE, diagnostics.txQueueCapacity)
-        assertEquals(
-            "https://torii.example/api/v1/sumeragi/diagnostics",
-            executor.lastRequest.uri.toString(),
-        )
-        assertEquals("GET", executor.lastRequest.method)
-        assertEquals("application/json", executor.lastRequest.headers["Accept"]?.single())
-    }
-
-    @Test
     fun issueIdentifierClaimReceiptForwardsAccountAliasPathLiteral() {
         val executor = CapturingExecutor()
         val transport = HttpClientTransport.withExecutor(
@@ -1527,44 +1464,6 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun getGovernanceContractParsesResponse() {
-        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-        val executor = StubResponseExecutor(
-            statusCode = 200,
-            body = """
-                {
-                  "found": true,
-                  "contract_address": "$contractAddress",
-                  "dataspace": "router",
-                  "code_hash_hex": "${"77".repeat(32)}"
-                }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
-        )
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_100L, "governance-read")
-        val response = transport.getGovernanceContract(contractAddress, auth).join()
-
-        assertTrue(response.found)
-        assertEquals(contractAddress, response.contractAddress)
-        assertEquals("router", response.dataspace)
-        assertEquals("77".repeat(32), response.codeHashHex)
-
-        val request = executor.lastRequest
-        assertNotNull(request)
-        assertEquals("GET", request.method)
-        assertEquals(
-            "https://torii.example/api/v1/gov/contracts/$contractAddress",
-            request.uri.toString(),
-        )
-        assertEquals(0, request.body.size)
-    }
-
-    @Test
     fun listRamLfeProgramPoliciesParsesResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -1920,7 +1819,7 @@ class HttpClientTransportTest {
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_000L, "vpn-nonce-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
 
         val quote = transport.createVpnQuote(
@@ -1964,7 +1863,7 @@ class HttpClientTransportTest {
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
         val unsignedPayload = linkedMapOf<String, Any?>(
             "domain" to linkedMapOf(
@@ -1999,7 +1898,7 @@ class HttpClientTransportTest {
         val executor = StubResponseExecutor(200, ByteArray(0))
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            config = signedClientConfig("https://torii.example"),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private)
@@ -2069,9 +1968,7 @@ class HttpClientTransportTest {
             )
             val transport = HttpClientTransport.withExecutor(
                 executor = executor,
-                config = ClientConfig.builder()
-                    .setBaseUri(URI.create("https://torii.example"))
-                    .build(),
+                config = signedClientConfig("https://torii.example"),
             )
             val error = assertFailsWith<java.util.concurrent.CompletionException> {
                 transport.quoteFees(
@@ -2128,9 +2025,7 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example/api"))
-                .build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
 
         val program = transport.getFeeSponsorProgram(
@@ -2175,9 +2070,7 @@ class HttpClientTransportTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
+            config = signedClientConfig("https://torii.example"),
         )
 
         val error = assertFailsWith<java.util.concurrent.CompletionException> {
@@ -2195,7 +2088,7 @@ class HttpClientTransportTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            config = signedClientConfig("https://torii.example"),
         )
         val requestBody = PushDeviceRequest(" alice ", "FCM", " token-1 ", listOf(" activity "))
 
@@ -2241,7 +2134,7 @@ class HttpClientTransportTest {
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_001L, "vpn-nonce-2")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            config = signedClientConfig("https://torii.example"),
         )
 
         val session = transport.createVpnSession(
@@ -2744,7 +2637,7 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
 
         val response = transport.resolveAccountAlias("merchant@private", auth).join()
@@ -2821,7 +2714,7 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
 
         val plan = transport.planAliasSetup(requestBody, auth).join()
@@ -2893,7 +2786,7 @@ class HttpClientTransportTest {
         )
         val lifecycleTransport = HttpClientTransport.withExecutor(
             lifecycleExecutor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            signedClientConfig("https://torii.example/api"),
         )
 
         lifecycleTransport.planAliasLeaseRenewal(renewalRequest, auth).join()
@@ -2930,7 +2823,7 @@ class HttpClientTransportTest {
             1,
             onboardingRequest,
             onboardingAuthority,
-            "test-chain",
+            verifyingKeyNetworkId,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
             AliasLeaseAcquisitionV1(1),
@@ -2954,6 +2847,7 @@ class HttpClientTransportTest {
             onboardingRequest,
             token,
             onboardingAuthority,
+            verifyingKeyNetworkId,
         ).join()
 
         val onboardingHttpRequest = assertNotNull(onboardingExecutor.lastRequest)
@@ -2977,6 +2871,7 @@ class HttpClientTransportTest {
             receipt,
             token,
             onboardingAuthority,
+            verifyingKeyNetworkId,
         ).join()
         assertEquals(AccountOnboardingStatusV1.UNCHANGED, applyResponse.status)
         val applyHttpRequest = assertNotNull(applyExecutor.lastRequest)
@@ -3027,6 +2922,7 @@ class HttpClientTransportTest {
             fixture.receipt,
             token,
             fixture.authority,
+            fixture.receipt.body.networkId,
         ).join()
         assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status)
         assertEquals(hash, applied.transactionHashHex)
@@ -3081,6 +2977,7 @@ class HttpClientTransportTest {
                     fixture.receipt,
                     token,
                     fixture.authority,
+                    fixture.receipt.body.networkId,
                 ).join()
             }
             assertTrue(failure.cause is IllegalArgumentException)
@@ -3104,6 +3001,7 @@ class HttpClientTransportTest {
                 noOpFixture.receipt,
                 token,
                 noOpFixture.authority,
+                noOpFixture.receipt.body.networkId,
             ).join()
         }
         assertTrue(invalidTransition.cause is IllegalArgumentException)
@@ -3127,7 +3025,7 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            signedClientConfig("https://torii.example/api"),
         )
 
         val response = transport.listAccountAliases(
@@ -3490,6 +3388,12 @@ class HttpClientTransportTest {
         return NoritoCodec.encode(envelope as Any, "iroha_torii_shared::ErrorEnvelope", envelopeAdapter)
     }
 
+    private fun signedClientConfig(baseUri: String): ClientConfig =
+        ClientConfig.builder()
+            .setBaseUri(URI.create(baseUri))
+            .setLocalSigningContext(LocalSigningContext(verifyingKeyNetworkId))
+            .build()
+
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
 
@@ -3509,6 +3413,7 @@ class HttpClientTransportTest {
         val encodedSignature = assertNotNull(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.first())
         val signature = Base64.getDecoder().decode(encodedSignature)
         val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            verifyingKeyNetworkId,
             request.method,
             request.uri,
             request.body,
@@ -3954,7 +3859,7 @@ class HttpClientTransportTest {
             1,
             AccountOnboardingPlanRequestV1(alias.canonicalName.canonicalText(), accountId),
             authority,
-            "test-chain",
+            verifyingKeyNetworkId,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(
                 intent,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import importlib.util
 import json
 import re
@@ -97,6 +96,12 @@ from scripts.tests.sorafs_rollout_gate_contract_inventory import (
     rendered_gate_steps,
     expected_rendered_plan_steps,
     runner_inventory_constant_fields,
+)
+from scripts.tests.sorafs_rollout_gate_source_support import (
+    function_source,
+    governance_service_source,
+    governance_source,
+    read_source as read,
 )
 
 
@@ -948,34 +953,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     *sorted((SCRIPTS_DIR / "examples").glob("*sorafs*.args.example")),
     *sorted((REPO_ROOT / "ci").glob("*sorafs*.sh")),
 )
-
-
-TEST_SOURCE_COMPONENTS = {
-    "check_sorafs_ai_prescreen_rollout_evidence_test.py": (
-        "sorafs_ai_prescreen_live_evidence_cases.py",
-    ),
-    "check_sorafs_production_readiness_test.py": (
-        "sorafs_production_foundational_cases.py",
-    ),
-    "check_sorafs_rollout_gate_contract_test.py": ("sorafs_rollout_gate_contract_inventory.py",),
-    "actual.rs": ("actual/sorafs_pop_credentials.rs",),
-}
-
-
-def read(path: Path) -> str:
-    source = path.read_text(encoding="utf-8")
-    for component_name in TEST_SOURCE_COMPONENTS.get(path.name, ()):
-        source += "\n" + (path.parent / component_name).read_text(encoding="utf-8")
-    return source
-
-
-def function_source(path: Path, function_name: str) -> str:
-    source_text = read(path)
-    module = ast.parse(source_text)
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == function_name:
-            return ast.get_source_segment(source_text, node) or ""
-    return ""
 
 
 def test_rollout_checkers_use_exact_required_value_membership() -> None:
@@ -2115,7 +2092,9 @@ def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
 
 def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     cli = read(IROHA_CLI_SORAFS_RS)
-    peer = read(IROHA_P2P_PEER_RS)
+    peer = read(IROHA_P2P_PEER_RS) + read(
+        IROHA_P2P_PEER_RS.with_name("peer_handshake_config_tests.rs")
+    )
     kiso = read(IROHA_CORE_KISO_RS)
     actual_config = read(IROHA_CONFIG_ACTUAL_RS)
     user_config = read(IROHA_CONFIG_USER_RS)
@@ -7797,7 +7776,7 @@ def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     adoption_test = read(
         SCRIPTS_DIR / "tests" / "sorafs_orchestrator_adoption_wrapper_test.py"
     )
-    xtask_main = read(XTASK_MAIN_RS)
+    xtask_main = read(XTASK_MAIN_RS) + read(XTASK_MAIN_RS.with_name("tests.rs"))
 
     assert "def read_open_flags() -> int" in adoption
     assert "def write_open_flags() -> int" in adoption
@@ -14729,15 +14708,9 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     outbox = read(
         REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_outbox.rs"
     )
-    runtime = read(
-        REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_runtime.rs"
-    )
+    runtime = read(SORAFS_NODE_LIB_RS.with_name("provider_ingest_runtime.rs"))
     daemon = read(
-        REPO_ROOT
-        / "crates"
-        / "irohad"
-        / "src"
-        / "sorafs_provider_ingest_runtime.rs"
+        IROHAD_MAIN_RS.parent / "sorafs_provider_ingest_runtime.rs"
     )
     closure = read(DOCS_SOURCE_DIR / "sorafs" / "v1_closure_ledger.md")
 
@@ -14963,7 +14936,7 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
     missing = [phrase for phrase in required_open if phrase not in normalized]
     assert missing == []
     for stale_claim in (
-        "but it is not yet deployable from the standard `irohad` binary",
+        "but it is not yet deployable from the standard `iroha3d` binary",
         "the standard `irohad` entrypoint does not yet construct and inject",
         "no deployable shared external-runtime or sidecar adapter",
         "no production caller currently supplies",
@@ -17668,7 +17641,7 @@ def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
         bootstrap_start,
     )
     bootstrap_source = daemon_source[bootstrap_start:bootstrap_end]
-    assert ".validate_for_request(chain_id, None, 1, u64::MAX)" in bootstrap_source
+    assert ".validate_for_request(network_id, None, 1, u64::MAX)" in bootstrap_source
     assert (
         'wrap_err("validate exact finalized reputation journal bootstrap view")'
         in bootstrap_source
@@ -20104,7 +20077,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "digests, an explicit `external_ed25519_hsm` provider and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
+        "digests, an explicit `authenticated_external_signer` provider, exact `software` backend, and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -20179,7 +20152,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     )
     assert "test_signed_manifest_rejects_rsa_sha256_signature_algorithm" in checker_test
     assert "test_signed_manifest_rejects_unsupported_signature_algorithm" in checker_test
-    assert "test_signed_manifest_requires_external_hsm_provider" in checker_test
+    assert "test_signed_manifest_rejects_legacy_or_unapproved_provider" in checker_test
     assert "test_supply_chain_requires_all_five_targets" in checker_test
     assert "test_supply_chain_rejects_high_vulnerabilities" in checker_test
     assert "sorafs.reference_sdk.supply_chain_canary.v1" in checker
@@ -21107,7 +21080,7 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
 
 def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS) + read(SORAFS_GOVERNANCE_DAG_SERVICE_RS.parent / "governance_service/tests/restart_and_live_kubo.rs")
+    service = governance_service_source(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
 
     outstanding_start = source.index("Still outstanding:")
     outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
@@ -21151,8 +21124,8 @@ def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
 
 def test_governance_dag_rollout_constants_and_bindings_are_source_bound() -> None:
     checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
-    governance = read(SORAFS_GOVERNANCE_RS)
+    service = governance_service_source(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    governance = governance_source(SORAFS_GOVERNANCE_RS)
     kubo_workflow = read(SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW)
 
     for checker_marker, source_marker in (
@@ -24084,9 +24057,8 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
     instructions = read(
         REPO_ROOT / "crates" / "iroha_data_model" / "src" / "isi" / "sorafs.rs"
     )
-    queries = read(
-        REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query" / "mod.rs"
-    )
+    query_root = REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query"
+    queries = read(query_root / "mod.rs") + read(query_root / "domain_queries.rs")
     core = read(
         REPO_ROOT
         / "crates"
@@ -25129,7 +25101,12 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
             / "protocol_primitives.rs"
         ),
     )
-    daemon = re.sub(r"\s+", "", read(IROHAD_MAIN_RS))
+    daemon = re.sub(
+        r"\s+",
+        "",
+        read(IROHAD_MAIN_RS)
+        + read(IROHAD_MAIN_RS.parent / "main/governance_dag_launcher_tests.rs"),
+    )
 
     slots = (
         ("PrivacyCyclePrfProvider", 2, "privacy_cycle_prf_provider"),
@@ -26210,7 +26187,7 @@ def test_gateway_compliance_control_surface_is_single_canonical_authenticated_fa
         assert handler in torii
         assert handler in control
 
-    assert control.count("verify_canonical_request(") == 1
+    assert control.count("verify_canonical_network_request(") == 1
     assert "sorafs_gateway_compliance_operator" in control
     assert "require_exact_canonical_json" in control
     assert "MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1" in control
@@ -26580,6 +26557,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     plan = re.sub(r"\s+", " ", read(SORAFS_RELEASE_PIPELINE_PLAN))
     roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
     checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    archive_path_components = read(SCRIPTS_DIR / "sorafs_archive_path_components.py")
     runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py")
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example")
@@ -27268,8 +27246,8 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "aggregate_summary_path_label(path, evidence_dirs)" in checker
     assert "path.startswith((\"/\", \"\\\\\"))" in checker
     assert "decoded_text_variants" in checker
-    assert "from html import unescape" in checker
-    assert "unescape(unquote(current))" in checker
+    assert "from html import unescape" in archive_path_components
+    assert "unescape(unquote(current))" in archive_path_components
     assert "encoded, URI-scheme-like" in checker
     assert "or secret-looking segments" in checker
     assert "aggregate row path must be archive-relative without" in checker

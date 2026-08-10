@@ -4,8 +4,8 @@
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `permissions_preimage`
 
-use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::{account::AccountId, domain::DomainId};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{NetworkId, account::AccountId, block::BlockHeader, domain::DomainId};
 use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
 
 fn deterministic_wallet_keypair() -> Result<KeyPair, iroha_crypto::Error> {
@@ -30,6 +30,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let keypair = deterministic_wallet_keypair()?;
     let account_id = AccountId::new(keypair.public_key().clone()).to_string();
+    let constraints = proto::Constraints {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"connect-permissions-example-genesis"),
+        )),
+    };
+    let relay_auth = sdk::relay_auth_hash(&sid, "example-relay-token");
 
     // Request permissions in Open (app → wallet)
     let req_perms = proto::PermissionsV1 {
@@ -62,9 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             url: Some("https://example.org".into()),
             icon_hash: None,
         }),
-        constraints: proto::Constraints {
-            chain_id: "testnet".into(),
-        },
+        constraints: constraints.clone(),
         permissions: Some(req_perms.clone()),
     };
 
@@ -84,12 +88,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let perms_hash = sdk::hash_permissions_current(&acc_perms);
     let proof_hash = sdk::hash_signin_proof_current(&proof);
     let preimage = sdk::build_approve_preimage(
+        &constraints,
         &sid,
         &app_pk,
         &wallet_pk,
         &account_id,
         Some(&acc_perms),
         Some(&proof),
+        &relay_auth,
     );
 
     println!(

@@ -181,7 +181,7 @@ unauthorized caller.
 
 ## 9. Release checklist
 
-- [ ] `irohad --check-config` exits cleanly with aggregated diagnostics.
+- [ ] `iroha3d --check-config` exits cleanly with aggregated diagnostics.
 - [ ] Onboarding signer/authority agree; credential IDs and scopes are unique;
       signer/token files are protected and no secret appears inline.
 - [ ] The signed plan is unexpired, blocker-free, and anchored to the intended

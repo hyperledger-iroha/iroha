@@ -22,11 +22,12 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use hex::encode;
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::{AccountAddress, AccountId},
     asset::{AssetBalanceScope, AssetDefinitionId, AssetId},
+    block::BlockHeader,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
@@ -65,7 +66,7 @@ const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/offline/cbsi_interop_contract.json"
 );
-const CHAIN_ID: &str = "taira-cbsi-offline-fixture";
+const NETWORK_ID_SEED: &[u8] = b"taira-cbsi-offline-fixture-genesis";
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 const CBSI_SBD_ASSET_ALIAS: &str = "sbd#cbsi";
 const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
@@ -149,26 +150,28 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let recipient_asset = AssetId::new(asset_definition.clone(), recipient.clone());
     let sender_asset_literal = taira_asset_literal(&sender_asset)?;
     let recipient_asset_literal = taira_asset_literal(&recipient_asset)?;
-    let chain_id: ChainId = CHAIN_ID.parse()?;
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(NETWORK_ID_SEED),
+    ));
 
     let sender_device_key = fixed_p256_signing_key(0x31)?;
     let recipient_device_key = fixed_p256_signing_key(0x32)?;
     let source_note = KagemushaSpendableNoteDescriptorV2 {
-        chain_id: chain_id.clone(),
+        network_id,
         asset: asset_definition.clone(),
         note_commitment: [0x41; 32],
         spend_nullifier: [0x42; 32],
         amount: KagemushaScaledAmountV2::new(ISSUE_ATOMIC_UNITS, ASSET_SCALE)?,
     };
     let recipient_note = KagemushaSpendableNoteDescriptorV2 {
-        chain_id: chain_id.clone(),
+        network_id,
         asset: asset_definition.clone(),
         note_commitment: [0x52; 32],
         spend_nullifier: [0x53; 32],
         amount: KagemushaScaledAmountV2::new(AMOUNT_ATOMIC_UNITS, ASSET_SCALE)?,
     };
     let change_note = KagemushaSpendableNoteDescriptorV2 {
-        chain_id: chain_id.clone(),
+        network_id,
         asset: asset_definition.clone(),
         note_commitment: [0x62; 32],
         spend_nullifier: [0x63; 32],
@@ -176,7 +179,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     };
     let source_request = signed_payment_request(
         &sender_device_key,
-        chain_id.clone(),
+        network_id,
         asset_definition.clone(),
         sender.clone(),
         SENDER_DEVICE_ID,
@@ -188,7 +191,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     )?;
     let recipient_request = signed_payment_request(
         &recipient_device_key,
-        chain_id,
+        network_id,
         asset_definition.clone(),
         recipient.clone(),
         RECIPIENT_DEVICE_ID,
@@ -518,7 +521,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
                 (
                     "derivation",
                     object(vec![
-                        ("chain_id", Value::from(CHAIN_ID)),
+                        ("network_id", Value::from(network_id.to_string())),
                         ("change_note_secret_hex", Value::from(encode([0x64; 32]))),
                         (
                             "change_output_commitment",
@@ -685,7 +688,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
 #[allow(clippy::too_many_arguments)]
 fn signed_payment_request(
     key: &P256SigningKey,
-    chain_id: ChainId,
+    network_id: NetworkId,
     asset: AssetDefinitionId,
     recipient: AccountId,
     receiver_device_id: &str,
@@ -697,7 +700,7 @@ fn signed_payment_request(
 ) -> Result<KagemushaRecipientPaymentRequestV2, Box<dyn Error>> {
     let receiver_public_key = device_public_key(key)?;
     let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
-        chain_id,
+        network_id,
         asset,
         amount: recipient_output.amount,
         recipient,
@@ -735,7 +738,7 @@ fn payment_bundle(
     );
     let operation_id = [0x58; 32];
     let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: request.chain_id().clone(),
+        network_id: *request.network_id(),
         asset: request.asset().clone(),
         asset_scale: request.amount().scale,
         final_root: [0x59; 32],

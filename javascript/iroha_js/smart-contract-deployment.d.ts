@@ -10,7 +10,8 @@ import type { NetworkId } from "./index.js";
 export const SMART_CONTRACT_CODE_CHUNK_BYTES: 65536;
 
 export interface ContractAddressDerivationInput {
-  chainId: string;
+  networkId: NetworkId;
+  chainId?: never;
   chainDiscriminant: BrowserTransactionUnsigned;
   authority: string;
   deployNonce: BrowserTransactionUnsigned;
@@ -128,8 +129,7 @@ export interface BrowserContractDeploymentOptions
   networkId: NetworkId;
   chain?: never;
   chain_id?: never;
-  /** Canonical ChainId committed only into contract-address derivation. */
-  chainId: string;
+  chainId?: never;
   chainDiscriminant: BrowserTransactionUnsigned;
   authority: string;
   contractAlias: string;
@@ -168,7 +168,7 @@ export interface BrowserContractDeploymentOptions
     input: BrowserManifestSignerInput,
   ) => BrowserDeploymentSignature | Promise<BrowserDeploymentSignature>;
   readNodeCapabilities: (input: {
-    readonly chainId: string;
+    readonly networkId: NetworkId;
     readonly chainDiscriminant: string;
   }) =>
     | BrowserDeploymentNodeCapabilities

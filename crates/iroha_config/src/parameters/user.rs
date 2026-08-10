@@ -1784,7 +1784,7 @@ pub struct SorafsPinPolicyConstraints {
     /// Canonically signer-id-ordered trusted Ed25519 approval roster.
     #[config(default = "Vec::new()")]
     pub approval_signers: Vec<SorafsPinApprovalSigner>,
-    /// Maximum number of live pin manifests in consensus state.
+    /// Maximum number of retained pin-manifest records in consensus state.
     #[config(
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_MANIFESTS"
     )]
@@ -1794,7 +1794,7 @@ pub struct SorafsPinPolicyConstraints {
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_BYTES"
     )]
     pub max_global_bytes: u64,
-    /// Maximum number of live pin manifests owned by one account.
+    /// Maximum number of retained pin-manifest records submitted by one account.
     #[config(
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_MANIFESTS_PER_AUTHORITY"
     )]
@@ -1809,7 +1809,7 @@ pub struct SorafsPinPolicyConstraints {
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_LINEAGE_DEPTH"
     )]
     pub max_lineage_depth: u32,
-    /// Maximum number of direct successors admitted for one manifest.
+    /// Maximum number of retained direct successors admitted for one manifest.
     #[config(
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT"
     )]
@@ -10757,6 +10757,15 @@ pub struct Da {
     /// Number of shards each attester must verify per slot.
     #[config(default = "defaults::nexus::da::PER_ATTESTER_SHARDS")]
     pub per_attester_shards: u16,
+    /// Number of consecutive block heights in one deterministic ingest quota window.
+    #[config(default = "defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS")]
+    pub ingest_quota_window_blocks: u64,
+    /// Maximum accepted DA ingests per account in one quota window.
+    #[config(default = "defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT")]
+    pub ingest_quota_max_count_per_account: u64,
+    /// Maximum canonical DA payload bytes per account in one quota window.
+    #[config(default = "defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT")]
+    pub ingest_quota_max_bytes_per_account: u64,
     /// Rolling audit configuration.
     #[config(nested)]
     pub audit: DaAudit,
@@ -10777,6 +10786,11 @@ impl Default for Da {
             sample_size_max: defaults::nexus::da::SAMPLE_SIZE_MAX,
             threshold_base: defaults::nexus::da::THRESHOLD_BASE,
             per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
+            ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
+            ingest_quota_max_count_per_account:
+                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+            ingest_quota_max_bytes_per_account:
+                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
             audit: DaAudit::default(),
             recovery: DaRecovery::default(),
             rotation: DaRotation::default(),
@@ -11166,6 +11180,33 @@ impl Da {
             );
             None
         });
+        let ingest_quota_window_blocks =
+            NonZeroU64::new(self.ingest_quota_window_blocks).or_else(|| {
+                invalid = true;
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach("nexus.da.ingest_quota_window_blocks must be > 0"),
+                );
+                None
+            });
+        let ingest_quota_max_count_per_account =
+            NonZeroU64::new(self.ingest_quota_max_count_per_account).or_else(|| {
+                invalid = true;
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach("nexus.da.ingest_quota_max_count_per_account must be > 0"),
+                );
+                None
+            });
+        let ingest_quota_max_bytes_per_account =
+            NonZeroU64::new(self.ingest_quota_max_bytes_per_account).or_else(|| {
+                invalid = true;
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach("nexus.da.ingest_quota_max_bytes_per_account must be > 0"),
+                );
+                None
+            });
 
         if let (Some(base), Some(max)) = (&sample_size_base, &sample_size_max)
             && base > max
@@ -11218,6 +11259,9 @@ impl Da {
             || sample_size_max.is_none()
             || threshold_base.is_none()
             || per_attester_shards.is_none()
+            || ingest_quota_window_blocks.is_none()
+            || ingest_quota_max_count_per_account.is_none()
+            || ingest_quota_max_bytes_per_account.is_none()
             || audit.is_none()
             || recovery.is_none()
             || rotation.is_none()
@@ -11232,6 +11276,11 @@ impl Da {
             sample_size_max: sample_size_max.expect("validated"),
             threshold_base: threshold_base.expect("validated"),
             per_attester_shards: per_attester_shards.expect("validated"),
+            ingest_quota_window_blocks: ingest_quota_window_blocks.expect("validated"),
+            ingest_quota_max_count_per_account: ingest_quota_max_count_per_account
+                .expect("validated"),
+            ingest_quota_max_bytes_per_account: ingest_quota_max_bytes_per_account
+                .expect("validated"),
             audit: audit.expect("validated"),
             recovery: recovery.expect("validated"),
             rotation: rotation.expect("validated"),
@@ -16324,12 +16373,6 @@ pub struct ToriiMcp {
     pub rate_per_minute: Option<u32>,
     /// Optional MCP burst budget.
     pub burst: Option<u32>,
-    /// Retention window in seconds for asynchronous MCP jobs.
-    #[config(default = "defaults::torii::mcp::ASYNC_JOB_TTL_SECS")]
-    pub async_job_ttl_secs: u64,
-    /// Maximum asynchronous MCP jobs retained in memory.
-    #[config(default = "defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES")]
-    pub async_job_max_entries: usize,
 }
 
 /// CORS response-header policy for Torii.
@@ -16728,8 +16771,6 @@ impl Default for ToriiMcp {
             deny_tool_prefixes: defaults::torii::mcp::deny_tool_prefixes(),
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE,
             burst: defaults::torii::mcp::BURST,
-            async_job_ttl_secs: defaults::torii::mcp::ASYNC_JOB_TTL_SECS,
-            async_job_max_entries: defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES,
         }
     }
 }

@@ -49,6 +49,7 @@ import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { buildBrowserVerifyingKeyTransactionPayload } from "../src/transactionCodec.js";
+import { generateConnectSid } from "../src/connectSession.js";
 import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
@@ -66,7 +67,7 @@ const SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL = Symbol.for(
 );
 const sumeragiDiagnosticsFocus =
   globalThis[SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL] ?? null;
-const ToriiClient =
+const SelectedToriiClient =
   sumeragiDiagnosticsFocus?.ToriiClient ?? SourceToriiClient;
 const FocusValidationError =
   sumeragiDiagnosticsFocus?.ValidationError ?? ValidationError;
@@ -99,6 +100,14 @@ const VK_SIGNING_NETWORK_ID = NetworkId.parse(
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
   VK_SIGNING_NETWORK_ID,
 );
+class ToriiClient extends SelectedToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, {
+      localSigningContext: VK_LOCAL_SIGNING_CONTEXT,
+      ...options,
+    });
+  }
+}
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
   Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
 const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
@@ -110,7 +119,44 @@ const SEED_11_ED25519_PUBLIC_KEY_HEX =
 const CANONICAL_ALIAS_MANIFEST_CID_HEX = `01711f20${"aa".repeat(32)}`;
 const SAMPLE_ACCOUNT_DOMAIN = "wonderland";
 const SORA_I105_DISCRIMINANT = 0x2f1;
-const SAMPLE_CONNECT_SID_BASE64 = bufferToBase64Url(Buffer.alloc(32, 0xcd));
+const SAMPLE_ACCOUNT_OWNER = AccountAddress.fromAccount({
+  publicKey: Buffer.from(SAMPLE_ACCOUNT_SIGNATORY.slice(6), "hex"),
+}).toI105(SORA_I105_DISCRIMINANT);
+const SEED_11_OWNER = AccountAddress.fromAccount({
+  publicKey: Buffer.from(SEED_11_ED25519_PUBLIC_KEY_HEX, "hex"),
+}).toI105(SORA_I105_DISCRIMINANT);
+const SAMPLE_CONNECT_APP_PUBLIC_KEY = Buffer.alloc(32, 0x22);
+const SAMPLE_CONNECT_NONCE = Buffer.alloc(16, 0x33);
+const SAMPLE_CONNECT_SID_BASE64 = generateConnectSid({
+  networkId: VK_SIGNING_NETWORK_ID,
+  appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
+  nonce: SAMPLE_CONNECT_NONCE,
+}).sidBase64Url;
+function sampleConnectSessionInput(overrides = {}) {
+  return {
+    sid: SAMPLE_CONNECT_SID_BASE64,
+    networkId: VK_SIGNING_NETWORK_ID,
+    appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
+    nonce: SAMPLE_CONNECT_NONCE,
+    ...overrides,
+  };
+}
+
+function sampleConnectSessionResponse(overrides = {}) {
+  return {
+    sid: SAMPLE_CONNECT_SID_BASE64,
+    network_id: VK_SIGNING_NETWORK_ID.toString(),
+    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
+    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
+    wallet_uri: "iroha://connect",
+    app_uri: "iroha://connect/app",
+    token_app: "token-app",
+    token_wallet: "token-wallet",
+    token_management: "token-management",
+    token_relay: "token-relay",
+    ...overrides,
+  };
+}
 const toriiFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/torii_responses.json", import.meta.url), "utf8"),
 );
@@ -1079,7 +1125,7 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
       view: 2,
     },
     epoch: 1,
-    chain_id_hash: fakeSumeragiHash(0x63),
+    network_id: fakeSumeragiHash(0x63),
     source_id: sourceId,
     tx_entrypoint_hash: transactionHash,
     plan_digest: fakeSumeragiHash(0x64),
@@ -1120,7 +1166,7 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
   return sealNativeAmxReceiptFixture({
     version: 2,
     source_id: sourceId,
-    chain_id_hash: fakeSumeragiHash(0x63),
+    network_id: fakeSumeragiHash(0x63),
     plan_digest: fakeSumeragiHash(0x64),
     lane_id: 2,
     dataspace_id: 7,
@@ -1728,7 +1774,7 @@ test("uploadAttachment posts bytes with metadata", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = Buffer.from("hello");
-  const meta = await client.uploadAttachment(payload, { content_type: "text/plain" });
+  const meta = await client.uploadAttachment(payload, canonicalReadOptions({ content_type: "text/plain" }));
   assert.deepEqual(meta, {
     id: "abc",
     contentType: "text/plain",
@@ -1753,7 +1799,7 @@ test("uploadAttachment rejects malformed metadata responses", async () => {
       }),
   });
   await assert.rejects(
-    () => client.uploadAttachment(Buffer.alloc(0), { contentType: "text/plain" }),
+    () => client.uploadAttachment(Buffer.alloc(0), canonicalReadOptions({ contentType: "text/plain" })),
     /upload attachment response/,
   );
 });
@@ -1873,7 +1919,7 @@ test("listAttachments returns attachment metadata", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAttachments();
+  const result = await client.listAttachments(canonicalReadOptions());
   assert.deepEqual(result, [
     {
       id: "a",
@@ -1903,7 +1949,7 @@ test("listAttachments forwards AbortSignal", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAttachments({ signal: controller.signal });
+  const result = await client.listAttachments(canonicalReadOptions({ signal: controller.signal }));
   assert.deepEqual(result, []);
 });
 
@@ -2009,7 +2055,7 @@ test("getAttachment returns bytes and content type", async () => {
       headers: { "content-type": "application/octet-stream" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getAttachment("att-1");
+  const result = await client.getAttachment("att-1", canonicalReadOptions());
   assert.ok(Buffer.isBuffer(result.data));
   assert.deepEqual([...result.data.values()], [1, 2, 3]);
   assert.equal(result.contentType, "application/octet-stream");
@@ -2026,7 +2072,7 @@ test("getAttachment forwards AbortSignal", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getAttachment("att-42", { signal: controller.signal });
+  const result = await client.getAttachment("att-42", canonicalReadOptions({ signal: controller.signal }));
   assert.ok(Buffer.isBuffer(result.data));
   assert.equal(result.contentType, "application/octet-stream");
 });
@@ -2050,14 +2096,14 @@ test("deleteAttachment issues delete request", async () => {
     return createResponse({ status: 202 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.deleteAttachment("att-2");
+  await client.deleteAttachment("att-2", canonicalReadOptions());
   assert.ok(called);
 });
 
 test("deleteAttachment tolerates not found responses", async () => {
   const fetchImpl = async () => createResponse({ status: 404 });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.deleteAttachment("missing");
+  await client.deleteAttachment("missing", canonicalReadOptions());
   await assert.rejects(() => client.deleteAttachment(""), /attachmentId/);
 });
 
@@ -3490,6 +3536,7 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
   assert.equal(calls[4]?.init?.redirect, "error");
   const eventHeaders = calls[4]?.init?.headers;
   const eventMessage = canonicalRequestSignatureMessage({
+    networkId: VK_SIGNING_NETWORK_ID,
     method: "GET",
     path: eventsUrl.pathname,
     query: eventsUrl.search.slice(1),
@@ -6206,12 +6253,14 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
   await assert.rejects(
     () =>
       client.submitDaBlob({
+        networkId: VK_SIGNING_NETWORK_ID,
+        owner: SAMPLE_ACCOUNT_OWNER,
         payload: Buffer.from("car-bytes"),
         codec: "nexus_lane_sidecar",
         laneId: 11,
         epoch: 22,
         sequence: 33,
-        submitterPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+        signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
         signatureHex: "aa".repeat(64),
         clientBlobId: Buffer.alloc(32, 0x11),
       }),
@@ -6248,12 +6297,14 @@ test("submitDaBlob rejects coercible non-byte digest entries in responses", asyn
     await assert.rejects(
       () =>
         client.submitDaBlob({
+          networkId: VK_SIGNING_NETWORK_ID,
+          owner: SAMPLE_ACCOUNT_OWNER,
           payload: Buffer.from("car-bytes"),
           codec: "nexus_lane_sidecar",
           laneId: 11,
           epoch: 22,
           sequence: 33,
-          submitterPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+          signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
           signatureHex: "aa".repeat(64),
           clientBlobId: Buffer.alloc(32, 0x11),
         }),
@@ -6298,6 +6349,8 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.submitDaBlob({
+    networkId: VK_SIGNING_NETWORK_ID,
+    owner: SEED_11_OWNER,
     payload: Buffer.from("car-bytes"),
     codec: "nexus_lane_sidecar",
     laneId: 11,
@@ -6375,6 +6428,8 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
   const dir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-submit-"));
   try {
     const result = await client.submitDaBlob({
+      networkId: VK_SIGNING_NETWORK_ID,
+      owner: SEED_11_OWNER,
       payload: Buffer.from("car-bytes"),
       codec: "nexus_lane_sidecar",
       laneId: 11,
@@ -6412,6 +6467,8 @@ nativeTest("submitDaBlob requires signing inputs", async () => {
   await assert.rejects(
     () =>
       client.submitDaBlob({
+        networkId: VK_SIGNING_NETWORK_ID,
+        owner: SEED_11_OWNER,
         payload: Buffer.from("demo"),
         codec: "application/octet-stream",
       }),
@@ -6910,240 +6967,6 @@ test("SoraFS storage helpers reject unsupported option fields", async () => {
   }
 });
 
-test("governance helpers validate options", async () => {
-  const client = new ToriiClient(BASE_URL);
-  const finalizePayload = {
-    referendumId: "ab".repeat(32),
-    proposalId: "ab".repeat(32),
-  };
-  const enactPayload = { proposalId: "cd".repeat(32) };
-
-  await assert.rejects(
-    () => client.getGovernanceCouncilCurrent("invalid"),
-    /getGovernanceCouncilCurrent options must be an object/,
-  );
-  await assert.rejects(
-    () => client.governanceFinalizeReferendum(finalizePayload, { signal: "nope" }),
-    /governanceFinalizeReferendum options.signal must be an AbortSignal/,
-  );
-  await assert.rejects(
-    () => client.governanceFinalizeReferendum(finalizePayload, { extra: true }),
-    /governanceFinalizeReferendum options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () => client.governanceEnactProposal(enactPayload, { signal: "nope" }),
-    /governanceEnactProposal options.signal must be an AbortSignal/,
-  );
-  await assert.rejects(
-    () => client.governanceEnactProposal(enactPayload, { extra: true }),
-    /governanceEnactProposal options contains unsupported fields: extra/,
-  );
-  const optionTypeCases = [
-    [
-      "getGovernanceProposal",
-      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, "invalid"),
-      /getGovernanceProposal options must be an object/,
-    ],
-    [
-      "getGovernanceReferendum",
-      () => client.getGovernanceReferendum("ref-1", "invalid"),
-      /getGovernanceReferendum options must be an object/,
-    ],
-    [
-      "getGovernanceTally",
-      () => client.getGovernanceTally("ref-1", "invalid"),
-      /getGovernanceTally options must be an object/,
-    ],
-  ];
-  for (const [_label, invoke, error] of optionTypeCases) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(invoke, error);
-  }
-  const invalidSignalCases = [
-    [
-      "getGovernanceProposal",
-      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, { signal: "nope" }),
-      /getGovernanceProposal options.signal must be an AbortSignal/,
-    ],
-    [
-      "getGovernanceReferendum",
-      () => client.getGovernanceReferendum("ref-1", { signal: "nope" }),
-      /getGovernanceReferendum options.signal must be an AbortSignal/,
-    ],
-    [
-      "getGovernanceTally",
-      () => client.getGovernanceTally("ref-1", { signal: "nope" }),
-      /getGovernanceTally options.signal must be an AbortSignal/,
-    ],
-  ];
-  for (const [_label, invoke, error] of invalidSignalCases) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(invoke, error);
-  }
-  const extraFieldCases = [
-    [
-      "getGovernanceProposal",
-      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, { extra: true }),
-      /getGovernanceProposal options contains unsupported fields: extra/,
-    ],
-    [
-      "getGovernanceReferendum",
-      () => client.getGovernanceReferendum("ref-1", { extra: true }),
-      /getGovernanceReferendum options contains unsupported fields: extra/,
-    ],
-    [
-      "getGovernanceTally",
-      () => client.getGovernanceTally("ref-1", { extra: true }),
-      /getGovernanceTally options contains unsupported fields: extra/,
-    ],
-  ];
-  for (const [_label, invoke, error] of extraFieldCases) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(invoke, error);
-  }
-});
-
-test("governance id validation surfaces structured errors", async () => {
-  const client = new ToriiClient(BASE_URL);
-  const cases = [
-    [
-      "getGovernanceProposal",
-      () => client.getGovernanceProposal("  "),
-      "proposalId",
-    ],
-    [
-      "getGovernanceReferendum",
-      // @ts-expect-error intentionally invalid type for validation path
-      () => client.getGovernanceReferendum(null),
-      "referendumId",
-    ],
-    [
-      "getGovernanceTally",
-      () => client.getGovernanceTally(undefined),
-      "referendumId",
-    ],
-  ];
-  for (const [label, invoke, path] of cases) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(invoke, (error) => {
-      assert.ok(error instanceof ValidationError, `${label} should surface ValidationError`);
-      assert.equal(error.code, ValidationErrorCode.INVALID_STRING);
-      assert.equal(error.path, path);
-      return true;
-    });
-  }
-});
-
-test("governance GET identifiers use canonical unreserved path segments", async () => {
-  const capturedUrls = [];
-  const fetchImpl = async (url) => {
-    capturedUrls.push(url);
-    return createResponse({ status: 404 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  assert.equal(await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID), null);
-  assert.equal(await client.getGovernanceReferendum("ref.one~1"), null);
-  assert.equal(await client.getGovernanceTally("ref_two-2"), null);
-  assert.equal(await client.getGovernanceLocks("Ref3"), null);
-  assert.deepEqual(capturedUrls, [
-    `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`,
-    `${BASE_URL}/v1/gov/referenda/ref.one~1`,
-    `${BASE_URL}/v1/gov/tally/ref_two-2`,
-    `${BASE_URL}/v1/gov/locks/Ref3`,
-  ]);
-});
-
-test("governance GET identifiers reject aliases before transport", async () => {
-  let dispatched = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      dispatched = true;
-      throw new Error("invalid governance identifier reached transport");
-    },
-  });
-  const invalidCalls = [
-    () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID.toUpperCase()),
-    () => client.getGovernanceProposal(`0x${GOVERNANCE_PROPOSAL_ID}`),
-    () => client.getGovernanceProposal(` ${GOVERNANCE_PROPOSAL_ID}`),
-    () => client.getGovernanceProposal("proposal/segment"),
-    () => client.getGovernanceReferendum(" ref-1"),
-    () => client.getGovernanceReferendum("ref 1"),
-    () => client.getGovernanceReferendum("ref/1"),
-    () => client.getGovernanceReferendum(".hidden"),
-    () => client.getGovernanceReferendum("ref%31"),
-    () => client.getGovernanceReferendum("投票"),
-    () => client.getGovernanceTally("ref\t1"),
-    () => client.getGovernanceTally("a".repeat(129)),
-    () => client.getGovernanceLocks("ref\u00001"),
-  ];
-
-  for (const invoke of invalidCalls) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(invoke, ValidationError);
-  }
-  assert.equal(dispatched, false);
-});
-
-test("governance draft identifiers reject noncanonical selector aliases", async () => {
-  let dispatched = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      dispatched = true;
-      throw new Error("invalid governance selector reached transport");
-    },
-  });
-  const invalidSelectors = [
-    "ref/1",
-    ".hidden",
-    "ref%31",
-    "投票",
-    "a".repeat(129),
-  ];
-  for (const selector of invalidSelectors) {
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: selector,
-          proposalId: "ab".repeat(32),
-        }),
-      /exact lowercase 32-byte hex string/u,
-    );
-    const calls = [
-      () =>
-        client.governanceSubmitPlainBallot({
-          authority: FIXTURE_ALICE_ID,
-          chainId: "chain-1",
-          referendumId: selector,
-          owner: FIXTURE_ALICE_ID,
-          amount: "1",
-          durationBlocks: 1,
-          direction: "Aye",
-        }),
-      () =>
-        client.governanceSubmitZkBallotV1({
-          authority: FIXTURE_ALICE_ID,
-          chainId: "chain-1",
-          electionId: selector,
-          backend: "halo2/ipa",
-          envelope: [1],
-        }),
-      () =>
-        client.governanceSubmitZkBallotProofV1({
-          authority: FIXTURE_ALICE_ID,
-          chainId: "chain-1",
-          electionId: selector,
-          ballot: { backend: "halo2/ipa", envelopeBytes: "AQ==" },
-        }),
-    ];
-    for (const invoke of calls) {
-      // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(invoke, /RFC 3986/u);
-    }
-  }
-  assert.equal(dispatched, false);
-});
 
 test("DA and UAID helpers reject non-object options", async () => {
   const client = new ToriiClient(BASE_URL);
@@ -14078,7 +13901,11 @@ registerToriiClientGovernanceTests({
   FIXTURE_ALICE_ID,
   FIXTURE_BOB_ID,
   FIXTURE_CAROL_ID,
+  GOVERNANCE_NETWORK_ID: VK_SIGNING_NETWORK_ID,
+  GOVERNANCE_LOCAL_SIGNING_CONTEXT: VK_LOCAL_SIGNING_CONTEXT,
   GOVERNANCE_PROPOSAL_ID,
+  LocalSigningContext,
+  NetworkId,
   SAMPLE_ACCOUNT_FORMS,
   SEED_11_ED25519_PUBLIC_KEY_HEX,
   ToriiClient,
@@ -17672,7 +17499,7 @@ test("ToriiClient applies default headers and tokens", async () => {
         authToken: "local-auth",
         allowInsecure: true,
       });
-      await client.listAttachments();
+      await client.listAttachments(canonicalReadOptions());
       assert.equal(captures.length, 1);
       const headers = captures[0].init.headers;
       assert.equal(headers["User-Agent"], "iroha-js");
@@ -17763,7 +17590,7 @@ test("ToriiClient enforces request timeout", async () => {
     maxRetries: 0,
   });
   await assert.rejects(
-    () => client.listAttachments(),
+    () => client.listAttachments(canonicalReadOptions()),
     /AbortError|aborted/i,
   );
 });
@@ -19073,23 +18900,14 @@ test("createConnectSession validates sid and posts JSON", async () => {
     captured = { url, init };
     return createResponse({
       status: 200,
-      jsonData: {
-        sid: SAMPLE_CONNECT_SID_BASE64,
-        wallet_uri: "iroha://connect",
-        app_uri: "iroha://connect/app",
-        token_app: "token-app",
-        token_wallet: "token-wallet",
-        token_management: "token-management",
-        token_relay: "token-relay",
-      },
+      jsonData: sampleConnectSessionResponse(),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const resp = await client.createConnectSession({
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    node: "torii",
-  });
+  const resp = await client.createConnectSession(
+    sampleConnectSessionInput({ node: "torii" }),
+  );
   assert.equal(resp.sid, SAMPLE_CONNECT_SID_BASE64);
   assert.equal(resp.wallet_uri, "iroha://connect");
   assert.equal(resp.app_uri, "iroha://connect/app");
@@ -19102,6 +18920,9 @@ test("createConnectSession validates sid and posts JSON", async () => {
   assert.equal(captured.init.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(captured.init.body), {
     sid: SAMPLE_CONNECT_SID_BASE64,
+    network_id: VK_SIGNING_NETWORK_ID.toString(),
+    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
+    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
     node: "torii",
   });
 });
@@ -19111,17 +18932,12 @@ test("createConnectSession rejects malformed responses", async () => {
     fetchImpl: async () =>
       createResponse({
         status: 200,
-        jsonData: {
-          sid: SAMPLE_CONNECT_SID_BASE64,
-          wallet_uri: "iroha://connect",
-          app_uri: "iroha://connect/app",
-          token_app: "token-app",
-        },
+        jsonData: sampleConnectSessionResponse({ token_wallet: undefined }),
         headers: { "content-type": "application/json" },
       }),
   });
   await assert.rejects(
-    () => client.createConnectSession({ sid: SAMPLE_CONNECT_SID_BASE64 }),
+    () => client.createConnectSession(sampleConnectSessionInput()),
     /token_wallet/i,
   );
 });
@@ -19132,23 +18948,20 @@ test("createConnectSession accepts base64url sid", async () => {
     captured = { url, init };
     return createResponse({
       status: 200,
-      jsonData: {
-        sid: SAMPLE_CONNECT_SID_BASE64,
-        wallet_uri: "iroha://connect",
-        app_uri: "iroha://connect/app",
-        token_app: "token-app",
-        token_wallet: "token-wallet",
-        token_management: "token-management",
-        token_relay: "token-relay",
-      },
+      jsonData: sampleConnectSessionResponse(),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const resp = await client.createConnectSession({ sid: SAMPLE_CONNECT_SID_BASE64 });
+  const resp = await client.createConnectSession(sampleConnectSessionInput());
   assert.equal(resp.sid, SAMPLE_CONNECT_SID_BASE64);
   assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
-  assert.deepEqual(JSON.parse(captured.init.body), { sid: SAMPLE_CONNECT_SID_BASE64 });
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    sid: SAMPLE_CONNECT_SID_BASE64,
+    network_id: VK_SIGNING_NETWORK_ID.toString(),
+    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
+    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
+  });
 });
 
 test("createConnectSession rejects invalid sid values", async () => {
@@ -19158,34 +18971,27 @@ test("createConnectSession rejects invalid sid values", async () => {
     },
   });
   await assert.rejects(
-    () => client.createConnectSession({ sid: "not a valid sid" }),
+    () => client.createConnectSession(sampleConnectSessionInput({ sid: "not a valid sid" })),
     /32-byte.*(base64url|hex)/i,
   );
 });
 
-test("createConnectSession accepts hex sid", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        sid: "ab".repeat(32),
-        wallet_uri: "iroha://connect",
-        app_uri: "iroha://connect/app",
-        token_app: "token-app",
-        token_wallet: "token-wallet",
-        token_management: "token-management",
-        token_relay: "token-relay",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const resp = await client.createConnectSession({ sid: `0x${"ab".repeat(32)}` });
-  assert.equal(resp.sid, "ab".repeat(32));
-  assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
-  assert.deepEqual(JSON.parse(captured.init.body), { sid: "ab".repeat(32) });
+test("createConnectSession rejects a SID derived for another exact network", async () => {
+  const otherNetwork = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+  const wrongSid = generateConnectSid({
+    networkId: otherNetwork,
+    appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
+    nonce: SAMPLE_CONNECT_NONCE,
+  }).sidBase64Url;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not be called");
+    },
+  });
+  await assert.rejects(
+    () => client.createConnectSession(sampleConnectSessionInput({ sid: wrongSid })),
+    /exact networkId, appPublicKey, and nonce/,
+  );
 });
 
 test("deleteConnectSession returns flag based on status", async () => {
@@ -21931,7 +21737,7 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
     },
     bytecode: proved.bytecode,
   };
-  const derived = await client.deriveIvmProved(proofRequest);
+  const derived = await client.deriveIvmProved(proofRequest, ivmProveOptions());
   assert.deepEqual(derived, { proved });
   const completed = await client.proveIvmAndWait(
     { ...proofRequest, proved: derived.proved },
@@ -22040,9 +21846,9 @@ test("IVM response endpoints enforce declared caps before reads and forward sign
     {
       name: "derive",
       invoke: (client) =>
-        client.deriveIvmProved(executionRequest, {
+        client.deriveIvmProved(executionRequest, ivmProveOptions({
           signal: controller.signal,
-        }),
+        })),
     },
     {
       name: "prove creation",
@@ -22404,7 +22210,7 @@ test("IVM request bytecode accepts genuine cross-realm binary views without user
       authority: SAMPLE_ACCOUNT_ID,
       metadata: {},
       bytecode,
-    });
+    }, ivmProveOptions());
     assert.equal(posted.bytecode, expectedBytecode);
   }
 });
@@ -22433,7 +22239,7 @@ test("IVM derive and proof status responses cap and canonicalize proved bytecode
         authority: SAMPLE_ACCOUNT_ID,
         metadata: {},
         bytecode: "Y29kZQ==",
-      }),
+      }, ivmProveOptions()),
     /4194304-byte artifact limit/,
   );
 
@@ -22505,7 +22311,7 @@ test("IVM derive response envelope and overlay arrays require exact data propert
       fetchImpl: async () => createResponse({ status: 200 }),
     });
     client._maybeBoundedJson = async () => body;
-    await assert.rejects(() => client.deriveIvmProved(request), expected);
+    await assert.rejects(() => client.deriveIvmProved(request, ivmProveOptions()), expected);
   }
   assert.equal(getterCalls, 0);
 });
@@ -22533,7 +22339,7 @@ test("IVM JSON cloning preserves dangerous-looking own keys without inheritance"
     authority: SAMPLE_ACCOUNT_ID,
     metadata: {},
     bytecode: proved.bytecode,
-  });
+  }, ivmProveOptions());
   const normalized = result.proved.overlay[0];
   assert.equal(Object.getPrototypeOf(normalized), null);
   assert.equal(Object.hasOwn(normalized, "__proto__"), true);
@@ -22669,7 +22475,7 @@ test("IVM proved DTOs and proof-job states are exact and internally consistent",
           authority: SAMPLE_ACCOUNT_ID,
           metadata: {},
           bytecode: "Y29kZQ==",
-        }),
+        }, ivmProveOptions()),
       /must contain exactly|overlay must be an array|32-byte hex string/,
     );
   }
@@ -23911,7 +23717,7 @@ test("IVM request and bounded response copies never consult buffer species", asy
     authority: SAMPLE_ACCOUNT_ID,
     metadata: {},
     bytecode: requestBuffer,
-  });
+  }, ivmProveOptions());
   assert.equal(requestConstructorReads, 0);
 
   const responseChunk = new TextEncoder().encode('{"code_b64":"Y29kZQ=="}');
@@ -25482,7 +25288,7 @@ test("methods surface HTTP errors with body", async () => {
     createResponse({ status: 500, textBody: "boom", jsonData: { error: "boom" } });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAttachments(),
+    () => client.listAttachments(canonicalReadOptions()),
     (error) => {
       assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 500);

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.privacy
 
 import java.util.Collections
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /**
  * Canonical first-release local privacy build-metadata bridge.
@@ -50,9 +51,14 @@ class PrivacyNativeBridge private constructor() {
 
     companion object {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 22
+        const val CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3: Int = 1
         const val EXACT12_CAPABILITY_MANIFEST_MAX_BYTES: Int = 256 * 1024
         const val COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Int = 256 * 1024
         const val EXACT12_FIXTURE_BUNDLE_MAX_BYTES: Int = 2 * 1024 * 1024
+        private const val CONFIDENTIAL_TREE_DEPTH: Int = 16
+        private const val CONFIDENTIAL_TREE_CAPACITY: Int = 1 shl CONFIDENTIAL_TREE_DEPTH
+        private const val CONFIDENTIAL_MERKLE_PATH_BYTES: Int =
+            32 + CONFIDENTIAL_TREE_DEPTH * 32 + CONFIDENTIAL_TREE_DEPTH
         private const val LIBRARY_NAME: String = "connect_norito_bridge"
         private val PROTOCOLS: List<PrivacyProtocolIdV1> =
             Collections.unmodifiableList(PrivacyProtocolIdV1.values().toList())
@@ -64,6 +70,178 @@ class PrivacyNativeBridge private constructor() {
         /** All twelve protocol identities in exact wire order. */
         @JvmStatic
         fun protocolsV1(): List<PrivacyProtocolIdV1> = PROTOCOLS
+
+        /** Return the canonical Rust-owned default V3 owner diversifier. */
+        internal fun defaultConfidentialDiversifierV3(): ByteArray =
+            confidentialDigest("default diversifier") {
+                nativeDefaultConfidentialDiversifierV3()
+            }
+
+        /** Derive a canonical Rust-owned V3 owner diversifier. */
+        internal fun deriveConfidentialDiversifierV3(seed: ByteArray): ByteArray {
+            require(seed.isNotEmpty() && seed.size <= 4_096) {
+                "confidential diversifier seed must contain 1..4096 bytes"
+            }
+            return confidentialDigest("diversifier") {
+                nativeDeriveConfidentialDiversifierV3(seed.copyOf())
+            }
+        }
+
+        /** Derive a canonical Rust-owned V3 owner tag. */
+        internal fun deriveConfidentialOwnerTagV3(
+            spendKey: ByteArray,
+            diversifier: ByteArray,
+        ): ByteArray =
+            confidentialDigest("owner tag") {
+                nativeDeriveConfidentialOwnerTagV3(
+                    confidentialInput32(spendKey, "spendKey"),
+                    confidentialInput32(diversifier, "diversifier"),
+                )
+            }
+
+        /** Derive a canonical Rust-owned V3 asset tag. */
+        internal fun deriveConfidentialAssetTagV3(asset: String): ByteArray =
+            confidentialDigest("asset tag") {
+                nativeDeriveConfidentialAssetTagV3(confidentialText(asset, "asset"))
+            }
+
+        /** Derive a canonical Rust-owned V3 exact-network tag. */
+        internal fun deriveConfidentialNetworkTagV3(networkId: NetworkId): ByteArray =
+            confidentialDigest("network tag") {
+                nativeDeriveConfidentialNetworkTagV3(networkId.bytes())
+            }
+
+        /** Derive a canonical Rust-owned V3 note commitment. */
+        internal fun deriveConfidentialNoteCommitmentV3(
+            asset: String,
+            amount: String,
+            rho: ByteArray,
+            ownerTag: ByteArray,
+        ): ByteArray =
+            confidentialDigest("note commitment") {
+                nativeDeriveConfidentialNoteCommitmentV3(
+                    confidentialText(asset, "asset"),
+                    confidentialPositiveU128(amount),
+                    confidentialInput32(rho, "rho"),
+                    confidentialInput32(ownerTag, "ownerTag"),
+                )
+            }
+
+        /** Derive a canonical Rust-owned V3 exact-network nullifier. */
+        internal fun deriveConfidentialNullifierV3(
+            networkId: NetworkId,
+            asset: String,
+            spendKey: ByteArray,
+            rho: ByteArray,
+        ): ByteArray =
+            confidentialDigest("nullifier") {
+                nativeDeriveConfidentialNullifierV3(
+                    networkId.bytes(),
+                    confidentialText(asset, "asset"),
+                    confidentialInput32(spendKey, "spendKey"),
+                    confidentialInput32(rho, "rho"),
+                )
+            }
+
+        /** Derive one canonical fixed-tree V3 authentication path in native Rust. */
+        internal fun deriveConfidentialMerklePathV3(
+            commitments: List<ByteArray>,
+            leafIndex: Long,
+        ): ByteArray {
+            require(commitments.isNotEmpty() && commitments.size <= CONFIDENTIAL_TREE_CAPACITY) {
+                "commitments must contain 1..$CONFIDENTIAL_TREE_CAPACITY leaves"
+            }
+            require(leafIndex >= 0 && leafIndex < commitments.size.toLong()) {
+                "leafIndex must identify one supplied commitment"
+            }
+            val packed = ByteArray(commitments.size * 32)
+            commitments.forEachIndexed { index, commitment ->
+                confidentialInput32(commitment, "commitments[$index]")
+                    .copyInto(packed, index * 32)
+            }
+            check(nativeAvailable) { "native confidential V3 Merkle derivation is unavailable" }
+            val path = nativeDeriveConfidentialMerklePathV3(packed, leafIndex)
+            check(path != null && path.size == CONFIDENTIAL_MERKLE_PATH_BYTES) {
+                "native confidential V3 Merkle derivation returned an invalid path"
+            }
+            return requireNotNull(path).copyOf()
+        }
+
+        /** Verify one exact V3 membership path in native Rust. */
+        internal fun verifyConfidentialMerklePathV3(
+            commitment: ByteArray,
+            leafIndex: Long,
+            siblings: List<ByteArray>,
+            directions: ByteArray,
+            root: ByteArray,
+        ): Boolean {
+            if (leafIndex < 0 || siblings.size != CONFIDENTIAL_TREE_DEPTH ||
+                directions.size != CONFIDENTIAL_TREE_DEPTH
+            ) {
+                return false
+            }
+            val packedSiblings = ByteArray(CONFIDENTIAL_TREE_DEPTH * 32)
+            siblings.forEachIndexed { index, sibling ->
+                if (sibling.size != 32) return false
+                sibling.copyInto(packedSiblings, index * 32)
+            }
+            if (commitment.size != 32 || root.size != 32) return false
+            check(nativeAvailable) { "native confidential V3 Merkle verification is unavailable" }
+            return nativeVerifyConfidentialMerklePathV3(
+                commitment.copyOf(),
+                leafIndex,
+                packedSiblings,
+                directions.copyOf(),
+                root.copyOf(),
+            )
+        }
+
+        private fun confidentialDigest(
+            label: String,
+            derive: () -> ByteArray?,
+        ): ByteArray {
+            check(nativeAvailable) { "native confidential V3 derivation is unavailable" }
+            val digest =
+                try {
+                    derive()
+                } catch (error: RuntimeException) {
+                    throw IllegalStateException("native confidential $label derivation failed", error)
+                } catch (error: LinkageError) {
+                    throw IllegalStateException("native confidential $label derivation failed", error)
+                }
+            check(digest != null && digest.size == 32 && digest.any { it != 0.toByte() }) {
+                "native confidential $label derivation returned an invalid digest"
+            }
+            return requireNotNull(digest).copyOf()
+        }
+
+        private fun confidentialInput32(value: ByteArray, label: String): ByteArray {
+            require(value.size == 32 && value.any { it != 0.toByte() }) {
+                "$label must be exactly 32 non-zero bytes"
+            }
+            return value.copyOf()
+        }
+
+        private fun confidentialText(value: String, label: String): ByteArray {
+            require(value.isNotEmpty() && value == value.trim() && '\u0000' !in value) {
+                "$label must be canonical non-empty text"
+            }
+            return value.toByteArray(Charsets.UTF_8).also {
+                require(it.size <= 512) { "$label exceeds the native byte bound" }
+            }
+        }
+
+        private fun confidentialPositiveU128(value: String): ByteArray {
+            require(
+                value.isNotEmpty() &&
+                    value.all { it in '0'..'9' } &&
+                    (value.length == 1 || value[0] != '0') &&
+                    value != "0" &&
+                    (value.length < 39 ||
+                        (value.length == 39 && value <= "340282366920938463463374607431768211455")),
+            ) { "amount must be a canonical positive u128" }
+            return value.toByteArray(Charsets.US_ASCII)
+        }
 
         /** Returns this binary's canonical `PrivacyCompiledProfileCatalogV1` Norito archive. */
         @JvmStatic
@@ -331,6 +509,8 @@ class PrivacyNativeBridge private constructor() {
             try {
                 System.loadLibrary(LIBRARY_NAME)
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
+                    nativeConfidentialDerivationContractRevisionV3() ==
+                    CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 &&
                     nativeValidateExact12CapabilityManifest(null) ==
                     Exact12CapabilityManifestValidationStatusV1.NULL_POINTER.code &&
                     nativeInspectExact12CapabilityManifest(null) == null &&
@@ -345,6 +525,54 @@ class PrivacyNativeBridge private constructor() {
             }
 
         @JvmStatic private external fun nativeBridgeAbiVersion(): Int
+
+        @JvmStatic private external fun nativeConfidentialDerivationContractRevisionV3(): Int
+
+        @JvmStatic private external fun nativeDefaultConfidentialDiversifierV3(): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialDiversifierV3(
+            seed: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialOwnerTagV3(
+            spendKey: ByteArray,
+            diversifier: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialAssetTagV3(
+            assetUtf8: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialNetworkTagV3(
+            networkId: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialNoteCommitmentV3(
+            assetUtf8: ByteArray,
+            amountAscii: ByteArray,
+            rho: ByteArray,
+            ownerTag: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialNullifierV3(
+            networkId: ByteArray,
+            assetUtf8: ByteArray,
+            spendKey: ByteArray,
+            rho: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeDeriveConfidentialMerklePathV3(
+            commitments: ByteArray,
+            leafIndex: Long,
+        ): ByteArray?
+
+        @JvmStatic private external fun nativeVerifyConfidentialMerklePathV3(
+            commitment: ByteArray,
+            leafIndex: Long,
+            siblings: ByteArray,
+            directions: ByteArray,
+            root: ByteArray,
+        ): Boolean
 
         @JvmStatic private external fun nativeCompiledProfileCatalog(): ByteArray?
 

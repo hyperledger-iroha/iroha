@@ -7,6 +7,13 @@ which is placed in the closed aggregate release inventory and then signed with
 actual release subject and native exact-12 evidence and requires byte-for-byte
 equality, so a valid signature cannot authorize a relocated or substituted
 artifact by path alone.
+
+The current implementation can close byte identities, but it cannot establish
+that the source-built native runner actually produced semantically valid
+Exact12 results.  Every production entry point is therefore provisioned closed
+until a separately authenticated native-evidence authority is installed.  The
+lower structural builder is retained only for hostile and post-provisioning
+tests; its self-consistent hashes are not release authority.
 """
 
 from __future__ import annotations
@@ -109,11 +116,35 @@ EVIDENCE_PATHS = {
     "stage_artifacts_norito": (
         "provenance/privacy-native/stage-artifacts-v1.norito"
     ),
-    "validator_binary": "bin/irohad",
+    "validator_binary": "bin/iroha3d",
     "workspace_source_manifest": (
         "provenance/privacy-native/workspace-source-manifest.sha256"
     ),
 }
+
+INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_SCHEMA = (
+    "iroha.taira.independent-native-evidence-authority.v1"
+)
+INDEPENDENT_NATIVE_EVIDENCE_REPLAY_NAMESPACE = (
+    "iroha.taira.independent-native-evidence-authority-replay.v1"
+)
+INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR = (
+    f"{INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_SCHEMA} is not provisioned: "
+    "release authority requires a canonical authority-origin envelope signed "
+    "under a separately pinned trust root that is inaccessible to the "
+    "source-built runner, build lane, runtime, candidate signer, and release "
+    "signer; the envelope must bind the exact runner and validator bytes, the "
+    "JSON and Norito command manifest, receipt, stage-artifact, expectation, "
+    "and ZK-X509 resource bytes and digests, the closed Exact12 operation and "
+    "outcome table, source and DPN commits, Cargo.lock and workspace-source "
+    "digests, the native Linux host and installation identity, the installed "
+    "controller digest, and a fresh run nonce, issued time, expiry, and replay "
+    f"identity in {INDEPENDENT_NATIVE_EVIDENCE_REPLAY_NAMESPACE}; that "
+    "authority must independently verify JSON/Norito correspondence and "
+    "native result semantics and must reject runner self-hashes, recomputed "
+    "archive hashes, caller markers, reused signing keys, stale runs, and "
+    "legacy unsigned evidence"
+)
 
 
 class TairaReleaseAuthorityError(RuntimeError):
@@ -122,6 +153,19 @@ class TairaReleaseAuthorityError(RuntimeError):
 
 def _fail(message: str) -> None:
     raise TairaReleaseAuthorityError(message)
+
+
+def require_independent_native_evidence_authority_provisioned() -> None:
+    """Refuse release trust until an independent semantic authority exists.
+
+    This has deliberately no arguments, environment switch, marker file, or
+    key-based escape hatch.  Provisioning requires a new authenticated broker
+    and verifier path, not reuse of the release or candidate signer.
+    """
+
+    raise TairaReleaseAuthorityError(
+        INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR
+    )
 
 
 def _sha256(value: str, label: str) -> str:
@@ -587,7 +631,9 @@ def _image_subject(
     }
 
 
-def build_authority(args: argparse.Namespace) -> dict[str, object]:
+def _build_untrusted_authority_structure(args: argparse.Namespace) -> dict[str, object]:
+    """Build the byte-closure structure without claiming semantic authority."""
+
     commit = _commit(args.commit)
     dpn_commit = _commit(args.dpn_validator_release_commit)
     artifacts, exact12, source_digest = _evidence(
@@ -626,6 +672,13 @@ def build_authority(args: argparse.Namespace) -> dict[str, object]:
         "subject": subject,
         "workspace_source_manifest_sha256": source_digest,
     }
+
+
+def build_authority(args: argparse.Namespace) -> dict[str, object]:
+    """Production authority entry point, closed before evidence/path access."""
+
+    require_independent_native_evidence_authority_provisioned()
+    return _build_untrusted_authority_structure(args)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

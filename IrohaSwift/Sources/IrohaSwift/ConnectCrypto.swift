@@ -6,6 +6,7 @@ public enum ConnectCryptoError: Error, LocalizedError, Sendable {
     case invalidPrivateKeyLength(expected: Int, actual: Int)
     case invalidPublicKeyLength(expected: Int, actual: Int)
     case invalidSessionIdentifierLength(expected: Int, actual: Int)
+    case invalidNonceLength(expected: Int, actual: Int)
     case invalidRelayToken
 
     public var errorDescription: String? {
@@ -20,6 +21,8 @@ public enum ConnectCryptoError: Error, LocalizedError, Sendable {
             return "Connect public keys must be \(expected) bytes (got \(actual))."
         case let .invalidSessionIdentifierLength(expected, actual):
             return "Connect session identifiers must be \(expected) bytes (got \(actual))."
+        case let .invalidNonceLength(expected, actual):
+            return "Connect session nonces must be \(expected) bytes (got \(actual))."
         case .invalidRelayToken:
             return "Connect relay tokens must not be empty."
         }
@@ -81,12 +84,31 @@ public struct ConnectDirectionKeys: Sendable {
 
 public enum ConnectCrypto {
     private static let keyLength = 32
+    private static let nonceLength = 16
+    private static let sidDomain = Data("iroha-connect|sid|".utf8)
     private static let relayAuthDomain = Data("iroha-connect|relay-auth|v1".utf8)
 
     private static func ensureBridgeAvailable() throws {
         if !NoritoNativeBridge.shared.isConnectCryptoAvailable {
             throw ConnectCryptoError.bridgeUnavailable
         }
+    }
+
+    /// Derive the canonical session id from an exact network, app key, and fresh nonce.
+    public static func deriveSessionID(networkID: NetworkId,
+                                       appPublicKey: Data,
+                                       nonce: Data) throws -> Data {
+        guard appPublicKey.count == keyLength else {
+            throw ConnectCryptoError.invalidPublicKeyLength(expected: keyLength, actual: appPublicKey.count)
+        }
+        guard nonce.count == nonceLength else {
+            throw ConnectCryptoError.invalidNonceLength(expected: nonceLength, actual: nonce.count)
+        }
+        var preimage = sidDomain
+        preimage.append(networkID.bytes)
+        preimage.append(appPublicKey)
+        preimage.append(nonce)
+        return Blake2b.hash256(preimage)
     }
 
     @discardableResult

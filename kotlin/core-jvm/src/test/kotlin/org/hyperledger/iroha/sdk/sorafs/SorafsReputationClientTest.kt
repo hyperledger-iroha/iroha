@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.TransportStreamResponse
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import java.io.ByteArrayInputStream
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -30,7 +31,7 @@ class SorafsReputationClientTest {
     @Test
     fun finiteReadsUseExactAuthenticatedGetTargetsAndTypedProjection() {
         val executor = RecordingStreamingExecutor()
-        val client = SorafsReputationClient(BASE_URI, executor)
+        val client = SorafsReputationClient(BASE_URI, NETWORK_ID, executor)
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
 
         executor.enqueueJson(SNAPSHOT_JSON)
@@ -111,7 +112,7 @@ class SorafsReputationClientTest {
     @Test
     fun rejectsNoncanonicalInputsAndPartialAuthenticationBeforeTransport() {
         val executor = RecordingStreamingExecutor()
-        val client = SorafsReputationClient(BASE_URI, executor)
+        val client = SorafsReputationClient(BASE_URI, NETWORK_ID, executor)
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val canonicalAuth = auth(keyPair, "valid")
 
@@ -172,7 +173,7 @@ class SorafsReputationClientTest {
     @Test
     fun authenticatedSseUsesOneStreamingAttemptWithoutResumeSurface() {
         val executor = RecordingStreamingExecutor()
-        val client = SorafsReputationClient(BASE_URI, executor)
+        val client = SorafsReputationClient(BASE_URI, NETWORK_ID, executor)
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val canonicalAuth = auth(keyPair, "stream")
         executor.enqueueStream(
@@ -238,7 +239,7 @@ class SorafsReputationClientTest {
                 )
             }
         }
-        val client = SorafsReputationClient(BASE_URI, bufferedOnly)
+        val client = SorafsReputationClient(BASE_URI, NETWORK_ID, bufferedOnly)
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
 
         assertFailsWith<IllegalArgumentException> {
@@ -381,18 +382,34 @@ class SorafsReputationClientTest {
         assertTrue(request.body.isEmpty())
         val signature = request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.single()
         assertNotNull(signature)
+        val timestampMs = requireNotNull(auth.timestampMs)
+        val nonce = requireNotNull(auth.nonce)
         val verifier = Signature.getInstance("Ed25519")
         verifier.initVerify(keyPair.public)
         verifier.update(
             CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                NETWORK_ID,
                 "GET",
                 request.uri,
                 ByteArray(0),
-                auth.timestampMs!!,
-                auth.nonce!!,
+                timestampMs,
+                nonce,
             ),
         )
-        assertTrue(verifier.verify(Base64.getDecoder().decode(signature)))
+        val signatureBytes = Base64.getDecoder().decode(signature)
+        assertTrue(verifier.verify(signatureBytes))
+        verifier.initVerify(keyPair.public)
+        verifier.update(
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                TestNetworkIds.fromSeed(99),
+                "GET",
+                request.uri,
+                ByteArray(0),
+                timestampMs,
+                nonce,
+            ),
+        )
+        assertFalse(verifier.verify(signatureBytes))
     }
 
     private class RecordingStreamingExecutor : StreamingTransportExecutor {
@@ -441,6 +458,7 @@ class SorafsReputationClientTest {
 
     private companion object {
         private val BASE_URI = URI.create("https://torii.example")
+        private val NETWORK_ID = TestNetworkIds.canonical()
         private const val TIMESTAMP_MS = 1_717_171_717_000L
         private const val SNAPSHOT_ID = "abababababababababababababababab"
         private const val NEXT_SNAPSHOT_ID = "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc"

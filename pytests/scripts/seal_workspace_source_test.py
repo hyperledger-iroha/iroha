@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 
 import pytest
 
@@ -87,6 +88,48 @@ def test_ordinary_transient_edit_cannot_start_against_cooperatively_sealed_sourc
         module.verify_source_tree_sealed(source)
     finally:
         module.unseal_source_tree(source)
+
+
+def test_no_writable_paths_seals_the_entire_source_tree(tmp_path: Path) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    target = source / "target"
+    target.mkdir(parents=True)
+    output = target / "unexpected.log"
+    output.write_text("not release evidence\n", encoding="utf-8")
+
+    module.seal_source_tree(source, ())
+    try:
+        module.verify_source_tree_sealed(source, ())
+        assert stat.S_IMODE(source.stat().st_mode) == 0o555
+        assert stat.S_IMODE(target.stat().st_mode) == 0o555
+        assert stat.S_IMODE(output.stat().st_mode) == 0o444
+    finally:
+        module.unseal_source_tree(source)
+
+
+def test_no_writable_paths_cli_is_mutually_exclusive_with_writable(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--seal",
+            "--root",
+            str(source),
+            "--no-writable-paths",
+            "--writable",
+            "target",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 2
 
 
 def test_detached_worktree_reproduces_identity_then_seals_source(

@@ -18,7 +18,7 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 
 ## Orchestration Modes
 
-- Rust harness (recommended): `crates/iroha_test_network` spawns `irohad` processes locally, allocates ports, writes per‑run configs and Norito `.nrt` genesis, monitors readiness and block heights, and provides utilities for shutdown/restart.
+- Rust harness (recommended): `crates/iroha_test_network` spawns `iroha3d` processes locally, allocates ports, writes per‑run configs and Norito `.nrt` genesis, monitors readiness and block heights, and provides utilities for shutdown/restart.
 - Docker Compose (optional): `crates/iroha_swarm` generates a Compose file for N peers. Use when containerized networking or external orchestration is desired.
 
 ## Test Network Setup
@@ -95,14 +95,14 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --features dev-tools --bin xtask -- kagami-profiles --profile iroha3-testus`
 - Build required localnet binaries once:
   - `cargo build -p iroha_kagami --bin kagami`
-  - `cargo build -p irohad --bin irohad`
+  - `cargo build -p irohad --bin iroha3d`
 - Run the 7-validator bootstrap check:
-  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_bootstrap_7_validators -- --nocapture`
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_bootstrap_7_validators -- --nocapture`
 - Run churn behavior tests (ignored by default):
-  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_joiner_register_unregister_behavior -- --ignored --nocapture`
-  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_restart_catchup_behavior -- --ignored --nocapture`
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_joiner_register_unregister_behavior -- --ignored --nocapture`
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test testus_public_localnet testus_localnet_restart_catchup_behavior -- --ignored --nocapture`
 - Run the full 5 TPS, 60-minute churn simulation:
-  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TESTUS_SIM_DURATION_SECS=3600 IROHA_TESTUS_LOAD_TPS=5 cargo test -p integration_tests --test testus_public_localnet testus_public_localnet_5tps_churn_stability -- --ignored --nocapture`
+  - `KAGAMI_BIN=$PWD/target/debug/kagami TEST_NETWORK_BIN_IROHAD=$PWD/target/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 IROHA_TESTUS_SIM_DURATION_SECS=3600 IROHA_TESTUS_LOAD_TPS=5 cargo test -p integration_tests --test testus_public_localnet testus_public_localnet_5tps_churn_stability -- --ignored --nocapture`
 - Optional tuning knobs:
   - `IROHA_TESTUS_MAX_HEIGHT_SKEW` (default `2`) sets allowed validator height skew.
   - `IROHA_TESTUS_MAX_HEIGHT_SKEW_GRACE_SECS` (default `30`) allows transient skew bursts; only sustained unrecovered breaches fail.

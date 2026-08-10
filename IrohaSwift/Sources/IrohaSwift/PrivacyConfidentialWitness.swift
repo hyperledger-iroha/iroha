@@ -54,7 +54,7 @@ public struct PrivacyConfidentialUnshieldChangeWitnessV1: Equatable, Sendable {
 }
 
 public struct PrivacyConfidentialWitnessV1: Equatable, Sendable {
-    public let chainId: String
+    public let networkId: NetworkId
     public let assetDefinitionId: String
     public let spendKey: Data
     public let treeCommitments: [Data]
@@ -65,7 +65,7 @@ public struct PrivacyConfidentialWitnessV1: Equatable, Sendable {
     public let rootHint: Data
 
     public init(
-        chainId: String,
+        networkId: NetworkId,
         assetDefinitionId: String,
         spendKey: Data,
         treeCommitments: [Data],
@@ -75,10 +75,7 @@ public struct PrivacyConfidentialWitnessV1: Equatable, Sendable {
         publicAmount: String,
         rootHint: Data
     ) throws {
-        self.chainId = try PrivacyConfidentialWitnessCodecs.canonicalText(
-            chainId,
-            field: "chainId"
-        )
+        self.networkId = networkId
         self.assetDefinitionId = try PrivacyConfidentialWitnessCodecs.canonicalText(
             assetDefinitionId,
             field: "assetDefinitionId"
@@ -178,7 +175,7 @@ public struct PrivacyConfidentialMerklePathWitnessV2: Equatable, Sendable {
 /// always expose two input slots. For a one-input proof the second path is the
 /// authoritative `next_zero_path` returned by `POST /v1/zk/merkle-path`.
 public struct PrivacyConfidentialWitnessV2: Equatable, Sendable {
-    public let chainId: String
+    public let networkId: NetworkId
     public let assetDefinitionId: String
     public let spendKey: Data
     public let inputPaths: [PrivacyConfidentialMerklePathWitnessV2]
@@ -189,7 +186,7 @@ public struct PrivacyConfidentialWitnessV2: Equatable, Sendable {
     public let rootHint: Data
 
     public init(
-        chainId: String,
+        networkId: NetworkId,
         assetDefinitionId: String,
         spendKey: Data,
         inputPaths: [PrivacyConfidentialMerklePathWitnessV2],
@@ -199,10 +196,7 @@ public struct PrivacyConfidentialWitnessV2: Equatable, Sendable {
         publicAmount: String,
         rootHint: Data
     ) throws {
-        self.chainId = try PrivacyConfidentialWitnessCodecs.canonicalText(
-            chainId,
-            field: "chainId"
-        )
+        self.networkId = networkId
         self.assetDefinitionId = try PrivacyConfidentialWitnessCodecs.canonicalText(
             assetDefinitionId,
             field: "assetDefinitionId"
@@ -279,14 +273,14 @@ public enum PrivacyConfidentialWitnessCodecs {
         (
             "{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\"," +
                 "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\"," +
-                "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}"
+                "\"output_commitment_1\",\"root\",\"asset_tag\",\"network_tag\"]}"
         ).utf8
     )
     static let confidentialUnshieldPublicInputsSchemaV1 = Data(
         (
             "{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\"," +
                 "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\"," +
-                "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}"
+                "\"root\",\"public_amount\",\"asset_tag\",\"network_tag\"]}"
         ).utf8
     )
 
@@ -300,7 +294,7 @@ public enum PrivacyConfidentialWitnessCodecs {
 
     public static func encodeWitness(_ witness: PrivacyConfidentialWitnessV1) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeString(witness.chainId))
+        writer.writeField(witness.networkId.bytes)
         writer.writeField(CompactNorito.encodeString(witness.assetDefinitionId))
         writer.writeField(encodeBytesVec(witness.spendKey))
         writer.writeField(try encodeSequence(witness.treeCommitments, encodeBytesVec))
@@ -319,7 +313,7 @@ public enum PrivacyConfidentialWitnessCodecs {
 
     public static func encodeWitnessV2(_ witness: PrivacyConfidentialWitnessV2) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeString(witness.chainId))
+        writer.writeField(witness.networkId.bytes)
         writer.writeField(CompactNorito.encodeString(witness.assetDefinitionId))
         writer.writeField(encodeBytesVec(witness.spendKey))
         writer.writeField(try encodeSequence(witness.inputPaths, encodeMerklePathV2))

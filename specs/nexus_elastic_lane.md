@@ -93,7 +93,7 @@ existing artefacts.
    using the command captured in the summary (`space_directory_encode.command`). This produces the
    `.manifest.to` payload Torii expects and records the evidence for auditors; submit via
    `iroha app space-directory manifest publish`.
-4. Run `irohad --sora --config path/to/config.toml --trace-config` and archive the trace output in
+4. Run `iroha3d --sora --config path/to/config.toml --trace-config` and archive the trace output in
    the rollout ticket. This proves the new geometry matches the generated slug/kura segments.
 5. Restart the validators assigned to the lane once the manifest/catalog changes are deployed. Keep
    the summary JSON in the ticket for future audits.

@@ -26,7 +26,7 @@ use toml::{Value, map::Map};
 /// Overrides for external binaries referenced by the supervisor.
 #[derive(Debug, Default, Clone)]
 pub struct BinaryOverrides {
-    /// Optional override for the `irohad` executable.
+    /// Optional override for the `iroha3d` executable.
     pub irohad: Option<PathBuf>,
     /// Optional override for the `kagami` executable.
     pub kagami: Option<PathBuf>,
@@ -1033,7 +1033,7 @@ torii_start = 12000
 p2p_start = 13000
 
 [binaries]
-irohad = "./bin/irohad"
+irohad = "./bin/iroha3d"
 kagami = "/opt/iroha/bin/kagami"
 iroha_cli = "./tools/iroha_cli"
 "#,
@@ -1058,7 +1058,7 @@ iroha_cli = "./tools/iroha_cli"
         assert_eq!(config.vrf_seed_hex.as_deref(), Some("abcd"));
         assert_eq!(
             config.binaries.irohad.as_deref(),
-            Some(dir.path().join("bin/irohad").as_path())
+            Some(dir.path().join("bin/iroha3d").as_path())
         );
         assert_eq!(
             config.binaries.kagami.as_deref(),
@@ -1335,7 +1335,7 @@ data_root = "./env-data"
         config.set_vrf_seed_hex(Some("abcd".to_owned()));
         config.set_torii_start(Some(12000));
         config.set_p2p_start(Some(13000));
-        config.binaries.irohad = Some(temp.path().join("bin/irohad"));
+        config.binaries.irohad = Some(temp.path().join("bin/iroha3d"));
         config.binaries.kagami = Some(temp.path().join("bin/kagami"));
         config.binaries.iroha_cli = Some(temp.path().join("bin/iroha_cli"));
         let mut nexus = Map::new();
@@ -1503,7 +1503,7 @@ backoff_ms = 1000
         fs::create_dir_all(&config_dir).expect("config dir");
         let path = config_dir.join("local.toml");
         let data_root = temp.path().join("existing");
-        let irohad = temp.path().join("bin/irohad");
+        let irohad = temp.path().join("bin/iroha3d");
         fs::write(
             &path,
             format!(

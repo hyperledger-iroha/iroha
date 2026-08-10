@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.junit.Test;
 
 /** Cross-SDK checks pinned to payloads emitted by the Rust production types. */
@@ -386,29 +387,33 @@ public final class SumeragiV2WireFixtureTests {
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(requestMessage.hex)).payload;
     SumeragiV2Wire.CommitCertificateRequest request = requestPayload.value;
     assertEquals(SumeragiV2Wire.PROTOCOL_VERSION, request.protocolVersion);
-    assertEquals("sumeragi-v2-test", request.chainId.value);
+    byte[] expectedNetworkId = new byte[32];
+    Arrays.fill(expectedNetworkId, (byte) 0x71);
+    assertArrayEquals(expectedNetworkId, request.networkId.bytes());
     assertEquals(1L, request.height);
     assertEquals(48, request.signature().length);
     assertArrayEquals(hexBytes(requestPreimage.hex), request.signaturePreimage());
     SumeragiV2Wire.CommitCertificateRequest reSignedRequest =
         new SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             request.contextId,
             request.height,
             request.requester,
             new byte[] {1});
     assertArrayEquals(request.signaturePreimage(), reSignedRequest.signaturePreimage());
-    SumeragiV2Wire.CommitCertificateRequest crossChainRequest =
+    byte[] otherNetworkBytes = request.networkId.bytes();
+    otherNetworkBytes[0] ^= 1;
+    SumeragiV2Wire.CommitCertificateRequest crossNetworkRequest =
         new SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            new SumeragiV2Wire.ChainId("other-chain"),
+            NetworkId.fromBytes(otherNetworkBytes),
             request.contextId,
             request.height,
             request.requester,
             new byte[] {1});
-    if (Arrays.equals(request.signaturePreimage(), crossChainRequest.signaturePreimage())) {
-      throw new AssertionError("commit request signature preimage did not bind chain ID");
+    if (Arrays.equals(request.signaturePreimage(), crossNetworkRequest.signaturePreimage())) {
+      throw new AssertionError("commit request signature preimage did not bind NetworkId");
     }
 
     SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
@@ -439,7 +444,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.CommitCertificateRequest changedContextRequest =
         new SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             new SumeragiV2Wire.HeightContextId(new SumeragiV2Wire.Hash32(changedContextBytes)),
             request.height,
             request.requester,
@@ -457,7 +462,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.CommitCertificateRequest changedHeightRequest =
         new SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             request.contextId,
             request.height + 1,
             request.requester,

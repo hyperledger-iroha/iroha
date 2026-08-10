@@ -223,7 +223,7 @@ PREBUILT_DIR_PY
   )"
 fi
 
-daemon_bin="irohad"
+daemon_bin="iroha3d"
 governance_dag_bin="sorafs_governance_dag"
 cli_bin="iroha"
 utility_bin="kagami"

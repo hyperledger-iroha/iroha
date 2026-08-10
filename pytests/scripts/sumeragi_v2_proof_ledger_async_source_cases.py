@@ -2393,6 +2393,42 @@ def local_runner_service_fixture(tmp_path: Path, module) -> Path:
     return formal_dir
 
 
+def pending_run_inner_fixture(
+    tmp_path: Path, module, checker_name: str
+) -> Path:
+    """Copy and approve the source fixture owned by one run-loop checker."""
+
+    if checker_name != "timeout_vote_episode":
+        return local_runner_service_fixture(tmp_path, module)
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    return formal_dir
+
+
+def pending_run_inner_source_fidelity_errors(
+    module, repo_root: Path, formal_dir: Path, checker_name: str
+) -> list[str]:
+    """Dispatch one run-loop mutation to its sole semantic owner."""
+
+    if checker_name == "timeout_vote_episode":
+        return module._timeout_vote_episode_source_fidelity_errors(
+            repo_root, formal_dir
+        )
+    if checker_name == "local_runner":
+        return module._local_runner_service_contract_source_fidelity_errors(
+            module.load_ledger(), repo_root=repo_root, formal_dir=formal_dir
+        )
+    if checker_name == "retained_response":
+        return module._retained_response_escape_latch_source_fidelity_errors(
+            repo_root
+        )
+    if checker_name == "locked_body":
+        return module._locked_body_reproposal_source_fidelity_errors(
+            module.FORMAL_DIR, repo_root
+        )
+    return module._exact_output_production_source_fidelity_errors(repo_root)
+
+
 def test_exact_serve_runtime_episode_production_contract_is_current(
     tmp_path: Path,
 ) -> None:
@@ -2831,3 +2867,122 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
         "DeadlockFreedomObligation must state only" in error
         for error in architecture_errors
     ), architecture_errors
+
+
+@pytest.mark.parametrize(
+    (
+        "relative_path",
+        "item_name",
+        "old",
+        "new",
+        "diagnostic",
+        "lifecycle_digest_key",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "adopt_effect_ownership",
+            "production_adapter_effect_candidate_binding(effect, Some(&retained_statement))?",
+            "production_adapter_effect_candidate_binding(effect, None)?",
+            "body-terminal adoption must derive its candidate from the retained effective authority",
+            "",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "reserve_body_available_with_owner",
+            "let candidate_statement = ownership.candidate_semantic_statement();",
+            "let candidate_statement = None;",
+            "owned BodyAvailable reservation must receive the incumbent effect statement",
+            "reserve_body_available_with_owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner",
+            "foreign_subject,",
+            "manifest.subject,",
+            "unpublished-token regression must reject foreign coordinates without selecting the token",
+            "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "commit_pending_fetch_retirement",
+            "if !retired_completion {",
+            "if false && !retired_completion {",
+            "pending Fetch retirement must release its token or restored stage-7 parent before local ownership",
+            "commit_pending_fetch_retirement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "retire_restored_producer_continuation",
+            "self.persist_restored_body_producer_retirement(*address, record)?;",
+            "let _unretired = (address, record);",
+            "persistent producer retirement must delegate its exact matched owner",
+            "",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "persist_restored_body_producer_retirement",
+            "record.identity().address() != address",
+            "record.identity().address() == address",
+            "persistent producer retirement must own one exact dormant durable volatile-body record",
+            "",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "persist_restored_body_producer_retirement",
+            "self.restored_dormant_producer_continuations.insert(address);",
+            "self.restored_dormant_producer_continuations.remove(&address);",
+            "roll all memory back on persistence failure",
+            "",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            """if !reserve_completion {
+            assert!(
+                runtime
+                    .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+                    .expect("persist terminal restored fetch-parent retirement")
+            );
+            assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+            assert!(
+                !runtime""",
+            """if !reserve_completion {
+            assert!(
+                runtime
+                    .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+                    .expect("persist terminal restored fetch-parent retirement")
+            );
+            assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+            assert!(
+                runtime""",
+            "must observe both terminal-fetch and reserved-token process/durable/dormant removal cuts",
+            "",
+        ),
+    ),
+)
+def test_effect_capacity_reconciled_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    relative_path: str,
+    item_name: str,
+    old: str,
+    new: str,
+    diagnostic: str,
+    lifecycle_digest_key: str,
+) -> None:
+    """Extracted ownership contracts remain semantic after any item reseal."""
+
+    module = load_checker()
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    path = repo_root / relative_path
+    mutate_rust_item_source(module, path, item_name, old, new)
+    if lifecycle_digest_key:
+        items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
+        assert len(items) == 1, item_name
+        module._EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[
+            lifecycle_digest_key
+        ] = module._rust_item_token_sha256(items[0])
+
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+
+    assert any(diagnostic in error for error in errors), errors

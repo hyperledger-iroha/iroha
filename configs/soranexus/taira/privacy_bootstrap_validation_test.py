@@ -17,6 +17,14 @@ from pathlib import Path
 import validate_privacy_bootstrap as target
 
 
+TEST_NETWORK_ID = (
+    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+)
+FOREIGN_NETWORK_ID = (
+    "hash:A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A5#E8B5"
+)
+
+
 class PrivacyBootstrapValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -106,6 +114,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         broker = {
             "schema": target.EXPECTED_BROKER_SCHEMA,
             "chain_id": target.EXPECTED_CHAIN_ID,
+            "network_id": TEST_NETWORK_ID,
             "runtime_provider_handle": target.EXPECTED_PROVIDER_HANDLE,
             "runtime_provider_revision": 1,
             "runtime_provider_policy_digest_hex": provider_digest,
@@ -158,6 +167,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
             + "\n"
         ).encode()
         self.broker.write_bytes(broker_payload)
+        plan["network_id"] = TEST_NETWORK_ID
         bootle["public_export_sha256"] = hashlib.sha256(broker_payload).hexdigest()
         self.write_plan(plan)
         config = self.config.read_text(encoding="utf-8")
@@ -183,6 +193,12 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_canonical_staging_contract_passes(self) -> None:
         target.validate(self.paths, release=False)
+
+    def test_staging_cannot_prebind_a_network_id(self) -> None:
+        plan = self.load_plan()
+        plan["network_id"] = TEST_NETWORK_ID
+        self.write_plan(plan)
+        self.assert_rejected("must not bind a genesis-derived network_id")
 
     def test_auto_mode_selects_canonical_staging(self) -> None:
         output = io.StringIO()
@@ -230,6 +246,22 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
     def test_release_keeps_activation_out_of_genesis(self) -> None:
         self.materialize_release_public_inputs()
         target.validate(self.paths, release=True)
+
+    def test_release_requires_a_canonical_genesis_derived_network_id(self) -> None:
+        self.materialize_release_public_inputs()
+        plan = self.load_plan()
+        plan["network_id"] = None
+        self.write_plan(plan)
+        self.assert_rejected("checksummed NetworkId", release=True)
+
+    def test_release_rejects_broker_network_substitution_even_if_export_is_rebound(
+        self,
+    ) -> None:
+        self.materialize_release_public_inputs()
+        broker = self.load_broker()
+        broker["network_id"] = FOREIGN_NETWORK_ID
+        self.write_broker(broker, rebind_plan=True)
+        self.assert_rejected("plan bindings", release=True)
 
     def test_reordered_protocols_are_rejected(self) -> None:
         plan = self.load_plan()
@@ -527,6 +559,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_release_requires_provider_qualification_after_exact12(self) -> None:
         plan = self.load_plan()
+        plan["network_id"] = TEST_NETWORK_ID
         plan["bootle_lantern_issuer"]["public_export_sha256"] = "22" * 32
         self.write_plan(plan)
         self.assert_rejected("provider qualification digest", release=True)

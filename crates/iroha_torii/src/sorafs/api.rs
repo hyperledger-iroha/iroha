@@ -274,7 +274,6 @@ use crate::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
             PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
             RegistryReplicationOrder, collect_pin_registry, collect_snapshot, lineage_to_json,
-            record_pin_registry_metrics,
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
@@ -11434,8 +11433,15 @@ fn require_reputation_canonical_auth(
             "SoraFS reputation routes accept GET only",
         ));
     }
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(_)) => Ok(()),
         Ok(None) | Err(_) => Err(reputation_authentication_required_response()),
     }
@@ -12233,7 +12239,9 @@ fn moderation_dead_letter_resolution_fixture(
 ) -> ModerationDeadLetterResolutionV1 {
     ModerationDeadLetterResolutionV1 {
         version: 1,
-        chain_id: "moderation-recovery-test-chain".to_owned(),
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"moderation-recovery-test-genesis"),
+        )),
         checkpoint_namespace_digest: [0x11; 32],
         checkpoint_generation: 7,
         checkpoint_revision: [0x22; 32],
@@ -14115,7 +14123,9 @@ async fn submit_repair_signed_transaction(
     if !repair_api_enabled(&state) {
         return feature_disabled("sorafs repair API is not enabled on this node");
     }
-    if let Err(response) = validate_repair_signed_transaction(&transaction, route) {
+    if let Err(response) =
+        validate_repair_signed_transaction(state.state.network_id_ref(), &transaction, route)
+    {
         return response;
     }
     match crate::submit_signed_transaction_for_ingress_strict_durable(
@@ -14132,9 +14142,22 @@ async fn submit_repair_signed_transaction(
 }
 
 fn validate_repair_signed_transaction(
+    expected_network: &NetworkId,
     transaction: &SignedTransaction,
     route: RepairCommandRouteV1,
 ) -> Result<(), Response> {
+    if transaction.network_id() != Some(expected_network) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS repair transaction network does not match this peer",
+        ));
+    }
+    transaction.verify_signature().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS repair transaction signature or authority binding is invalid",
+        )
+    })?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -14250,6 +14273,18 @@ fn validate_orderbook_signed_transaction(
     transaction: &SignedTransaction,
     route: OrderbookCommandRouteV1,
 ) -> Result<(), Response> {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook transaction network does not match this peer",
+        ));
+    }
+    transaction.verify_signature().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook transaction signature or authority binding is invalid",
+        )
+    })?;
     let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
         json_error(
             StatusCode::BAD_REQUEST,
@@ -14508,8 +14543,9 @@ fn require_moderation_request_auth(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(
+    match crate::app_auth::verify_canonical_network_request(
         &state.state,
+        state.state.network_id_ref(),
         headers,
         method,
         uri,
@@ -14629,8 +14665,15 @@ fn require_appeal_finance_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
@@ -14656,8 +14699,15 @@ fn require_transparency_source_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
@@ -27716,389 +27766,7 @@ async fn resolve_site_manifest_by_cid(
 
 #[cfg(test)]
 mod remote_hydration_security_tests {
-    use std::convert::Infallible;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use axum::{Router, routing::get};
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    #[test]
-    fn provider_base_url_requires_clean_https_origin() {
-        assert_eq!(
-            normalize_provider_torii_base_url("provider.example:8443")
-                .expect("bare HTTPS origin")
-                .as_str(),
-            "https://provider.example:8443/"
-        );
-        assert!(normalize_provider_torii_base_url("https://provider.example/").is_ok());
-
-        for unsafe_url in [
-            "http://provider.example/",
-            "https://user@provider.example/",
-            "https://user:password@provider.example/",
-            "https://provider.example/?token=secret",
-            "https://provider.example/#fragment",
-            "https://provider.example/api",
-            "https://provider.example/a/..",
-            "https://provider.example/%2e%2e/",
-            "https://provider.example\\@127.0.0.1/",
-            "https://provider.example@127.0.0.1/",
-            "https://[fe80::1%25en0]/",
-            "https://provider.example:0/",
-        ] {
-            assert!(
-                normalize_provider_torii_base_url(unsafe_url).is_err(),
-                "unsafe endpoint should be rejected: {unsafe_url}"
-            );
-        }
-    }
-
-    #[test]
-    fn public_ip_policy_rejects_special_ipv4_and_ipv6_ranges() {
-        for ip in [
-            "0.0.0.0",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.169.254",
-            "172.16.0.1",
-            "192.0.0.1",
-            "192.0.2.1",
-            "192.168.1.1",
-            "198.18.0.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::",
-            "::1",
-            "::ffff:127.0.0.1",
-            "::ffff:10.0.0.1",
-            "::ffff:169.254.169.254",
-            "::8.8.8.8",
-            "::192.168.1.1",
-            "fc00::1",
-            "fe80::1",
-            "ff02::1",
-            "2001:db8::1",
-            "2001:2::1",
-            "2002::1",
-            "3fff::1",
-        ] {
-            let parsed = ip.parse::<IpAddr>().expect("test IP literal");
-            assert!(!ip_is_public(parsed), "special address allowed: {ip}");
-        }
-
-        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            let parsed = ip.parse::<IpAddr>().expect("test public IP literal");
-            assert!(ip_is_public(parsed), "public address rejected: {ip}");
-        }
-    }
-
-    #[tokio::test]
-    async fn endpoint_resolution_rejects_private_literals_before_connect() {
-        for endpoint in [
-            "https://127.0.0.1/",
-            "https://127.1/",
-            "https://2130706433/",
-            "https://0177.0.0.1/",
-            "https://0x7f000001/",
-            "https://[::ffff:127.0.0.1]/",
-            "https://[fe80::1]/",
-        ] {
-            let private = normalize_provider_torii_base_url(endpoint)
-                .expect("syntactically valid private endpoint");
-            assert!(
-                resolve_public_endpoint(&private).await.is_err(),
-                "private endpoint should be rejected: {endpoint}"
-            );
-        }
-
-        let public =
-            normalize_provider_torii_base_url("https://8.8.8.8:444/").expect("public endpoint");
-        assert_eq!(
-            resolve_public_endpoint(&public)
-                .await
-                .expect("resolve public literal"),
-            vec!["8.8.8.8:444".parse().expect("socket literal")]
-        );
-        let public_v6 = normalize_provider_torii_base_url("https://[2606:4700:4700::1111]:444/")
-            .expect("public IPv6 endpoint");
-        assert_eq!(
-            resolve_public_endpoint(&public_v6)
-                .await
-                .expect("resolve public IPv6 literal"),
-            vec![
-                "[2606:4700:4700::1111]:444"
-                    .parse()
-                    .expect("IPv6 socket literal")
-            ]
-        );
-    }
-
-    #[test]
-    fn pinned_client_revalidates_addresses_to_prevent_rebinding() {
-        let mut source = RemoteCidSource {
-            manifest_digest_hex: hex::encode([0x11; 32]),
-            provider_id_hex: hex::encode([0x22; 32]),
-            torii_base_url: normalize_provider_torii_base_url("https://provider.example/")
-                .expect("provider URL"),
-            pinned_addrs: vec!["8.8.8.8:443".parse().expect("public address")],
-        };
-        assert!(build_pinned_remote_client(&source).is_ok());
-
-        source.pinned_addrs = vec!["127.0.0.1:443".parse().expect("loopback address")];
-        assert!(build_pinned_remote_client(&source).is_err());
-    }
-
-    #[test]
-    fn remote_file_layout_rejects_traversal_gaps_and_overflow() {
-        let file = |path: &[&str], offset, size| StorageStoredFileDto {
-            path: path
-                .iter()
-                .map(|component| (*component).to_owned())
-                .collect(),
-            offset,
-            size,
-            first_chunk: 0,
-            chunk_count: 1,
-        };
-        assert!(
-            storage_file_entries_from_manifest_response(&[file(&["..", "secret"], 0, 1)], 1)
-                .is_err()
-        );
-        assert!(
-            storage_file_entries_from_manifest_response(&[file(&["index.html"], 1, 1)], 1).is_err()
-        );
-        assert!(
-            storage_file_entries_from_manifest_response(
-                &[
-                    file(&["first"], 0, u64::MAX),
-                    file(&["second"], u64::MAX, 1),
-                ],
-                u64::MAX,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn site_ranges_are_bounded_and_single_only() {
-        let empty = HeaderMap::new();
-        assert_eq!(
-            parse_site_response_range(&empty, 7).expect("full range"),
-            SiteResponseRange {
-                offset: 0,
-                length: 7,
-                partial: false,
-            }
-        );
-        assert_eq!(
-            parse_site_response_range(&empty, MAX_SITE_RESPONSE_BYTES + 1)
-                .expect_err("oversized full response")
-                .status(),
-            StatusCode::PAYLOAD_TOO_LARGE
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10).expect("bounded range"),
-            SiteResponseRange {
-                offset: 2,
-                length: 4,
-                partial: true,
-            }
-        );
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=-3"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10).expect("suffix range"),
-            SiteResponseRange {
-                offset: 7,
-                length: 3,
-                partial: true,
-            }
-        );
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-1,4-5"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10)
-                .expect_err("multiple ranges")
-                .status(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-
-    #[test]
-    fn active_content_types_require_isolated_origin() {
-        for media_type in [
-            "text/html; charset=utf-8",
-            "text/css; charset=utf-8",
-            "text/javascript; charset=utf-8",
-            "image/svg+xml",
-            "application/xml; charset=utf-8",
-            "application/pdf",
-            "application/wasm",
-        ] {
-            assert!(content_type_is_active(media_type), "missed {media_type}");
-        }
-        assert!(!content_type_is_active("image/png"));
-        assert!(!content_type_is_active("application/octet-stream"));
-    }
-
-    #[tokio::test]
-    async fn same_cid_hydrations_share_one_exclusion_lock() {
-        let cid = b"single-flight-security-test-cid";
-        let first = cid_hydration_flight(cid).expect("first hydration flight");
-        let second = cid_hydration_flight(cid).expect("second hydration flight");
-        assert!(Arc::ptr_eq(&first, &second));
-
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let mut tasks = Vec::new();
-        for _ in 0..24 {
-            let active = Arc::clone(&active);
-            let maximum = Arc::clone(&maximum);
-            let lock = Arc::clone(&first);
-            tasks.push(tokio::spawn(async move {
-                let _guard = lock.gate.lock().await;
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                maximum.fetch_max(current, Ordering::SeqCst);
-                tokio::task::yield_now().await;
-                active.fetch_sub(1, Ordering::SeqCst);
-            }));
-        }
-        for task in tasks {
-            task.await.expect("hydration task");
-        }
-        assert_eq!(maximum.load(Ordering::SeqCst), 1);
-
-        first.record_failure();
-        assert!(second.failure_backoff_active());
-        first.clear_failure();
-        assert!(!second.failure_backoff_active());
-    }
-
-    #[tokio::test]
-    async fn remote_response_reader_rejects_redirects_and_declared_or_streamed_oversize_bodies() {
-        let router = Router::new()
-            .route(
-                "/ok",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/redirect",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    *response.status_mut() = StatusCode::FOUND;
-                    response
-                        .headers_mut()
-                        .insert(header::LOCATION, HeaderValue::from_static("/target"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/declared-oversize",
-                get(|| async {
-                    let mut response = Response::new(Body::from("12345"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                        .headers_mut()
-                        .insert(header::CONTENT_LENGTH, HeaderValue::from_static("5"));
-                    response
-                }),
-            )
-            .route(
-                "/streamed-oversize",
-                get(|| async {
-                    let chunks = futures::stream::iter([
-                        Ok::<_, Infallible>(Bytes::from_static(b"123")),
-                        Ok::<_, Infallible>(Bytes::from_static(b"456")),
-                    ]);
-                    let mut response = Response::new(Body::from_stream(chunks));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/oversize-headers",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response.headers_mut().insert(
-                        HeaderName::from_static("x-adversarial-padding"),
-                        HeaderValue::from_str(&"a".repeat(MAX_REMOTE_RESPONSE_HEADER_BYTES + 1))
-                            .expect("oversized test header"),
-                    );
-                    response
-                }),
-            );
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind adversarial response server");
-        let addr = listener.local_addr().expect("response server address");
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .await
-                .expect("serve adversarial responses");
-        });
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client");
-
-        for path in [
-            "redirect",
-            "declared-oversize",
-            "streamed-oversize",
-            "oversize-headers",
-        ] {
-            let response = client
-                .get(format!("http://{addr}/{path}"))
-                .send()
-                .await
-                .expect("fetch adversarial response");
-            assert!(
-                bounded_remote_response_bytes(response, 4, "adversarial response")
-                    .await
-                    .is_err(),
-                "response should be rejected: {path}"
-            );
-        }
-        let response = client
-            .get(format!("http://{addr}/ok"))
-            .send()
-            .await
-            .expect("fetch bounded response");
-        let (status, body) = bounded_remote_response_bytes(response, 4, "bounded response")
-            .await
-            .expect("accept bounded response");
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, b"{}");
-
-        server.abort();
-    }
+    include!("api/remote_hydration_security_tests.rs");
 }
 
 fn enforce_governed_site_compliance(
@@ -33708,11 +33376,7 @@ fn pin_snapshot_with_attestation(
     };
 
     match collect_pin_registry(view.world()) {
-        Ok(snapshot) => {
-            let telemetry = state.telemetry_handle();
-            record_pin_registry_metrics(&telemetry, &snapshot);
-            Ok((attestation, snapshot))
-        }
+        Ok(snapshot) => Ok((attestation, snapshot)),
         Err(err) => {
             error!(?err, "failed to collect pin registry snapshot");
             Err(json_error(
@@ -34418,87 +34082,7 @@ pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<Chu
 
 #[cfg(test)]
 mod chunk_profile_tests {
-    use super::*;
-
-    use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
-
-    fn canonical_fixture_car_stats(
-        plan: &CarBuildPlan,
-        payload: &[u8],
-    ) -> sorafs_car::CarWriteStats {
-        sorafs_car::CarWriter::new(plan, payload)
-            .expect("canonical fixture CAR writer")
-            .write_to(std::io::sink())
-            .expect("derive canonical fixture CAR archive stats")
-    }
-
-    #[test]
-    fn chunk_profile_for_manifest_accepts_inline_profile() {
-        let payload = b"chunk-profile-fixture";
-        let content_length = payload.len() as u64;
-        let profile = sorafs_chunker::ChunkProfile {
-            min_size: 8,
-            target_size: 8,
-            max_size: 8,
-            break_mask: 1,
-        };
-        let plan =
-            CarBuildPlan::single_file_with_profile(payload, profile).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical inline-profile PoR root"),
-            )
-            .content_length(content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let resolved = chunk_profile_for_manifest(&manifest).expect("inline profile accepted");
-
-        assert_eq!(resolved, profile);
-    }
-
-    #[test]
-    fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
-        let payload = b"chunk-profile-fixture";
-        let content_length = payload.len() as u64;
-        let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let mut manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical unknown-profile fixture PoR root"),
-            )
-            .content_length(content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-        manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
-        manifest.chunking.min_size = 1024;
-        manifest.chunking.target_size = 512;
-        manifest.chunking.max_size = 2048;
-        manifest.chunking.break_mask = 1;
-
-        let err = chunk_profile_for_manifest(&manifest).expect_err("invalid profile should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-    }
+    include!("api/chunk_profile_tests.rs");
 }
 
 fn advert_to_json(
@@ -35150,9 +34734,11 @@ mod advert_tests {
                 RegistryFeeLedgerEntry,
             },
         },
-        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
+        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
         utils::extractors::JsonOnly,
     };
+
+    include!("api/exact_network_auth_tests.rs");
 
     #[test]
     fn finalized_capacity_worker_preserves_bounded_restart_semantics() {
@@ -38087,23 +37673,6 @@ mod advert_tests {
         (app, temp_dir)
     }
 
-    fn reputation_request_keypair() -> KeyPair {
-        KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
-            .expect("derive reputation request authentication key")
-    }
-
-    fn reputation_signed_get_headers(uri: &Uri, body: &[u8]) -> HeaderMap {
-        let keypair = reputation_request_keypair();
-        let account = AccountId::new(keypair.public_key().clone());
-        signed_app_headers(&account, &keypair, &Method::GET, uri, body)
-    }
-
-    fn reputation_auth_test_guard() -> impl Drop {
-        crate::tests_runtime_handlers::app_auth_test_guard(
-            crate::app_auth::CanonicalRequestAuthConfig::default(),
-        )
-    }
-
     fn assert_reputation_terminal_response(response: &Response, expected_status: StatusCode) {
         assert_eq!(response.status(), expected_status);
         assert_eq!(
@@ -39350,8 +38919,12 @@ mod advert_tests {
         )
         .with_instructions([report.clone(), report])
         .sign(auth.provider.keypair.private_key());
-        let response = validate_repair_signed_transaction(&multiple, RepairCommandRouteV1::Report)
-            .expect_err("multiple repair instructions must be rejected before ingress");
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &multiple,
+            RepairCommandRouteV1::Report,
+        )
+        .expect_err("multiple repair instructions must be rejected before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let claim: InstructionBox = ApplySorafsRepairTaskAction::new(
@@ -39370,11 +38943,54 @@ mod advert_tests {
         )
         .with_instructions([claim])
         .sign(auth.provider.keypair.private_key());
-        validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Claim)
-            .expect("matching claim route must pass pre-ingress contract validation");
-        let response = validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Fail)
-            .expect_err("claim action must not enter the fail route");
+        validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &transaction,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect("matching claim route must pass pre-ingress contract validation");
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &transaction,
+            RepairCommandRouteV1::Fail,
+        )
+        .expect_err("claim action must not enter the fail route");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let wrong_network = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xFD; Hash::LENGTH]),
+            )),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ApplySorafsRepairTaskAction::new(
+            "REP-ROUTE-1".to_owned(),
+            1,
+            SorafsRepairTaskActionV1::Claim(iroha_data_model::isi::sorafs::SorafsRepairClaimV1 {
+                lease_duration_ms: 60_000,
+                idempotency_key: "claim-route-1".to_owned(),
+            }),
+        )])
+        .sign(auth.provider.keypair.private_key());
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &wrong_network,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect_err("cross-network repair transaction must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let substituted = transaction
+            .clone()
+            .with_authority(auth.buyer.account.clone());
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &substituted,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect_err("authority substitution must invalidate the repair envelope");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -42914,31 +42530,6 @@ mod advert_tests {
         latencies.sort_by(f64::total_cmp);
         assert_eq!(latencies, vec![3.0]);
         assert_eq!(summary.deadline_slack_epochs, vec![15.0]);
-
-        #[cfg(feature = "telemetry")]
-        {
-            let telemetry = isolated_test_telemetry();
-            record_pin_registry_metrics(&telemetry, &snapshot);
-            let metrics_text = telemetry
-                .telemetry()
-                .expect("telemetry handle")
-                .metrics()
-                .await
-                .try_to_string()
-                .expect("serialize metrics");
-            assert!(
-                metrics_text.contains("torii_sorafs_registry_aliases_total 1"),
-                "alias gauge missing in metrics output: {metrics_text}"
-            );
-            assert!(
-                metrics_text.contains("torii_sorafs_replication_sla_total{outcome=\"met\"} 1"),
-                "SLA met gauge missing in metrics output: {metrics_text}"
-            );
-            assert!(
-                metrics_text.contains("torii_sorafs_replication_sla_total{outcome=\"missed\"} 2"),
-                "SLA missed gauge missing in metrics output: {metrics_text}"
-            );
-        }
     }
 
     fn encode_replication_order_bytes_with_providers(

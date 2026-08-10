@@ -909,17 +909,14 @@ fn validate_exact_input_length(
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::{
-        ChainId,
-        privacy::{
-            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1,
-            PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-            PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
-            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
-        },
+    use iroha_data_model::privacy::{
+        PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1,
+        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
+        PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
     };
     use iroha_zkp_halo2::vega::VegaT256ScalarV1;
     use p256::ecdsa::{SigningKey, signature::hazmat::PrehashSigner};
@@ -1038,7 +1035,7 @@ mod tests {
 
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: ChainId::from("taira-vega-test"),
+            network_id: super::super::network_id_from_genesis_hash_bytes([0xA7; 32]),
             action_index: VEGA_PRIVACY_ACTION_INDEX_V1,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x26; 32]),
             parameter_id: PrivacyParameterIdV1::new([0x21; 32]),

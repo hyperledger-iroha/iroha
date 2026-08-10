@@ -80,23 +80,22 @@ use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
     nexus::DataSpaceId,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
         IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
-        MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
-        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PqMaspStarkStatementV1, PrivacyActionDigestV1,
-        PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
-        PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyNoteEncryptionKeyDigestV1,
-        PrivacyOrchardActionV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1,
+        PrivacyActionDigestV1, PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1,
+        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
+        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1,
+        PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
         PrivacyVeRangeBitLengthV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
         PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1,
@@ -294,8 +293,6 @@ pub fn privacy_native_action_capability_for_protocol_v1(
 pub struct PrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
     pub network_id: NetworkId,
-    /// Chain selected by the signed transaction and every native transcript.
-    pub chain_id: ChainId,
     /// Exact direct single-key authority.
     pub authority: AccountId,
     /// Creation time resolved once before two-pass construction.
@@ -315,7 +312,6 @@ impl fmt::Debug for PrivacyActionTransactionContextV1 {
         formatter
             .debug_struct("PrivacyActionTransactionContextV1")
             .field("network_id", &self.network_id)
-            .field("chain_id", &self.chain_id)
             .field("authority", &self.authority)
             .field("creation_time", &self.creation_time)
             .field("time_to_live", &self.time_to_live)
@@ -887,14 +883,6 @@ impl InspectedPrivacyActionV1 {
 fn validate_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> Result<(), PrivacyNativeActionErrorV1> {
-    let chain_len = context.chain_id.as_str().as_bytes().len();
-    if chain_len == 0
-        || chain_len
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(PrivacyNativeActionErrorV1::at("transaction-chain-id"));
-    }
     if context.creation_time.as_millis() > u128::from(u64::MAX) {
         return Err(PrivacyNativeActionErrorV1::at("transaction-creation-time"));
     }
@@ -951,7 +939,7 @@ fn statement_context(
     profile: CompiledPrivacyProfileV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
         parameter_id: profile.parameter_id,
@@ -1155,7 +1143,6 @@ pub fn build_signed_zk_ace_authorization_action_v1(
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = ZkAcePrivacyActionTransactionContextV1 {
         network_id: context.network_id,
-        chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1187,7 +1174,6 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = JindoPrivacyActionTransactionContextV1 {
         network_id: context.network_id,
-        chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1218,7 +1204,6 @@ pub fn build_signed_vega_credential_presentation_action_v1(
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = VegaPrivacyActionTransactionContextV1 {
         network_id: context.network_id,
-        chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1424,7 +1409,7 @@ pub fn build_signed_verange_action_v1(
         .digest()
         .map_err(|_| PrivacyNativeActionErrorV1::at("verange-statement-digest"))?;
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1525,7 +1510,6 @@ fn zk_ams_transaction_context(
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
         network_id: context.network_id,
-        chain_id: context.chain_id.clone(),
         authority: context.authority.clone(),
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1542,7 +1526,7 @@ fn zk_ams_transcript_binding<'a>(
     statement_digest: PrivacyStatementDigestV1,
 ) -> TranscriptBindingV1<'a> {
     TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1881,7 +1865,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
     let parameters = AnonymousPgcParametersV1::get()
         .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-parameters"))?;
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -2043,13 +2027,11 @@ fn model_fcmp_input(input: FcmpProofInputPublicV1) -> PrivacyFcmpInputPublicV1 {
 
 fn fcmp_runtime_context_hash(
     context: &PrivacyActionTransactionContextV1,
-    canonical_genesis_hash: [u8; 32],
     statement_digest: PrivacyStatementDigestV1,
     profile: CompiledPrivacyProfileV1,
 ) -> [u8; 32] {
     derive_fcmp_runtime_context_hash_v1(&FcmpRuntimeContextBindingV1 {
-        chain_id: &context.chain_id,
-        genesis_hash: canonical_genesis_hash,
+        network_id: &context.network_id,
         action_index: 0,
         statement_digest,
         parameter_id: profile.parameter_id,
@@ -2132,8 +2114,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyNativeActionErrorV1::at("fcmp-statement-digest"))?;
-    let runtime_context =
-        fcmp_runtime_context_hash(&context, canonical_genesis_hash, statement_digest, profile);
+    let runtime_context = fcmp_runtime_context_hash(&context, statement_digest, profile);
     let proved = prove_fcmp_plus_plus_v1(
         &mut OsRng,
         runtime_context,
@@ -2790,7 +2771,6 @@ mod tests {
         let private_key = signing_key();
         PrivacyActionTransactionContextV1 {
             network_id: network_id_from_genesis_hash_bytes([1; 32]),
-            chain_id: ChainId::from("privacy-native-actions-test-v1"),
             authority: AccountId::new(PublicKey::from(private_key)),
             creation_time: Duration::from_millis(1_800_000_000_123),
             time_to_live: Some(Duration::from_secs(60)),
@@ -3179,25 +3159,9 @@ mod tests {
     }
 
     #[test]
-    fn chain_id_and_transaction_context_reject_invalid_values_before_proving() {
+    fn transaction_context_rejects_invalid_values_before_proving() {
         let mut context = action_context();
         validate_context(&context).expect("baseline context");
-
-        assert!(
-            "".parse::<ChainId>().is_err(),
-            "the canonical ChainId type must reject an empty identifier"
-        );
-        assert!(
-            ChainId::try_from(
-                "x".repeat(
-                    usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                        .expect("privacy chain-id bound fits usize")
-                        + 1,
-                ),
-            )
-            .is_err(),
-            "the canonical ChainId type must reject an oversized identifier"
-        );
 
         context = action_context();
         context.creation_time = Duration::from_secs(u64::MAX);

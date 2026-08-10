@@ -923,7 +923,7 @@ mod tests {
             .collect();
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "runtime-scope-chain".to_owned(),
-            network_id: None,
+            network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
             bindings,
         }
     }

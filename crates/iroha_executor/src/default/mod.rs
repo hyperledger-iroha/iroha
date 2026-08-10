@@ -327,7 +327,7 @@ fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
 mod contract_deployment_bootstrap_tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{AccountAlias, NewAccount, OpaqueAccountId},
         isi::smart_contract_code::{
@@ -540,7 +540,9 @@ mod contract_deployment_bootstrap_tests {
         let authority = account(1);
         let code_hash = Hash::new(b"executor lifecycle dispatch code");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -719,7 +721,9 @@ mod contract_deployment_bootstrap_tests {
             CommitContractDeployment {
                 expected_deploy_nonce: 0,
                 contract_address: ContractAddress::derive(
-                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
                     &authority,
                     0,
                     DataSpaceId::UNIVERSAL,

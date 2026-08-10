@@ -2,6 +2,14 @@
 //
 // Included by `runtime_provider_registry::tests` to preserve exact libtest paths.
 
+fn test_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [seed; Hash::LENGTH],
+        )),
+    )
+}
+
 fn configure_governance_service(config: &mut Config) {
     let service = &mut config.torii.sorafs_storage.governance_dag_service;
     service.enabled = true;
@@ -259,7 +267,7 @@ fn reputation_catalog_rejects_zero_public_qualification_bindings() {
 fn reputation_checkpoint_request() -> IrohaRuntimeProviderBindingsV1 {
     IrohaRuntimeProviderBindingsV1 {
         chain_id: "reputation-checkpoint-registry-test".to_owned(),
-        network_id: None,
+        network_id: test_network_id(0xA5),
         bindings: vec![
             IrohaRuntimeProviderBindingV1::try_new(
                 IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint,
@@ -297,7 +305,7 @@ fn reputation_checkpoint_resolution_is_exactly_scoped_and_qualified() {
 
     let unrequested = IrohaRuntimeProviderBindingsV1 {
         chain_id: "reputation-checkpoint-registry-test".to_owned(),
-        network_id: None,
+        network_id: test_network_id(0xA5),
         bindings: Vec::new(),
     };
     assert!(matches!(
@@ -522,14 +530,17 @@ fn governance_service_catalog_projects_only_exact_public_provider_bindings() {
 #[test]
 fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
     let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
+    let network_id = test_network_id(0xA5);
     let signed_head_view = governance_service_view("signed_http");
     let request_max = signed_head_view.service.max_request_bytes.0;
     let signed_head = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
         &chain_id,
+        network_id,
         &signed_head_view,
     )
     .expect("project signed-head standalone service bindings");
     assert_eq!(signed_head.chain_id(), chain_id.to_string());
+    assert_eq!(signed_head.network_id(), &network_id);
     assert_eq!(
         signed_head
             .iter()
@@ -569,9 +580,11 @@ fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
 
     let ipns = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
         &chain_id,
+        network_id,
         &governance_service_view("ipns"),
     )
     .expect("project IPNS standalone service bindings");
+    assert_eq!(ipns.network_id(), &network_id);
     assert_eq!(
         ipns.iter()
             .map(IrohaRuntimeProviderBindingV1::slot)
@@ -605,7 +618,9 @@ fn standalone_governance_service_view_projection_rejects_invalid_public_bindings
         |view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView, slot| {
             assert_eq!(
                 IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
-                    &chain_id, view,
+                    &chain_id,
+                    test_network_id(0xA5),
+                    view,
                 ),
                 Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))
             );
@@ -1416,7 +1431,7 @@ fn unrequested_native_signers_are_rejected_individually() {
     ];
     let empty_bindings = IrohaRuntimeProviderBindingsV1 {
         chain_id: "production-chain".to_owned(),
-        network_id: None,
+        network_id: test_network_id(0xA5),
         bindings: Vec::new(),
     };
 

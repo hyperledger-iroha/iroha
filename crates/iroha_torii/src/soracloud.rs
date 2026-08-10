@@ -136,9 +136,6 @@ pub(crate) const VERIFIED_ACCOUNT_HEADER: &str = "x-iroha-internal-soracloud-acc
 pub(crate) const VERIFIED_SIGNER_HEADER: &str = "x-iroha-internal-soracloud-signer";
 pub(crate) const VERIFIED_SIGNERS_HEADER: &str = "x-iroha-internal-soracloud-signers";
 
-pub(crate) fn requires_signed_mutation_request(method: &axum::http::Method, path: &str) -> bool {
-    method == axum::http::Method::POST && path.starts_with("/v1/soracloud/")
-}
 const TRAINING_MAX_IDENTIFIER_BYTES: usize = 128;
 const MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
@@ -13852,22 +13849,6 @@ mod tests {
             iroha_core::sns::record_storage_key(&selector),
             Encode::encode(&record),
         );
-    }
-
-    #[test]
-    fn signed_mutation_request_matcher_targets_only_soracloud_posts() {
-        assert!(requires_signed_mutation_request(
-            &axum::http::Method::POST,
-            "/v1/soracloud/deploy",
-        ));
-        assert!(!requires_signed_mutation_request(
-            &axum::http::Method::GET,
-            "/v1/soracloud/deploy",
-        ));
-        assert!(!requires_signed_mutation_request(
-            &axum::http::Method::POST,
-            "/v1/zk/attachments",
-        ));
     }
 
     #[test]

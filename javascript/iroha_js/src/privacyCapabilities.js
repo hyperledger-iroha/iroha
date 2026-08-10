@@ -142,7 +142,7 @@ export function parsePrivacyCapabilitySnapshotV1(payload) {
  * @param {object} [options] Client-specific request options.
  * @returns {Promise<Readonly<Record<string, unknown>>>}
  */
-export async function getPrivacyCapabilitiesV1(client, options = {}) {
+export async function getPrivacyCapabilitiesV1(client, options) {
   if (
     (typeof client !== "object" && typeof client !== "function")
     || client === null
@@ -588,7 +588,7 @@ export function decodePrivacyExact12CapabilityManifestV1(canonicalArchive) {
  * Fetch Torii's canonical Norito manifest and validate it with the required
  * N-API binding. Browser-only clients and JSON/mock transports fail closed.
  */
-export async function getPrivacyExact12CapabilityManifestV1(client, options = {}) {
+export async function getPrivacyExact12CapabilityManifestV1(client, options) {
   requirePrivacyExact12NativeV1();
   if (
     (typeof client !== "object" && typeof client !== "function")
@@ -663,7 +663,7 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
 function requirePrivacyExact12NativeV1() {
   let native;
   try {
-    native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+    native = getNativeBinding();
   } catch (cause) {
     throw new PrivacyExact12CapabilityManifestError(
       "authenticated iroha_js_host native binding is required; no browser or mock fallback is permitted",

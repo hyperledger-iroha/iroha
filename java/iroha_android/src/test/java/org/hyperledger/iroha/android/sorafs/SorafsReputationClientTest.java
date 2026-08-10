@@ -11,6 +11,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
@@ -28,15 +29,18 @@ import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.EventStreamListener;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.SnapshotEventV1;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.SnapshotSummaryV1;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
 
 /** Focused hard-cut tests for authenticated Java SoraFS reputation reads. */
 public final class SorafsReputationClientTest {
 
   private static final URI BASE_URI = URI.create("https://torii.example");
+  private static final NetworkId NETWORK_ID = TestNetworkIds.canonical();
   private static final long TIMESTAMP_MS = 1_717_171_717_000L;
   private static final byte[] SIGNATURE = new byte[] {1, 2, 3};
   private static final String SNAPSHOT_ID = "abababababababababababababababab";
@@ -139,7 +143,8 @@ public final class SorafsReputationClientTest {
   @Test
   public void finiteReadsUseExactAuthenticatedGetTargetsAndTypedProjection() {
     final RecordingStreamingExecutor executor = new RecordingStreamingExecutor();
-    final SorafsReputationClient client = new SorafsReputationClient(BASE_URI, executor);
+    final SorafsReputationClient client =
+        new SorafsReputationClient(BASE_URI, NETWORK_ID, executor);
 
     executor.enqueueJson(SNAPSHOT_JSON);
     final RecordedAuth latestAuth = auth("latest");
@@ -208,7 +213,8 @@ public final class SorafsReputationClientTest {
   @Test
   public void rejectsNoncanonicalInputsAndPartialAuthenticationBeforeTransport() {
     final RecordingStreamingExecutor executor = new RecordingStreamingExecutor();
-    final SorafsReputationClient client = new SorafsReputationClient(BASE_URI, executor);
+    final SorafsReputationClient client =
+        new SorafsReputationClient(BASE_URI, NETWORK_ID, executor);
     final ToriiCanonicalRequestAuth canonicalAuth = auth("valid").auth;
     final String[] snapshots = {
       repeat("AB", 16),
@@ -264,7 +270,8 @@ public final class SorafsReputationClientTest {
   @Test
   public void authenticatedSseUsesOneStreamingAttemptWithoutResumeSurface() throws Exception {
     final RecordingStreamingExecutor executor = new RecordingStreamingExecutor();
-    final SorafsReputationClient client = new SorafsReputationClient(BASE_URI, executor);
+    final SorafsReputationClient client =
+        new SorafsReputationClient(BASE_URI, NETWORK_ID, executor);
     final RecordedAuth canonicalAuth = auth("stream");
     executor.enqueueStream(
         "id: 8\n"
@@ -326,7 +333,8 @@ public final class SorafsReputationClientTest {
           return CompletableFuture.completedFuture(
               TransportResponse.builder().setStatusCode(200).build());
         };
-    final SorafsReputationClient client = new SorafsReputationClient(BASE_URI, bufferedOnly);
+    final SorafsReputationClient client =
+        new SorafsReputationClient(BASE_URI, NETWORK_ID, bufferedOnly);
     final RecordedAuth canonicalAuth = auth("no-fallback");
 
     assertThrows(
@@ -525,12 +533,23 @@ public final class SorafsReputationClientTest {
     assertArrayEquals(new byte[0], request.body());
     assertArrayEquals(
         CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            NETWORK_ID,
             "GET",
             request.uri(),
             new byte[0],
             TIMESTAMP_MS,
             recordedAuth.auth.nonce()),
         recordedAuth.signedMessage.get());
+    assertFalse(
+        Arrays.equals(
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                TestNetworkIds.fromSeed(99L),
+                "GET",
+                request.uri(),
+                new byte[0],
+                TIMESTAMP_MS,
+                recordedAuth.auth.nonce()),
+            recordedAuth.signedMessage.get()));
     assertEquals(1, recordedAuth.signCalls.get());
     assertEquals(
         Collections.singletonList(Base64.getEncoder().encodeToString(SIGNATURE)),

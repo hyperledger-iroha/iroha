@@ -9626,7 +9626,7 @@ impl_validated_json_key!(PrivacyPgcPoolInvariantKeyV1);
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
         BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPolicyLifecycleV1,
@@ -9651,7 +9651,8 @@ mod tests {
         PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     };
     use iroha_data_model::{
-        ChainId, account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
+        NetworkId, account::AccountId, asset::AssetDefinitionId, block::BlockHeader,
+        domain::DomainId, name::Name,
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
@@ -9660,6 +9661,12 @@ mod tests {
 
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(nonzero(byte)),
+        ))
     }
 
     fn p256_point(multiple: u64) -> PrivacyP256PointV1 {
@@ -15876,7 +15883,7 @@ mod tests {
 
         let statement = IrohaZkX509StarkP256StatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: ChainId::from("x509-authoritative-state-test"),
+                network_id: network_id(0x91),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(nonzero(91)),
                 parameter_id: PrivacyParameterIdV1::new(nonzero(92)),

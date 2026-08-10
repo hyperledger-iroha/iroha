@@ -23,6 +23,8 @@ use futures::{SinkExt, StreamExt};
 use iroha_core as corelib;
 use iroha_crypto::{Algorithm, MerkleTree, Signature};
 use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
     block::proofs::{BlockProofs, BlockReceiptProof},
     prelude::HashOf,
     transaction::TransactionEntrypoint,
@@ -49,6 +51,12 @@ pub(crate) const CLOSE_CODE_HEARTBEAT: u16 = 4003;
 pub(crate) const CLOSE_REASON_HEARTBEAT: &str = "connect_heartbeat_timeout";
 pub(crate) const CLOSE_REASON_ROLE_DIRECTION_MISMATCH: &str = "connect_role_direction_mismatch";
 pub(crate) const CLOSE_REASON_SEQUENCE_VIOLATION: &str = "connect_sequence_violation";
+pub(crate) const CLOSE_REASON_NETWORK_MISMATCH: &str = "connect_network_id_mismatch";
+pub(crate) const CLOSE_REASON_OPEN_IDENTITY_MISMATCH: &str =
+    "connect_open_identity_mismatch";
+pub(crate) const CLOSE_REASON_OPEN_REPLAY: &str = "connect_open_replayed";
+pub(crate) const CLOSE_REASON_APPROVAL_INVALID: &str = "connect_wallet_approval_invalid";
+pub(crate) const CLOSE_REASON_APPROVAL_REPLAY: &str = "connect_wallet_approval_replayed";
 
 fn spawn_background_task<F>(task: F)
 where
@@ -90,6 +98,7 @@ fn expires_at_ms(ttl: Duration) -> u64 {
 
 #[derive(Clone)]
 pub struct Bus {
+    network_id: NetworkId,
     inner: Arc<RwLock<HashMap<Vec<u8>, Arc<Session>>>>,
     p2p: Arc<RwLock<Option<corelib::IrohaNetwork>>>,
     seen: Arc<Mutex<SeenCache>>,
@@ -196,11 +205,17 @@ struct Session {
     management_token_hash: Mutex<Option<[u8; 32]>>,
     // Relay MAC key derived from the session relay token.
     relay_key: Mutex<Option<[u8; 32]>>,
+    // Canonical approval-preimage relay binding derived from the raw relay token.
+    relay_auth_hash: Mutex<Option<[u8; 32]>>,
+    // Application public key committed by the canonical registration SID.
+    expected_app_pk: Mutex<Option<[u8; 32]>>,
     // Whether this session was created locally or learned from P2P.
     origin: SessionOrigin,
     // Requested/accepted permissions for diagnostics
     req_perms: Mutex<Option<proto::PermissionsV1>>,
     acc_perms: Mutex<Option<proto::PermissionsV1>>,
+    // Immutable application identity and constraints from the one-shot Open.
+    open_binding: Mutex<Option<OpenBinding>>,
     // Handshake approval observed
     approved: Mutex<bool>,
     // Last seen peer sequence per direction
@@ -220,6 +235,12 @@ enum SessionOrigin {
     PeerClaimed,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenBinding {
+    app_pk: [u8; 32],
+    constraints: proto::Constraints,
+}
+
 impl SessionOrigin {
     const fn as_str(self) -> &'static str {
         match self {
@@ -236,6 +257,8 @@ pub enum RegisterSessionError {
     Exists,
     /// Session capacity reached.
     Capacity,
+    /// SID does not commit the supplied application key, nonce, and network.
+    InvalidIdentity,
 }
 
 impl Default for Session {
@@ -250,9 +273,12 @@ impl Default for Session {
             wallet_token_hash: Mutex::new(None),
             management_token_hash: Mutex::new(None),
             relay_key: Mutex::new(None),
+            relay_auth_hash: Mutex::new(None),
+            expected_app_pk: Mutex::new(None),
             origin: SessionOrigin::Local,
             req_perms: Mutex::new(None),
             acc_perms: Mutex::new(None),
+            open_binding: Mutex::new(None),
             approved: Mutex::new(false),
             last_seq_app_to_wallet: Mutex::new(None),
             last_seq_wallet_to_app: Mutex::new(None),
@@ -333,6 +359,7 @@ impl Bus {
     pub fn new() -> Self {
         #[allow(dead_code)]
         let bus = Self {
+            network_id: test_network_id(),
             inner: Arc::new(RwLock::new(HashMap::new())),
             p2p: Arc::new(RwLock::new(None)),
             seen: Arc::new(Mutex::new(SeenCache::new(8192, Duration::from_mins(2)))),
@@ -345,8 +372,12 @@ impl Bus {
         bus
     }
 
-    pub fn from_config(cfg: &iroha_config::parameters::actual::Connect) -> Self {
+    pub fn from_config(
+        cfg: &iroha_config::parameters::actual::Connect,
+        network_id: NetworkId,
+    ) -> Self {
         let bus = Self {
+            network_id,
             inner: Arc::new(RwLock::new(HashMap::new())),
             p2p: Arc::new(RwLock::new(None)),
             seen: Arc::new(Mutex::new(SeenCache::new(cfg.dedupe_cap, cfg.dedupe_ttl))),
@@ -573,11 +604,16 @@ impl Bus {
     pub async fn register_tokens(
         &self,
         sid: Sid,
+        app_pk: [u8; 32],
+        nonce: [u8; 16],
         token_app: String,
         token_wallet: String,
         token_management: String,
         token_relay: String,
     ) -> Result<(), RegisterSessionError> {
+        if connect_sdk::derive_session_id(&self.network_id, &app_pk, &nonce) != sid {
+            return Err(RegisterSessionError::InvalidIdentity);
+        }
         {
             let map = self.inner.read().await;
             if map.contains_key(&sid.to_vec()) {
@@ -597,12 +633,17 @@ impl Bus {
             &token_management,
         );
         let relay_key = connect_sdk::derive_relay_mac_key(&sid, &token_relay);
+        let relay_auth_hash = connect_sdk::relay_auth_hash(&sid, &token_relay);
         let claim = proto::ConnectSessionClaimV1 {
             sid,
+            network_id: self.network_id,
+            app_pk,
+            nonce,
             token_app_hash: app_hash,
             token_wallet_hash: wallet_hash,
             token_management_hash: management_hash,
             relay_mac_key: relay_key,
+            relay_auth_hash,
             expires_at_ms: expires_at_ms(self.policy.session_ttl),
         };
 
@@ -611,6 +652,8 @@ impl Bus {
         *sess.wallet_token_hash.lock().await = Some(wallet_hash);
         *sess.management_token_hash.lock().await = Some(management_hash);
         *sess.relay_key.lock().await = Some(relay_key);
+        *sess.relay_auth_hash.lock().await = Some(relay_auth_hash);
+        *sess.expected_app_pk.lock().await = Some(app_pk);
         *sess.last_activity.lock().await = Instant::now();
 
         let mut map = self.inner.write().await;
@@ -773,6 +816,9 @@ impl Bus {
             *sess.wallet_token_hash.lock().await = None;
             *sess.management_token_hash.lock().await = None;
             *sess.relay_key.lock().await = None;
+            *sess.relay_auth_hash.lock().await = None;
+            *sess.expected_app_pk.lock().await = None;
+            *sess.open_binding.lock().await = None;
 
             self.notify_close(sess.clone(), sid, proto::Role::Wallet, reason)
                 .await;
@@ -956,16 +1002,110 @@ impl Bus {
         // If control frame, capture permissions for diagnostics
         if let proto::FrameKind::Control(ctrl) = &frame.kind {
             match ctrl {
-                proto::ConnectControlV1::Open { permissions, .. } => {
+                proto::ConnectControlV1::Open {
+                    app_pk,
+                    constraints,
+                    permissions,
+                    ..
+                } => {
                     if frame.dir == proto::Dir::AppToWallet {
+                        if constraints.network_id != self.network_id {
+                            warn!(
+                                sid = ?hex::encode(frame.sid),
+                                expected_network_id = %self.network_id,
+                                supplied_network_id = %constraints.network_id,
+                                "connect: rejecting Open for a different network"
+                            );
+                            self.terminate_session(frame.sid, CLOSE_REASON_NETWORK_MISMATCH)
+                                .await;
+                            return;
+                        }
+                        if *sess.expected_app_pk.lock().await != Some(*app_pk) {
+                            warn!(
+                                sid = ?hex::encode(frame.sid),
+                                "connect: rejecting Open whose application key is not bound to the session id"
+                            );
+                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_IDENTITY_MISMATCH)
+                                .await;
+                            return;
+                        }
+                        let mut open_binding = sess.open_binding.lock().await;
+                        if open_binding.is_some() {
+                            drop(open_binding);
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated Open");
+                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_REPLAY)
+                                .await;
+                            return;
+                        }
+                        *open_binding = Some(OpenBinding {
+                            app_pk: *app_pk,
+                            constraints: constraints.clone(),
+                        });
+                        drop(open_binding);
                         (*sess.req_perms.lock().await).clone_from(permissions);
                         if permissions.is_some() {
                             debug!(sid = ?hex::encode(frame.sid), "connect: Open with permissions requested");
                         }
                     }
                 }
-                proto::ConnectControlV1::Approve { permissions, .. } => {
+                proto::ConnectControlV1::Approve {
+                    wallet_pk,
+                    account_id,
+                    permissions,
+                    proof,
+                    sig_wallet,
+                } => {
                     if frame.dir == proto::Dir::WalletToApp {
+                        if *sess.approved.lock().await {
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_REPLAY)
+                                .await;
+                            return;
+                        }
+                        let Some(open_binding) = sess.open_binding.lock().await.clone() else {
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
+                        };
+                        let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
+                        };
+                        let account = match account_id.parse::<AccountId>() {
+                            Ok(account) => account,
+                            Err(error) => {
+                                warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
+                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                    .await;
+                                return;
+                            }
+                        };
+                        let Some(signatory) = account.try_signatory() else {
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
+                        };
+                        if let Err(error) = connect_sdk::verify_wallet_approval_signature(
+                            signatory,
+                            &open_binding.constraints,
+                            &frame.sid,
+                            &open_binding.app_pk,
+                            wallet_pk,
+                            account_id,
+                            permissions.as_ref(),
+                            proof.as_ref(),
+                            &relay_auth_hash,
+                            sig_wallet,
+                        ) {
+                            warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
+                        }
                         (*sess.acc_perms.lock().await).clone_from(permissions);
                         *sess.approved.lock().await = true;
                         if permissions.is_some() {
@@ -1111,6 +1251,14 @@ impl Bus {
         if relay_key != Some(claim.relay_mac_key) {
             return false;
         }
+        let relay_auth_hash = *session.relay_auth_hash.lock().await;
+        if relay_auth_hash != Some(claim.relay_auth_hash) {
+            return false;
+        }
+        let expected_app_pk = *session.expected_app_pk.lock().await;
+        if expected_app_pk != Some(claim.app_pk) {
+            return false;
+        }
         let management_hash = *session.management_token_hash.lock().await;
         if management_hash.is_some_and(|stored| stored != claim.token_management_hash) {
             return false;
@@ -1127,6 +1275,30 @@ impl Bus {
         self.shared
             .p2p_session_claims_in_total
             .fetch_add(1, Ordering::Relaxed);
+        if claim.network_id != self.network_id {
+            self.shared
+                .p2p_session_claim_conflicts_total
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                sid = ?hex::encode(claim.sid),
+                expected_network_id = %self.network_id,
+                claimed_network_id = %claim.network_id,
+                "connect: dropping cross-network P2P session claim"
+            );
+            return;
+        }
+        if connect_sdk::derive_session_id(&claim.network_id, &claim.app_pk, &claim.nonce)
+            != claim.sid
+        {
+            self.shared
+                .p2p_session_claim_conflicts_total
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                sid = ?hex::encode(claim.sid),
+                "connect: dropping P2P session claim with an unbound application identity"
+            );
+            return;
+        }
         if claim.expires_at_ms <= unix_time_ms() {
             debug!(
                 sid = ?hex::encode(claim.sid),
@@ -1165,6 +1337,8 @@ impl Bus {
         *session.wallet_token_hash.lock().await = Some(claim.token_wallet_hash);
         *session.management_token_hash.lock().await = Some(claim.token_management_hash);
         *session.relay_key.lock().await = Some(claim.relay_mac_key);
+        *session.relay_auth_hash.lock().await = Some(claim.relay_auth_hash);
+        *session.expected_app_pk.lock().await = Some(claim.app_pk);
         *session.last_activity.lock().await = Instant::now();
 
         let mut map = self.inner.write().await;
@@ -1376,6 +1550,13 @@ impl Bus {
     }
 }
 
+#[cfg(test)]
+fn test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"torii-connect-test-genesis"),
+    ))
+}
+
 fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
     use std::collections::HashSet;
     let r: HashSet<_> = req.iter().cloned().collect();
@@ -1566,20 +1747,31 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZeroU64};
 
     use base64::Engine as _;
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, KeyPair};
     use tokio::time::{Duration, timeout};
 
     use super::*;
 
+    fn test_session_identity(seed: u8) -> (Sid, [u8; 32], [u8; 16]) {
+        let app_pk = [seed.max(1); 32];
+        let nonce = [seed.wrapping_add(1).max(1); 16];
+        let sid = connect_sdk::derive_session_id(&test_network_id(), &app_pk, &nonce);
+        (sid, app_pk, nonce)
+    }
+
     fn test_claim(
-        sid: Sid,
+        seed: u8,
         app_token: &str,
         wallet_token: &str,
         management_token: &str,
         relay_token: &str,
     ) -> proto::ConnectSessionClaimV1 {
+        let (sid, app_pk, nonce) = test_session_identity(seed);
         proto::ConnectSessionClaimV1 {
             sid,
+            network_id: test_network_id(),
+            app_pk,
+            nonce,
             token_app_hash: connect_sdk::token_auth_hash(
                 connect_sdk::TokenKind::App,
                 &sid,
@@ -1596,6 +1788,7 @@ mod tests {
                 management_token,
             ),
             relay_mac_key: connect_sdk::derive_relay_mac_key(&sid, relay_token),
+            relay_auth_hash: connect_sdk::relay_auth_hash(&sid, relay_token),
             expires_at_ms: expires_at_ms(Duration::from_mins(5)),
         }
     }
@@ -1603,9 +1796,11 @@ mod tests {
     #[tokio::test]
     async fn register_tokens_rejects_duplicate_sid() {
         let bus = Bus::new();
-        let sid = [0x11u8; 32];
+        let (sid, app_pk, nonce) = test_session_identity(0x11);
         bus.register_tokens(
             sid,
+            app_pk,
+            nonce,
             "t-app".into(),
             "t-wallet".into(),
             "t-management".into(),
@@ -1616,6 +1811,8 @@ mod tests {
         let err = bus
             .register_tokens(
                 sid,
+                app_pk,
+                nonce,
                 "t-app-2".into(),
                 "t-wallet-2".into(),
                 "t-management-2".into(),
@@ -1629,9 +1826,11 @@ mod tests {
     #[tokio::test]
     async fn register_tokens_stores_token_hashes() {
         let bus = Bus::new();
-        let sid = [0x51u8; 32];
+        let (sid, app_pk, nonce) = test_session_identity(0x51);
         bus.register_tokens(
             sid,
+            app_pk,
+            nonce,
             "app-token".into(),
             "wallet-token".into(),
             "management-token".into(),
@@ -1684,14 +1883,14 @@ mod tests {
     #[tokio::test]
     async fn p2p_session_claim_installs_shadow_session() {
         let bus = Bus::new();
-        let sid = [0x52u8; 32];
         let claim = test_claim(
-            sid,
+            0x52,
             "app-token",
             "wallet-token",
             "management-token",
             "relay-token",
         );
+        let sid = claim.sid;
 
         bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
             .await;
@@ -1710,14 +1909,14 @@ mod tests {
     #[tokio::test]
     async fn p2p_role_consumed_clears_peer_token_hash() {
         let bus = Bus::new();
-        let sid = [0x53u8; 32];
         let claim = test_claim(
-            sid,
+            0x53,
             "app-token",
             "wallet-token",
             "management-token",
             "relay-token",
         );
+        let sid = claim.sid;
         bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
             .await;
 
@@ -1741,14 +1940,14 @@ mod tests {
     #[tokio::test]
     async fn p2p_session_terminated_removes_peer_session() {
         let bus = Bus::new();
-        let sid = [0x54u8; 32];
         let claim = test_claim(
-            sid,
+            0x54,
             "app-token",
             "wallet-token",
             "management-token",
             "relay-token",
         );
+        let sid = claim.sid;
         bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
             .await;
 
@@ -1767,18 +1966,18 @@ mod tests {
     #[tokio::test]
     async fn p2p_conflicting_session_claim_is_ignored() {
         let bus = Bus::new();
-        let sid = [0x55u8; 32];
         let claim = test_claim(
-            sid,
+            0x55,
             "app-token",
             "wallet-token",
             "management-token",
             "relay-token",
         );
+        let sid = claim.sid;
         bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
             .await;
         let conflict = test_claim(
-            sid,
+            0x55,
             "app-token",
             "wallet-token",
             "management-token",
@@ -1798,7 +1997,7 @@ mod tests {
     #[tokio::test]
     async fn p2p_relay_requires_prior_session_claim() {
         let bus = Bus::new();
-        let sid = [0x56u8; 32];
+        let (sid, _, _) = test_session_identity(0x56);
         let relay_token = "relay-token";
         let relay_key = connect_sdk::derive_relay_mac_key(&sid, relay_token);
         let frame = proto::ConnectFrameV1 {
@@ -1815,7 +2014,7 @@ mod tests {
         assert_eq!(bus.status().await.p2p_unknown_session_drops_total, 1);
 
         let claim = test_claim(
-            sid,
+            0x56,
             "app-token",
             "wallet-token",
             "management-token",
@@ -1852,7 +2051,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "198.51.100.7".parse().unwrap();
         bus.pre_session_create(ip).await.expect("first create ok");
         let err = bus.pre_session_create(ip).await.expect_err("rate limit");
@@ -1878,10 +2077,12 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
-        let sid = [0xABu8; 32];
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let (sid, app_pk, nonce) = test_session_identity(0xAB);
         bus.register_tokens(
             sid,
+            app_pk,
+            nonce,
             "t-app".into(),
             "t-wallet".into(),
             "t-management".into(),
@@ -1937,7 +2138,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         // Two sessions should be allowed
         let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
@@ -1957,9 +2158,11 @@ mod tests {
     #[tokio::test]
     async fn terminate_session_sends_close_frames() {
         let bus = Bus::new();
-        let sid = [0x42u8; 32];
+        let (sid, app_pk, nonce) = test_session_identity(0x42);
         bus.register_tokens(
             sid,
+            app_pk,
+            nonce,
             "app-token".into(),
             "wallet-token".into(),
             "management-token".into(),
@@ -2024,7 +2227,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus_primary = Bus::from_config(&cfg);
+        let bus_primary = Bus::from_config(&cfg, test_network_id());
         let bus_clone = bus_primary.clone();
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
 
@@ -2101,7 +2304,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "203.0.113.99".parse().unwrap();
         let mut permit = bus.pre_ws_handshake(ip).await.expect("handshake ok");
 
@@ -2132,7 +2335,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "203.0.113.10".parse().unwrap();
         for _ in 0..4 {
             let mut permit = bus.pre_ws_handshake(ip).await.expect("handshake ok");
@@ -2159,7 +2362,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "198.51.100.1".parse().unwrap();
         let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
         let mut second = bus.pre_ws_handshake(ip).await.expect("second ok");
@@ -2188,7 +2391,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
         // Two immediate handshakes allowed (burst = 2)
         let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
@@ -2218,7 +2421,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let sid = [0xAAu8; 32];
         let mut _app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut _wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
@@ -2428,7 +2631,7 @@ mod tests {
             relay_strategy: "bogus_strategy",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let status = bus.status().await;
         assert_eq!(status.policy.relay_strategy, "local_only");
         assert_eq!(status.policy.relay_effective_strategy, "local_only");
@@ -2455,7 +2658,7 @@ mod tests {
                 relay_strategy,
                 p2p_ttl_hops: 0,
             };
-            let bus = Bus::from_config(&cfg);
+            let bus = Bus::from_config(&cfg, test_network_id());
             let status = bus.status().await;
             assert_eq!(status.policy.relay_strategy, "local_only");
             assert_eq!(status.policy.relay_effective_strategy, "local_only");
@@ -2482,7 +2685,7 @@ mod tests {
             relay_strategy: "  BROADCAST  ",
             p2p_ttl_hops: 0,
         };
-        let broadcast_bus = Bus::from_config(&broadcast_cfg);
+        let broadcast_bus = Bus::from_config(&broadcast_cfg, test_network_id());
         let broadcast_status = broadcast_bus.status().await;
         assert_eq!(broadcast_status.policy.relay_strategy, "broadcast");
         assert_eq!(
@@ -2508,7 +2711,7 @@ mod tests {
             relay_strategy: "  LOCAL-ONLY  ",
             p2p_ttl_hops: 0,
         };
-        let local_bus = Bus::from_config(&local_cfg);
+        let local_bus = Bus::from_config(&local_cfg, test_network_id());
         let local_status = local_bus.status().await;
         assert_eq!(local_status.policy.relay_strategy, "local_only");
         assert_eq!(local_status.policy.relay_effective_strategy, "local_only");
@@ -2534,7 +2737,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         {
             let mut p2p = bus.p2p.write().await;
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
@@ -2566,14 +2769,16 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 1,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         {
             let mut p2p = bus.p2p.write().await;
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
         }
-        let sid = [0xB1u8; 32];
+        let (sid, app_pk, nonce) = test_session_identity(0xB1);
         bus.register_tokens(
             sid,
+            app_pk,
+            nonce,
             "app-token".into(),
             "wallet-token".into(),
             "management-token".into(),
@@ -2623,7 +2828,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 1,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         let sid = [0xB4u8; 32];
         let _app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
@@ -2677,7 +2882,7 @@ mod tests {
             relay_strategy: "bogus_strategy",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         {
             let mut p2p = bus.p2p.write().await;
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
@@ -2729,7 +2934,7 @@ mod tests {
             relay_strategy: "broadcast",
             p2p_ttl_hops: 0,
         };
-        let bus = Bus::from_config(&cfg);
+        let bus = Bus::from_config(&cfg, test_network_id());
         {
             let mut p2p = bus.p2p.write().await;
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
@@ -2789,10 +2994,58 @@ mod tests {
     #[tokio::test]
     async fn drops_plaintext_control_after_approve() {
         let bus = Bus::new();
-        let sid = [6u8; 32];
+        let (sid, app_pk, nonce) = test_session_identity(6);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register approval fixture session");
         // Attach both sides
         let mut app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        let open = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        };
+        bus.relay(open).await;
+        wallet_inbox.recv().await.expect("wallet should receive Open");
+
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("approval fixture keypair");
+        let account_id = AccountId::new(key_pair.public_key().clone()).to_string();
+        let wallet_pk = [1u8; 32];
+        let relay_auth = connect_sdk::relay_auth_hash(&sid, "relay-token");
+        let preimage = connect_sdk::build_approve_preimage(
+            &constraints,
+            &sid,
+            &app_pk,
+            &wallet_pk,
+            &account_id,
+            None,
+            None,
+            &relay_auth,
+        );
+        let sig_wallet = proto::WalletSignatureV1::new(
+            Algorithm::Ed25519,
+            Signature::try_new(key_pair.private_key(), &preimage).expect("approval fixture signs"),
+        );
 
         // Send Approve from wallet to app (seq=1)
         let approve = proto::ConnectFrameV1 {
@@ -2800,15 +3053,11 @@ mod tests {
             dir: proto::Dir::WalletToApp,
             seq: 1,
             kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
-                wallet_pk: [1u8; 32],
-                account_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
+                wallet_pk,
+                account_id,
                 permissions: None,
                 proof: None,
-                sig_wallet: proto::WalletSignatureV1::new(
-                    Algorithm::Ed25519,
-                    Signature::try_from_bytes(&[0x42u8; 64])
-                        .expect("nonzero Connect wallet signature fixture"),
-                ),
+                sig_wallet,
             }),
         };
         bus.relay(approve.clone()).await;

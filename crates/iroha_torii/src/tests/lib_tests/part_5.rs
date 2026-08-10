@@ -535,7 +535,19 @@
     }
 
     #[tokio::test]
-    async fn zk_attachments_tenant_rejects_replayed_signed_headers() {
+    async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
+        use axum::{Extension, Router, routing::post};
+        use tower::ServiceExt as _;
+
+        async fn probe(
+            Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+            crate::utils::extractors::NoritoJson(_body): crate::utils::extractors::NoritoJson<
+                norito::json::Value,
+            >,
+        ) -> StatusCode {
+            StatusCode::NO_CONTENT
+        }
+
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
@@ -545,6 +557,15 @@
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
         );
+        let router = Router::new()
+            .route("/v1/zk/attachments", post(probe))
+            .layer(axum::middleware::from_fn_with_state(
+                CanonicalAccountBodyAuthState {
+                    app: app.clone(),
+                    max_body_bytes: 1024,
+                },
+                enforce_canonical_account_body_authentication,
+            ));
         let method = axum::http::Method::POST;
         let uri: axum::http::Uri = "/v1/zk/attachments".parse().expect("uri");
         let body = br#"{"attachment":"test"}"#;
@@ -556,20 +577,42 @@
             body,
         );
 
-        let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, body)
-            .expect("first attachment request should verify");
-        assert_eq!(
-            tenant,
-            crate::zk_attachments::AttachmentTenant::from_account(&account_id)
-        );
+        let unsigned = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method.clone())
+                    .uri(uri.clone())
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{"))
+                    .expect("unsigned malformed attachment request"),
+            )
+            .await
+            .expect("unsigned attachment response");
+        assert_eq!(unsigned.status(), StatusCode::FORBIDDEN);
 
-        let err = zk_attachments_tenant(&app, &method, &uri, &headers, body)
-            .expect_err("replayed attachment request must fail");
-        assert!(matches!(
-            err,
-            Error::Query(ValidationFail::NotPermitted(ref message))
-                if message.contains("nonce already used")
-        ));
+        let signed_request = || {
+            let mut request = axum::http::Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_vec()))
+                .expect("signed attachment request");
+            request.headers_mut().extend(headers.clone());
+            request
+        };
+        let accepted = router
+            .clone()
+            .oneshot(signed_request())
+            .await
+            .expect("accepted attachment response");
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+
+        let replayed = router
+            .oneshot(signed_request())
+            .await
+            .expect("replayed attachment response");
+        assert_eq!(replayed.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

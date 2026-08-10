@@ -295,9 +295,9 @@ pub(super) fn synthesize_figure9_mc_material(
 
     byte_indices(&issuer)?;
     byte_indices(&birth)?;
-    let issuer_states_after_blocks_le = state_indices(&issuer_trace)?;
-    let birth_states_after_blocks_le = state_indices(&birth_trace)?;
-    if issuer_states_after_blocks_le.len() != 6 || birth_states_after_blocks_le.len() != 2 {
+    let issuer_state_count = state_indices(&issuer_trace)?.len();
+    let birth_state_count = state_indices(&birth_trace)?.len();
+    if issuer_state_count != 6 || birth_state_count != 2 {
         return Err(CircuitError::InvalidDimension);
     }
     Ok(Figure9McMaterial {

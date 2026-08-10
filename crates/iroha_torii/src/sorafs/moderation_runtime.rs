@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     query::sorafs::prelude::{FindSorafsModerationEvents, FindSorafsModerationSnapshot},
     sorafs::moderation_ledger::{
@@ -497,7 +497,6 @@ impl<P: ModerationRuntimeProviderV1 + ?Sized> core::fmt::Debug
 
 /// Fail-closed bridge from moderation operations to signed Torii ingress.
 pub struct ModerationTransactionSubmitterAdapterV1 {
-    chain_id: ChainId,
     network_id: NetworkId,
     signer: QualifiedModerationRuntimeProviderV1<dyn ModerationSignedTransactionSignerV1>,
     fee_quoter: Arc<dyn ModerationFeeQuoterV1>,
@@ -508,7 +507,6 @@ impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ModerationTransactionSubmitterAdapterV1")
-            .field("chain_id", &self.chain_id)
             .field("network_id", &self.network_id)
             .field("signer", &"<runtime-only>")
             .field("fee_quoter", &"<finalized-policy>")
@@ -518,14 +516,13 @@ impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
 }
 
 impl ModerationTransactionSubmitterAdapterV1 {
-    /// Construct and qualify a submitter for one exact chain.
+    /// Construct and qualify a submitter for one exact genesis-derived network.
     ///
     /// # Errors
     ///
     /// Fails when either injected provider is unavailable, test-marked,
     /// substituted, stale, or differs from its independent exact binding.
     pub fn try_new(
-        chain_id: ChainId,
         network_id: NetworkId,
         transaction_signer_handle: &str,
         expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
@@ -546,7 +543,6 @@ impl ModerationTransactionSubmitterAdapterV1 {
             ingress,
         )?;
         Ok(Self {
-            chain_id,
             network_id,
             signer,
             fee_quoter,
@@ -562,10 +558,6 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
 
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.ingress.provider.as_ref()
-    }
-
-    fn chain_id(&self) -> ChainId {
-        self.chain_id.clone()
     }
 
     fn network_id(&self) -> NetworkId {
@@ -587,7 +579,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         let mut payload = builder
             .into_payload()
             .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
-        validate_unsigned_moderation_payload(&self.chain_id, &self.network_id, request, &payload)?;
+        validate_unsigned_moderation_payload(&self.network_id, request, &payload)?;
         payload.fee_payment = self
             .fee_quoter
             .quote(&payload)
@@ -599,7 +591,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
                     ModerationSubmissionFailureV1::PermanentRejection
                 }
             })?;
-        validate_unsigned_moderation_payload(&self.chain_id, &self.network_id, request, &payload)?;
+        validate_unsigned_moderation_payload(&self.network_id, request, &payload)?;
         let expected_payload = payload.clone();
         self.signer
             .revalidate()
@@ -612,12 +604,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         if transaction.payload() != &expected_payload {
             return Err(ModerationSubmissionFailureV1::PermanentRejection);
         }
-        validate_signed_moderation_transaction(
-            &self.chain_id,
-            &self.network_id,
-            request,
-            &transaction,
-        )?;
+        validate_signed_moderation_transaction(&self.network_id, request, &transaction)?;
         ModerationSignedTransactionV1::from_signed_transaction(request, &transaction)
     }
 
@@ -628,12 +615,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
     ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
         validate_moderation_transaction_request(request)?;
         let transaction = signed.decode_for_request(request)?;
-        validate_signed_moderation_transaction(
-            &self.chain_id,
-            &self.network_id,
-            request,
-            &transaction,
-        )?;
+        validate_signed_moderation_transaction(&self.network_id, request, &transaction)?;
         let expected_transaction_id = signed.transaction_id;
         self.ingress
             .revalidate()
@@ -687,7 +669,6 @@ fn validate_moderation_transaction_request(
 }
 
 fn validate_unsigned_moderation_payload(
-    chain_id: &ChainId,
     network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
     payload: &TransactionPayload,
@@ -698,7 +679,6 @@ fn validate_unsigned_moderation_payload(
         u64::try_from(MODERATION_TRANSACTION_TTL_V1.as_millis()).unwrap_or(u64::MAX);
     if canonical.is_empty()
         || canonical.len() > MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1
-        || request.chain_id != *chain_id
         || request.network_id != *network_id
         || payload.domain != TransactionDomain::Network(*network_id)
         || payload.authority != request.authority
@@ -722,13 +702,11 @@ fn validate_unsigned_moderation_payload(
 }
 
 fn validate_signed_moderation_transaction(
-    chain_id: &ChainId,
     network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
     transaction: &SignedTransaction,
 ) -> Result<(), ModerationSubmissionFailureV1> {
     if transaction.verify_signature().is_err()
-        || request.chain_id != *chain_id
         || request.network_id != *network_id
         || transaction.network_id() != Some(network_id)
         || transaction.authority() != &request.authority
@@ -1531,6 +1509,7 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
         handoff: &ModerationTerminalHandoffV1,
     ) -> Result<(), ModerationHandoffFailureV1> {
         if handoff.kind != self.kind
+            || !handoff.is_bound_to_network(&handoff.network_id)
             || handoff.handoff_id == [0; 32]
             || handoff.outcome_digest == [0; 32]
             || handoff.finalized_cursor.block_height == 0
@@ -1741,7 +1720,10 @@ impl ModerationPanelNotificationSinkV1 for ModerationPanelNotificationSinkAdapte
         claim: &ModerationPanelNotificationClaimV1,
     ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>
     {
-        if claim.notification.notification_id == [0; 32]
+        if !claim
+            .notification
+            .is_bound_to_network(&claim.notification.network_id)
+            || claim.notification.notification_id == [0; 32]
             || claim.notification.source_operation_id == [0; 32]
             || claim.notification.scope_digest == [0; 32]
             || claim.notification.finalized_event_cursor.sequence == 0
@@ -1811,7 +1793,6 @@ mod tests {
 
     use super::*;
 
-    const TEST_CHAIN: &str = "moderation-runtime-test";
     const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
     const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";
@@ -2081,7 +2062,6 @@ mod tests {
 
     fn transaction_request(authority: AccountId) -> ModerationTransactionRequestV1 {
         ModerationTransactionRequestV1::new(
-            ChainId::from(TEST_CHAIN),
             test_network_id(0xA5),
             1,
             authority,
@@ -2104,7 +2084,7 @@ mod tests {
     #[derive(Debug)]
     enum FixedSignerBehavior {
         Exact,
-        SubstituteChain,
+        SubstituteNetwork,
         Forged(KeyPair),
     }
 
@@ -2135,10 +2115,10 @@ mod tests {
             }
         }
 
-        fn substitute_chain(key_pair: KeyPair) -> Self {
+        fn substitute_network(key_pair: KeyPair) -> Self {
             Self {
                 key_pair,
-                behavior: FixedSignerBehavior::SubstituteChain,
+                behavior: FixedSignerBehavior::SubstituteNetwork,
                 calls: AtomicUsize::new(0),
                 handle: TEST_SIGNER_HANDLE.to_owned(),
                 qualification: Mutex::new(Ok(TEST_SIGNER_QUALIFICATION)),
@@ -2197,7 +2177,7 @@ mod tests {
                 FixedSignerBehavior::Exact => TransactionBuilder::from_payload(payload)
                     .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
                     .map_err(|_| ModerationSigningFailureV1::Refused),
-                FixedSignerBehavior::SubstituteChain => {
+                FixedSignerBehavior::SubstituteNetwork => {
                     payload.domain = TransactionDomain::Network(test_network_id(0xEE));
                     TransactionBuilder::from_payload(payload)
                         .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
@@ -2244,7 +2224,6 @@ mod tests {
         ingress: Arc<dyn ModerationStrictTransactionIngressV1>,
     ) -> ModerationTransactionSubmitterAdapterV1 {
         ModerationTransactionSubmitterAdapterV1::try_new(
-            ChainId::from(TEST_CHAIN),
             test_network_id(0xA5),
             TEST_SIGNER_HANDLE,
             TEST_SIGNER_QUALIFICATION,
@@ -2417,7 +2396,6 @@ mod tests {
         let ingress = Arc::new(TestIngress::default());
 
         let error = ModerationTransactionSubmitterAdapterV1::try_new(
-            ChainId::from(TEST_CHAIN),
             test_network_id(0xA5),
             TEST_SIGNER_HANDLE,
             TEST_SIGNER_QUALIFICATION,
@@ -2449,6 +2427,35 @@ mod tests {
             Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
         );
         assert_eq!(signer.calls(), 1);
+    }
+
+    #[test]
+    fn same_label_different_genesis_is_rejected_before_signer_or_ingress() {
+        let configured_display_label = "moderation-runtime-test".to_owned();
+        let foreign_display_label = configured_display_label.clone();
+        assert_eq!(configured_display_label, foreign_display_label);
+        let signer_key = key(34);
+        let request = ModerationTransactionRequestV1::new(
+            test_network_id(0xA6),
+            1,
+            account(&signer_key),
+            action(),
+            [0x42; 32],
+            7,
+            [0x43; 32],
+        )
+        .expect("canonical request for the other genesis");
+        let signer = Arc::new(FixedSigner::exact(signer_key));
+        let ingress = Arc::new(TestIngress::default());
+        let adapter = adapter(signer.clone(), ingress.clone());
+
+        assert_eq!(
+            adapter.sign(&request),
+            Err(ModerationSubmissionFailureV1::PermanentRejection)
+        );
+        assert_eq!(signer.calls(), 0);
+        assert_eq!(ingress.calls(), 0);
+        assert_eq!(ingress.unique_admissions(), 0);
     }
 
     #[test]
@@ -2530,7 +2537,7 @@ mod tests {
     fn signer_payload_substitution_is_rejected_before_ingress() {
         let signer_key = key(15);
         let request = transaction_request(account(&signer_key));
-        let signer = Arc::new(FixedSigner::substitute_chain(signer_key));
+        let signer = Arc::new(FixedSigner::substitute_network(signer_key));
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer, ingress.clone());
 
@@ -3018,8 +3025,9 @@ mod tests {
     }
 
     fn terminal_handoff(kind: ModerationTerminalHandoffKindV1) -> ModerationTerminalHandoffV1 {
-        ModerationTerminalHandoffV1 {
-            handoff_id: [0x61; 32],
+        let mut handoff = ModerationTerminalHandoffV1 {
+            handoff_id: [0; 32],
+            network_id: test_network_id(0xA5),
             kind,
             case_id: "case-1".to_owned(),
             round_id: "round-1".to_owned(),
@@ -3044,7 +3052,9 @@ mod tests {
                     11,
                 ),
             },
-        }
+        };
+        handoff.handoff_id = handoff.canonical_id();
+        handoff
     }
 
     #[test]
@@ -3237,21 +3247,24 @@ mod tests {
     }
 
     fn panel_notification_claim() -> ModerationPanelNotificationClaimV1 {
-        ModerationPanelNotificationClaimV1 {
-            notification: ModerationPanelNotificationV1 {
-                notification_id: [0x71; 32],
-                source_operation_id: [0x72; 32],
-                scope_digest: [0x73; 32],
-                kind: ModerationPanelNotificationKindV1::PrimaryAssignment,
-                recipient: account(&key(7)),
-                finalized_event_cursor: ModerationFinalizedEventCursorV1 {
-                    sequence: 1,
-                    block_height: 11,
-                    block_hash: [0x74; 32],
-                    event_index: 0,
-                },
-                source_occurred_at_unix_ms: 100,
+        let mut notification = ModerationPanelNotificationV1 {
+            notification_id: [0; 32],
+            network_id: test_network_id(0xA5),
+            source_operation_id: [0x72; 32],
+            scope_digest: [0x73; 32],
+            kind: ModerationPanelNotificationKindV1::PrimaryAssignment,
+            recipient: account(&key(7)),
+            finalized_event_cursor: ModerationFinalizedEventCursorV1 {
+                sequence: 1,
+                block_height: 11,
+                block_hash: [0x74; 32],
+                event_index: 0,
             },
+            source_occurred_at_unix_ms: 100,
+        };
+        notification.notification_id = notification.canonical_id();
+        ModerationPanelNotificationClaimV1 {
+            notification,
             worker_id: [0x75; 32],
             lease_token: [0x76; 32],
             lease_expires_at_unix_ms: 1_000,

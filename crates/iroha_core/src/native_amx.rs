@@ -10,6 +10,7 @@ use std::{
 
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
+    NetworkId,
     block::consensus::{
         LaneBlockCommitment, LaneBlockProposalV1, NativeAmxAttestationBodyV2,
         NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
@@ -199,7 +200,7 @@ pub(crate) fn native_amx_receipt_requires_separate_participant_application_for(
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningKeyV2 {
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     context_id: HeightContextId,
     round: ConsensusRound,
     epoch: u64,
@@ -214,7 +215,7 @@ struct NativeAmxSigningKeyV2 {
 impl NativeAmxSigningKeyV2 {
     fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
         Self {
-            chain_id_hash: body.chain_id_hash,
+            network_id: body.network_id,
             context_id: body.round.context_id,
             round: body.round,
             epoch: body.epoch,
@@ -233,7 +234,7 @@ impl NativeAmxSigningKeyV2 {
 /// the same lane-local height/view (ABA equivocation).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningSlotV3 {
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     context_id: HeightContextId,
     epoch: u64,
     authority_context_height: u64,
@@ -249,7 +250,7 @@ struct NativeAmxSigningSlotV3 {
 impl NativeAmxSigningSlotV3 {
     fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
         Self {
-            chain_id_hash: body.chain_id_hash,
+            network_id: body.network_id,
             context_id: body.round.context_id,
             epoch: body.epoch,
             authority_context_height: body.authority_context_height,
@@ -293,7 +294,7 @@ struct NativeAmxSourceSessionClaimV4 {
     plan_digest: Hash,
     round: ConsensusRound,
     epoch: u64,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     authority_context_height: u64,
     coordinator_lane_id: LaneId,
     coordinator_dataspace_id: DataSpaceId,
@@ -311,7 +312,7 @@ impl NativeAmxSourceSessionClaimV4 {
             plan_digest: body.plan_digest,
             round: body.round,
             epoch: body.epoch,
-            chain_id_hash: body.chain_id_hash,
+            network_id: body.network_id,
             authority_context_height: body.authority_context_height,
             coordinator_lane_id: body.coordinator_lane_id,
             coordinator_dataspace_id: body.coordinator_dataspace_id,
@@ -382,7 +383,7 @@ struct NativeAmxHeightBindingV2 {
     active_height: u64,
     context_id: HeightContextId,
     epoch: u64,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     signer: PeerId,
     max_records: u32,
 }
@@ -668,7 +669,7 @@ impl NativeAmxSigningGuard {
         active_height: u64,
         context_id: HeightContextId,
         epoch: u64,
-        chain_id_hash: Hash,
+        network_id: NetworkId,
         signer: PeerId,
         limits: NativeAmxSigningGuardLimits,
     ) -> Result<Self, NativeAmxSigningGuardError> {
@@ -679,7 +680,7 @@ impl NativeAmxSigningGuard {
                 active_height,
                 context_id,
                 epoch,
-                chain_id_hash,
+                network_id,
                 signer,
                 limits,
             );
@@ -693,7 +694,7 @@ impl NativeAmxSigningGuard {
                 active_height,
                 context_id,
                 epoch,
-                chain_id_hash,
+                network_id,
                 signer,
                 limits,
             )
@@ -706,12 +707,12 @@ impl NativeAmxSigningGuard {
         active_height: u64,
         context_id: HeightContextId,
         epoch: u64,
-        chain_id_hash: Hash,
+        network_id: NetworkId,
         signer: PeerId,
         limits: NativeAmxSigningGuardLimits,
     ) -> Result<Self, NativeAmxSigningGuardError> {
         if active_height == 0
-            || native_amx_hash_is_zero_sentinel(chain_id_hash.as_ref())
+            || native_amx_hash_is_zero_sentinel(network_id.as_bytes())
             || native_amx_hash_is_zero_sentinel(context_id.0.as_ref())
         {
             return Err(NativeAmxSigningGuardError::InvalidInput(
@@ -749,7 +750,7 @@ impl NativeAmxSigningGuard {
             active_height,
             context_id,
             epoch,
-            chain_id_hash,
+            network_id,
             signer: signer.clone(),
             max_records: max_records_u32,
         };
@@ -769,7 +770,7 @@ impl NativeAmxSigningGuard {
                 (anchor, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
             }
             Some(anchor) => {
-                if anchor.binding.chain_id_hash != chain_id_hash
+                if anchor.binding.network_id != network_id
                     || anchor.binding.signer != signer
                     || anchor.binding.max_records != max_records_u32
                 {
@@ -922,7 +923,7 @@ impl NativeAmxSigningGuard {
         if anchor.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || anchor.binding.active_height == 0
             || native_amx_hash_is_zero_sentinel(anchor.binding.context_id.0.as_ref())
-            || native_amx_hash_is_zero_sentinel(anchor.binding.chain_id_hash.as_ref())
+            || native_amx_hash_is_zero_sentinel(anchor.binding.network_id.as_bytes())
             || anchor.binding.max_records == 0
             || usize::try_from(anchor.binding.max_records)
                 .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
@@ -972,7 +973,7 @@ impl NativeAmxSigningGuard {
             || record.body.round.height != binding.active_height
             || record.body.round.context_id != binding.context_id
             || record.body.epoch != binding.epoch
-            || record.body.chain_id_hash != binding.chain_id_hash
+            || record.body.network_id != binding.network_id
             || record.key.signer != binding.signer
         {
             return Err(native_amx_unsafe_journal(
@@ -1297,7 +1298,7 @@ impl NativeAmxSigningGuard {
             ));
         }
         let binding = &inner.anchor.binding;
-        if body.chain_id_hash != binding.chain_id_hash
+        if body.network_id != binding.network_id
             || body.round.context_id != binding.context_id
             || body.epoch != binding.epoch
         {
@@ -2510,7 +2511,7 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
         && !native_amx_hash_is_zero_sentinel(body.round.context_id.0.as_ref())
         && body.authority_context_height == body.round.height
         && body.planned_coordinator_block_height != 0
-        && !native_amx_hash_is_zero_sentinel(body.chain_id_hash.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.network_id.as_bytes())
         && body.source_id.iter().any(|byte| *byte != 0)
         && !native_amx_hash_is_zero_sentinel(body.tx_entrypoint_hash.as_ref())
         && !native_amx_hash_is_zero_sentinel(body.plan_digest.as_ref())
@@ -2876,7 +2877,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
     routing_plan: &RoutingPlan,
     expected_source_id: &[u8],
     expected_entrypoint_hash: Hash,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     coordinator_proposal: &LaneBlockProposalV1,
 ) -> bool {
     let NativeAmx(native_plan) = routing_plan else {
@@ -2893,7 +2894,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
     let descriptor = &coordinator_proposal.descriptor;
     if receipt.version != 2
         || receipt.source_id.as_slice() != expected_source_id
-        || receipt.chain_id_hash != expected_chain_id_hash
+        || receipt.network_id != expected_network_id
         || receipt.plan_digest != routing_plan.digest()
         || receipt.lane_id != descriptor.lane_id
         || receipt.dataspace_id != descriptor.dataspace_id
@@ -2968,7 +2969,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                 body.round == expected_round
                     && body.round.height == receipt.authority_context_height
                     && body.epoch == expected_epoch
-                    && body.chain_id_hash == expected_chain_id_hash
+                    && body.network_id == expected_network_id
                     && body.source_id == receipt.source_id
                     && Hash::from(body.tx_entrypoint_hash) == expected_entrypoint_hash
                     && body.plan_digest == receipt.plan_digest
@@ -3048,7 +3049,7 @@ fn native_amx_bodies_match_leg(
 ) -> bool {
     left.round == right.round
         && left.epoch == right.epoch
-        && left.chain_id_hash == right.chain_id_hash
+        && left.network_id == right.network_id
         && left.source_id == right.source_id
         && left.tx_entrypoint_hash == right.tx_entrypoint_hash
         && left.plan_digest == right.plan_digest
@@ -3389,11 +3390,6 @@ mod tests {
 
     use super::*;
 
-    fn checked_random_ed25519_keypair() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked native AMX fixture keypair")
-    }
-
     fn checked_bls_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
             .expect("generate checked native AMX BLS fixture keypair")
@@ -3418,7 +3414,7 @@ mod tests {
                 view: 3,
             },
             epoch: 7,
-            chain_id_hash: Hash::new(b"native-amx-v2-test-chain"),
+            network_id: network_id(b"native-amx-v2-test-genesis"),
             source_id: [0xCD; iroha_crypto::Hash::LENGTH],
             tx_entrypoint_hash:
                 iroha_crypto::HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -3479,7 +3475,7 @@ mod tests {
             active_height: body.authority_context_height,
             context_id: body.round.context_id,
             epoch: body.epoch,
-            chain_id_hash: body.chain_id_hash,
+            network_id: body.network_id,
             signer: signer.clone(),
             max_records: 8,
         };
@@ -3537,7 +3533,7 @@ mod tests {
             body.authority_context_height,
             body.round.context_id,
             body.epoch,
-            body.chain_id_hash,
+            body.network_id,
             signer,
             signing_guard_limits(max_records),
         )
@@ -3604,7 +3600,7 @@ mod tests {
                 body.authority_context_height,
                 body.round.context_id,
                 body.epoch,
-                body.chain_id_hash,
+                body.network_id,
                 signer,
                 signing_guard_limits(8),
             ),
@@ -3774,7 +3770,7 @@ mod tests {
                 base.authority_context_height,
                 another_context(b"same-height-context-drift"),
                 base.epoch,
-                base.chain_id_hash,
+                base.network_id,
                 signer.clone(),
                 signing_guard_limits(8),
             ),
@@ -3786,7 +3782,7 @@ mod tests {
                 base.authority_context_height,
                 base.round.context_id,
                 base.epoch + 1,
-                base.chain_id_hash,
+                base.network_id,
                 signer.clone(),
                 signing_guard_limits(8),
             ),
@@ -3798,7 +3794,7 @@ mod tests {
                 base.authority_context_height,
                 base.round.context_id,
                 base.epoch,
-                Hash::new(b"same-height-chain-drift"),
+                network_id(b"same-height-foreign-genesis"),
                 signer.clone(),
                 signing_guard_limits(8),
             ),
@@ -3829,7 +3825,7 @@ mod tests {
             base.authority_context_height + 1,
             next_context,
             base.epoch,
-            base.chain_id_hash,
+            base.network_id,
             signer.clone(),
             signing_guard_limits(8),
         )
@@ -4168,7 +4164,7 @@ mod tests {
             active_height: base.authority_context_height + 1,
             context_id: next_context,
             epoch: base.epoch,
-            chain_id_hash: base.chain_id_hash,
+            network_id: base.network_id,
             signer: signer.clone(),
             max_records: 8,
         };

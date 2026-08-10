@@ -1,5 +1,5 @@
 # Sora Nexus profile example.
-# Run the daemon with `irohad --sora --config defaults/nexus/config.toml`.
+# Run the daemon with `iroha3d --sora --config defaults/nexus/config.toml`.
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key_file = "/run/secrets/iroha/nexus-validator-private-key"

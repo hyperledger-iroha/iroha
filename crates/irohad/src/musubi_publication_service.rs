@@ -6,25 +6,33 @@
 //! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
 //! provider broker.
 
+mod finality;
+
+pub use finality::{
+    MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
+    MusubiPublicationFinalizedArchiveRegistrationReaderV1,
+};
+
 // TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
 // The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
 //
-// 1. provider ingest durably binds a V5 chain/genesis/archive authorization context, accepts only
+// 1. provider ingest durably binds a V5 network/archive authorization context, accepts only
 //    monotonic finalized observations over the retained admission cursor, and keeps generic and
 //    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
 //    opaque completed-row claim, and a fresh verifier result can derive an externally inert
 //    approval request. A runtime driver must still perform that fresh verifier pass and submit the
 //    request only to an approval-only HSM/KMS or threshold provider;
 // 2. the approved provider attestation has a bounded journal and an inert, root-fenced local
-//    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. The
-//    adapter binds the exact chain/genesis/provider and rejects online substitution, torn writes,
-//    and divergent lineage, but it is not daemon-wired, does not resist privileged offline
-//    rollback, and still needs a bounded cross-process initialization-lock path plus a
-//    rollback-resistant clock or external monotonic seal;
+//    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. Its bound
+//    cross-process composite operation lease authenticates the committed initialization-lock
+//    identity plus separate checkpoint-head and immutable-blob namespaces. It binds the exact
+//    network/provider and rejects online substitution, torn writes, and divergent lineage, but is
+//    not daemon-wired; external rollback-resistant provider/session/singleton deployment and
+//    fault/platform qualification remain;
 // 3. the authenticated provider-attestation inventory/coordinator handoff needs production SoraFS
-//    pin/replication mutation APIs and an authoritative finalized-chain reader which verifies the
-//    exact committed registration transaction and immutable archive projection before submitting
-//    or reconciling those mutations;
+//    pin/replication mutation APIs and must consume the implemented daemon-owned finalized archive
+//    registration reader before submitting or reconciling those mutations;
 // 4. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
 //    full plan/CAR/bundle verification; and
 // 5. deployment assembly needs non-secret public configuration, runtime credential/signer
@@ -32,30 +40,34 @@
 //    daemon-owned finalized-state/SoraFS handles.
 //
 // The publication protocol core, publication-service durable clock and replay journal, typed
-// supervisor dependency, provider-attestation journal, and inert local two-slot store are complete.
+// supervisor dependency, provider-attestation journal, inert local two-slot store with its bound
+// composite operation lease, and read-only authoritative archive-registration reader are complete.
 // The finalized-completion capture/reconciliation driver, qualified replay-stable HSM signer,
-// authenticated inventory adapter, rollback-resistant clock or external seal, bounded
-// initialization-lock path, and production fault/platform qualification are not. Until every
-// boundary above is implemented and deployment-qualified, stock `irohad` must keep the routes
-// absent. In particular, do not substitute an in-memory backend, treat the local two-slot store as
-// protection from privileged offline rollback, treat a public query response or publisher-supplied
-// bytes as finality evidence, or revive the retired public Torii upload path.
+// authenticated inventory adapter, daemon wiring, external rollback-resistant
+// provider/session/singleton deployment, and production fault/platform qualification are not.
+// Until every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
+// routes absent. In particular, do not
+// substitute an in-memory backend, treat the local two-slot store as protection from privileged
+// offline rollback, treat a public query response or publisher-supplied bytes as finality evidence,
+// or revive the retired public Torii upload path.
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use iroha_core::{queue::Queue, state::State};
-use iroha_data_model::ChainId;
+use iroha_core::{
+    queue::Queue,
+    state::{State, StateReadOnly as _},
+};
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 
 /// Live daemon-owned dependencies made available only after trusted startup replay.
 ///
 /// The context carries handles rather than snapshots so a long-running publication backend can
 /// observe later finalized blocks and submit its signed registry transactions through the same
-/// queue as Torii. The independently validated genesis hash is included because a fresh node may
-/// still be waiting for Sumeragi to commit its staged genesis when this factory runs.
+/// queue as Torii. The mandatory genesis-derived network identity remains available even while a
+/// fresh node is waiting for Sumeragi to commit its staged genesis.
 pub struct MusubiPublicationPrivateServiceContextV1 {
-    chain_id: ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: NetworkId,
     state: Arc<State>,
     queue: Arc<Queue>,
     sorafs_node: sorafs_node::NodeHandle,
@@ -65,8 +77,7 @@ impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("MusubiPublicationPrivateServiceContextV1")
-            .field("chain_id", &self.chain_id)
-            .field("genesis_block_hash", &self.genesis_block_hash)
+            .field("network_id", &self.network_id)
             .finish_non_exhaustive()
     }
 }
@@ -74,37 +85,40 @@ impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
 impl MusubiPublicationPrivateServiceContextV1 {
     /// Capture the exact handles owned by a successfully assembled daemon.
     pub(crate) fn new(
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         state: Arc<State>,
         queue: Arc<Queue>,
         sorafs_node: sorafs_node::NodeHandle,
     ) -> Self {
         Self {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             state,
             queue,
             sorafs_node,
         }
     }
 
-    /// Exact chain identity already validated by daemon startup.
+    /// Exact genesis-derived network identity already validated by daemon startup.
     #[must_use]
-    pub fn chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    /// Independently configured and authenticated genesis block hash.
-    #[must_use]
-    pub const fn genesis_block_hash(&self) -> [u8; 32] {
-        self.genesis_block_hash
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
     }
 
     /// Clone the live finalized-state handle.
     #[must_use]
     pub fn state(&self) -> Arc<State> {
         Arc::clone(&self.state)
+    }
+
+    /// Bind a read-only finalized archive-registration reader to these exact daemon handles.
+    #[must_use]
+    pub fn finalized_archive_registration_reader(
+        &self,
+    ) -> MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
+        MusubiPublicationFinalizedArchiveRegistrationReaderV1::from_validated_context(
+            self.network_id,
+            Arc::clone(&self.state),
+        )
     }
 
     /// Clone the node's transaction-admission queue handle.
@@ -339,8 +353,7 @@ mod tests {
         let queue = Arc::new(Queue::from_config(QueueConfig::default(), events));
         let sorafs_node = sorafs_node::NodeHandle::new(StorageConfig::default());
         MusubiPublicationPrivateServiceContextV1::new(
-            ChainId::from("musubi-publication-factory-test"),
-            [0xA5; 32],
+            *state.network_id_ref(),
             state,
             queue,
             sorafs_node,
@@ -364,11 +377,7 @@ mod tests {
             MusubiPublicationPrivateServiceFactoryErrorV1,
         > {
             assert!(!self.called.swap(true, Ordering::SeqCst));
-            assert_eq!(
-                context.chain_id(),
-                &ChainId::from("musubi-publication-factory-test")
-            );
-            assert_eq!(context.genesis_block_hash(), [0xA5; 32]);
+            assert_eq!(context.network_id(), *self.expected_state.network_id_ref());
             assert!(Arc::ptr_eq(&context.state(), &self.expected_state));
             assert!(Arc::ptr_eq(&context.queue(), &self.expected_queue));
             assert!(Arc::ptr_eq(

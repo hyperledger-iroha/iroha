@@ -29,14 +29,15 @@ dead-letter readiness. The evidence viewer's signed receipt checkpoint and
 exact predecessor-bound projection are its sole audit authority, and missing
 runtime dependencies fail through typed payload-free startup errors. The
 retained checkpoint anchor signs its canonical digest, receipt count, exact
-chain head, and governed signer identity; audit pages require that digest and
+finalized head, and governed signer identity; audit pages require that digest and
 an explicit digest-bound limit and return `409` on change. A deployment-owned
 monotonic transparency or ledger head is still required for first-contact
 freshness.
 
 The durable orchestrator now runs payload-free panel notifications through the
 same supervised maintenance owner. It checkpoints a lease before leaving local
-state, derives a stable worker identity from the chain and governed provider
+state, derives a stable worker identity from the exact genesis-derived network
+and governed provider
 binding, sends one canonical Norito notification to an independently qualified
 idempotent boundary, and checkpoints the exact receipt or bounded
 retry/dead-letter result. Enabling the orchestrator requires
@@ -45,6 +46,14 @@ retry/dead-letter result. Enabling the orchestrator requires
 credentials. Standard `irohad` forwards the deployment-owned boundary into
 Torii, and startup or an in-flight call fails closed when the provider is
 missing, substituted, stale, unavailable, or test-marked.
+
+Every security-bearing moderation domain uses the mandatory typed `NetworkId`
+derived from the configured genesis hash. Its raw 32 bytes bind native operation
+IDs, checkpoint records and namespaces, transaction signatures, handoffs,
+notifications, source attestations, archive manifests, heads, rotations,
+receipts, and dead-letter resolutions. A human-readable chain label is display
+metadata only: deployments with the same label and different genesis hashes are
+distinct, and no retired label-based durable or wire decoder is accepted.
 
 The bounded terminal archive is now source-complete. It selects one canonical
 safe prefix across delivered panel notifications, resolved notification dead

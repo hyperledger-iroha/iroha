@@ -515,11 +515,12 @@ the SLO work in SF-7:
 - `torii_sorafs_chunk_range_requests_total{endpoint,status}` and
   `torii_sorafs_chunk_range_bytes_total{endpoint}` drive request/byte rate SLOs
   for range-capable gateways.【crates/iroha_telemetry/src/metrics.rs:4303】
-- `torii_sorafs_registry_*` gauges expose manifest counts, alias inventory, and
-  replication order backlog so dashboards can track governance health without
-  scraping JSON endpoints. These periodically sampled operational gauges are
-  not pin-quota evidence; use finalized `PinManifestPageV1.charged_usage` for
-  the consensus-maintained live count/byte charge.【crates/iroha_telemetry/src/metrics.rs:5278】
+- `torii_sorafs_pin_retained_manifests` and
+  `torii_sorafs_pin_live_content_bytes` expose the consensus-maintained global
+  pin accounting summary in O(1). They do not reconstruct lifecycle, alias, or
+  replication-order inventories; inspect finalized, height/hash-bound registry
+  queries for those details. `PinManifestPageV1.charged_usage` exposes the same
+  retained-record/live-content charge for authenticated queries.【crates/iroha_telemetry/src/metrics.rs:5278】
 - `torii_sorafs_gc_*` counters/gauges surface retention sweeps, bytes freed,
   blocked evictions, and expired-manifest age for capacity dashboards.
 - `torii_sorafs_alias_cache_refresh_total{result,reason}` and

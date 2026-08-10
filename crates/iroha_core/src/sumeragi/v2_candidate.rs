@@ -15,7 +15,6 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
-    time::Duration,
 };
 
 use super::v2_core::EventTag;
@@ -1138,7 +1137,7 @@ fn validate_autonomous_lane_payloads(
         .iter()
         .map(|candidate| Hash::from(candidate.entrypoint_hash()))
         .collect::<BTreeSet<_>>();
-    let expected_chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let expected_network_id = context.network_id;
     let aggregate_bytes = envelopes.iter().try_fold(0usize, |aggregate, envelope| {
         let envelope_bytes = norito::encode_canonical(envelope)
             .map_err(|error| CandidateError::AutonomousLanePayloadInvalid(error.to_string()))?;
@@ -1218,7 +1217,7 @@ fn validate_autonomous_lane_payloads(
 
         let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
             envelope,
-            expected_chain_id_hash,
+            expected_network_id,
             context.epoch,
         )
         .map_err(|error| CandidateError::AutonomousLanePayloadInvalid(error.to_string()))?;
@@ -1627,9 +1626,9 @@ mod tests {
             reservation_owner_hash: Hash::new(b"candidate autonomous reservation owner"),
             proposal_identity_hash: proposal.proposal_hash,
         };
-        let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+        let network_id = context.network_id;
         let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
+            network_id,
             context.epoch,
             proposal,
             vec![transaction.entrypoint().clone()],
@@ -1642,7 +1641,7 @@ mod tests {
         .expect("construct valid autonomous candidate payload");
         crate::lane_consensus::autonomous_lane_payload_envelope(
             &payload,
-            chain_id_hash,
+            network_id,
             context.epoch,
         )
         .expect("construct valid autonomous candidate envelope")
@@ -1826,7 +1825,7 @@ mod tests {
             BlockExecutionContextBundle::default().with_autonomous_lane_payloads(vec![
                 AutonomousLanePayloadEnvelopeV1 {
                     version: 1,
-                    chain_id_hash: Hash::prehashed(*context.network_id.as_bytes()),
+                    network_id: context.network_id,
                     epoch: context.epoch,
                     lane_id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(11),

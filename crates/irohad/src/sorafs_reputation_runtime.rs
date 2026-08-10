@@ -16,7 +16,7 @@ use std::{
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
     sorafs::{
         capacity::ProviderId,
@@ -554,13 +554,13 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
 /// fail startup before durable state is opened or any worker is spawned.
 pub(crate) fn start(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
     shutdown_signal: ShutdownSignal,
 ) -> Result<(ReputationRuntimeHandleV1, Child)> {
     let poll_interval = config.poll_interval;
-    let handle = assemble(config, chain_id, trust_policy, dependencies)?;
+    let handle = assemble(config, network_id, trust_policy, dependencies)?;
     let active = handle
         .active()
         .wrap_err("access assembled committed reputation runtime")?;
@@ -586,7 +586,7 @@ pub(crate) type ReputationRuntimeActivationProbeV1 =
 /// shutdown instead of installing a partial runtime.
 pub(crate) fn start_deferred(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
     activation_probe: ReputationRuntimeActivationProbeV1,
@@ -594,13 +594,13 @@ pub(crate) fn start_deferred(
 ) -> Result<(ReputationRuntimeHandleV1, Child)> {
     validate_actual_config(config)?;
     let policies =
-        build_and_qualify_runtime_policies(config, chain_id, trust_policy, &dependencies)?;
+        build_and_qualify_runtime_policies(config, network_id, trust_policy, &dependencies)?;
     validate_retention_control(config, &dependencies)?;
     revalidate_before_durable_state(&policies, &dependencies)?;
 
     let poll_interval = config.poll_interval;
     let config = config.clone();
-    let chain_id = chain_id.clone();
+    let network_id = *network_id;
     let trust_policy = trust_policy.clone();
     let handle = ReputationRuntimeHandleV1::deferred();
     record_status_metrics(&handle);
@@ -638,7 +638,7 @@ pub(crate) fn start_deferred(
                     };
                     let active = match assemble_active(
                         &config,
-                        &chain_id,
+                        &network_id,
                         &trust_policy,
                         dependencies,
                     ) {
@@ -851,27 +851,27 @@ struct ReputationRuntimePoliciesV1 {
 
 fn assemble(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
 ) -> Result<ReputationRuntimeHandleV1> {
-    assemble_active(config, chain_id, trust_policy, dependencies)
+    assemble_active(config, network_id, trust_policy, dependencies)
         .map(ReputationRuntimeHandleV1::from_active)
 }
 
 fn assemble_active(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
 ) -> Result<ActiveReputationRuntimeV1> {
     validate_actual_config(config)?;
     let poll_interval = config.poll_interval;
     let policies =
-        build_and_qualify_runtime_policies(config, chain_id, trust_policy, &dependencies)?;
+        build_and_qualify_runtime_policies(config, network_id, trust_policy, &dependencies)?;
     validate_retention_control(config, &dependencies)?;
     let bootstrap_delivery_view = read_bootstrap_delivery_view(
-        chain_id,
+        network_id,
         &policies.query,
         &policies.journal_delivery,
         &dependencies,
@@ -897,7 +897,7 @@ fn assemble_active(
     )
     .wrap_err("bind committed reputation finalized-query runtime")?;
     let producer_policy = ReputationJournalProducerPolicyV1::strict_v1(
-        chain_id.clone(),
+        *network_id,
         bootstrap_delivery_view.authority_policy.policy.clone(),
     )
     .wrap_err("construct reputation journal producer policy")?;
@@ -969,11 +969,11 @@ fn validate_retention_control(
 
 fn build_and_qualify_runtime_policies(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: &ReputationRuntimeDependenciesV1,
 ) -> Result<ReputationRuntimePoliciesV1> {
-    let ingest = build_reputation_ingest_policy(config, chain_id, trust_policy)?;
+    let ingest = build_reputation_ingest_policy(config, network_id, trust_policy)?;
     let query = build_reputation_finalized_query_policy(config, &ingest)?;
     let journal_checkpoint_sealing = ReputationJournalCheckpointSealingPolicyV1::try_new(
         config.journal_checkpoint_provider_handle.clone(),
@@ -982,7 +982,7 @@ fn build_and_qualify_runtime_policies(
     )
     .wrap_err("construct reputation journal-checkpoint sealing policy")?;
     let journal_delivery_policy = ReputationJournalDeliveryPolicyV1::strict_v1(
-        chain_id.clone(),
+        *network_id,
         config.finalized_query_handle.clone(),
         query.query_qualification(),
         config.journal_transaction_submitter_handle.clone(),
@@ -1000,7 +1000,7 @@ fn build_and_qualify_runtime_policies(
     let journal_submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
         reputation_journal_submitter_policy_digest_v1(
-            chain_id,
+            network_id,
             &config.journal_transaction_submitter_handle,
         )
         .wrap_err("derive reputation journal transaction-submitter qualification")?,
@@ -1100,7 +1100,7 @@ fn validate_configured_runtime_provider_qualifications(
 }
 
 fn read_bootstrap_delivery_view(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     query_policy: &ReputationFinalizedQueryPolicyV1,
     journal_delivery_policy: &ReputationJournalDeliveryPolicyV1,
     dependencies: &ReputationRuntimeDependenciesV1,
@@ -1111,7 +1111,7 @@ fn read_bootstrap_delivery_view(
     let bootstrap_delivery_view_result = dependencies
         .finalized_query
         .reputation_journal_delivery_view(
-            chain_id,
+            network_id,
             u64::MAX,
             FindSorafsReputationJournalAuthorityPolicy,
             None,
@@ -1123,7 +1123,7 @@ fn read_bootstrap_delivery_view(
     let bootstrap_delivery_view = bootstrap_delivery_view_result
         .wrap_err("read exact finalized reputation journal authority policy")?;
     bootstrap_delivery_view
-        .validate_for_request(chain_id, None, 1, u64::MAX)
+        .validate_for_request(network_id, None, 1, u64::MAX)
         .wrap_err("validate exact finalized reputation journal bootstrap view")?;
     for authority in [
         &bootstrap_delivery_view
@@ -1186,7 +1186,7 @@ fn revalidate_before_durable_state(
 
 fn build_reputation_ingest_policy(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
 ) -> Result<ReputationIngestPolicyV1> {
     let trust_policy_digest = trust_policy
@@ -1206,7 +1206,7 @@ fn build_reputation_ingest_policy(
         .validate()
         .wrap_err("validate configured reputation weights")?;
     let mut ingest_policy = ReputationIngestPolicyV1::strict_v1(
-        chain_id.clone(),
+        *network_id,
         config.window_start_height,
         config.window_end_height,
         trust_policy_digest,
@@ -1241,11 +1241,11 @@ fn build_reputation_finalized_query_policy(
 /// adapter from the same committed ingest policy used by worker assembly.
 pub(crate) fn finalized_query_qualification_v1(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trust_policy: &ReputationSnapshotTrustPolicyV1,
 ) -> Result<ReputationRuntimeProviderQualificationV1> {
     validate_actual_config(config)?;
-    let ingest_policy = build_reputation_ingest_policy(config, chain_id, trust_policy)?;
+    let ingest_policy = build_reputation_ingest_policy(config, network_id, trust_policy)?;
     Ok(build_reputation_finalized_query_policy(config, &ingest_policy)?.query_qualification())
 }
 
@@ -1356,7 +1356,7 @@ mod tests {
     use std::path::PathBuf;
 
     use iroha_config::base::util::Bytes;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
@@ -1398,6 +1398,14 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn network_id(label: &str) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                label.as_bytes(),
+            )),
+        )
+    }
 
     #[derive(Debug)]
     struct CountingRetentionControl {
@@ -1604,7 +1612,7 @@ mod tests {
     impl ReputationFinalizedQueryV1 for UnavailableQuery {
         fn finalized_at_or_before(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
@@ -1613,7 +1621,7 @@ mod tests {
 
         fn reputation_journal_delivery_view(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             _maximum_height: u64,
             _policy_query: FindSorafsReputationJournalAuthorityPolicy,
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -1621,7 +1629,7 @@ mod tests {
         ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             let anchor = ReputationFinalizedAnchorV1 {
-                chain_id: chain_id.clone(),
+                network_id: *network_id,
                 identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
                     height: 1,
                     block_hash: [0x81; 32],
@@ -1666,14 +1674,14 @@ mod tests {
 
         fn reputation_journal_event_by_source_id(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             maximum_height: u64,
             query: FindSorafsReputationJournalEventBySourceId,
         ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             let view = ReputationJournalSourceFinalizedViewV1 {
                 anchor: ReputationFinalizedAnchorV1 {
-                    chain_id: chain_id.clone(),
+                    network_id: *network_id,
                     identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
                         height: 1,
                         block_hash: [0x81; 32],
@@ -1682,7 +1690,7 @@ mod tests {
                 },
                 event: None,
             };
-            view.validate_for_request(chain_id, maximum_height, query)
+            view.validate_for_request(network_id, maximum_height, query)
                 .map_err(|_| {
                     ReputationExternalFailureV1::try_new([0x93; 32])
                         .expect("non-zero source-query failure receipt")
@@ -2016,7 +2024,7 @@ mod tests {
 
     fn config(
         state_dir: PathBuf,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
     ) -> SorafsReputationRuntime {
         let finalized_archive_root = state_dir.with_extension("finalized-archive");
@@ -2030,7 +2038,7 @@ mod tests {
             ReputationRuntimeProviderQualificationV1::new(
                 REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
                 reputation_journal_submitter_policy_digest_v1(
-                    chain_id,
+                    network_id,
                     &journal_transaction_submitter_handle,
                 )
                 .expect("journal transaction-submitter policy digest"),
@@ -2095,16 +2103,16 @@ mod tests {
 
     fn dependencies(
         config: &SorafsReputationRuntime,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         query_handle: &str,
     ) -> ReputationRuntimeDependenciesV1 {
-        dependencies_with_calls(config, chain_id, trust_policy, query_handle, None)
+        dependencies_with_calls(config, network_id, trust_policy, query_handle, None)
     }
 
     fn dependencies_with_calls(
         config: &SorafsReputationRuntime,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         query_handle: &str,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
@@ -2120,7 +2128,7 @@ mod tests {
             repair_breach_bps: config.repair_breach_bps,
         };
         let mut ingest_policy = ReputationIngestPolicyV1::strict_v1(
-            chain_id.clone(),
+            *network_id,
             config.window_start_height,
             config.window_end_height,
             trust_policy
@@ -2190,7 +2198,7 @@ mod tests {
 
     fn counting_dependencies(
         config: &SorafsReputationRuntime,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
     ) -> (
         ReputationRuntimeDependenciesV1,
@@ -2199,7 +2207,7 @@ mod tests {
         let calls = Arc::new(ExternalProviderCallCounters::default());
         let mut dependencies = dependencies_with_calls(
             config,
-            chain_id,
+            network_id,
             trust_policy,
             &config.finalized_query_handle,
             Some(Arc::clone(&calls)),
@@ -2233,17 +2241,17 @@ mod tests {
     #[tokio::test]
     async fn deferred_start_is_nonblocking_and_fail_closed_before_activation() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-deferred");
+        let network_id = network_id("reputation-runtime-deferred");
         let trust_policy = trust_policy();
         let mut config = config(
             temp.path().join("deferred-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         config.poll_interval = Duration::from_millis(100);
         let dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         );
@@ -2251,7 +2259,7 @@ mod tests {
         let activation_probe: ReputationRuntimeActivationProbeV1 = Arc::new(|| Ok(false));
         let (handle, _child) = start_deferred(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             dependencies,
             activation_probe,
@@ -2279,16 +2287,16 @@ mod tests {
     #[test]
     fn daemon_owned_query_qualification_matches_worker_policy() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
         let config = config(
             temp.path().join("qualification-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let expected = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         )
@@ -2296,7 +2304,7 @@ mod tests {
         .qualification()
         .expect("fixture query qualification");
 
-        let actual = finalized_query_qualification_v1(&config, &chain_id, trust_policy.as_ref())
+        let actual = finalized_query_qualification_v1(&config, &network_id, trust_policy.as_ref())
             .expect("derive daemon-owned query qualification");
 
         assert_eq!(actual, expected);
@@ -2305,20 +2313,20 @@ mod tests {
     #[test]
     fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-native-admission");
+        let network_id = network_id("reputation-runtime-native-admission");
         let trust_policy = trust_policy();
         let config = config(
             temp.path().join("native-admission-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let handle = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             dependencies(
                 &config,
-                &chain_id,
+                &network_id,
                 trust_policy.as_ref(),
                 &config.finalized_query_handle,
             ),
@@ -2440,16 +2448,16 @@ mod tests {
     #[test]
     fn native_admission_revalidates_bindings_before_and_after_durable_enqueue() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-native-binding");
+        let network_id = network_id("reputation-runtime-native-binding");
         let trust_policy = trust_policy();
         let config = config(
             temp.path().join("native-admission-binding-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let mut runtime_dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         );
@@ -2465,7 +2473,7 @@ mod tests {
         runtime_dependencies.threshold_signer = signer.clone();
         let handle = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             runtime_dependencies,
         )
@@ -2506,11 +2514,11 @@ mod tests {
     #[test]
     fn native_admission_rejects_stale_retention_before_mutation() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-native-retention-stale");
+        let network_id = network_id("reputation-runtime-native-retention-stale");
         let trust_policy = trust_policy();
         let mut config = config(
             temp.path().join("native-admission-retention-stale-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         config.finalized_archive_retention_authority = Some(
@@ -2522,7 +2530,7 @@ mod tests {
         );
         let mut runtime_dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         );
@@ -2530,7 +2538,7 @@ mod tests {
         runtime_dependencies.retention_control = Some(retention.clone());
         let handle = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             runtime_dependencies,
         )
@@ -2573,11 +2581,11 @@ mod tests {
     #[test]
     fn native_admission_replays_after_post_enqueue_retention_drift() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-native-retention-drift");
+        let network_id = network_id("reputation-runtime-native-retention-drift");
         let trust_policy = trust_policy();
         let mut config = config(
             temp.path().join("native-admission-retention-drift-state"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         config.finalized_archive_retention_authority = Some(
@@ -2589,7 +2597,7 @@ mod tests {
         );
         let mut runtime_dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         );
@@ -2597,7 +2605,7 @@ mod tests {
         runtime_dependencies.retention_control = Some(retention.clone());
         let handle = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             runtime_dependencies,
         )
@@ -2640,7 +2648,7 @@ mod tests {
     #[test]
     fn production_config_rejects_null_test_handles_and_unsafe_paths() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-config-test");
+        let network_id = network_id("reputation-runtime-config-test");
         let trust_policy = trust_policy();
         for rejected in [
             "null-query.test",
@@ -2649,8 +2657,11 @@ mod tests {
             "https://reputation.example/query#fragment",
             "hsm://reputation/dummy/signer",
         ] {
-            let mut invalid_handle_config =
-                config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
+            let mut invalid_handle_config = config(
+                temp.path().to_path_buf(),
+                &network_id,
+                trust_policy.as_ref(),
+            );
             invalid_handle_config.finalized_query_handle = rejected.to_owned();
             assert!(
                 validate_actual_config(&invalid_handle_config).is_err(),
@@ -2660,7 +2671,7 @@ mod tests {
 
         let mut unsafe_path_config = config(
             PathBuf::from("/var/lib/iroha/../reputation"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         unsafe_path_config.finalized_query_handle = "ledger.finalized.primary".to_owned();
@@ -2761,11 +2772,11 @@ mod tests {
         ];
 
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-config-pins");
+        let network_id = network_id("reputation-runtime-config-pins");
         let trust_policy = trust_policy();
         for (case, mutate, expected_error) in cases {
             let state_dir = temp.path().join(case);
-            let mut config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+            let mut config = config(state_dir.clone(), &network_id, trust_policy.as_ref());
             config.finalized_archive_retention_authority = Some(
                 iroha_config::parameters::actual::SorafsReputationFinalizedArchiveRetentionAuthority {
                     handle: "sealed.reputation.archive.primary".to_owned(),
@@ -2774,10 +2785,10 @@ mod tests {
                 },
             );
             let (dependencies, calls) =
-                counting_dependencies(&config, &chain_id, trust_policy.as_ref());
+                counting_dependencies(&config, &network_id, trust_policy.as_ref());
             mutate(&mut config);
 
-            let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+            let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
                 .expect_err("substituted configured qualification must fail startup");
 
             assert_eq!(error.to_string(), expected_error, "{case}");
@@ -2792,27 +2803,31 @@ mod tests {
     #[test]
     fn assembly_rejects_adapter_identity_substitution_before_external_calls() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-        let config = config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
+        let config = config(
+            temp.path().to_path_buf(),
+            &network_id,
+            trust_policy.as_ref(),
+        );
         let dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.substituted",
         );
-        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+        let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("mismatched query identity must fail startup");
         assert!(error.to_string().contains("identity"));
     }
 
     #[test]
     fn configured_retention_control_is_required_invoked_and_fail_closed() {
-        let chain_id = ChainId::from("reputation-retention-runtime-test");
+        let network_id = network_id("reputation-retention-runtime-test");
         let trust_policy = trust_policy();
         let mut config = config(
             PathBuf::from("/var/lib/iroha/reputation"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         config.finalized_archive_retention_authority = Some(
@@ -2824,7 +2839,7 @@ mod tests {
         );
         let mut dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             &config.finalized_query_handle,
         );
@@ -2856,16 +2871,16 @@ mod tests {
 
     #[test]
     fn startup_rejects_each_missing_runtime_adapter() {
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
         let config = config(
             PathBuf::from("/var/lib/iroha/reputation"),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let complete = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -2930,12 +2945,12 @@ mod tests {
     fn assembly_rejects_unready_adapter_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
         let state_dir = temp.path().join("must-not-exist");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let config = config(state_dir.clone(), &network_id, trust_policy.as_ref());
         let mut dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -2951,7 +2966,7 @@ mod tests {
             external_calls: None,
         });
 
-        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+        let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("unready query adapter must fail startup");
 
         assert!(error.to_string().contains("not qualified"));
@@ -2965,12 +2980,12 @@ mod tests {
     fn assembly_rejects_malformed_bootstrap_view_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
         let state_dir = temp.path().join("malformed-bootstrap-must-not-exist");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let config = config(state_dir.clone(), &network_id, trust_policy.as_ref());
         let mut dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -2986,7 +3001,7 @@ mod tests {
             external_calls: None,
         });
 
-        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+        let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("malformed exact bootstrap view must fail startup");
 
         assert!(error.to_string().contains("bootstrap view"));
@@ -3000,12 +3015,12 @@ mod tests {
     fn assembly_rejects_same_key_different_governance_peer_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
         let state_dir = temp.path().join("substituted-dag-peer-must-not-exist");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let config = config(state_dir.clone(), &network_id, trust_policy.as_ref());
         let mut dependencies = dependencies(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -3022,7 +3037,7 @@ mod tests {
             external_calls: None,
         });
 
-        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+        let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("same-key different-peer DAG adapter must fail startup");
 
         assert!(error.to_string().contains("not qualified"));
@@ -3035,18 +3050,18 @@ mod tests {
     #[test]
     fn assembly_rejects_policy_mismatched_and_test_marked_providers_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
 
         let mismatched_state_dir = temp.path().join("mismatched-must-not-exist");
         let mismatched_config = config(
             mismatched_state_dir.clone(),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let mut mismatched_dependencies = dependencies(
             &mismatched_config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -3060,7 +3075,7 @@ mod tests {
         });
         let mismatch = assemble(
             &mismatched_config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             mismatched_dependencies,
         )
@@ -3074,12 +3089,12 @@ mod tests {
         let test_marked_state_dir = temp.path().join("test-marked-must-not-exist");
         let test_marked_config = config(
             test_marked_state_dir.clone(),
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
         );
         let mut test_marked_dependencies = dependencies(
             &test_marked_config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             "ledger.finalized.primary",
         );
@@ -3096,7 +3111,7 @@ mod tests {
         });
         let _ = assemble(
             &test_marked_config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             test_marked_dependencies,
         )
@@ -3110,16 +3125,20 @@ mod tests {
     #[test]
     fn checkpoint_runtime_reopens_without_claiming_journal_readiness() {
         let temp = TempDir::new().expect("tempdir");
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-        let config = config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
+        let config = config(
+            temp.path().to_path_buf(),
+            &network_id,
+            trust_policy.as_ref(),
+        );
         let first = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             dependencies(
                 &config,
-                &chain_id,
+                &network_id,
                 trust_policy.as_ref(),
                 "ledger.finalized.primary",
             ),
@@ -3152,11 +3171,11 @@ mod tests {
 
         let restarted = assemble(
             &config,
-            &chain_id,
+            &network_id,
             trust_policy.as_ref(),
             dependencies(
                 &config,
-                &chain_id,
+                &network_id,
                 trust_policy.as_ref(),
                 "ledger.finalized.primary",
             ),

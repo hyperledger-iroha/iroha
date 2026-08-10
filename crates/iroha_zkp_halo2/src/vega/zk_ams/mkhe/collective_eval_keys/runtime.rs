@@ -347,37 +347,96 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     }
 }
 
-struct StreamedHybridDigitDecomposerV1<'a> {
+/// One coefficient-major CRT/radix pass hoisted across a bounded digit batch.
+///
+/// Only compact signed digits are retained. Evaluated-key records and expanded
+/// RNS polynomials remain streamed one digit at a time.
+struct HoistedHybridDigitBatchV1<'a> {
     profile: &'a BgvProfile,
-    polynomial: &'a RnsPolynomial,
-    /// Zero for identity, otherwise the inverse odd exponent modulo `2N`.
-    automorphism_inverse: usize,
-    ciphertext_modulus: WideUint,
-    half_modulus: WideUint,
-    base: u64,
-    half_base: u64,
+    first_digit: usize,
+    digit_count: usize,
+    /// Digit-major coefficients, exactly `digit_count * ring_degree` values.
+    signed_digits: Vec<i64>,
 }
 
-impl<'a> StreamedHybridDigitDecomposerV1<'a> {
+#[cfg(test)]
+std::thread_local! {
+    static HOISTED_RESIDUE_READS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_hoisted_residue_reads_v1() {
+    HOISTED_RESIDUE_READS_V1.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn hoisted_residue_reads_v1() -> usize {
+    HOISTED_RESIDUE_READS_V1.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn observe_hoisted_residue_read_v1() {
+    HOISTED_RESIDUE_READS_V1.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[cfg(not(test))]
+fn observe_hoisted_residue_read_v1() {}
+
+impl<'a> HoistedHybridDigitBatchV1<'a> {
+    #[cfg(test)]
     fn new(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        Self::new_with_automorphism(profile, polynomial, None)
+        Self::new_batch_with_automorphism(profile, polynomial, None, 0, profile.gadget_digits)
     }
 
+    #[cfg(test)]
     fn new_automorphed(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
         exponent: usize,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        Self::new_with_automorphism(profile, polynomial, Some(exponent))
+        Self::new_batch_with_automorphism(
+            profile,
+            polynomial,
+            Some(exponent),
+            0,
+            profile.gadget_digits,
+        )
     }
 
-    fn new_with_automorphism(
+    fn new_batch(
+        profile: &'a BgvProfile,
+        polynomial: &'a RnsPolynomial,
+        first_digit: usize,
+        digit_count: usize,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        Self::new_batch_with_automorphism(profile, polynomial, None, first_digit, digit_count)
+    }
+
+    fn new_automorphed_batch(
+        profile: &'a BgvProfile,
+        polynomial: &'a RnsPolynomial,
+        exponent: usize,
+        first_digit: usize,
+        digit_count: usize,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        Self::new_batch_with_automorphism(
+            profile,
+            polynomial,
+            Some(exponent),
+            first_digit,
+            digit_count,
+        )
+    }
+
+    fn new_batch_with_automorphism(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
         exponent: Option<usize>,
+        first_digit: usize,
+        digit_count: usize,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
         polynomial.validate(profile)?;
@@ -387,8 +446,17 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
         {
             return Err(ZkAmsMkheErrorV1::InvalidProfile);
         }
+        let end_digit = first_digit
+            .checked_add(digit_count)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if digit_count == 0
+            || digit_count > HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1
+            || end_digit > profile.gadget_digits
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidProfile);
+        }
         let accounting = seekable_evaluated_key_accounting(profile)?;
-        checked_coefficient_work(profile, streamed_hybrid_decomposition_passes(profile)?)?;
+        checked_coefficient_work(profile, hoisted_hybrid_decomposition_passes(profile)?)?;
         checked_ring_multiplication_work(
             profile,
             profile
@@ -417,75 +485,43 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
                 inverse_odd_mod_power_of_two(exponent, twice_degree)?
             }
         };
-        Ok(Self {
-            profile,
-            polynomial,
-            automorphism_inverse,
-            ciphertext_modulus,
-            half_modulus,
-            base,
-            half_base: base / 2,
-        })
-    }
-
-    fn coefficient_residue(
-        &self,
-        limb: usize,
-        coefficient: usize,
-    ) -> Result<u64, ZkAmsMkheErrorV1> {
-        if self.automorphism_inverse == 0 {
-            return Ok(self.polynomial.limb(self.profile, limb)[coefficient]);
-        }
-        let twice_degree = self
-            .profile
+        let signed_count = profile
             .ring_degree
-            .checked_mul(2)
-            .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-        let coefficient =
-            u64::try_from(coefficient).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let inverse = u64::try_from(self.automorphism_inverse)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let twice_degree =
-            u64::try_from(twice_degree).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let mapped = coefficient
-            .checked_mul(inverse)
-            .map(|mapped| mapped % twice_degree)
-            .and_then(|mapped| usize::try_from(mapped).ok())
+            .checked_mul(digit_count)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let (source, negate) = if mapped >= self.profile.ring_degree {
-            (mapped - self.profile.ring_degree, true)
-        } else {
-            (mapped, false)
-        };
-        let value = self.polynomial.limb(self.profile, limb)[source];
-        Ok(if negate && value != 0 {
-            self.profile.moduli[limb] - value
-        } else {
-            value
-        })
-    }
-
-    fn digit(&self, digit_index: usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
-        if digit_index >= self.profile.gadget_digits {
-            return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
-        }
-        let mut signed_digit = Vec::new();
-        signed_digit
-            .try_reserve_exact(self.profile.ring_degree)
+        let mut signed_digits = Vec::new();
+        signed_digits
+            .try_reserve_exact(signed_count)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        if signed_digit.capacity() != self.profile.ring_degree {
+        if signed_digits.capacity() != signed_count {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
-        let mut residues = vec![0_u64; self.profile.moduli.len()];
-        for coefficient in 0..self.profile.ring_degree {
+        signed_digits.resize(signed_count, 0_i64);
+
+        let mut residues = Vec::new();
+        residues
+            .try_reserve_exact(profile.moduli.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if residues.capacity() != profile.moduli.len() {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        residues.resize(profile.moduli.len(), 0_u64);
+
+        for coefficient in 0..profile.ring_degree {
             for (limb, residue) in residues.iter_mut().enumerate() {
-                *residue = self.coefficient_residue(limb, coefficient)?;
+                *residue = coefficient_residue_with_automorphism_v1(
+                    profile,
+                    polynomial,
+                    automorphism_inverse,
+                    limb,
+                    coefficient,
+                )?;
             }
-            let canonical = WideUint::crt(&residues, self.profile.moduli)?;
-            let (negative, magnitude) = if canonical > self.half_modulus {
+            let canonical = WideUint::crt(&residues, profile.moduli)?;
+            let (negative, magnitude) = if canonical > half_modulus {
                 (
                     true,
-                    self.ciphertext_modulus
+                    ciphertext_modulus
                         .checked_sub(canonical)
                         .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?,
                 )
@@ -493,22 +529,20 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
                 (false, canonical)
             };
             let mut carry = 0_u64;
-            let mut selected = 0_i64;
-            for digit in 0..self.profile.gadget_digits {
+            for digit in 0..profile.gadget_digits {
                 let chunk = magnitude.bits_at(
                     digit
-                        .checked_mul(usize::from(self.profile.gadget_base_log))
+                        .checked_mul(usize::from(profile.gadget_base_log))
                         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-                    usize::from(self.profile.gadget_base_log),
+                    usize::from(profile.gadget_base_log),
                 )?;
                 let with_carry = chunk
                     .checked_add(carry)
                     .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
-                let (balanced, next_carry) = if with_carry >= self.half_base {
+                let (balanced, next_carry) = if with_carry >= base / 2 {
                     (
                         i64::try_from(with_carry).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
-                            - i64::try_from(self.base)
-                                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+                            - i64::try_from(base).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
                         1,
                     )
                 } else {
@@ -517,18 +551,87 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
                         0,
                     )
                 };
-                if digit == digit_index {
-                    selected = if negative { -balanced } else { balanced };
+                if (first_digit..end_digit).contains(&digit) {
+                    let local_digit = digit - first_digit;
+                    let offset = local_digit
+                        .checked_mul(profile.ring_degree)
+                        .and_then(|base| base.checked_add(coefficient))
+                        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+                    signed_digits[offset] = if negative { -balanced } else { balanced };
                 }
                 carry = next_carry;
             }
             if carry != 0 {
                 return Err(ZkAmsMkheErrorV1::InvalidProfile);
             }
-            signed_digit.push(selected);
         }
-        rns_from_signed_exact(self.profile, &signed_digit)
+        Ok(Self {
+            profile,
+            first_digit,
+            digit_count,
+            signed_digits,
+        })
     }
+
+    fn digit(&self, digit_index: usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
+        let end_digit = self
+            .first_digit
+            .checked_add(self.digit_count)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if !(self.first_digit..end_digit).contains(&digit_index) {
+            return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
+        }
+        let start = (digit_index - self.first_digit)
+            .checked_mul(self.profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let end = start
+            .checked_add(self.profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let signed_digit = self
+            .signed_digits
+            .get(start..end)
+            .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        rns_from_signed_exact(self.profile, signed_digit)
+    }
+}
+
+fn coefficient_residue_with_automorphism_v1(
+    profile: &BgvProfile,
+    polynomial: &RnsPolynomial,
+    automorphism_inverse: usize,
+    limb: usize,
+    coefficient: usize,
+) -> Result<u64, ZkAmsMkheErrorV1> {
+    observe_hoisted_residue_read_v1();
+    if automorphism_inverse == 0 {
+        return Ok(polynomial.limb(profile, limb)[coefficient]);
+    }
+    let twice_degree = profile
+        .ring_degree
+        .checked_mul(2)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let coefficient =
+        u64::try_from(coefficient).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let inverse = u64::try_from(automorphism_inverse)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let twice_degree =
+        u64::try_from(twice_degree).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mapped = coefficient
+        .checked_mul(inverse)
+        .map(|mapped| mapped % twice_degree)
+        .and_then(|mapped| usize::try_from(mapped).ok())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let (source, negate) = if mapped >= profile.ring_degree {
+        (mapped - profile.ring_degree, true)
+    } else {
+        (mapped, false)
+    };
+    let value = polynomial.limb(profile, limb)[source];
+    Ok(if negate && value != 0 {
+        profile.moduli[limb] - value
+    } else {
+        value
+    })
 }
 
 fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -744,26 +847,41 @@ where
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     observe_seekable_liveness(accounting.output_accumulator_bytes);
-    let decomposition = match switched_automorphism {
-        Some(exponent) => {
-            StreamedHybridDigitDecomposerV1::new_automorphed(profile, switched, exponent)?
+    let mut first_digit = 0_usize;
+    while first_digit < profile.gadget_digits {
+        let digit_count =
+            (profile.gadget_digits - first_digit).min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1);
+        let hoisted = match switched_automorphism {
+            Some(exponent) => HoistedHybridDigitBatchV1::new_automorphed_batch(
+                profile,
+                switched,
+                exponent,
+                first_digit,
+                digit_count,
+            )?,
+            None => {
+                HoistedHybridDigitBatchV1::new_batch(profile, switched, first_digit, digit_count)?
+            }
+        };
+        let end_digit = first_digit
+            .checked_add(digit_count)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        for digit_index in first_digit..end_digit {
+            let plaintext_digit = hoisted.digit(digit_index)?;
+            observe_seekable_liveness(accounting.decomposition_phase_bytes);
+            {
+                observe_seekable_liveness(accounting.provider_read_phase_bytes);
+                let stored_b = stored_b(digit_index)?;
+                observe_seekable_liveness(accounting.multiplication_phase_bytes);
+                multiply_accumulate_in_place(profile, &mut constant, &plaintext_digit, &stored_b)?;
+            }
+            {
+                let seeded_a = seeded_a(digit_index)?;
+                observe_seekable_liveness(accounting.multiplication_phase_bytes);
+                multiply_accumulate_in_place(profile, &mut linear, &plaintext_digit, &seeded_a)?;
+            }
         }
-        None => StreamedHybridDigitDecomposerV1::new(profile, switched)?,
-    };
-    for digit_index in 0..profile.gadget_digits {
-        observe_seekable_liveness(accounting.decomposition_phase_bytes);
-        let plaintext_digit = decomposition.digit(digit_index)?;
-        {
-            observe_seekable_liveness(accounting.provider_read_phase_bytes);
-            let stored_b = stored_b(digit_index)?;
-            observe_seekable_liveness(accounting.multiplication_phase_bytes);
-            multiply_accumulate_in_place(profile, &mut constant, &plaintext_digit, &stored_b)?;
-        }
-        {
-            let seeded_a = seeded_a(digit_index)?;
-            observe_seekable_liveness(accounting.multiplication_phase_bytes);
-            multiply_accumulate_in_place(profile, &mut linear, &plaintext_digit, &seeded_a)?;
-        }
+        first_digit = end_digit;
     }
     Ok((constant, linear))
 }

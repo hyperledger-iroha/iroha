@@ -1746,8 +1746,6 @@ fn minimal_config_snapshot() {
                     burst: Some(
                         120,
                     ),
-                    async_job_ttl_secs: 300,
-                    async_job_max_entries: 2000,
                 },
                 cors: ToriiCors {
                     enabled: false,
@@ -2293,6 +2291,9 @@ fn minimal_config_snapshot() {
                     sample_size_max: 96,
                     threshold_base: 43,
                     per_attester_shards: 25,
+                    ingest_quota_window_blocks: 100,
+                    ingest_quota_max_count_per_account: 1024,
+                    ingest_quota_max_bytes_per_account: 68719476736,
                     audit: DaAudit {
                         sample_size: 32,
                         window_count: 20,

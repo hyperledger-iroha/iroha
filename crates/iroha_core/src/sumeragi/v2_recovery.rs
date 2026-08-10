@@ -570,7 +570,7 @@ pub fn authenticate_v2_snapshot_startup(
 /// # Errors
 ///
 /// Returns an error when the immutable boundary record, first full artifact, Kura anchor, or live
-/// chain identity disagree.
+/// network identity disagree.
 pub fn authenticated_v2_snapshot_startup_mode(
     kura: &Kura,
     state: &State,

@@ -17,7 +17,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, DataSpaceId, NetworkId,
+    DataSpaceId, NetworkId,
     account::AccountId,
     isi::InstructionBox,
     nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
@@ -328,10 +328,9 @@ impl TransactionGossiper {
         )
     }
 
-    /// Construct [`Self`] from configuration
+    /// Construct [`Self`], deriving target seeds from the state's exact network identity.
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn from_config(
-        chain_id: ChainId,
         Config {
             gossip_period,
             gossip_size,
@@ -351,9 +350,10 @@ impl TransactionGossiper {
         );
         let now = Instant::now();
         let dataspace_cfg = dataspace;
+        let network_id = *state.network_id_ref();
         let public_seed = GossipTargetSeed::new(
             Self::initial_target_seed(
-                &chain_id,
+                &network_id,
                 &self_peer_id,
                 &max_peer_id,
                 GOSSIP_SEED_PUBLIC_DOMAIN,
@@ -363,7 +363,7 @@ impl TransactionGossiper {
         );
         let restricted_seed = GossipTargetSeed::new(
             Self::initial_target_seed(
-                &chain_id,
+                &network_id,
                 &self_peer_id,
                 &max_peer_id,
                 GOSSIP_SEED_RESTRICTED_DOMAIN,
@@ -1271,15 +1271,36 @@ impl TransactionGossiper {
     }
 
     fn initial_target_seed(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         self_peer_id: &PeerId,
         max_peer_id: &PeerId,
         domain: u64,
     ) -> u64 {
-        let material = format!(
-            "iroha:tx-gossip-target-seed:v1\n{domain:016x}\n{chain_id}\n{self_peer_id}\n{max_peer_id}"
+        let self_peer = self_peer_id.encode();
+        let max_peer = max_peer_id.encode();
+        let mut material = Vec::with_capacity(
+            b"iroha:tx-gossip-target-seed:v2\0".len()
+                + Hash::LENGTH
+                + core::mem::size_of::<u64>() * 3
+                + self_peer.len()
+                + max_peer.len(),
         );
-        let digest = Hash::new(material.as_bytes());
+        material.extend_from_slice(b"iroha:tx-gossip-target-seed:v2\0");
+        material.extend_from_slice(network_id.as_bytes());
+        material.extend_from_slice(&domain.to_be_bytes());
+        material.extend_from_slice(
+            &u64::try_from(self_peer.len())
+                .expect("canonical peer id length fits in u64")
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&self_peer);
+        material.extend_from_slice(
+            &u64::try_from(max_peer.len())
+                .expect("canonical peer id length fits in u64")
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&max_peer);
+        let digest = Hash::new(&material);
         let mut seed = [0_u8; 8];
         seed.copy_from_slice(&digest.as_ref()[..8]);
         u64::from_le_bytes(seed)
@@ -3579,7 +3600,7 @@ mod tests {
         ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
-        ChainId, DataSpaceId, Level,
+        DataSpaceId, Level,
         account::{AccountDetails, AccountValue},
         domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
@@ -4211,7 +4232,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         network_cfg.max_frame_bytes_tx_gossip = 1024;
         let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
         let max_peer_id = self_peer_id.clone();
-        let chain_id: ChainId = "test-chain".parse().expect("chain id");
         let expected = tx_gossip_frame_payload_cap(
             &network_cfg,
             state.network_id_ref(),
@@ -4222,7 +4242,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let network = IrohaNetwork::closed_for_tests();
 
         let gossiper = TransactionGossiper::from_config(
-            chain_id,
             Config {
                 gossip_period: Duration::from_millis(1000),
                 gossip_size: NonZeroU32::new(1).expect("nonzero size"),
@@ -5577,51 +5596,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
-    fn initial_target_seed_is_stable_and_peer_specific() {
-        let chain_id: ChainId = "test-chain".parse().expect("chain id");
-        let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
-        let other_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
-        let max_peer: PeerId = (*CARPENTER_KEYPAIR).public_key().clone().into();
-
-        let seed = TransactionGossiper::initial_target_seed(
-            &chain_id,
-            &self_peer,
-            &max_peer,
-            GOSSIP_SEED_PUBLIC_DOMAIN,
-        );
-        assert_eq!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &self_peer,
-                &max_peer,
-                GOSSIP_SEED_PUBLIC_DOMAIN,
-            ),
-            "initial target seed should be stable for the same identity inputs"
-        );
-        assert_ne!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &self_peer,
-                &max_peer,
-                GOSSIP_SEED_RESTRICTED_DOMAIN,
-            ),
-            "public and restricted gossip planes should start from distinct seeds"
-        );
-        assert_ne!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &other_peer,
-                &max_peer,
-                GOSSIP_SEED_PUBLIC_DOMAIN,
-            ),
-            "local peer identity should perturb initial target seed"
-        );
-    }
-
-    #[test]
     fn gossip_target_seed_holds_until_reshuffle_period() {
         let now = Instant::now();
         let mut seed = GossipTargetSeed::new(0xA5A5_1234, Duration::from_secs(5), now);
@@ -6875,5 +6849,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
     }
 
+    include!("gossiper_network_domain_tests.rs");
     include!("gossiper_restricted_route_tests.rs");
 }

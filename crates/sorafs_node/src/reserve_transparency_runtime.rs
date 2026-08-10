@@ -17,7 +17,7 @@ use iroha_config::parameters::{
     actual::SorafsReserveTransparencyRuntime, validate_production_runtime_handle,
 };
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     sorafs::reserve::{
         RESERVE_QUERY_MAX_ITEMS_V1, ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1,
         ReserveFinalizedEventPageV1,
@@ -67,7 +67,7 @@ pub trait ReserveTransparencyCommittedProjectionV1: Send + Sync {
     /// `ForkOrReorg` when any expected cursor is absent or substituted.
     fn verify_committed_anchors(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         expected: &[ReserveFinalizedCursorV1],
     ) -> Result<ReserveFinalizedCursorV1, ReserveTransparencyCommittedProjectionErrorV1>;
 }
@@ -125,7 +125,7 @@ pub trait ReserveTransparencyFinalizedQueryV1: Send + Sync {
     /// Returns a payload-free failure when the archive cannot serve the view.
     fn finalized_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1>;
 
@@ -179,10 +179,11 @@ impl ReserveTransparencyFinalizedQueryV1 for ReputationReserveTransparencyQueryA
 
     fn finalized_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
-        self.inner.finalized_at_or_before(chain_id, maximum_height)
+        self.inner
+            .finalized_at_or_before(network_id, maximum_height)
     }
 
     fn reserve_page(
@@ -251,7 +252,7 @@ impl ReserveTransparencyScannerErrorV1 {
 struct ReserveTransparencyCheckpointPayloadV1 {
     version: u8,
     generation: u64,
-    chain_id: ChainId,
+    network_id: NetworkId,
     query_handle: String,
     query_revision: u64,
     query_policy_digest: [u8; 32],
@@ -268,7 +269,7 @@ struct ReserveTransparencyCheckpointV1 {
 impl ReserveTransparencyCheckpointV1 {
     fn try_new(
         generation: u64,
-        chain_id: ChainId,
+        network_id: NetworkId,
         query_handle: String,
         query_qualification: ReputationRuntimeProviderQualificationV1,
         finalized_anchor: ReserveFinalizedCursorV1,
@@ -277,7 +278,7 @@ impl ReserveTransparencyCheckpointV1 {
         let payload = ReserveTransparencyCheckpointPayloadV1 {
             version: RESERVE_TRANSPARENCY_CHECKPOINT_VERSION_V1,
             generation,
-            chain_id,
+            network_id,
             query_handle,
             query_revision: query_qualification.revision(),
             query_policy_digest: query_qualification.policy_digest(),
@@ -290,7 +291,7 @@ impl ReserveTransparencyCheckpointV1 {
 
     fn validate_for(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         query_handle: &str,
         query_qualification: ReputationRuntimeProviderQualificationV1,
     ) -> Result<(), ReserveTransparencyScannerErrorV1> {
@@ -304,7 +305,7 @@ impl ReserveTransparencyCheckpointV1 {
         });
         if self.payload.version != RESERVE_TRANSPARENCY_CHECKPOINT_VERSION_V1
             || self.payload.generation == 0
-            || &self.payload.chain_id != chain_id
+            || &self.payload.network_id != network_id
             || self.payload.query_handle != query_handle
             || self.payload.query_revision != query_qualification.revision()
             || self.payload.query_policy_digest != query_qualification.policy_digest()
@@ -350,7 +351,7 @@ pub struct ReserveTransparencyTickOutcomeV1 {
 
 /// Bounded restart-safe scanner for finalized reserve transparency entries.
 pub struct ReserveTransparencyScannerV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     checkpoint_path: PathBuf,
     checkpoint_max_bytes: u64,
     query_handle: String,
@@ -367,7 +368,7 @@ impl fmt::Debug for ReserveTransparencyScannerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReserveTransparencyScannerV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("checkpoint_path", &self.checkpoint_path)
             .field("query_handle", &self.query_handle)
             .field("page_items", &self.page_items)
@@ -386,13 +387,13 @@ impl ReserveTransparencyScannerV1 {
     /// path, checkpoint bytes, or checkpoint lineage is invalid.
     pub fn try_new(
         config: &SorafsReserveTransparencyRuntime,
-        chain_id: ChainId,
+        network_id: NetworkId,
         query_qualification: ReputationRuntimeProviderQualificationV1,
         query: Arc<dyn ReserveTransparencyFinalizedQueryV1>,
         projection: Arc<dyn ReserveTransparencyCommittedProjectionV1>,
         sink: Arc<dyn ReserveTransparencySourceSinkV1>,
     ) -> Result<Self, ReserveTransparencyScannerErrorV1> {
-        if chain_id.as_str().is_empty()
+        if network_id.as_bytes()[31] & 1 != 1
             || !config.state_dir.is_absolute()
             || config.state_dir.file_name().is_none()
             || config
@@ -426,12 +427,12 @@ impl ReserveTransparencyScannerV1 {
                             CHECKPOINT_MAX_SEQUENCE_ELEMENTS_V1,
                         )
                         .map_err(|_| ReserveTransparencyScannerErrorV1::Checkpoint)?;
-                    checkpoint.validate_for(&chain_id, &query_handle, query_qualification)?;
+                    checkpoint.validate_for(&network_id, &query_handle, query_qualification)?;
                     Ok(checkpoint)
                 })
                 .transpose()?;
         Ok(Self {
-            chain_id,
+            network_id,
             checkpoint_path,
             checkpoint_max_bytes: config.checkpoint_max_bytes.0,
             query_handle,
@@ -471,14 +472,14 @@ impl ReserveTransparencyScannerV1 {
 
         let selected = self
             .query
-            .finalized_at_or_before(&self.chain_id, committed_head.height)
+            .finalized_at_or_before(&self.network_id, committed_head.height)
             .map_err(|_| ReserveTransparencyScannerErrorV1::QueryUnavailable)?;
         assert_query_binding(
             self.query.as_ref(),
             &self.query_handle,
             self.query_qualification,
         )?;
-        validate_selected_anchor(&selected, &self.chain_id)?;
+        validate_selected_anchor(&selected, &self.network_id)?;
         let selected_cursor = ReserveFinalizedCursorV1 {
             height: selected.identity.height,
             block_hash: selected.identity.block_hash,
@@ -574,7 +575,7 @@ impl ReserveTransparencyScannerV1 {
         expected: &[ReserveFinalizedCursorV1],
     ) -> Result<ReserveFinalizedCursorV1, ReserveTransparencyScannerErrorV1> {
         self.projection
-            .verify_committed_anchors(&self.chain_id, expected)
+            .verify_committed_anchors(&self.network_id, expected)
             .map_err(|error| match error {
                 ReserveTransparencyCommittedProjectionErrorV1::Unavailable => {
                     ReserveTransparencyScannerErrorV1::ProjectionUnavailable
@@ -604,13 +605,17 @@ impl ReserveTransparencyScannerV1 {
         }
         let next = ReserveTransparencyCheckpointV1::try_new(
             generation,
-            self.chain_id.clone(),
+            self.network_id,
             self.query_handle.clone(),
             self.query_qualification,
             finalized_anchor,
             after,
         )?;
-        next.validate_for(&self.chain_id, &self.query_handle, self.query_qualification)?;
+        next.validate_for(
+            &self.network_id,
+            &self.query_handle,
+            self.query_qualification,
+        )?;
         let bytes =
             norito::to_bytes(&next).map_err(|_| ReserveTransparencyScannerErrorV1::Checkpoint)?;
         write_local_checkpoint_atomic_bounded(
@@ -650,9 +655,9 @@ fn validate_anchor(
 
 fn validate_selected_anchor(
     anchor: &ReputationFinalizedAnchorV1,
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Result<(), ReserveTransparencyScannerErrorV1> {
-    if &anchor.chain_id != expected_chain_id
+    if &anchor.network_id != expected_network_id
         || anchor.identity.height == 0
         || anchor.identity.block_hash == [0; 32]
         || anchor.finalized_at_unix_ms == 0
@@ -725,6 +730,7 @@ mod tests {
         time::Duration,
     };
 
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
         events::data::sorafs::{SorafsReserveLedgerEvent, SorafsReserveLedgerEventKind},
@@ -740,9 +746,17 @@ mod tests {
     const QUERY_HANDLE: &str = "ledger.finalized.primary";
     const QUERY_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
 
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"reserve-transparency-test-genesis",
+            )),
+        )
+    }
+
     #[derive(Debug)]
     struct MockQuery {
-        chain_id: ChainId,
+        network_id: NetworkId,
         anchor: ReserveFinalizedCursorV1,
         events: Vec<ReserveFinalizedEventV1>,
     }
@@ -760,13 +774,13 @@ mod tests {
 
         fn finalized_at_or_before(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
-            assert_eq!(chain_id, &self.chain_id);
+            assert_eq!(network_id, &self.network_id);
             assert!(maximum_height >= self.anchor.height);
             Ok(ReputationFinalizedAnchorV1 {
-                chain_id: self.chain_id.clone(),
+                network_id: self.network_id,
                 identity: ReputationFinalizedIdentityV1 {
                     height: self.anchor.height,
                     block_hash: self.anchor.block_hash,
@@ -808,7 +822,7 @@ mod tests {
 
     #[derive(Debug)]
     struct MockProjection {
-        chain_id: ChainId,
+        network_id: NetworkId,
         hashes: Mutex<Vec<[u8; 32]>>,
     }
 
@@ -822,11 +836,11 @@ mod tests {
     impl ReserveTransparencyCommittedProjectionV1 for MockProjection {
         fn verify_committed_anchors(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             expected: &[ReserveFinalizedCursorV1],
         ) -> Result<ReserveFinalizedCursorV1, ReserveTransparencyCommittedProjectionErrorV1>
         {
-            if chain_id != &self.chain_id {
+            if network_id != &self.network_id {
                 return Err(ReserveTransparencyCommittedProjectionErrorV1::ForkOrReorg);
             }
             let hashes = self
@@ -930,7 +944,7 @@ mod tests {
     type TestDependencies = (Arc<MockQuery>, Arc<MockProjection>, Arc<MockSink>);
 
     fn test_dependencies() -> TestDependencies {
-        let chain_id = ChainId::from("reserve-transparency-test");
+        let network_id = test_network_id();
         let hashes = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
         let anchor = ReserveFinalizedCursorV1 {
             height: 3,
@@ -938,7 +952,7 @@ mod tests {
         };
         (
             Arc::new(MockQuery {
-                chain_id: chain_id.clone(),
+                network_id,
                 anchor,
                 events: vec![
                     finalized_event(1, 2, hashes[1]),
@@ -946,7 +960,7 @@ mod tests {
                 ],
             }),
             Arc::new(MockProjection {
-                chain_id,
+                network_id,
                 hashes: Mutex::new(hashes),
             }),
             Arc::new(MockSink::default()),
@@ -964,7 +978,7 @@ mod tests {
         let sink: Arc<dyn ReserveTransparencySourceSinkV1> = sink;
         ReserveTransparencyScannerV1::try_new(
             config,
-            ChainId::from("reserve-transparency-test"),
+            test_network_id(),
             query_qualification(),
             query,
             projection,

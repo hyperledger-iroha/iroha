@@ -3,8 +3,8 @@
 These guidelines apply to the `crates/irohad` daemon (node binary).
 
 ## Overview
-- `irohad` is the node process that runs consensus, networking, and execution.
-- Binary target; use `cargo run -p irohad -- --help` to see CLI options.
+- `iroha3d` is the node process that runs consensus, networking, and execution.
+- Binary target `iroha3d`; use `cargo run -p irohad --bin iroha3d -- --help` to see CLI options.
 
 ## Development workflow
 - Keep changes deterministic and side-effect free under test; avoid time- and network-dependent behavior in unit tests.

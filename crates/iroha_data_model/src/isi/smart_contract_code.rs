@@ -56,9 +56,10 @@ isi! {
     /// Atomically deploy a new contract address and move its stable alias.
     ///
     /// `expected_deploy_nonce` and `expected_previous_contract_address` are compare-and-swap
-    /// guards. The executor derives `contract_address` from the authority, nonce, chain, and
-    /// alias dataspace, then either creates the first binding or replaces the exact active alias
-    /// target. The authority must already exist and hold `CanRegisterSmartContractCode`;
+    /// guards. The executor derives `contract_address` from the authority, nonce, exact
+    /// genesis-derived `NetworkId`, and alias dataspace, then either creates the first binding or
+    /// replaces the exact active alias target. The authority must already exist and hold
+    /// `CanRegisterSmartContractCode`;
     /// protected namespaces additionally require governance authority.
     pub struct CommitContractDeployment {
         /// Exact next deployment nonce expected in the authority's reserved metadata.
@@ -471,7 +472,9 @@ mod tests {
 
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &account(),
             7,
             DataSpaceId::UNIVERSAL,

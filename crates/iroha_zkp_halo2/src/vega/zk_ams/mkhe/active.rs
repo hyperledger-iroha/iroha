@@ -18,8 +18,9 @@
 //! release KATs.
 
 use super::{
-    ArtifactAuthentication, AuthenticationSecret, MKHE_VERSION_V1, Scalar, ZkAmsMkheErrorV1,
-    ZkAmsMkhePartyIdV1, auth_generator,
+    ArtifactAuthentication, AuthenticationSecret, MKHE_VERSION_V1, Scalar,
+    ZeroizingScalarEntropyV1, ZeroizingScalarV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    auth_generator,
     manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
     packing::{
         ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
@@ -414,7 +415,7 @@ fn prove_roster_key_possession<R: MaskedRelaxedRandomSourceV1>(
     }
     let nonce = sample_nonzero_scalar(random)?;
     let commitment = auth_generator()?
-        .mul_scalar(nonce)
+        .mul_scalar(nonce.expose_copy())
         .to_non_identity_wire_bytes()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
     let challenge = roster_pop_challenge(
@@ -427,9 +428,10 @@ fn prove_roster_key_possession<R: MaskedRelaxedRandomSourceV1>(
         public_key,
         commitment,
     )?;
+    let secret_scalar = secret.scalar()?;
     let proof = ZkAmsMkheRosterKeyProofV1 {
         commitment,
-        response: (nonce + challenge * secret.scalar()?).to_be_bytes(),
+        response: (nonce.expose_copy() + challenge * secret_scalar.expose_copy()).to_be_bytes(),
     };
     verify_roster_key_proof(
         profile_digest,
@@ -539,15 +541,14 @@ fn scalar_challenge(frame: &[u8]) -> Result<Scalar, ZkAmsMkheErrorV1> {
 
 fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
-) -> Result<Scalar, ZkAmsMkheErrorV1> {
+) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
     for _ in 0..RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut uniform = [0_u8; 64];
+        let mut uniform = ZeroizingScalarEntropyV1::zeroed();
         random
-            .fill_bytes(&mut uniform)
+            .fill_bytes(uniform.as_mut_slice())
             .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-        let scalar = Scalar::from_uniform_le_bytes(uniform);
-        uniform.fill(0);
-        if !scalar.is_zero() {
+        let scalar = ZeroizingScalarV1::new(Scalar::from_uniform_le_bytes_ref(uniform.as_array()));
+        if !scalar.as_ref().is_zero() {
             return Ok(scalar);
         }
     }

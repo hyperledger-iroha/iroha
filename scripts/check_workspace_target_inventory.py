@@ -24,7 +24,7 @@ EXPECTED_DEFAULT_BINS = frozenset(
         ("iroha_monitor", "iroha_monitor"),
         ("iroha_python_rs", "iroha_privacy_wallet_worker"),
         ("iroha_torii", "attachment_sanitizer"),
-        ("irohad", "irohad"),
+        ("irohad", "iroha3d"),
         ("irohad", "sorafs_governance_dag"),
         ("irohad", "taira_bootle_lantern_broker"),
         ("ivm", "koto"),
@@ -47,12 +47,12 @@ EXPECTED_DEFAULT_BINS = frozenset(
 )
 
 FORBIDDEN_COMPATIBILITY_BINS = frozenset(
-    {"iroha2", "iroha2d", "iroha3", "iroha3d", "iroha_cli"}
+    {"iroha2", "iroha2d", "iroha3", "iroha_cli", "irohad"}
 )
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 113
+EXPECTED_DECLARED_BIN_COUNT = 114
 
 
 def load_metadata(root: Path) -> dict[str, Any]:
@@ -126,7 +126,7 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
         errors.append(
             f"declared binary count {len(declared)} differs from the expected "
             f"{EXPECTED_DECLARED_BIN_COUNT} after retiring five obsolete aliases and "
-            "adding the two reviewed first-release targets "
+            "adding the three reviewed first-release targets "
             f"(pre-refactor baseline: {BASELINE_DECLARED_BIN_COUNT})"
         )
 

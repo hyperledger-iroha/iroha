@@ -1581,7 +1581,7 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
             &native_public_keys,
             &native_balances,
             TranscriptBindingV1 {
-                chain_id: state_transaction.chain_id.as_str().as_bytes(),
+                network_id: state_transaction.network_id.as_bytes(),
                 genesis_hash,
                 action_index: expected_action_index,
                 statement_digest: *bootstrap_digest.as_bytes(),
@@ -4568,7 +4568,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     .privacy_consensus_policy
                     .get()
                     .current_limits,
-                chain_id: &state_transaction.chain_id,
+                network_id: &state_transaction.network_id,
                 genesis_hash,
                 current_height: state_transaction.block_height(),
                 expected_action_index,
@@ -5935,7 +5935,7 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
-        Registrable,
+        NetworkId, Registrable,
         account::Account,
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
@@ -6010,6 +6010,12 @@ mod tests {
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
     const TEST_GENESIS_HASH: [u8; 32] = [0x91; 32];
     const TEST_BLOCK_HEIGHT: u64 = 2;
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(TEST_GENESIS_HASH),
+        ))
+    }
 
     struct KatRng {
         seed: [u8; 32],
@@ -6138,7 +6144,7 @@ mod tests {
                     &public_keys,
                     &encrypted_balances,
                     TranscriptBindingV1 {
-                        chain_id: TEST_CHAIN_ID.as_bytes(),
+                        network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
                         statement_digest: *bootstrap_digest.as_bytes(),
@@ -6258,7 +6264,7 @@ mod tests {
                 )
                 .expect("successor account root");
                 let context = PrivacyStatementContextV1 {
-                    chain_id: TEST_CHAIN_ID.into(),
+                    network_id: test_network_id(),
                     action_index: 0,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xD0; 32]),
                     parameter_id: compiled.parameter_id,
@@ -6308,7 +6314,7 @@ mod tests {
                     recipient_count,
                     pool_invariant,
                     TranscriptBindingV1 {
-                        chain_id: TEST_CHAIN_ID.as_bytes(),
+                        network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
                         statement_digest: *statement_digest.as_bytes(),
@@ -6440,7 +6446,7 @@ mod tests {
     ) -> IrohaBootleLanternAnoncredStatementV1 {
         IrohaBootleLanternAnoncredStatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: TEST_CHAIN_ID.into(),
+                network_id: test_network_id(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
                 parameter_id: PrivacyParameterIdV1::new([0xB5; 32]),
@@ -6849,11 +6855,12 @@ mod tests {
             .expect("FCMP++ bootstrap root head"),
         );
 
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            fixture.chain_id.clone(),
+            TEST_CHAIN_ID.into(),
+            fixture.network_id,
         );
         state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(fixture.genesis_hash),
@@ -8764,11 +8771,12 @@ mod tests {
             PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 2)
                 .expect("ZK-ACE policy state record"),
         );
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            fixture.chain_id.clone(),
+            TEST_CHAIN_ID.into(),
+            fixture.network_id,
         );
         state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(fixture.genesis_hash),
@@ -8946,11 +8954,12 @@ mod tests {
             )
             .expect("ZK-AMS prestate root head"),
         );
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            fixture.chain_id.clone(),
+            TEST_CHAIN_ID.into(),
+            fixture.network_id,
         );
         state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(fixture.genesis_hash),

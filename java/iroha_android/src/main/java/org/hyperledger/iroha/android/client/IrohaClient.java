@@ -22,6 +22,8 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
 import org.hyperledger.iroha.android.alias.AliasSetupModels;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
+import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -108,6 +110,24 @@ public interface IrohaClient {
     future.completeExceptionally(
         new IllegalStateException(
             "waitForTransactionStatus requires a concrete IrohaClient implementation"));
+    return future;
+  }
+
+  /** Fetches the authoritative, protocol-v4-only Sumeragi status snapshot. */
+  default CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
+    final CompletableFuture<SumeragiV2Status> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new IllegalStateException(
+            "getSumeragiStatus requires a concrete IrohaClient implementation"));
+    return future;
+  }
+
+  /** Fetches operational Sumeragi evidence separately from authoritative status. */
+  default CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
+    final CompletableFuture<SumeragiDiagnosticsStatus> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new IllegalStateException(
+            "getSumeragiDiagnostics requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -332,7 +352,9 @@ public interface IrohaClient {
 
   /** Requests a stateless sponsored-onboarding receipt using a dedicated header token. */
   default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
-      final AccountOnboardingPlanRequestV1 request, final String onboardingToken) {
+      final AccountOnboardingPlanRequestV1 request,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingPlanReceiptV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -344,7 +366,8 @@ public interface IrohaClient {
   default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 request,
       final String onboardingToken,
-      final String expectedAuthority) {
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingPlanReceiptV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -354,7 +377,9 @@ public interface IrohaClient {
 
   /** Revalidates and applies a stateless sponsored-onboarding receipt. */
   default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
-      final AccountOnboardingPlanReceiptV1 receipt, final String onboardingToken) {
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -366,7 +391,8 @@ public interface IrohaClient {
   default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
       final AccountOnboardingPlanReceiptV1 receipt,
       final String onboardingToken,
-      final String expectedAuthority) {
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(

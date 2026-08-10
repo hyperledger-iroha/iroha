@@ -138,6 +138,22 @@ impl Kura {
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl Kura {
+    /// Remove only the reverse carrier record while retaining its committed full entry.
+    ///
+    /// This models the finalized block-first crash seam repaired at startup.
+    pub(crate) fn remove_merge_carrier_record_for_testing(
+        &self,
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> Result<()> {
+        let record = Self::carrier_record_for_block_entry(block, entry)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _carrier_guard = self.merge_carrier_lock.lock();
+        self.remove_merge_carrier_record_unlocked(record)
+    }
+
     /// Remove the local DA cache only after a canonical body was genuinely evicted.
     ///
     /// This test-only hook models a remote-only historical block so downstream

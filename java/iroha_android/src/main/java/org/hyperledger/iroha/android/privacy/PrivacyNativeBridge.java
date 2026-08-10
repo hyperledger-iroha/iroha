@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.android.privacy;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /**
  * Canonical first-release local privacy build-metadata bridge.
@@ -13,9 +15,14 @@ import java.util.List;
  */
 public final class PrivacyNativeBridge {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
+  public static final int CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 = 1;
   public static final int EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
   public static final int COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
   public static final int EXACT12_FIXTURE_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
+  private static final int CONFIDENTIAL_TREE_DEPTH = 16;
+  private static final int CONFIDENTIAL_TREE_CAPACITY = 1 << CONFIDENTIAL_TREE_DEPTH;
+  private static final int CONFIDENTIAL_MERKLE_PATH_BYTES =
+      32 + CONFIDENTIAL_TREE_DEPTH * 32 + CONFIDENTIAL_TREE_DEPTH;
   private static final String LIBRARY_NAME = "connect_norito_bridge";
 
   /** Stable ABI-22 result of validating one typed local compiled-profile catalog. */
@@ -120,6 +127,211 @@ public final class PrivacyNativeBridge {
   /** Returns all twelve protocol identities in exact wire order. */
   public static List<PrivacyProtocolIdV1> protocolsV1() {
     return PROTOCOLS;
+  }
+
+  static byte[] defaultConfidentialDiversifierV3() {
+    return confidentialDigest(
+        "default diversifier", PrivacyNativeBridge::nativeDefaultConfidentialDiversifierV3);
+  }
+
+  static byte[] deriveConfidentialDiversifierV3(final byte[] seed) {
+    if (seed == null || seed.length == 0 || seed.length > 4096) {
+      throw new IllegalArgumentException(
+          "confidential diversifier seed must contain 1..4096 bytes");
+    }
+    final byte[] snapshot = seed.clone();
+    return confidentialDigest(
+        "diversifier", () -> nativeDeriveConfidentialDiversifierV3(snapshot));
+  }
+
+  static byte[] deriveConfidentialOwnerTagV3(
+      final byte[] spendKey, final byte[] diversifier) {
+    final byte[] spend = confidentialInput32(spendKey, "spendKey");
+    final byte[] diversified = confidentialInput32(diversifier, "diversifier");
+    return confidentialDigest(
+        "owner tag", () -> nativeDeriveConfidentialOwnerTagV3(spend, diversified));
+  }
+
+  static byte[] deriveConfidentialAssetTagV3(final String asset) {
+    final byte[] encoded = confidentialText(asset, "asset");
+    return confidentialDigest("asset tag", () -> nativeDeriveConfidentialAssetTagV3(encoded));
+  }
+
+  static byte[] deriveConfidentialNetworkTagV3(final NetworkId networkId) {
+    if (networkId == null) {
+      throw new IllegalArgumentException("networkId must be provided");
+    }
+    return confidentialDigest(
+        "network tag", () -> nativeDeriveConfidentialNetworkTagV3(networkId.bytes()));
+  }
+
+  static byte[] deriveConfidentialNoteCommitmentV3(
+      final String asset,
+      final String amount,
+      final byte[] rho,
+      final byte[] ownerTag) {
+    final byte[] encodedAsset = confidentialText(asset, "asset");
+    final byte[] encodedAmount = confidentialPositiveU128(amount);
+    final byte[] exactRho = confidentialInput32(rho, "rho");
+    final byte[] exactOwner = confidentialInput32(ownerTag, "ownerTag");
+    return confidentialDigest(
+        "note commitment",
+        () ->
+            nativeDeriveConfidentialNoteCommitmentV3(
+                encodedAsset, encodedAmount, exactRho, exactOwner));
+  }
+
+  static byte[] deriveConfidentialNullifierV3(
+      final NetworkId networkId,
+      final String asset,
+      final byte[] spendKey,
+      final byte[] rho) {
+    if (networkId == null) {
+      throw new IllegalArgumentException("networkId must be provided");
+    }
+    final byte[] encodedAsset = confidentialText(asset, "asset");
+    final byte[] spend = confidentialInput32(spendKey, "spendKey");
+    final byte[] exactRho = confidentialInput32(rho, "rho");
+    return confidentialDigest(
+        "nullifier",
+        () ->
+            nativeDeriveConfidentialNullifierV3(
+                networkId.bytes(), encodedAsset, spend, exactRho));
+  }
+
+  static byte[] deriveConfidentialMerklePathV3(
+      final List<byte[]> commitments, final long leafIndex) {
+    if (commitments == null
+        || commitments.isEmpty()
+        || commitments.size() > CONFIDENTIAL_TREE_CAPACITY) {
+      throw new IllegalArgumentException(
+          "commitments must contain 1.." + CONFIDENTIAL_TREE_CAPACITY + " leaves");
+    }
+    if (leafIndex < 0 || leafIndex >= commitments.size()) {
+      throw new IllegalArgumentException("leafIndex must identify one supplied commitment");
+    }
+    final byte[] packed = new byte[commitments.size() * 32];
+    for (int index = 0; index < commitments.size(); index++) {
+      final byte[] commitment =
+          confidentialInput32(commitments.get(index), "commitments[" + index + "]");
+      System.arraycopy(commitment, 0, packed, index * 32, 32);
+    }
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("native confidential V3 Merkle derivation is unavailable");
+    }
+    final byte[] path = nativeDeriveConfidentialMerklePathV3(packed, leafIndex);
+    if (path == null || path.length != CONFIDENTIAL_MERKLE_PATH_BYTES) {
+      throw new IllegalStateException(
+          "native confidential V3 Merkle derivation returned an invalid path");
+    }
+    return path.clone();
+  }
+
+  static boolean verifyConfidentialMerklePathV3(
+      final byte[] commitment,
+      final long leafIndex,
+      final List<byte[]> siblings,
+      final byte[] directions,
+      final byte[] root) {
+    if (leafIndex < 0
+        || siblings == null
+        || siblings.size() != CONFIDENTIAL_TREE_DEPTH
+        || directions == null
+        || directions.length != CONFIDENTIAL_TREE_DEPTH
+        || commitment == null
+        || commitment.length != 32
+        || root == null
+        || root.length != 32) {
+      return false;
+    }
+    final byte[] packedSiblings = new byte[CONFIDENTIAL_TREE_DEPTH * 32];
+    for (int index = 0; index < siblings.size(); index++) {
+      final byte[] sibling = siblings.get(index);
+      if (sibling == null || sibling.length != 32) {
+        return false;
+      }
+      System.arraycopy(sibling, 0, packedSiblings, index * 32, 32);
+    }
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("native confidential V3 Merkle verification is unavailable");
+    }
+    return nativeVerifyConfidentialMerklePathV3(
+        commitment.clone(),
+        leafIndex,
+        packedSiblings,
+        directions.clone(),
+        root.clone());
+  }
+
+  private static byte[] confidentialDigest(
+      final String label, final NativeDigestDerivation derivation) {
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("native confidential V3 derivation is unavailable");
+    }
+    final byte[] digest;
+    try {
+      digest = derivation.derive();
+    } catch (final RuntimeException | LinkageError error) {
+      throw new IllegalStateException("native confidential " + label + " derivation failed", error);
+    }
+    if (digest == null || digest.length != 32 || allZero(digest)) {
+      throw new IllegalStateException(
+          "native confidential " + label + " derivation returned an invalid digest");
+    }
+    return digest.clone();
+  }
+
+  private static byte[] confidentialInput32(final byte[] value, final String label) {
+    if (value == null || value.length != 32 || allZero(value)) {
+      throw new IllegalArgumentException(label + " must be exactly 32 non-zero bytes");
+    }
+    return value.clone();
+  }
+
+  private static byte[] confidentialText(final String value, final String label) {
+    if (value == null
+        || value.isEmpty()
+        || !value.equals(value.trim())
+        || value.indexOf('\0') >= 0) {
+      throw new IllegalArgumentException(label + " must be canonical non-empty text");
+    }
+    final byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+    if (encoded.length > 512) {
+      throw new IllegalArgumentException(label + " exceeds the native byte bound");
+    }
+    return encoded;
+  }
+
+  private static byte[] confidentialPositiveU128(final String value) {
+    if (value == null || value.isEmpty() || value.length() > 39) {
+      throw new IllegalArgumentException("amount must be a canonical positive u128");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      if (value.charAt(index) < '0' || value.charAt(index) > '9') {
+        throw new IllegalArgumentException("amount must be a canonical positive u128");
+      }
+    }
+    if (value.equals("0")
+        || (value.length() > 1 && value.charAt(0) == '0')
+        || (value.length() == 39
+            && value.compareTo("340282366920938463463374607431768211455") > 0)) {
+      throw new IllegalArgumentException("amount must be a canonical positive u128");
+    }
+    return value.getBytes(StandardCharsets.US_ASCII);
+  }
+
+  private static boolean allZero(final byte[] value) {
+    for (final byte item : value) {
+      if (item != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @FunctionalInterface
+  private interface NativeDigestDerivation {
+    byte[] derive();
   }
 
   /**
@@ -296,6 +508,8 @@ public final class PrivacyNativeBridge {
     try {
       System.loadLibrary(LIBRARY_NAME);
       return nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
+          && nativeConfidentialDerivationContractRevisionV3()
+              == CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3
           && nativeValidateExact12CapabilityManifest(null)
               == Exact12CapabilityManifestValidationStatusV1.NULL_POINTER.code()
           && nativeInspectExact12CapabilityManifest(null) == null
@@ -309,6 +523,35 @@ public final class PrivacyNativeBridge {
   }
 
   private static native int nativeBridgeAbiVersion();
+
+  private static native int nativeConfidentialDerivationContractRevisionV3();
+
+  private static native byte[] nativeDefaultConfidentialDiversifierV3();
+
+  private static native byte[] nativeDeriveConfidentialDiversifierV3(byte[] seed);
+
+  private static native byte[] nativeDeriveConfidentialOwnerTagV3(
+      byte[] spendKey, byte[] diversifier);
+
+  private static native byte[] nativeDeriveConfidentialAssetTagV3(byte[] assetUtf8);
+
+  private static native byte[] nativeDeriveConfidentialNetworkTagV3(byte[] networkId);
+
+  private static native byte[] nativeDeriveConfidentialNoteCommitmentV3(
+      byte[] assetUtf8, byte[] amountAscii, byte[] rho, byte[] ownerTag);
+
+  private static native byte[] nativeDeriveConfidentialNullifierV3(
+      byte[] networkId, byte[] assetUtf8, byte[] spendKey, byte[] rho);
+
+  private static native byte[] nativeDeriveConfidentialMerklePathV3(
+      byte[] commitments, long leafIndex);
+
+  private static native boolean nativeVerifyConfidentialMerklePathV3(
+      byte[] commitment,
+      long leafIndex,
+      byte[] siblings,
+      byte[] directions,
+      byte[] root);
 
   private static native byte[] nativeCompiledProfileCatalog();
 

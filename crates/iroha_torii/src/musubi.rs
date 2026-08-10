@@ -468,7 +468,7 @@ where
 {
     let payload = to_json_value(&instruction, "Musubi V1 instruction preview")?;
     let instruction: InstructionBox = instruction.into();
-    let framed = norito::to_bytes(&instruction).map_err(|error| {
+    let framed = norito::encode_canonical(&instruction).map_err(|error| {
         crate::routing::conversion_error(format!("failed to encode Musubi V1 instruction: {error}"))
     })?;
     let mut instruction_json = Map::new();
@@ -532,6 +532,26 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn v1_instruction_envelope_ignores_ambient_layout_flags() {
+        let expected = build_instruction_envelope(
+            SetMusubiReleaseYankV1::WIRE_ID,
+            SetMusubiReleaseYankV1::new(release(), true, "withdrawn".parse().expect("reason"), 3),
+        )
+        .expect("canonical instruction envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let actual = build_instruction_envelope(
+            SetMusubiReleaseYankV1::WIRE_ID,
+            SetMusubiReleaseYankV1::new(release(), true, "withdrawn".parse().expect("reason"), 3),
+        )
+        .expect("instruction envelope under alternate ambient flags");
+
+        assert_eq!(actual.instruction_base64, expected.instruction_base64);
+        assert_eq!(actual.instruction_hex, expected.instruction_hex);
     }
 
     #[test]

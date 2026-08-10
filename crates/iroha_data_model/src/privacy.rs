@@ -11,7 +11,7 @@ use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::{AssetDefinitionId, ChainId, account::AccountId, asset::AssetBalanceScope};
+use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
 
 pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,

@@ -294,9 +294,9 @@ from .client import (
     SorafsPorIngestionProviderStatus,
     SorafsPorIngestionStatus,
     build_canonical_request_headers,
+    canonical_network_request_signature_message,
     canonical_query_string,
     canonical_request_message,
-    canonical_request_signature_message,
 )
 from .query import (
     AggregateFn,
@@ -644,7 +644,7 @@ _BASE_EXPORTS = [
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
     "canonical_request_message",
-    "canonical_request_signature_message",
+    "canonical_network_request_signature_message",
     "build_canonical_request_headers",
     "VpnQuoteCreateRequest",
     "VpnSessionCreateRequest",

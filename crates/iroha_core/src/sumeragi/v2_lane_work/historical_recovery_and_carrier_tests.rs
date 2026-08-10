@@ -681,3 +681,414 @@ pub(in crate::sumeragi) fn quiet_historical_recovery_fixture() -> V2LaneWorkAdap
     assert!(successor.has_pending_historical_recovery());
     successor
 }
+
+#[test]
+fn historical_recovery_diagnostics_are_typed_bounded_and_payload_free() {
+    let identity = |seed: u8| HistoricalRecoveryIdentity {
+        lane_id: LaneId::new(u32::from(seed)),
+        dataspace_id: DataSpaceId::new(u64::from(seed)),
+        lane_incarnation: Hash::new([seed, 0x11]),
+        lane_block_height: u64::from(seed),
+        proposal_height: u64::from(seed).saturating_add(1),
+        proposal_hash: Hash::new([seed, 0x22]),
+        descriptor_hash: Hash::new([seed, 0x33]),
+        proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 0x44])),
+    };
+    let reasons = [
+        (
+            HistoricalRecoveryWaitReason::StateCommitPending,
+            HistoricalRecoveryStage::CanonicalAnchor,
+            HistoricalRecoveryRetry::LocalState,
+        ),
+        (
+            HistoricalRecoveryWaitReason::CanonicalBlockPending,
+            HistoricalRecoveryStage::CanonicalAnchor,
+            HistoricalRecoveryRetry::AuthenticatedBlockSync,
+        ),
+        (
+            HistoricalRecoveryWaitReason::AutonomousPayloadPending,
+            HistoricalRecoveryStage::ExecutablePayload,
+            HistoricalRecoveryRetry::AuthenticatedLanePayload,
+        ),
+        (
+            HistoricalRecoveryWaitReason::PredecessorApplicationPending,
+            HistoricalRecoveryStage::PredecessorApplication,
+            HistoricalRecoveryRetry::LocalState,
+        ),
+        (
+            HistoricalRecoveryWaitReason::CanonicalResultsPending,
+            HistoricalRecoveryStage::CanonicalApplication,
+            HistoricalRecoveryRetry::AuthenticatedBlockSync,
+        ),
+    ];
+    let diagnostics = |capacity| {
+        HistoricalRecoveryDiagnostics::new(
+            capacity,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+        )
+    };
+    let mut all_reasons = diagnostics(reasons.len());
+    for (index, (reason, stage, retry)) in reasons.into_iter().enumerate() {
+        let observation = all_reasons.observe(identity(index as u8 + 1), reason);
+        assert_eq!(observation.reason(), reason);
+        assert_eq!(observation.stage(), stage);
+        assert_eq!(observation.retry(), retry);
+        assert!(observation.first_observation());
+        assert!(
+            observation.retry_delay(Duration::from_millis(10), Duration::from_secs(1))
+                <= Duration::from_secs(1)
+        );
+    }
+
+    let retry_identity = identity(250);
+    let retry_wait = diagnostics(1).observe(
+        retry_identity,
+        HistoricalRecoveryWaitReason::CanonicalBlockPending,
+    );
+    let retry_floor = Duration::from_millis(10);
+    let retry_ceiling = Duration::from_millis(50);
+    for (attempt, expected) in [
+        (1, Duration::from_millis(10)),
+        (4, Duration::from_millis(10)),
+        (5, Duration::from_millis(20)),
+        (9, Duration::from_millis(40)),
+        (13, Duration::from_millis(50)),
+        (u32::MAX, Duration::from_millis(50)),
+    ] {
+        assert_eq!(
+            HistoricalRecoveryWait {
+                consecutive_attempts: attempt,
+                ..retry_wait
+            }
+            .retry_delay(retry_floor, retry_ceiling),
+            expected,
+            "retry attempt {attempt} must select the exact bounded tier"
+        );
+    }
+    assert_eq!(
+        retry_wait.retry_delay(retry_floor, Duration::from_millis(1)),
+        retry_floor,
+        "a ceiling below the floor must normalize to the floor"
+    );
+
+    let now = Instant::now();
+    let first_cadence = HistoricalRecoveryRequestCadence::immediate(
+        HistoricalRecoveryWaitReason::CanonicalBlockPending,
+        now,
+    )
+    .after_retained_attempt(retry_wait, now, retry_floor, retry_ceiling)
+    .expect("bounded retry deadline fits the monotonic clock");
+    let second_identity = identity(251);
+    let second_cadence = HistoricalRecoveryRequestCadence::immediate(
+        HistoricalRecoveryWaitReason::CanonicalBlockPending,
+        now,
+    );
+    let per_identity = BTreeMap::from([
+        (retry_identity, first_cadence),
+        (second_identity, second_cadence),
+    ]);
+    assert!(!per_identity[&retry_identity].due(now));
+    assert!(per_identity[&second_identity].due(now));
+    assert!(first_cadence.due(first_cadence.next_retry_at));
+    let restarted = HistoricalRecoveryRequestCadence::immediate(
+        HistoricalRecoveryWaitReason::CanonicalBlockPending,
+        now,
+    );
+    assert_eq!(restarted.retained_attempts, 0);
+    assert!(restarted.due(now));
+    let reset = HistoricalRecoveryRequestCadence::immediate(
+        HistoricalRecoveryWaitReason::CanonicalResultsPending,
+        now,
+    );
+    assert_eq!(reset.retained_attempts, 0);
+    assert!(reset.due(now));
+    assert_ne!(reset.reason, first_cadence.reason);
+
+    let secret = "raw-transaction-secret-must-never-enter-recovery-diagnostics";
+    let rendered = format!("{:?}", all_reasons.snapshot());
+    assert!(!rendered.contains(secret));
+    assert!(
+        rendered.len() < 8 * 1024,
+        "bounded typed observations must remain compact"
+    );
+
+    let mut bounded = diagnostics(2);
+    let first = identity(1);
+    let second = identity(2);
+    let third = identity(3);
+    bounded.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
+    bounded.observe(
+        second,
+        HistoricalRecoveryWaitReason::CanonicalResultsPending,
+    );
+    bounded.observe(first, HistoricalRecoveryWaitReason::CanonicalResultsPending);
+    bounded.observe(
+        third,
+        HistoricalRecoveryWaitReason::AutonomousPayloadPending,
+    );
+    let snapshot = bounded.snapshot();
+    assert_eq!(snapshot.len(), 2);
+    assert!(
+        snapshot
+            .iter()
+            .all(|observation| observation.identity() != first),
+        "updating an observation must not nondeterministically refresh FIFO eviction order"
+    );
+    assert!(
+        snapshot
+            .iter()
+            .any(|observation| observation.identity() == second)
+    );
+    assert!(
+        snapshot
+            .iter()
+            .any(|observation| observation.identity() == third)
+    );
+
+    let mut stuck = diagnostics(1);
+    let mut stuck_reports = 0;
+    for _ in 0..iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS
+        .get()
+        .saturating_mul(2)
+    {
+        let observation = stuck.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
+        if observation.became_stuck {
+            stuck_reports += 1;
+        }
+    }
+    assert_eq!(
+        stuck_reports, 1,
+        "one identity/reason may emit at most one stuck transition"
+    );
+}
+
+#[test]
+fn historical_missing_canonical_block_schedules_authenticated_retry_then_completes() {
+    let mut unbound = quiet_historical_recovery_fixture();
+    assert!(matches!(
+        unbound
+            .service_next_historical_recovery_at(Instant::now())
+            .expect("State hash without finality remains a typed local wait"),
+        HistoricalRecoveryServiceOutcome::Waiting(wait)
+            if wait.reason() == HistoricalRecoveryWaitReason::CanonicalBlockPending
+    ));
+    assert!(
+        unbound.drain_effects(usize::MAX).is_empty(),
+        "State's block hash alone must never authorize an unbound body request"
+    );
+    assert!(unbound.historical_recovery_requests.is_empty());
+
+    let (mut adapter, keys) = fixture_at_height_inner_with_kura(
+        wire::ConsensusMode::Permissioned,
+        1,
+        false,
+        locked_lane_work_test_kura(
+            NonZeroUsize::new(1).expect("retain one canonical recovery body"),
+        ),
+    );
+    let (parent_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+    adapter
+        .kura
+        .store_block(parent_block.clone())
+        .expect("persist the canonical historical carrier");
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
+    let _finality_receipt = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("persist the immutable historical body authority");
+    let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+    commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+    evict_canonical_executed_block_fixture(&adapter, &keys, &parent_block);
+    assert!(
+        adapter
+            .kura
+            .get_block_without_merge_sidecar(
+                NonZeroUsize::new(1).expect("non-zero historical height"),
+            )
+            .is_none(),
+        "fixture must retain finality while the canonical body is remote-only"
+    );
+    let certificate = LaneBlockCertificateV1 {
+        proposal: proposal.clone(),
+        prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+        commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+    };
+    adapter.context = successor_context_for_parent(&adapter, &parent_block);
+    assert_eq!(
+        adapter.accept_lane_message(
+            InboundBlockMessage::new(
+                BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                Some(PeerId::new(keys[0].public_key().clone())),
+            ),
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    let first_attempt_at = Instant::now();
+    let wait = match adapter
+        .service_next_historical_recovery_at(first_attempt_at)
+        .expect("missing canonical body is a typed retry")
+    {
+        HistoricalRecoveryServiceOutcome::Waiting(wait) => wait,
+        outcome => panic!("expected canonical-body wait, got {outcome:?}"),
+    };
+    assert_eq!(
+        wait.reason(),
+        HistoricalRecoveryWaitReason::CanonicalBlockPending
+    );
+    assert_eq!(
+        wait.retry(),
+        HistoricalRecoveryRetry::AuthenticatedBlockSync
+    );
+    assert_eq!(adapter.historical_recovery_waits_snapshot(), vec![wait]);
+    let first_requests = adapter.drain_effects(usize::MAX);
+    let request_frames = |effects: &[V2LaneWorkEffect]| {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                V2LaneWorkEffect::PostLaneBlock {
+                    peer,
+                    message: message @ BlockMessage::LaneHistoricalRecoveryRequest(_),
+                } => Some((peer.clone(), message.encode())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_request_frames = request_frames(&first_requests);
+    assert!(
+        !first_requests.is_empty() && first_request_frames.len() == first_requests.len(),
+        "finality-bound recovery must emit only authenticated historical requests"
+    );
+    let identity = wait.identity();
+    let first_cadence = adapter
+        .historical_recovery_requests
+        .get(&identity)
+        .expect("first request retains one exact retry owner")
+        .cadence;
+    assert_eq!(first_cadence.retained_attempts, 1);
+    assert_eq!(
+        first_cadence.next_retry_at,
+        first_attempt_at
+            .checked_add(adapter.limits.historical_recovery_retry_floor)
+            .expect("bounded first retry deadline")
+    );
+
+    let before_deadline = first_cadence
+        .next_retry_at
+        .checked_sub(Duration::from_nanos(1))
+        .expect("first deadline follows its sampled service time");
+    assert!(matches!(
+        adapter
+            .service_next_historical_recovery_at(before_deadline)
+            .expect("local recovery checks continue before the network deadline"),
+        HistoricalRecoveryServiceOutcome::Waiting(_)
+    ));
+    assert!(
+        adapter.drain_effects(usize::MAX).is_empty(),
+        "a same-reason service turn before the deadline must not fan out"
+    );
+    assert_eq!(
+        adapter
+            .historical_recovery_requests
+            .get(&identity)
+            .expect("suppressed retry retains its owner")
+            .cadence
+            .retained_attempts,
+        1,
+        "local observations must not advance network retry tiers"
+    );
+
+    let late_retry_at = first_cadence
+        .next_retry_at
+        .checked_add(
+            adapter
+                .limits
+                .historical_recovery_retry_floor
+                .saturating_mul(5),
+        )
+        .expect("delayed retry remains inside the monotonic clock");
+    let effect_capacity = adapter.limits.effect_capacity;
+    adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("one blocking effect");
+    let blocker = match &first_requests[0] {
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => V2LaneWorkEffect::PostLaneBlock {
+            peer: adapter.local_peer.clone(),
+            message: message.clone(),
+        },
+        _ => unreachable!("historical request fixture emitted only lane posts"),
+    };
+    assert!(adapter.push_effect(blocker));
+    assert!(matches!(
+        adapter
+            .service_next_historical_recovery_at(late_retry_at)
+            .expect("backpressure retains a due historical retry"),
+        HistoricalRecoveryServiceOutcome::Waiting(_)
+    ));
+    assert_eq!(
+        adapter
+            .historical_recovery_requests
+            .get(&identity)
+            .expect("backpressured retry retains its owner")
+            .cadence
+            .retained_attempts,
+        1,
+        "a full effect queue must not advance the retry deadline"
+    );
+    assert_eq!(adapter.drain_effects(usize::MAX).len(), 1);
+    adapter.limits.effect_capacity = effect_capacity;
+
+    assert!(matches!(
+        adapter
+            .service_next_historical_recovery_at(late_retry_at)
+            .expect("free capacity permits the still-due bounded retry"),
+        HistoricalRecoveryServiceOutcome::Waiting(_)
+    ));
+    let second_requests = adapter.drain_effects(usize::MAX);
+    assert!(
+        !second_requests.is_empty(),
+        "a due retry must re-emit the authenticated request"
+    );
+    assert_eq!(
+        request_frames(&second_requests),
+        first_request_frames,
+        "retry must preserve the exact peer order and request bytes"
+    );
+    let second_cadence = adapter
+        .historical_recovery_requests
+        .get(&identity)
+        .expect("second request retains the exact owner")
+        .cadence;
+    assert_eq!(second_cadence.retained_attempts, 2);
+    assert_eq!(
+        second_cadence.next_retry_at,
+        late_retry_at
+            .checked_add(adapter.limits.historical_recovery_retry_floor)
+            .expect("bounded second retry deadline"),
+        "the next deadline is anchored at the service turn, not the prior schedule"
+    );
+
+    adapter
+        .kura
+        .cache_block_body(&parent_block)
+        .expect("simulate authenticated canonical body recovery");
+    let local_completion_at = second_cadence
+        .next_retry_at
+        .checked_sub(Duration::from_nanos(1))
+        .expect("second deadline follows the body recovery turn");
+    assert!(matches!(
+        adapter
+            .service_next_historical_recovery_at(local_completion_at)
+            .expect("local completion is never gated by the network deadline"),
+        HistoricalRecoveryServiceOutcome::Complete(_)
+    ));
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    assert!(adapter.historical_recovery_waits_snapshot().is_empty());
+    assert!(adapter.historical_recovery_requests.is_empty());
+    assert!(adapter.historical_recovery_request_owners.is_empty());
+    assert!(
+        adapter
+            .kura
+            .lane_block_application_receipt_available(&proposal)
+    );
+}

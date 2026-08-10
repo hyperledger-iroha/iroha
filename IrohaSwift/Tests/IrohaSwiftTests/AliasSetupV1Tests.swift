@@ -397,7 +397,7 @@ final class AliasSetupV1Tests: XCTestCase {
                 for: vector.receiptJSON.body.request,
                 canonicalBodyNorito: canonicalBody,
                 expectedAuthority: vector.authority,
-                expectedChainId: vector.receiptJSON.body.chainId
+                expectedNetworkId: vector.receiptJSON.body.networkId
             )
         )
 
@@ -411,7 +411,7 @@ final class AliasSetupV1Tests: XCTestCase {
                     vector.receiptJSON,
                     for: vector.receiptJSON.body.request,
                     expectedAuthority: vector.authority,
-                    expectedChainId: vector.receiptJSON.body.chainId,
+                    expectedNetworkId: vector.receiptJSON.body.networkId,
                     bodyEncoder: ToriiAccountOnboardingPlanBodyNorito.encode
                 )
             )

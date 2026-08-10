@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.validationfee
 
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
@@ -45,9 +46,8 @@ class ValidationFeeConsensusProofBridgeTest {
         assertThrows(IllegalArgumentException::class.java) {
             ValidationFeeConsensusProofBridge.verifyCurrentPolicyProofV1(
                 proofNorito = byteArrayOf(1),
-                chainId = "chain",
-                boundGenesisHash = ByteArray(31) { 1 },
-                policyChainGenesisHash = ByteArray(32) { 1 },
+                networkId = NetworkId.fromBytes(ByteArray(32) { 1 }),
+                policyChainGenesisHash = ByteArray(31) { 1 },
                 trustedCheckpointHeight = 1,
                 trustedCheckpointContextId = ByteArray(32) { 1 },
             )

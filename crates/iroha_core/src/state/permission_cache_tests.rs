@@ -363,8 +363,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let lane_config = LaneConfig::default();
 
@@ -439,7 +438,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         let valid_genesis = crate::block::ValidBlock::validate_with_events(
             genesis_block.0.clone(),
             &topology,
-            &chain_id,
             &genesis_id,
             &time_source,
             &mut state_block,

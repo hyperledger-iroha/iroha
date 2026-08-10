@@ -284,7 +284,7 @@ if (( ${#trusted_buildx_version} == 0 || ${#trusted_buildx_version} > 512 )); th
 fi
 
 if [[ -z "$binaries" ]]; then
-  binaries="irohad sorafs_governance_dag iroha kagami attachment_sanitizer"
+  binaries="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer"
 fi
 read -r -a binary_inventory <<< "$binaries"
 if (( ${#binary_inventory[@]} == 0 || ${#binary_inventory[@]} > 32 )); then

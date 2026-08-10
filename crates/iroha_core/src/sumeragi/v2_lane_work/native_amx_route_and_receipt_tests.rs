@@ -225,8 +225,8 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
     assert_eq!(receipt.version, 2);
     assert_eq!(receipt.source_id, source_id);
     assert_eq!(
-        receipt.chain_id_hash,
-        Hash::prehashed(*adapter.context.network_id.as_bytes())
+        receipt.network_id,
+        adapter.context.network_id
     );
     assert_eq!(receipt.plan_digest, plan_digest);
     assert_eq!(receipt.lane_id, proposal.descriptor.lane_id);
@@ -266,7 +266,7 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
 
 #[test]
 fn lane_signing_boundary_requires_exact_descriptor_membership() {
-    let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let (_, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     assert!(
         proposal

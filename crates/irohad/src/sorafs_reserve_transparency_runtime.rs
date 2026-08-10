@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use eyre::{Result, bail};
 use iroha_config::parameters::actual::SorafsReserveTransparencyRuntime;
 use iroha_core::state::{State, WorldStateSnapshot as _};
-use iroha_data_model::{ChainId, sorafs::reserve::ReserveFinalizedCursorV1};
+use iroha_data_model::{NetworkId, sorafs::reserve::ReserveFinalizedCursorV1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_node::{
     NodeHandle,
@@ -26,12 +26,12 @@ struct StateReserveTransparencyCommittedProjectionV1 {
 impl ReserveTransparencyCommittedProjectionV1 for StateReserveTransparencyCommittedProjectionV1 {
     fn verify_committed_anchors(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         expected: &[ReserveFinalizedCursorV1],
     ) -> std::result::Result<ReserveFinalizedCursorV1, ReserveTransparencyCommittedProjectionErrorV1>
     {
         let view = self.state.query_view();
-        if &view.chain_id != chain_id {
+        if &view.network_id != network_id {
             return Err(ReserveTransparencyCommittedProjectionErrorV1::ForkOrReorg);
         }
         let hashes = view.block_hashes();
@@ -78,7 +78,7 @@ fn committed_anchors_match(
 /// binding, or the durable checkpoint is invalid.
 pub(crate) fn start(
     config: &SorafsReserveTransparencyRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     query_qualification: ReputationRuntimeProviderQualificationV1,
     finalized_query: Arc<dyn ReputationFinalizedQueryV1>,
     state: Arc<State>,
@@ -100,7 +100,7 @@ pub(crate) fn start(
     let sink: Arc<dyn ReserveTransparencySourceSinkV1> = Arc::new(node);
     let mut scanner = ReserveTransparencyScannerV1::try_new(
         config,
-        chain_id.clone(),
+        *network_id,
         query_qualification,
         query,
         projection,

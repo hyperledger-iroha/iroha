@@ -584,7 +584,7 @@ fn vega_python_device_digest_binds_intent_and_session() {
         .value_generator()
         .as_bytes();
     let context = |intent: [u8; 32]| PrivacyStatementContextV1 {
-        chain_id: parse_chain_id("test-chain").expect("chain id"),
+        network_id: python_test_network_id().inner,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(intent),
         parameter_id: profile.parameter_id,

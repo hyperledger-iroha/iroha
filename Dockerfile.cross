@@ -94,7 +94,7 @@ RUN --mount=type=cache,target=/app/target <<EOF
       | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
   fi
   if [ -z "${bins}" ]; then
-    bins="iroha irohad sorafs_governance_dag kagami attachment_sanitizer"
+    bins="iroha iroha3d sorafs_governance_dag kagami attachment_sanitizer"
   fi
   for bin in ${bins}; do
     bin_path="./target/${target_triple}/${PROFILE}/${bin}"
@@ -124,4 +124,4 @@ ENV SNAPSHOT_STORE_DIR=/data/iroha/snapshot
 
 VOLUME ["/data/iroha/storage", "/data/iroha/snapshot"]
 
-CMD ["irohad"]
+CMD ["iroha3d"]

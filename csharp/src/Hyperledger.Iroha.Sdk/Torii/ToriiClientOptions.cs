@@ -4,7 +4,7 @@ using Hyperledger.Iroha.Http;
 namespace Hyperledger.Iroha.Torii;
 
 /// <summary>
-/// Immutable trust context required by Torii operations that return bytes for local signing.
+/// Immutable trust context required by every Torii operation that creates local signatures.
 /// </summary>
 public sealed class ToriiLocalSigningContext
 {
@@ -28,7 +28,7 @@ public sealed class ToriiClientOptions
     public CanonicalRequestCredentials? CanonicalRequestCredentials { get; init; }
 
     /// <summary>
-    /// Immutable network trust context for endpoints that return bytes to be signed locally.
+    /// Immutable network trust context for canonical HTTP auth and locally signed drafts.
     /// </summary>
     public ToriiLocalSigningContext? LocalSigningContext { get; init; }
 

@@ -1,3 +1,5 @@
+//! VRF syscall verification and exact-network binding tests.
+
 use ivm::{IVM, Memory, PointerType};
 
 mod common;
@@ -34,10 +36,12 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn run_vrf_verify(req: VrfVerifyRequest) -> (u64, u64) {
+    let network_id = req.network_id;
     let body = norito::to_bytes(&req).expect("encode vrf request");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_vm_gas(body.len()));
+    vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -58,13 +62,14 @@ fn syscall_vrf_verify_normal_returns_expected_output() {
     let pk = (G1Projective::generator() * sk).to_affine();
     let pk_bytes = pk.to_compressed();
 
-    // Input and message prehash (with chain id)
+    // Input and message prehash (with exact network identity).
     let input = b"ivm:vrf:test";
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x41);
+    let network_bytes = network_id.as_bytes();
     let mut in_buf =
-        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain.len() + 1 + input.len());
+        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + network_bytes.len() + 1 + input.len());
     in_buf.extend_from_slice(b"iroha:vrf:v1:input|");
-    in_buf.extend_from_slice(chain);
+    in_buf.extend_from_slice(network_bytes);
     in_buf.push(b'|');
     in_buf.extend_from_slice(input);
     let msg: [u8; 32] = iroha_crypto::Hash::new(&in_buf).into();
@@ -84,13 +89,14 @@ fn syscall_vrf_verify_normal_returns_expected_output() {
         variant: 1,
         pk: pk_bytes.to_vec(),
         proof: sigma.to_vec(),
-        chain_id: chain.to_vec(),
+        network_id,
         input: input.to_vec(),
     };
     let body = norito::to_bytes(&req).expect("encode vrf request");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_vm_gas(body.len()));
+    vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     let p_env = Memory::INPUT_START;
     vm.set_register(10, p_env);
@@ -111,9 +117,9 @@ fn syscall_vrf_verify_normal_returns_expected_output() {
 }
 
 #[test]
-fn syscall_vrf_verify_chain_mismatch_rejected() {
+fn syscall_vrf_verify_network_mismatch_rejected() {
     use blstrs::{G2Projective, Scalar};
-    // Prover side: build a valid tuple for chain "A"
+    // Prover side: build a valid tuple for network A.
     let sk = {
         let mut b = [0u8; 32];
         for (i, x) in b.iter_mut().enumerate() {
@@ -123,10 +129,11 @@ fn syscall_vrf_verify_chain_mismatch_rejected() {
     };
     let pk_g1 = (G1Projective::generator() * sk).to_affine().to_compressed();
     let input = b"in";
-    let chain_a = b"chain-A";
+    let network_a = common::test_network_id(0x41);
+    let network_b = common::test_network_id(0x42);
     let mut m = Vec::new();
     m.extend_from_slice(b"iroha:vrf:v1:input|");
-    m.extend_from_slice(chain_a);
+    m.extend_from_slice(network_a.as_bytes());
     m.push(b'|');
     m.extend_from_slice(input);
     let msg: [u8; 32] = iroha_crypto::Hash::new(&m).into();
@@ -134,19 +141,19 @@ fn syscall_vrf_verify_chain_mismatch_rejected() {
         .to_affine()
         .to_compressed();
 
-    // Host configured with chain "B" must reject when envelope carries chain "A"
+    // A host configured for network B must reject a network-A envelope.
     let req = VrfVerifyRequest {
         variant: 1,
         pk: pk_g1.to_vec(),
         proof: sig.to_vec(),
-        chain_id: chain_a.to_vec(),
+        network_id: network_a,
         input: input.to_vec(),
     };
     let body = norito::to_bytes(&req).expect("encode req");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_vm_gas(body.len()));
-    vm.set_host(ivm::host::DefaultHost::new().with_chain_id(b"chain-B".to_vec()));
+    vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_b));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -154,8 +161,8 @@ fn syscall_vrf_verify_chain_mismatch_rejected() {
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    assert_eq!(vm.register(10), 0, "no output pointer on chain mismatch");
-    assert_eq!(vm.register(11), 8, "ERR_CHAIN=8");
+    assert_eq!(vm.register(10), 0, "no output pointer on network mismatch");
+    assert_eq!(vm.register(11), 8, "ERR_NETWORK=8");
 }
 
 #[test]
@@ -171,10 +178,12 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
 
     // Input prehash
     let input = b"ivm:vrf:test:neg";
+    let network_id = common::test_network_id(0x41);
+    let network_bytes = network_id.as_bytes();
     let mut in_buf =
-        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + b"test-chain".len() + 1 + input.len());
+        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + network_bytes.len() + 1 + input.len());
     in_buf.extend_from_slice(b"iroha:vrf:v1:input|");
-    in_buf.extend_from_slice(b"test-chain");
+    in_buf.extend_from_slice(network_bytes);
     in_buf.push(b'|');
     in_buf.extend_from_slice(input);
     let msg: [u8; 32] = iroha_crypto::Hash::new(&in_buf).into();
@@ -187,13 +196,14 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
         variant: 1,
         pk: pk_bytes.to_vec(),
         proof: sig_g1.to_vec(),
-        chain_id: b"test-chain".to_vec(),
+        network_id,
         input: input.to_vec(),
     };
     let body = norito::to_bytes(&req).expect("encode");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_vm_gas(body.len()));
+    vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -209,7 +219,7 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
 
 #[test]
 fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x41);
     let input = b"ivm:vrf:inert";
     let cases = [
         (
@@ -217,7 +227,7 @@ fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
                 variant: 1,
                 pk: vec![0u8; 48],
                 proof: G2Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -228,7 +238,7 @@ fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
                 variant: 1,
                 pk: G1Affine::generator().to_compressed().to_vec(),
                 proof: vec![0u8; 96],
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,
@@ -239,7 +249,7 @@ fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
                 variant: 1,
                 pk: G1Affine::identity().to_compressed().to_vec(),
                 proof: G2Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -250,7 +260,7 @@ fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
                 variant: 1,
                 pk: G1Affine::generator().to_compressed().to_vec(),
                 proof: G2Affine::identity().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,
@@ -267,7 +277,7 @@ fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
 
 #[test]
 fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x41);
     let input = b"ivm:vrf:inert-small";
     let cases = [
         (
@@ -275,7 +285,7 @@ fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
                 variant: 2,
                 pk: vec![0u8; 96],
                 proof: G1Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -286,7 +296,7 @@ fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
                 variant: 2,
                 pk: G2Affine::generator().to_compressed().to_vec(),
                 proof: vec![0u8; 48],
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,
@@ -297,7 +307,7 @@ fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
                 variant: 2,
                 pk: G2Affine::identity().to_compressed().to_vec(),
                 proof: G1Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -308,7 +318,7 @@ fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
                 variant: 2,
                 pk: G2Affine::generator().to_compressed().to_vec(),
                 proof: G1Affine::identity().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,

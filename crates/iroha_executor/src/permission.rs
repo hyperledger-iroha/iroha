@@ -2967,7 +2967,9 @@ mod tests {
             "root_asset".parse().expect("asset name"),
         );
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -3028,7 +3030,9 @@ mod tests {
         let context = make_context(&authority, 2);
         let raw = PermissionObject::from(CanInvokeContractEntrypoint {
             contract: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
                 &make_other_account_id(),
                 88,
                 DataSpaceId::UNIVERSAL,

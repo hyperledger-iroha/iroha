@@ -851,7 +851,7 @@ def _check_cargo_workflow(
         (
             "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
-            "aarch64-apple-darwin",
+            "aarch64-apple-darwin x86_64-apple-darwin",
             "cargo fetch --locked",
         )
     )
@@ -904,7 +904,7 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "f0b7091421939892d9557698717c18f26c7b3be8c456c56852d320a48c0c8420",
+        "privacy_swift_sdk_parse": "2b374ca01219f9abab30726b9a46c57a7598926b889c4995ae762c9af6fd4d27",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
         "privacy_csharp_sdk_tests": "527591fa158d75bd9349106e6382dbbf09a87e77b4f60bb640fc2b871aa51b27",
         "privacy_javascript_sdk_tests": "17b52dcc4caff1134d2b9e1731d76f39b71d33cc360038bcf81e8120cf93fbfc",

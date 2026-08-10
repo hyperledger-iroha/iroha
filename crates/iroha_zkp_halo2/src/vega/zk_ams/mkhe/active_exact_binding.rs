@@ -53,14 +53,14 @@
 //! This is still not a release proof.  The native T256 generalized-
 //! Bulletproof backend, its pinned generator basis, and exact chunked
 //! membership evidence now exist and are consumed by the complete CPK
-//! relation.  The six-witness direct-relation wire, its implementation-derived
-//! managed-memory ledger, the full persistent-consumer graph, and an exact
-//! split-decryption cross-commitment relation remain absent.  In particular,
-//! split decryption must bind its approximately 1,855-bit smudge witness to the
-//! same persistent secret commitment without copying four wide scalar
-//! responses beyond the proof ceiling.  No accepting direct-relation prover,
-//! verifier, decoder, manifest bit, or readiness gate is exposed here, and
-//! every operational entry point fails before parsing bytes.
+//! relation.  The state-owned decryption graph now requires the ordered CPK
+//! binding set and commits its actual party points to the existing shared-
+//! secret RNS proof transcript without copying the approximately 1,855-bit
+//! smudge response.  The transitive short-solution/SIS equality claim still
+//! lacks an independently pinned certificate and release-size KAT.  The six-
+//! witness direct-relation wire and its implementation-derived managed-memory
+//! ledger also remain incomplete.  No manifest bit or readiness gate is
+//! opened here.
 
 #![allow(dead_code)]
 
@@ -234,8 +234,6 @@ const PERSISTENT_COMMITMENT_SET_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.persistent-commitment-set";
 const PERSISTENT_ORDERED_SET_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.persistent-ordered-set";
-const PERSISTENT_DECRYPTION_USE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.persistent-decryption-use";
 const PERSISTENT_DIRECT_RELATION_USE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.persistent-direct-relation-use";
 const CHALLENGE_VECTOR_DOMAIN_V1: &[u8] =
@@ -526,7 +524,7 @@ struct ExactMembershipVerificationReceiptV1 {
 /// randomized membership-proof transcript and consumer purpose: it identifies
 /// the source commitment itself and therefore remains stable across CPK, every
 /// evaluated-key digit, every Galois key, and decryption.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedPersistentWitnessBindingV1 {
     version: u8,
     profile_digest: [u8; 32],
@@ -726,7 +724,7 @@ impl VerifiedPersistentWitnessBindingV1 {
 ///
 /// Construction accepts capabilities, not digests.  The stored root is stable
 /// across consumers; role authorization remains an explicit validation step.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedPersistentWitnessBindingSetV1 {
     profile_digest: [u8; 32],
     security_certificate_digest: [u8; 32],
@@ -884,25 +882,30 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         Ok(())
     }
 
-    /// Bind this exact ordered commitment set to one fresh decryption use.
-    /// The returned non-`Clone` capability is consumed by the decryption proof
-    /// adapter; replay under another statement changes `use_digest`.
-    pub(super) fn bind_decryption_use(
+    /// Copy one party's public commitment material out of this consumed,
+    /// proof-verified set. The sibling decryption module retains the authority;
+    /// this tuple is never accepted from a caller.
+    pub(super) fn decryption_party_material(
         &self,
-        roster: &ZkAmsMkheGovernedActiveRosterV1,
-        selector: PersistentDecryptionUseSelectorV1,
-    ) -> Result<VerifiedPersistentWitnessDecryptionUseV1, ZkAmsMkheErrorV1> {
-        self.validate_for_consumer(roster, PersistentWitnessConsumerV1::Decryption)?;
-        selector.validate()?;
-        let mut capability = VerifiedPersistentWitnessDecryptionUseV1 {
-            binding_set_root: self.set_root,
-            collective_public_key_digest: self.collective_public_key_digest,
-            aggregate_commitments: self.aggregate_commitments(),
-            selector,
-            use_digest: [0; 32],
-        };
-        capability.use_digest = persistent_decryption_use_digest(&capability)?;
-        Ok(capability)
+        party_index: usize,
+    ) -> Result<
+        (
+            [u8; 32],
+            [u8; 32],
+            [u8; 32],
+            [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
+        ),
+        ZkAmsMkheErrorV1,
+    > {
+        if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            return Err(ZkAmsMkheErrorV1::InvalidPartySet);
+        }
+        Ok((
+            self.identity_digests[party_index],
+            self.generator_basis_digests[party_index],
+            self.commitment_set_digests[party_index],
+            self.commitment_sets[party_index],
+        ))
     }
 
     /// Bind one party's actual persistent commitment points to one exact
@@ -1290,82 +1293,6 @@ pub(super) fn verify_and_consume_direct_relation_use_v1(
     Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
 }
 
-/// Public-statement selectors bound into a single decryption use.  Its
-/// constructor is crate-private and is intended to be called only after the
-/// native decryption statement has validated its immutable fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PersistentDecryptionUseSelectorV1 {
-    key_context_digest: [u8; 32],
-    ciphertext_digest: [u8; 32],
-    ciphertext_record_index: u32,
-    sample_index: u64,
-    level: u8,
-    statement_digest: [u8; 32],
-    masked_contribution_set_digest: [u8; 32],
-    commitment_transcript_digest: [u8; 32],
-}
-
-impl PersistentDecryptionUseSelectorV1 {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        key_context_digest: [u8; 32],
-        ciphertext_digest: [u8; 32],
-        ciphertext_record_index: u32,
-        sample_index: u64,
-        level: u8,
-        statement_digest: [u8; 32],
-        masked_contribution_set_digest: [u8; 32],
-        commitment_transcript_digest: [u8; 32],
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let selector = Self {
-            key_context_digest,
-            ciphertext_digest,
-            ciphertext_record_index,
-            sample_index,
-            level,
-            statement_digest,
-            masked_contribution_set_digest,
-            commitment_transcript_digest,
-        };
-        selector.validate()?;
-        Ok(selector)
-    }
-
-    fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
-        if self.key_context_digest == [0; 32]
-            || self.ciphertext_digest == [0; 32]
-            || self.statement_digest == [0; 32]
-            || self.masked_contribution_set_digest == [0; 32]
-            || self.commitment_transcript_digest == [0; 32]
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        Ok(())
-    }
-}
-
-/// Non-serializable, one-proof decryption capability derived from the complete
-/// ordered verified set.  It carries actual aggregate points rather than a raw
-/// lineage digest.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct VerifiedPersistentWitnessDecryptionUseV1 {
-    binding_set_root: [u8; 32],
-    collective_public_key_digest: [u8; 32],
-    aggregate_commitments: [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
-    selector: PersistentDecryptionUseSelectorV1,
-    use_digest: [u8; 32],
-}
-
-impl VerifiedPersistentWitnessDecryptionUseV1 {
-    pub(super) const fn aggregate_commitments(&self) -> &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1] {
-        &self.aggregate_commitments
-    }
-
-    pub(super) const fn use_digest(&self) -> [u8; 32] {
-        self.use_digest
-    }
-}
-
 /// Sole production minting boundary for a collective party's persistent secret.
 ///
 /// The input is move-only and can only be produced by the complete native CPK
@@ -1416,6 +1343,52 @@ pub(super) fn mint_collective_secret_binding_from_verified_cpk_v1(
     )
 }
 
+/// Test-only stand-in for the complete CPK verifier.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn mint_test_state_owned_collective_secret_binding_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    security_certificate_digest: [u8; 32],
+    cpk_transcript_digest: [u8; 32],
+    party_index: usize,
+    cpk_share_digest: [u8; 32],
+    commitments: [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
+) -> Result<VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+    let commitment_set_digest =
+        persistent_commitment_set_digest(ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, &commitments)?;
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.test-only-state-owned-cpk-binding");
+    frame.extend_from_slice(&roster.roster_digest());
+    frame.extend_from_slice(&roster.epoch().to_be_bytes());
+    frame.extend_from_slice(
+        &u32::try_from(party_index)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&cpk_share_digest);
+    frame.extend_from_slice(&commitment_set_digest);
+    let membership_proof_digest = keccak256(&[frame.as_slice(), b".membership"].concat());
+    let verifier_transcript_digest = keccak256(&[frame.as_slice(), b".transcript"].concat());
+    let relation_verification_digest = keccak256(&[frame.as_slice(), b".relation"].concat());
+    VerifiedPersistentWitnessBindingV1::from_verified_membership(
+        roster,
+        security_certificate_digest,
+        cpk_transcript_digest,
+        party_index,
+        cpk_share_digest,
+        0,
+        ExactMembershipVerificationReceiptV1 {
+            role: PersistentWitnessRoleV1::SecretEpoch,
+            generator_basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            commitments,
+            commitment_set_digest,
+            membership_proof_digest,
+            verifier_transcript_digest,
+            relation_verification_digest,
+        },
+    )
+}
+
 fn validate_membership_receipt(
     receipt: &ExactMembershipVerificationReceiptV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1447,7 +1420,7 @@ fn validate_canonical_commitment_set(
     Ok(())
 }
 
-fn persistent_commitment_set_digest(
+pub(super) fn persistent_commitment_set_digest(
     generator_basis_digest: [u8; 32],
     commitments: &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1545,42 +1518,6 @@ fn verified_binding_set_root(
         hash.update(&set.identity_digests[index]);
         hash.update(&set.generator_basis_digests[index]);
         hash.update(&set.commitment_set_digests[index]);
-    }
-    Ok(hash.finalize())
-}
-
-fn persistent_decryption_use_digest(
-    capability: &VerifiedPersistentWitnessDecryptionUseV1,
-) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    capability.selector.validate()?;
-    let mut hash = Keccak256::new();
-    hash.update(PERSISTENT_DECRYPTION_USE_DOMAIN_V1);
-    hash.update(&capability.binding_set_root);
-    hash.update(&capability.collective_public_key_digest);
-    hash.update(&capability.selector.key_context_digest);
-    hash.update(&capability.selector.ciphertext_digest);
-    hash.update(&capability.selector.ciphertext_record_index.to_be_bytes());
-    hash.update(&capability.selector.sample_index.to_be_bytes());
-    hash.update(&[capability.selector.level]);
-    hash.update(&capability.selector.statement_digest);
-    hash.update(&capability.selector.masked_contribution_set_digest);
-    hash.update(&capability.selector.commitment_transcript_digest);
-    for (index, point) in capability.aggregate_commitments.iter().enumerate() {
-        hash.update(
-            &u32::try_from(index)
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-                .to_be_bytes(),
-        );
-        if point.is_identity() {
-            hash.update(&[0x40]);
-            hash.update(&[0; 32]);
-        } else {
-            hash.update(
-                &point
-                    .to_non_identity_wire_bytes()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
-            );
-        }
     }
     Ok(hash.finalize())
 }
@@ -2794,7 +2731,10 @@ mod tests {
             .is_err()
         );
 
-        let mut mixed_security = bindings[6].clone();
+        let mut mixed_label = b"exact-binding-set-party-".to_vec();
+        mixed_label.push(6);
+        let mut mixed_security =
+            verified_binding_fixture(&roster, transcript, 6, shares[6], &mixed_label, 1);
         mixed_security.security_certificate_digest = keccak256(b"other-security-certificate");
         mixed_security.identity_digest = verified_binding_identity_digest(&mixed_security).unwrap();
         mixed_security.verification_digest =
@@ -2998,82 +2938,6 @@ mod tests {
             set.validate_for_consumer(&roster, PersistentWitnessConsumerV1::RkgRoundOne),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-    }
-
-    #[test]
-    fn decryption_capability_binds_aggregate_points_and_every_replay_selector() {
-        let (roster, _secrets) = governed_roster_fixture(b"exact-binding-decryption-roster");
-        let transcript = keccak256(b"exact-binding-decryption-transcript");
-        let collective_key = keccak256(b"exact-binding-decryption-collective-key");
-        let shares: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
-            core::array::from_fn(|index| keccak256(&[b'd', b'e', b'c', index as u8]));
-        let bindings = (0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
-            .map(|index| {
-                let mut label = b"exact-binding-decryption-party-".to_vec();
-                label.push(index as u8);
-                verified_binding_fixture(&roster, transcript, index, shares[index], &label, 1)
-            })
-            .collect::<Vec<_>>();
-        let references: [&VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
-            bindings.iter().collect::<Vec<_>>().try_into().unwrap();
-        let set = VerifiedPersistentWitnessBindingSetV1::new(
-            &roster,
-            transcript,
-            collective_key,
-            shares,
-            references,
-        )
-        .unwrap();
-        let selector = PersistentDecryptionUseSelectorV1::new(
-            keccak256(b"decryption-key-context"),
-            keccak256(b"decryption-ciphertext"),
-            17,
-            29,
-            2,
-            keccak256(b"decryption-statement"),
-            keccak256(b"decryption-masked-set"),
-            keccak256(b"decryption-commit-transcript"),
-        )
-        .unwrap();
-        let baseline = set.bind_decryption_use(&roster, selector).unwrap();
-        assert_ne!(baseline.use_digest(), [0; 32]);
-        assert_eq!(
-            baseline.aggregate_commitments(),
-            &set.aggregate_commitments()
-        );
-
-        for mutation in 0..8 {
-            let mut changed = selector;
-            match mutation {
-                0 => changed.key_context_digest[0] ^= 1,
-                1 => changed.ciphertext_digest[0] ^= 1,
-                2 => changed.ciphertext_record_index += 1,
-                3 => changed.sample_index += 1,
-                4 => changed.level += 1,
-                5 => changed.statement_digest[0] ^= 1,
-                6 => changed.masked_contribution_set_digest[0] ^= 1,
-                7 => changed.commitment_transcript_digest[0] ^= 1,
-                _ => unreachable!(),
-            }
-            let replay = set.bind_decryption_use(&roster, changed).unwrap();
-            assert_ne!(replay.use_digest(), baseline.use_digest());
-        }
-
-        for mutation in 0..5 {
-            let mut invalid = selector;
-            match mutation {
-                0 => invalid.key_context_digest = [0; 32],
-                1 => invalid.ciphertext_digest = [0; 32],
-                2 => invalid.statement_digest = [0; 32],
-                3 => invalid.masked_contribution_set_digest = [0; 32],
-                4 => invalid.commitment_transcript_digest = [0; 32],
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                set.bind_decryption_use(&roster, invalid),
-                Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
-            );
-        }
     }
 
     #[test]

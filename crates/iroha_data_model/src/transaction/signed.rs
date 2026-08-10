@@ -176,7 +176,12 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+    #[norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
     pub enum TransactionDomain {
         /// Exact deployment identity for every non-genesis transaction.
         Network(NetworkId),
@@ -190,6 +195,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct TransactionPayload {
         /// Exact signed security domain for replay protection.
         pub domain: TransactionDomain,
@@ -2587,7 +2593,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ChainId, Domain, DomainId, Level,
+        Domain, DomainId, Level,
         account::{MultisigMember, MultisigPolicy},
         prelude::{Log, Register, TriggerId},
         privacy::{
@@ -2696,6 +2702,8 @@ mod tests {
             r#"{"chain":"legacy"}"#.to_owned(),
             r#"{"chainId":"legacy"}"#.to_owned(),
             r#"{"chain_id":"legacy"}"#.to_owned(),
+            format!(r#"{{"kind":"network","value":{network_id_json},"chain":"legacy"}}"#),
+            r#"{"kind":"genesis","chain":"legacy"}"#.to_owned(),
             format!(r#"{{"kind":"genesis","value":{network_id_json}}}"#),
         ] {
             assert!(
@@ -2703,6 +2711,60 @@ mod tests {
                 "legacy, flat, or non-canonical transaction domain must be rejected: {rejected}"
             );
         }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
+        let transaction = sample_signed_transaction();
+        let canonical = norito::json::to_value(transaction.payload())
+            .expect("serialize canonical transaction payload");
+        assert!(
+            norito::json::from_value::<TransactionPayload>(canonical.clone()).is_ok(),
+            "the canonical transaction payload must round-trip"
+        );
+        let canonical_object = canonical
+            .as_object()
+            .expect("transaction payload serializes as an object");
+        assert!(canonical_object.contains_key("domain"));
+        for retired in ["chain", "chain_id", "chainId"] {
+            assert!(!canonical_object.contains_key(retired));
+            let mut hostile = canonical.clone();
+            hostile
+                .as_object_mut()
+                .expect("transaction payload object")
+                .insert(
+                    retired.to_owned(),
+                    norito::json::Value::String("legacy".to_owned()),
+                );
+            assert!(
+                norito::json::from_value::<TransactionPayload>(hostile).is_err(),
+                "retired transaction identity key `{retired}` must be rejected"
+            );
+        }
+
+        let mut unknown = canonical.clone();
+        unknown
+            .as_object_mut()
+            .expect("transaction payload object")
+            .insert(
+                "future_identity".to_owned(),
+                norito::json::Value::String("forbidden".to_owned()),
+            );
+        assert!(
+            norito::json::from_value::<TransactionPayload>(unknown).is_err(),
+            "unknown transaction payload fields must fail closed"
+        );
+
+        let mut missing_domain = canonical;
+        missing_domain
+            .as_object_mut()
+            .expect("transaction payload object")
+            .remove("domain");
+        assert!(
+            norito::json::from_value::<TransactionPayload>(missing_domain).is_err(),
+            "transaction payload domain is mandatory"
+        );
     }
 
     fn sample_fee_asset() -> AssetDefinitionId {
@@ -2740,7 +2802,7 @@ mod tests {
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
-                    chain_id: ChainId::from("privacy-intent-test"),
+                    network_id: test_network_id(0x30),
                     action_index: 0,
                     parameter_id,
                     parameter_digest,
@@ -2980,7 +3042,7 @@ mod tests {
     fn privacy_test_contract_call() -> ContractInvocation {
         ContractInvocation {
             contract_address: crate::smart_contract::ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &test_network_id(0x30),
                 &privacy_test_authority(),
                 0,
                 crate::nexus::DataSpaceId::UNIVERSAL,
@@ -3837,10 +3899,12 @@ mod tests {
                     PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5]));
             }
         );
-        assert_submission_bound!("context chain", |submission: &mut SubmitPrivacyProofV1| {
-            submission.envelope.statement.context_mut().chain_id =
-                ChainId::from("privacy-context-other-chain");
-        });
+        assert_submission_bound!(
+            "context network",
+            |submission: &mut SubmitPrivacyProofV1| {
+                submission.envelope.statement.context_mut().network_id = test_network_id(0x31);
+            }
+        );
         assert_submission_bound!("action index", |submission: &mut SubmitPrivacyProofV1| {
             submission.envelope.statement.context_mut().action_index = 1;
         });
@@ -4096,7 +4160,7 @@ mod tests {
 
     #[test]
     fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
-        let chain = test_network_id(0x13);
+        let network_id = test_network_id(0x13);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -4107,7 +4171,7 @@ mod tests {
                 .parse()
                 .expect("private key");
         let contract_address = crate::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             0,
             crate::nexus::DataSpaceId::UNIVERSAL,
@@ -4118,7 +4182,7 @@ mod tests {
         ])
         .expect("bounded argument record");
         let mut transaction = TransactionBuilder::new(
-            chain,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

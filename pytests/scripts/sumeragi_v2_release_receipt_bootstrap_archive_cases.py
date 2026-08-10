@@ -1,5 +1,85 @@
 """Bootstrap archive cases executed by the parent release-receipt suite."""
 
+
+@pytest.mark.parametrize("layout", ("nested", "alias"))
+def test_prebuilt_release_root_authentication_rejects_nesting_or_alias(
+    tmp_path: Path, layout: str
+) -> None:
+    module = load_writer_module()
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    cargo_target_root = external_root / "target"
+
+    if layout == "nested":
+        artifact_root = external_root / "artifacts"
+        artifact_root.mkdir(mode=0o700)
+        artifact_root.chmod(0o700)
+        cargo_target_root = artifact_root / "target"
+        cargo_target_root.mkdir(mode=0o700)
+        cargo_target_root.chmod(0o700)
+        expected_error = "release artifact and Cargo target roots overlap"
+    else:
+        real_artifact_root = external_root / "artifacts-real"
+        real_artifact_root.mkdir(mode=0o700)
+        real_artifact_root.chmod(0o700)
+        artifact_root = external_root / "artifacts-alias"
+        try:
+            artifact_root.symlink_to(real_artifact_root, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"directory symlinks are unavailable: {error}")
+        cargo_target_root.mkdir(mode=0o700)
+        cargo_target_root.chmod(0o700)
+        expected_error = "one private owner-owned directory outside the sealed source"
+
+    fields = {
+        "artifact_root_path": str(artifact_root),
+        "cargo_target_root_path": str(cargo_target_root),
+    }
+    with pytest.raises(module.ReceiptError, match=expected_error):
+        module._prebuilt_release_roots(
+            repo_root=source_root,
+            fields=fields,
+            expected_artifact_root=artifact_root,
+            expected_cargo_target_root=cargo_target_root,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_error"),
+    (
+        (
+            "artifact_root_path",
+            "corridor artifact root is not the exact authenticated release "
+            "artifact root",
+        ),
+        (
+            "cargo_target_root_path",
+            "corridor Cargo target root is not the exact authenticated release "
+            "Cargo target root",
+        ),
+    ),
+)
+def test_receipt_rejects_corridor_root_substitution(
+    tmp_path: Path, field: str, expected_error: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["corridor_completion"]
+    assert isinstance(completion, Path)
+    substituted_root = tmp_path / f"substituted-{field}"
+    substituted_root.mkdir(mode=0o700)
+    substituted_root.chmod(0o700)
+    fields = read_tsv_fields(completion)
+    fields[field] = str(substituted_root)
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected_error in result.stderr
+
 @pytest.mark.parametrize(
     ("field_path", "replacement"),
     [

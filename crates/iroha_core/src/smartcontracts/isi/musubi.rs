@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
     block::BlockHeader,
@@ -2952,8 +2952,7 @@ fn load_location_provider_attestations(
             ));
         }
         let binding = &record.attestation.payload.binding;
-        if binding.chain_id != receipt.chain_id
-            || binding.genesis_block_hash != receipt.genesis_block_hash
+        if binding.network_id != receipt.network_id
             || binding.provider_id != *provider
             || binding.replication_order != location.replication_order
             || binding.archive_id != archive.archive_id
@@ -3169,8 +3168,7 @@ fn validate_provider_bundle_attestation(
             .get(index)
             .map(|hash| *hash.as_ref())
     });
-    if binding.chain_id != *state_transaction.chain_id()
-        || binding.genesis_block_hash != genesis_block_hash(state_transaction)?
+    if binding.network_id != *state_transaction.network_id()
         || order.order_id != binding.replication_order
         || order.manifest_root_cid != archive.commitment.root_cid
         || current_owner != &completion.completed_by
@@ -3329,15 +3327,14 @@ fn validate_seed_ingress_receipt(
 ) -> Result<(), Error> {
     let binding = &receipt.payload.binding;
     let archive_id = commitment.archive_id();
-    if binding.chain_id != *state_transaction.chain_id()
-        || binding.genesis_block_hash != genesis_block_hash(state_transaction)?
+    if binding.network_id != *state_transaction.network_id()
         || binding.publisher != *authority
         || binding.archive_id != archive_id
         || binding.car_body_digest != commitment.car_digest
         || binding.car_body_length != commitment.car_size
     {
         return Err(invariant(
-            "Musubi seed-ingress receipt does not match the chain, publisher, or archive body",
+            "Musubi seed-ingress receipt does not match the network, publisher, or archive body",
         ));
     }
     let admitted_owner = state_transaction
@@ -4442,14 +4439,6 @@ fn execution_hash(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
 fn execution_time_ms(state_transaction: &StateTransaction<'_, '_>) -> Result<u64, Error> {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis())
         .map_err(|_| invariant("Musubi block creation time overflows u64 milliseconds"))
-}
-
-fn genesis_block_hash(state_transaction: &StateTransaction<'_, '_>) -> Result<[u8; 32], Error> {
-    state_transaction
-        .block_hashes()
-        .first()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| invariant("Musubi publication requires a committed genesis block"))
 }
 
 fn ensure_revision(label: &str, actual: u64, expected: u64) -> Result<(), Error> {

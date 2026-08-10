@@ -1,4 +1,5 @@
 using System.Text;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 
@@ -10,10 +11,13 @@ public sealed class CanonicalRequestTests
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
     private const string FixtureSignatureBase64 =
-        "RdaUygjFPFHDlzL5VQpz0m5L5MYN1MDJzY4I87+6LgzxA3VrnoAmSWqfrvgh2+tB2+pqqyZVEVstNZN86Px1Cw==";
+        "ZDp26XaHf2XldnSLiM5ICzmrQS4lCkc3jO5vpJBmLsCR9ivR8dF4ll14L6+m9tPX429ovNYG6mZYc6ggql0kDQ==";
 
     private static readonly byte[] FixturePrivateKeySeed =
         Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
+
+    private static readonly NetworkId FixtureNetworkId = NetworkId.Parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
 
     [Fact]
     public void CanonicalQueryStringSortsAndEncodes()
@@ -74,6 +78,7 @@ public sealed class CanonicalRequestTests
     {
         var body = Encoding.UTF8.GetBytes("{\"selector\":\"assets\"}");
         var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -93,6 +98,7 @@ public sealed class CanonicalRequestTests
     public void BuildHeadersGeneratesCanonicalNonce()
     {
         var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -111,6 +117,7 @@ public sealed class CanonicalRequestTests
         var credentials = new CanonicalRequestCredentials(FixtureAccountId, seed);
         var expectedSeed = credentials.PrivateKeySeed;
         var expectedSignature = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             credentials.AccountId,
             credentials.PrivateKeySeed,
             "post",
@@ -126,6 +133,7 @@ public sealed class CanonicalRequestTests
         Assert.NotSame(returnedSeed, credentials.PrivateKeySeed);
 
         var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             credentials.AccountId,
             credentials.PrivateKeySeed,
             "post",
@@ -174,6 +182,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "privateKeySeed",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: seed,
                 method: "post",
@@ -237,6 +246,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "accountId",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: mismatchedSeed,
                 method: "post",
@@ -249,6 +259,7 @@ public sealed class CanonicalRequestTests
     public void CanonicalRequestAuthAcceptsPositiveTimestampBoundary()
     {
         var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -256,6 +267,7 @@ public sealed class CanonicalRequestTests
             timestampMs: 1,
             nonce: "abcdef0123456789abcdef0123456789");
         var message = CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
             "post",
             "/v1/query",
             timestampMs: 1,
@@ -271,12 +283,36 @@ public sealed class CanonicalRequestTests
         Assert.Equal("1", manualHeaders.ToDictionary()["X-Iroha-Timestamp-Ms"]);
     }
 
+    [Fact]
+    public void CanonicalRequestAuthCannotReplayAcrossSameLabelNetworks()
+    {
+        var foreignNetworkId = NetworkId.Parse(
+            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+        var canonical = CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
+            "GET",
+            "/v1/accounts",
+            query: "label=same",
+            timestampMs: 1735000000123,
+            nonce: "abcdef0123456789abcdef0123456789");
+        var foreign = CanonicalRequest.BuildSignatureMessage(
+            foreignNetworkId,
+            "GET",
+            "/v1/accounts",
+            query: "label=same",
+            timestampMs: 1735000000123,
+            nonce: "abcdef0123456789abcdef0123456789");
+
+        Assert.NotEqual(canonical, foreign);
+    }
+
     [Theory]
     [InlineData(-1L)]
     [InlineData(0L)]
     public void CanonicalRequestAuthRejectsNonPositiveTimestamps(long timestampMs)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -284,6 +320,7 @@ public sealed class CanonicalRequestTests
             timestampMs: timestampMs,
             nonce: "abcdef0123456789abcdef0123456789"));
         Assert.Throws<ArgumentOutOfRangeException>(() => CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
             method: "post",
             path: "/v1/query",
             timestampMs: timestampMs,
@@ -302,6 +339,7 @@ public sealed class CanonicalRequestTests
             () => new CanonicalRequestCredentials($" {FixtureAccountId}", FixturePrivateKeySeed));
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: $"{FixtureAccountId} ",
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -309,6 +347,7 @@ public sealed class CanonicalRequestTests
                 nonce: "abcdef0123456789abcdef0123456789"));
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -316,6 +355,7 @@ public sealed class CanonicalRequestTests
                 nonce: " abcdef0123456789abcdef0123456789 "));
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -323,6 +363,7 @@ public sealed class CanonicalRequestTests
                 nonce: " "));
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
                 "post",
                 "/v1/query",
                 timestampMs: 1735000000123,
@@ -356,6 +397,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "accountId",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId.Insert(8, "\u00A0"),
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -364,6 +406,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "method",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "po st",
@@ -372,6 +415,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "path",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -380,6 +424,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "nonce",
             () => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -394,6 +439,7 @@ public sealed class CanonicalRequestTests
         AssertArgumentException(
             "nonce",
             () => CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
                 "post",
                 "/v1/query",
                 timestampMs: 1735000000123,
@@ -470,6 +516,7 @@ public sealed class CanonicalRequestTests
     public void BuildHeadersRejectsNonExactAccountIds(string accountId)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: accountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -511,6 +558,7 @@ public sealed class CanonicalRequestTests
     public void BuildHeadersRejectsNonExactMethods(string method)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: method,
@@ -551,6 +599,7 @@ public sealed class CanonicalRequestTests
     public void BuildHeadersRejectsNonExactPaths(string path)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -639,6 +688,7 @@ public sealed class CanonicalRequestTests
     public void BuildHeadersRejectsNonExactCallerProvidedNonces(string nonce)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -664,6 +714,7 @@ public sealed class CanonicalRequestTests
     public void BuildSignatureMessageRejectsNonExactCallerProvidedNonces(string nonce)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
             method: "post",
             path: "/v1/query",
             body: Encoding.UTF8.GetBytes("{}"),
@@ -711,6 +762,7 @@ public sealed class CanonicalRequestTests
     public void BuildSignatureMessageRejectsNonExactMethodsAndPaths(string method, string path)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
             method: method,
             path: path,
             body: Encoding.UTF8.GetBytes("{}"),

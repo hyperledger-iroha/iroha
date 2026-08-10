@@ -1090,7 +1090,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         try requireKeys(
             binding,
             [
-                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "network_id", "provider_id", "completed_by",
                 "completion_authority", "replication_order", "assignment_revision",
                 "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
                 "descriptor_digest", "semantic_release_manifest_digest",
@@ -1122,8 +1122,9 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         let anchor = try fixtureObject(binding["finalized_anchor"])
         try requireKeys(anchor, ["height", "block_hash"])
         return try MusubiProviderBundleVerificationBindingV1(
-            chainID: XCTUnwrap(binding["chain_id"] as? String),
-            genesisBlockHash: fixedBytes32(binding["genesis_block_hash"]),
+            networkId: NetworkId(
+                literal: try XCTUnwrap(binding["network_id"] as? String)
+            ),
             providerID: digestFromNewtypeHex(binding["provider_id"]),
             completedBy: XCTUnwrap(binding["completed_by"] as? String),
             completionAuthority: completionAuthority,

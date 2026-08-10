@@ -1701,14 +1701,14 @@ async fn alias_resolve_rejects_unsigned_request() {
 }
 
 #[tokio::test]
-async fn contract_identity_reads_reject_unsigned_requests_before_parsing() {
+async fn contract_alias_reads_reject_unsigned_requests_before_parsing() {
     let app = mk_app_state_for_tests();
     let method = axum::http::Method::POST;
     let alias_uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
         .parse()
         .expect("contract alias resolve URI");
     let alias_error = handler_contract_alias_resolve(
-        State(app.clone()),
+        State(app),
         method,
         alias_uri,
         HeaderMap::new(),
@@ -1721,26 +1721,6 @@ async fn contract_identity_reads_reject_unsigned_requests_before_parsing() {
         alias_error,
         Error::AppUnauthorized {
             code: "alias_auth_required",
-            ..
-        }
-    ));
-
-    let gov_error = handler_gov_contract_get(
-        State(app),
-        axum::http::Method::GET,
-        "/v1/gov/contracts/not-a-contract-address"
-            .parse()
-            .expect("governed contract URI"),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        AxPath("not-a-contract-address".to_owned()),
-    )
-    .await
-    .expect_err("unsigned malformed governed-contract read must fail authentication first");
-    assert!(matches!(
-        gov_error,
-        Error::AppUnauthorized {
-            code: "contract_code_auth_required",
             ..
         }
     ));

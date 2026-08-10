@@ -1271,7 +1271,7 @@ async fn privacy_ingest_rejects_when_disabled() {
     let app = mk_app_state_for_tests();
     let dto = sample_privacy_event_dto();
 
-    let response = super::handler_post_soranet_privacy_event(
+    let response = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
         axum::extract::ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))),
@@ -1311,7 +1311,7 @@ async fn privacy_ingest_denies_without_allowlist() {
         HeaderValue::from_static("secret-token"),
     );
 
-    let response = super::handler_post_soranet_privacy_event(
+    let response = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         headers,
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1364,7 +1364,7 @@ async fn privacy_ingest_enforces_token_namespace_and_rate() {
 
     let dto = sample_privacy_event_dto();
     // Missing token
-    let resp = super::handler_post_soranet_privacy_event(
+    let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1387,7 +1387,7 @@ async fn privacy_ingest_enforces_token_namespace_and_rate() {
         super::SORANET_PRIVACY_TOKEN_HEADER,
         HeaderValue::from_static("secret-token"),
     );
-    let resp = super::handler_post_soranet_privacy_event(
+    let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         headers.clone(),
         axum::extract::ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))),
@@ -1398,7 +1398,7 @@ async fn privacy_ingest_enforces_token_namespace_and_rate() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Happy path
-    let ok_resp = super::handler_post_soranet_privacy_event(
+    let ok_resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         headers.clone(),
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1409,7 +1409,7 @@ async fn privacy_ingest_enforces_token_namespace_and_rate() {
     assert_eq!(ok_resp.status(), StatusCode::ACCEPTED);
 
     // Rate limit on second immediate call
-    let limited_resp = super::handler_post_soranet_privacy_event(
+    let limited_resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         headers,
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1434,7 +1434,7 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
     }
 
     let dto = sample_privacy_event_dto();
-    let resp = super::handler_post_soranet_privacy_event(
+    let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1458,6 +1458,61 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
 
 #[tokio::test]
 #[cfg(feature = "telemetry")]
+async fn privacy_ingest_authenticates_before_body_decode() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let app_mut =
+            std::sync::Arc::get_mut(&mut app).expect("unique Arc for privacy configuration");
+        app_mut.soranet_privacy_ingest.enabled = true;
+        app_mut.soranet_privacy_ingest.require_token = true;
+        app_mut.soranet_privacy_ingest.tokens = vec!["secret-token".into()];
+        app_mut.soranet_privacy_ingest.allow_cidrs = vec!["127.0.0.1/32".to_owned()];
+        app_mut.soranet_privacy_tokens =
+            Arc::new(vec!["secret-token".to_owned()].into_iter().collect());
+        app_mut.soranet_privacy_allow_nets = Arc::new(crate::limits::parse_cidrs(
+            &app_mut.soranet_privacy_ingest.allow_cidrs,
+        ));
+    }
+
+    let descriptor = route_catalog::telemetry::SORANET_PRIVACY_EVENT;
+    let routes = [descriptor];
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(&routes),
+        compiled_route_features(),
+    )
+    .expect("privacy route catalog is valid");
+    builder.route(
+        &descriptor,
+        catalog_post(super::handler_post_soranet_privacy_event)
+            .layer(DefaultBodyLimit::max(
+                super::SORANET_PRIVACY_INGEST_MAX_BODY_BYTES,
+            ))
+            .authenticated_soranet_privacy_collector(app, "event"),
+    );
+    let (router, _) = builder.finish().expect("privacy route mounts exactly once");
+
+    let mut request = Request::builder()
+        .method(HttpMethod::POST)
+        .uri(descriptor.path())
+        .header("content-type", "application/json")
+        .body(Body::from("{"))
+        .expect("malformed request");
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    let response = router
+        .oneshot(request)
+        .await
+        .expect("privacy route response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[cfg(feature = "telemetry")]
 async fn privacy_ingest_blocks_without_allowlist() {
     let mut app = mk_app_state_for_tests();
     {
@@ -1477,7 +1532,7 @@ async fn privacy_ingest_blocks_without_allowlist() {
         super::SORANET_PRIVACY_TOKEN_HEADER,
         HeaderValue::from_static("secret-token"),
     );
-    let resp = super::handler_post_soranet_privacy_event(
+    let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         headers,
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1534,7 +1589,7 @@ async fn privacy_share_ingest_enforces_policy() {
     let share_dto = sample_privacy_share_dto();
 
     // Missing token -> 401
-    let resp = super::handler_post_soranet_privacy_share(
+    let resp = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1550,7 +1605,7 @@ async fn privacy_share_ingest_enforces_policy() {
         super::SORANET_PRIVACY_TOKEN_HEADER,
         HeaderValue::from_static("secret-token"),
     );
-    let resp = super::handler_post_soranet_privacy_share(
+    let resp = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
         headers.clone(),
         axum::extract::ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))),
@@ -1561,7 +1616,7 @@ async fn privacy_share_ingest_enforces_policy() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Happy path -> 202
-    let ok = super::handler_post_soranet_privacy_share(
+    let ok = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
         headers.clone(),
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
@@ -1572,7 +1627,7 @@ async fn privacy_share_ingest_enforces_policy() {
     assert_eq!(ok.status(), StatusCode::ACCEPTED);
 
     // Rate limit -> 429
-    let limited = super::handler_post_soranet_privacy_share(
+    let limited = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
         headers,
         axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),

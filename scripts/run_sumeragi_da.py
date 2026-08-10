@@ -296,7 +296,7 @@ def main() -> int:
     env = os.environ.copy()
     env["SUMERAGI_DA_ARTIFACT_DIR"] = str(run_dir)
     env.setdefault("IROHA_SKIP_BIND_CHECKS", "1")
-    env.setdefault("TEST_NETWORK_BIN_IROHAD", str(Path("target/debug/irohad").resolve()))
+    env.setdefault("TEST_NETWORK_BIN_IROHAD", str(Path("target/debug/iroha3d").resolve()))
 
     log_path = run_dir / "cargo-test.log"
     return_code = _tee_command(command, log_path, env)

@@ -309,7 +309,7 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-restart")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-restart", 0).await?;
+        let mut harness = setup_taira_harness::<true>(&out_dir, "taira-restart", 0).await?;
         let restart_index = harness
             .validator_clients
             .len()
@@ -319,5 +319,5 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     }
     .await;
 
-    finalize_result(temp_dir, "taira_localnet_restart_catchup_behavior", result)
+    result
 }

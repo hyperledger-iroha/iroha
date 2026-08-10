@@ -5864,9 +5864,8 @@
             "const": false,
             "type": "boolean"
           },
-          "chain_id": {
-            "minLength": 1,
-            "type": "string"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "direction": {
             "$ref": "#/components/schemas/HedgeIntentDirectionV1"
@@ -5922,7 +5921,7 @@
         "required": [
           "version",
           "intent_id",
-          "chain_id",
+          "network_id",
           "service_policy_digest",
           "period_close_digest",
           "period_end_unix",
@@ -8459,11 +8458,8 @@
           "archive": {
             "$ref": "#/components/schemas/MusubiArchiveRecordV1"
           },
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
-          "genesis_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "items": {
             "items": {
@@ -8488,8 +8484,7 @@
           }
         },
         "required": [
-          "chain_id",
-          "genesis_hash",
+          "network_id",
           "archive",
           "items",
           "next_cursor",
@@ -8808,14 +8803,11 @@
       "MusubiArchiveRetentionPageV1": {
         "additionalProperties": false,
         "properties": {
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
           "finalized_time_ms": {
             "$ref": "#/components/schemas/MusubiU64V1"
           },
-          "genesis_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "items": {
             "items": {
@@ -8830,8 +8822,7 @@
           }
         },
         "required": [
-          "chain_id",
-          "genesis_hash",
+          "network_id",
           "items",
           "snapshot",
           "finalized_time_ms"
@@ -8929,12 +8920,6 @@
         "maximum": 255,
         "minimum": 0,
         "type": "integer"
-      },
-      "MusubiChainIdV1": {
-        "maxLength": 128,
-        "minLength": 1,
-        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$",
-        "type": "string"
       },
       "MusubiChunkerProfileHandleV1": {
         "additionalProperties": false,
@@ -9223,6 +9208,30 @@
         },
         "required": [
           "release"
+        ],
+        "type": "object"
+      },
+      "MusubiExactReleaseSnapshotV1": {
+        "additionalProperties": false,
+        "properties": {
+          "home_release": {
+            "$ref": "#/components/schemas/MusubiReleaseRecordV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/MusubiRegistrySnapshotV1"
+          },
+          "universal_release": {
+            "$ref": "#/components/schemas/MusubiResolverReleaseRowV1"
+          }
+        },
+        "required": [
+          "network_id",
+          "snapshot",
+          "home_release",
+          "universal_release"
         ],
         "type": "object"
       },
@@ -10066,11 +10075,8 @@
       "MusubiOrderedPackagePageV1": {
         "additionalProperties": false,
         "properties": {
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
-          "genesis_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "items": {
             "items": {
@@ -10102,8 +10108,7 @@
         },
         "required": [
           "query",
-          "chain_id",
-          "genesis_hash",
+          "network_id",
           "namespace_binding",
           "items",
           "next_cursor",
@@ -10481,9 +10486,6 @@
           "bundle_digest": {
             "$ref": "#/components/schemas/MusubiDigest32V1"
           },
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
           "completed_by": {
             "$ref": "#/components/schemas/MusubiAccountIdV1"
           },
@@ -10499,8 +10501,8 @@
           "finalized_anchor": {
             "$ref": "#/components/schemas/MusubiProviderFinalizedAnchorV1"
           },
-          "genesis_block_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "provider_id": {
             "$ref": "#/components/schemas/MusubiProviderIdV1"
@@ -10519,8 +10521,7 @@
           }
         },
         "required": [
-          "chain_id",
-          "genesis_block_hash",
+          "network_id",
           "provider_id",
           "completed_by",
           "completion_authority",
@@ -11022,11 +11023,8 @@
       "MusubiResolverIndexPageV1": {
         "additionalProperties": false,
         "properties": {
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
-          "genesis_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "items": {
             "items": {
@@ -11055,8 +11053,7 @@
         },
         "required": [
           "query",
-          "chain_id",
-          "genesis_hash",
+          "network_id",
           "items",
           "next_cursor",
           "snapshot"
@@ -11314,11 +11311,8 @@
             "minimum": 1,
             "type": "integer"
           },
-          "chain_id": {
-            "$ref": "#/components/schemas/MusubiChainIdV1"
-          },
-          "genesis_block_hash": {
-            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "ingress_broker": {
             "$ref": "#/components/schemas/MusubiAccountIdV1"
@@ -11337,8 +11331,7 @@
           }
         },
         "required": [
-          "chain_id",
-          "genesis_block_hash",
+          "network_id",
           "publisher",
           "ingress_broker",
           "seed_provider",
@@ -11764,8 +11757,8 @@
             "minimum": 1,
             "type": "integer"
           },
-          "chain_id_hash": {
-            "$ref": "#/components/schemas/Hash"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "coordinator_dataspace_id": {
             "format": "uint64",
@@ -11901,7 +11894,7 @@
         "required": [
           "round",
           "epoch",
-          "chain_id_hash",
+          "network_id",
           "source_id",
           "tx_entrypoint_hash",
           "plan_digest",
@@ -12329,8 +12322,8 @@
             "minimum": 1,
             "type": "integer"
           },
-          "chain_id_hash": {
-            "$ref": "#/components/schemas/Hash"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "coordinator_proposal_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -12387,7 +12380,7 @@
         "required": [
           "version",
           "source_id",
-          "chain_id_hash",
+          "network_id",
           "plan_digest",
           "lane_id",
           "dataspace_id",
@@ -12399,6 +12392,14 @@
           "legs"
         ],
         "type": "object"
+      },
+      "NetworkId": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Hash"
+          }
+        ],
+        "description": "Exact genesis-header-derived deployment identity encoded as one canonical Norito JSON hash literal."
       },
       "NexusFeeReceipt": {
         "additionalProperties": false,
@@ -42337,8 +42338,18 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Accepts JSON-RPC payloads for MCP tool discovery and invocation.",
+        "description": "Accepts bounded JSON-RPC payloads. Tool calls dispatch only to cataloged routes, and each target enforces its own exact authentication and admission before any effect. Canonical account or operator proofs belong in the selected tool's arguments.headers and are never inferred from the outer MCP envelope.",
         "operationId": "mcpJsonRpc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -43783,7 +43794,7 @@
     },
     "/v1/musubi/queries/exact-release": {
       "post": {
-        "description": "Execute a bounded exact structural release query.",
+        "description": "Execute one bounded exact query that returns coherent home and universal release projections from the same finalized state view.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -43799,7 +43810,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MusubiReleaseRecordV1"
+                  "$ref": "#/components/schemas/MusubiExactReleaseSnapshotV1"
                 }
               }
             },
@@ -43811,7 +43822,7 @@
           "Musubi"
         ],
         "x-iroha-norito-request-type": "MusubiExactReleaseQueryV1",
-        "x-iroha-norito-response-type": "MusubiReleaseRecordV1",
+        "x-iroha-norito-response-type": "MusubiExactReleaseSnapshotV1",
         "x-iroha-tool-effect": "read"
       }
     },
@@ -55110,7 +55121,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction chain and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
+        "description": "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction's genesis-derived network identity and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -58258,7 +58269,7 @@
     },
     "/v1/sorafs/moderation/dead-letters/apply": {
       "post": {
-        "description": "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, bounded-decode and byte-canonically re-encode the opaque V1 resolution frame, verify its detached Ed25519 signature with the configured checkpoint attestor, and apply the checkpoint-bound redrive or acknowledgement atomically. The authenticated operator and external attestor must be independently administered.",
+        "description": "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, bounded-decode and byte-canonically re-encode the opaque V1 resolution frame, verify its exact genesis-derived NetworkId and detached Ed25519 signature with the configured checkpoint attestor, and apply the checkpoint-bound redrive or acknowledgement atomically. The authenticated operator and external attestor must be independently administered.",
         "operationId": "contracts.sorafs_moderation_dead_letters_apply_post",
         "parameters": [
           {
@@ -58452,7 +58463,7 @@
     },
     "/v1/sorafs/moderation/dead-letters/prepare": {
       "post": {
-        "description": "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, and prepare one checkpoint-bound canonical Norito resolution frame. The response exposes only that bounded frame and its signing digest. An independently administered checkpoint-attestor Ed25519 key must sign the digest outside Torii before apply; the authenticated operator key cannot substitute for the attestor.",
+        "description": "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, and prepare one exact-NetworkId/checkpoint-bound canonical Norito resolution frame. The response exposes only that bounded frame and its signing digest. An independently administered checkpoint-attestor Ed25519 key must sign the digest outside Torii before apply; the authenticated operator key cannot substitute for the attestor.",
         "operationId": "contracts.sorafs_moderation_dead_letters_prepare_post",
         "parameters": [
           {

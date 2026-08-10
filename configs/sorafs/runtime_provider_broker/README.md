@@ -11,6 +11,11 @@ The service CLI accepts exactly one public input:
 
     --catalog ABSOLUTE_PATH
 
+That canonical catalog includes a mandatory genesis-derived `NetworkId` in
+addition to the display chain label. Catalogs exported with the retired
+optional-network schema are rejected; regenerate the artifact for the exact
+deployment and roll broker and clients together.
+
 Do not add credential, private-key, token, plugin, test-provider, or socket
 override arguments. Provider objects retain private material internally.
 
@@ -79,8 +84,8 @@ production package:
   deployment-owned Governance DAG instance unit.
 
 The repository does not currently ship a base Governance DAG systemd unit
-because its instance config path and public chain identity are
-deployment-specific. Both drop-ins use Requires and After, so an enabled
+because its instance config path, public chain identity, and exact `NetworkId`
+are deployment-specific. Both drop-ins use Requires and After, so an enabled
 consumer cannot start successfully without the ready broker unit. They also
 pin User and Group to iroha so the stock Unix peer-credential check sees the
 same effective identity, and mount the broker runtime directory read-only in

@@ -22,6 +22,17 @@ SOURCE = admission.SourceIdentity("ab" * 20, "12" * 20, "cd" * 32, "ef" * 32)
 SCRIPT = Path(MODULE.__file__).resolve()
 
 
+@pytest.fixture(autouse=True)
+def _exercise_extraction_checks_behind_native_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        admission.taira_release_authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
+
+
 def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     tmp_path: Path,
 ) -> None:

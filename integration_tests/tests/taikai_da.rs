@@ -8,10 +8,9 @@ use eyre::Result;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
 use iroha_config_base::toml::Writer;
-use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
-        ingest::DaIngestRequest,
+        ingest::{DaIngestRequest, DaIngestRequestIntentV1},
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, ErasureProfile, ExtraMetadata,
             GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy,
@@ -76,7 +75,7 @@ async fn taikai_video_segments_require_resolution_metadata() -> Result<()> {
 
     let mut metadata = base_taikai_metadata();
     metadata.retain(|entry| entry.key != META_TRACK_RESOLUTION);
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -107,7 +106,7 @@ async fn taikai_segments_require_signing_manifest_metadata() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let metadata = base_taikai_metadata();
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -141,7 +140,7 @@ async fn taikai_audio_segments_require_audio_layout_metadata() -> Result<()> {
     let mut metadata = base_audio_metadata();
     metadata.retain(|entry| entry.key != META_TRACK_AUDIO_LAYOUT);
     metadata.retain(|entry| entry.key != META_TRACK_RESOLUTION);
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -174,7 +173,7 @@ async fn taikai_ingest_latency_metadata_requires_integer() -> Result<()> {
 
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_utf8(META_TAIKAI_INGEST_LATENCY_MS, "not-a-number"));
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -206,7 +205,7 @@ async fn taikai_live_edge_drift_metadata_requires_integer() -> Result<()> {
 
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_utf8(META_TAIKAI_LIVE_EDGE_DRIFT_MS, "invalid"));
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -239,7 +238,7 @@ async fn taikai_ingest_node_id_metadata_requires_utf8() -> Result<()> {
 
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_bytes(META_TAIKAI_INGEST_NODE_ID, vec![0xFF]));
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -271,7 +270,7 @@ async fn taikai_ssm_payload_must_decode_into_manifest() -> Result<()> {
 
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_bytes(META_SSM, vec![0xDE, 0xAD, 0xBE, 0xEF]));
-    let request = build_taikai_request(metadata);
+    let request = build_taikai_request(&network, metadata);
 
     let response = post_ingest(&network, &request).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -432,14 +431,16 @@ async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Res
     Ok(response)
 }
 
-fn build_taikai_request(metadata_entries: Vec<MetadataEntry>) -> DaIngestRequest {
+fn build_taikai_request(
+    network: &Network,
+    metadata_entries: Vec<MetadataEntry>,
+) -> DaIngestRequest {
     let payload = TEST_PAYLOAD.to_vec();
     let digest = BlobDigest::from_hash(blake3_hash(&payload));
-    let submitter = ALICE_KEYPAIR.public_key().clone();
-    let signature =
-        Signature::try_new(ALICE_KEYPAIR.private_key(), &payload).expect("Taikai DA signature");
 
-    DaIngestRequest {
+    DaIngestRequestIntentV1 {
+        network_id: network.client().network_id,
+        owner: network.client().account.clone(),
         client_blob_id: digest,
         lane_id: LaneId::SINGLE,
         epoch: 7,
@@ -450,15 +451,16 @@ fn build_taikai_request(metadata_entries: Vec<MetadataEntry>) -> DaIngestRequest
         retention_policy: RetentionPolicy::default(),
         chunk_size: 1_024,
         total_size: payload.len() as u64,
+        payload_hash: BlobDigest::from_hash(blake3_hash(&payload)),
         compression: Compression::Identity,
         metadata: ExtraMetadata {
             items: metadata_entries,
         },
         norito_manifest: None,
         payload,
-        submitter,
-        signature,
     }
+    .try_sign(&ALICE_KEYPAIR)
+    .expect("sign canonical Taikai DA request")
 }
 
 fn base_taikai_metadata() -> Vec<MetadataEntry> {

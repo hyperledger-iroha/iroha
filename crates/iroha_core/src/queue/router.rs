@@ -7830,7 +7830,7 @@ mod tests {
     ) -> iroha_data_model::transaction::executable::ContractInvocation {
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &super::super::queue_test_network_id(),
                 authority,
                 nonce,
                 dataspace,
@@ -8252,7 +8252,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"queue-router-drain-chain"),
+                network_id: super::super::queue_test_network_id(),
                 lane_id: lane.id,
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation: Hash::new(b"queue-router-drain-incarnation"),
@@ -10308,7 +10308,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -10997,7 +10997,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -11039,7 +11039,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -11095,7 +11095,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             contract_dataspace,
@@ -11169,7 +11169,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11667,25 +11667,27 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace_id),
+        ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
                 default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![],
             },
-            dataspace_catalog(&[(dataspace_id, "paynet")]),
-            catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                (LaneId::new(2), dataspace_id),
-            ]),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
         );
-        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let id_seed_domain = DomainId::try_new("cash", "sbp").expect("asset definition id seed");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            owning_domain.clone(),
+            id_seed_domain,
             "pkr".parse().expect("asset definition name"),
         );
         let transfer = Transfer::asset_quantity(
-            AssetId::of(asset_definition, sender_id.clone()),
+            AssetId::of(asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
         );
@@ -11694,11 +11696,32 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("owning domain");
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
 
         assert_eq!(
             router
-                .try_route(&tx)
-                .expect("asset transfer route must resolve"),
+                .try_route_without_state(&tx)
+                .expect("opaque asset transfer should defer to state"),
+            None
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("asset transfer route must resolve from stored ownership"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
@@ -13915,7 +13938,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &authority,
             0,
             contract_dataspace,

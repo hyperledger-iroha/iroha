@@ -750,8 +750,9 @@ fn authorize_gateway_compliance_request(
     uri: &Uri,
     body: &[u8],
 ) -> Result<(), Response> {
-    let verified = match crate::app_auth::verify_canonical_request(
+    let verified = match crate::app_auth::verify_canonical_network_request(
         &state.state,
+        state.state.network_id_ref(),
         headers,
         method,
         uri,
@@ -1331,6 +1332,25 @@ mod tests {
         GatewayComplianceCatalogPayloadV1, GatewayComplianceIdempotencyRecordV1,
         GatewayComplianceMutationKindV1,
     };
+
+    #[test]
+    fn gateway_compliance_auth_rejects_foreign_exact_network() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let method = Method::POST;
+        let uri: Uri = "/v1/sorafs/gateway/compliance/catalog"
+            .parse()
+            .expect("gateway compliance URI");
+        let body = b"{}";
+        let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
+            &method, &uri, body, 0xD2, 0xE2,
+        );
+
+        let response = authorize_gateway_compliance_request(&state, &headers, &method, &uri, body)
+            .expect_err("foreign-network gateway authorization must fail closed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 
     fn signed_catalog() -> GatewayComplianceCatalogV1 {
         let signing_key = SigningKey::from_bytes(&[0x31; 32]);

@@ -162,7 +162,7 @@ fn ready_bearing_certificate_never_enters_ordinary_receipt_repair() {
         .expect("autonomous fixture carries one merge execution");
     let autonomous = Kura::decode_autonomous_lane_merge_bundle(
         &execution.source_bundle,
-        execution.autonomous_chain_id_hash,
+        execution.autonomous_network_id,
         execution.autonomous_epoch,
     )
     .expect("decode autonomous fixture bundle")

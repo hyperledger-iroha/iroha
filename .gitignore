@@ -159,8 +159,6 @@ java/iroha_android/.gradle/
 javascript/iroha_js/node_modules/
 javascript/iroha_js/dist/
 javascript/iroha_js/target-cargo/
-docs/portal/node_modules/
-docs/portal/.docusaurus/
 
 # Developer portal build artifacts
 docs/portal/.docusaurus/
@@ -253,7 +251,7 @@ _apalache-out*
 /*.bin
 /*.der
 /*.pem
-/irohad
+/iroha3d
 /closure_clone
 /rust_out
 /test

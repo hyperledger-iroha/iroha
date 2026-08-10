@@ -53,7 +53,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::XorQuantity;
 use iroha_telemetry::metrics::Metrics;
-use iroha_test_samples::ALICE_ID;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
     NoritoDeserialize,
     codec::Decode,
@@ -1357,6 +1357,8 @@ fn sample_request() -> DaIngestRequest {
     let payload = b"example".to_vec();
 
     DaIngestRequestIntentV1 {
+        network_id: crate::signed_query_test_network_id(),
+        owner: ALICE_ID.clone(),
         client_blob_id: BlobDigest::from_hash(blake3::hash(b"blob-id")),
         lane_id: LaneId::new(1),
         epoch: 5,
@@ -1379,6 +1381,7 @@ fn sample_request() -> DaIngestRequest {
         },
         chunk_size: 1 << 10,
         total_size: payload.len() as u64,
+        payload_hash: BlobDigest::from_hash(blake3::hash(&payload)),
         compression: Compression::Identity,
         norito_manifest: None,
         payload,
@@ -1394,12 +1397,15 @@ fn sample_request() -> DaIngestRequest {
     .expect("sign canonical DA request fixture")
 }
 
+include!("tests/principal_binding_tests.rs");
+
 #[test]
 fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
     let mut request = sample_request();
     request.blob_class = BlobClass::NexusLaneSidecar;
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
-    request.signature = checked_signature(keypair.private_key(), &request.signing_digest());
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
     let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
@@ -1474,7 +1480,7 @@ fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
     );
 
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
-    invalid_signature_unknown_lane.signature = checked_signature(
+    invalid_signature_unknown_lane.signatures[0].signature = checked_signature(
         keypair.private_key(),
         &invalid_signature_unknown_lane.signing_digest(),
     );
@@ -1537,7 +1543,7 @@ fn nexus_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> ConfigNexus {
 fn validate_request_accepts_well_formed_payload() {
     let request = sample_request();
     let canonical = normalize_payload(&request).expect("normalize payload");
-    assert!(validate_request(&request, canonical.len()).is_ok());
+    assert!(validate_request(&request, canonical.as_slice()).is_ok());
 }
 
 #[test]
@@ -1545,7 +1551,7 @@ fn validate_request_rejects_non_power_two_chunks() {
     let mut request = sample_request();
     request.chunk_size = 1_500;
     let canonical = normalize_payload(&request).expect("normalize payload");
-    let err = match validate_request(&request, canonical.len()) {
+    let err = match validate_request(&request, canonical.as_slice()) {
         Ok(_) => panic!("expected validation to reject non power-of-two chunk size"),
         Err(err) => err,
     };
@@ -1554,12 +1560,12 @@ fn validate_request_rejects_non_power_two_chunks() {
 
 #[test]
 fn validate_request_rejects_unbounded_erasure_work_before_allocation() {
-    let canonical_len = sample_request().payload.len();
+    let canonical = sample_request().payload;
 
     let mut request = sample_request();
     request.erasure_profile.data_shards = MAX_DATA_SHARDS + 1;
     assert_eq!(
-        validate_request(&request, canonical_len)
+        validate_request(&request, &canonical)
             .expect_err("excess data shards must reject")
             .0,
         StatusCode::BAD_REQUEST
@@ -1568,7 +1574,7 @@ fn validate_request_rejects_unbounded_erasure_work_before_allocation() {
     let mut request = sample_request();
     request.erasure_profile.parity_shards = MAX_PARITY_SHARDS + 1;
     assert_eq!(
-        validate_request(&request, canonical_len)
+        validate_request(&request, &canonical)
             .expect_err("excess parity shards must reject")
             .0,
         StatusCode::BAD_REQUEST
@@ -1577,7 +1583,7 @@ fn validate_request_rejects_unbounded_erasure_work_before_allocation() {
     let mut request = sample_request();
     request.erasure_profile.row_parity_stripes = MAX_ROW_PARITY_STRIPES + 1;
     assert_eq!(
-        validate_request(&request, canonical_len)
+        validate_request(&request, &canonical)
             .expect_err("excess row parity must reject")
             .0,
         StatusCode::BAD_REQUEST
@@ -5179,11 +5185,6 @@ fn persist_da_pin_intent_writes_file() {
         b"sora/docs".to_vec(),
         MetadataVisibility::Public,
     ));
-    request.metadata.items.push(MetadataEntry::new(
-        META_DA_REGISTRY_OWNER,
-        ALICE_ID.to_string().into_bytes(),
-        MetadataVisibility::Public,
-    ));
     let canonical = normalize_payload(&request).expect("normalize payload");
     let chunk_store = build_chunk_store(&request, canonical.as_slice());
     let metadata =
@@ -5201,17 +5202,15 @@ fn persist_da_pin_intent_writes_file() {
     .expect("manifest");
     let alias =
         registry_alias_from_metadata(&request.metadata).expect("alias metadata should parse");
-    let owner =
-        registry_owner_from_metadata(&request.metadata).expect("owner metadata should parse");
     let mut intent = DaPinIntent::new(
         request.lane_id,
         request.epoch,
         request.sequence,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+        request.authorization(),
     );
     intent.alias = alias;
-    intent.owner = owner;
     let path = persistence::persist_da_pin_intent(
         manifest_dir,
         &intent,
@@ -5229,7 +5228,7 @@ fn persist_da_pin_intent_writes_file() {
         NoritoDeserialize::try_deserialize(archived).expect("deserialize pin intent");
     assert_eq!(decoded, intent);
     assert_eq!(decoded.alias, Some("sora/docs".to_owned()));
-    assert_eq!(decoded.owner, Some(ALICE_ID.clone()));
+    assert_eq!(decoded.authorization.owner, *ALICE_ID);
 }
 
 fn assert_invalid_input<T>(result: std::io::Result<T>, label: &str) {
@@ -5368,6 +5367,7 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         request.sequence,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+        request.authorization(),
     );
     assert_invalid_input(
         persistence::persist_da_pin_intent(
@@ -5430,6 +5430,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         request.sequence,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+        request.authorization(),
     );
     let fingerprint = *manifest.fingerprint.as_bytes();
     let assert_invalid_data =

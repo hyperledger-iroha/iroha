@@ -124,7 +124,9 @@ fn contract_address(
     deploy_nonce: u64,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         authority,
         deploy_nonce,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

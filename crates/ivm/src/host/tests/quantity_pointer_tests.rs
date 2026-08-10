@@ -1,6 +1,92 @@
-//! Canonical quantity-pointer admission tests for the default IVM host.
+//! Pointer-ABI provenance and canonical quantity admission tests for the default IVM host.
 
 use super::*;
+
+#[test]
+fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
+    let blob = test_tlv(PointerType::Blob, b"owned-heap-input");
+
+    let mut heap_vm = IVM::new(u64::MAX);
+    let heap_pointer = heap_vm
+        .alloc_heap(u64::try_from(blob.len()).expect("TLV length fits u64"))
+        .expect("allocate complete HEAP envelope");
+    heap_vm
+        .store_bytes(heap_pointer, &blob)
+        .expect("store complete HEAP envelope");
+    heap_vm.set_register(10, heap_pointer);
+    DefaultHost::new()
+        .syscall(syscalls::SYSCALL_SHA256_HASH, &mut heap_vm)
+        .expect("allocated HEAP must be a valid pointer-ABI source");
+    let digest = heap_vm
+        .validate_tlv(heap_vm.register(10))
+        .expect("validate hash result");
+    assert_eq!(digest.type_id, PointerType::Blob);
+    assert_eq!(digest.payload.len(), 32);
+
+    for (label, pointer) in [
+        ("unallocated HEAP", Memory::HEAP_START),
+        ("OUTPUT", Memory::OUTPUT_START),
+        ("stack", Memory::STACK_START),
+    ] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.store_bytes(pointer, &blob)
+            .unwrap_or_else(|error| panic!("store {label} envelope: {error:?}"));
+        vm.set_register(10, pointer);
+        assert!(
+            matches!(
+                DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
+                Err(VMError::NoritoInvalid)
+            ),
+            "{label} bytes must not acquire pointer provenance"
+        );
+        assert_eq!(vm.register(10), pointer);
+    }
+
+    let mut partial_vm = IVM::new(u64::MAX);
+    let owned_blob_bytes = blob
+        .len()
+        .checked_sub(8)
+        .expect("Blob envelope exceeds one HEAP alignment unit");
+    let partial_pointer = partial_vm
+        .alloc_heap(u64::try_from(owned_blob_bytes).expect("partial length fits u64"))
+        .expect("allocate truncated HEAP ownership");
+    partial_vm
+        .store_bytes(partial_pointer, &blob)
+        .expect("write across the unowned HEAP boundary");
+    partial_vm.set_register(10, partial_pointer);
+    assert!(matches!(
+        DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut partial_vm),
+        Err(VMError::NoritoInvalid)
+    ));
+
+    for malformed in [test_tlv(PointerType::Name, b"wrong-type"), {
+        let mut corrupted = blob.clone();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        corrupted
+    }] {
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_host_tlv(&malformed)
+            .expect("allocate malformed adversarial envelope");
+        vm.set_register(10, pointer);
+        assert!(matches!(
+            DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    let mut code_vm = IVM::new(u64::MAX);
+    let mut code = crate::encoding::wide::encode_halt().to_le_bytes().to_vec();
+    let code_pointer = u64::try_from(code.len()).expect("code offset fits u64");
+    code.extend_from_slice(&blob);
+    code_vm.load_code(&code).expect("load arbitrary code bytes");
+    code_vm.set_register(10, code_pointer);
+    assert!(matches!(
+        DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut code_vm),
+        Err(VMError::NoritoInvalid)
+    ));
+}
 
 #[test]
 fn expect_tlv_enforces_pointer_policy() {

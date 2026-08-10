@@ -561,7 +561,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             binary_source,
             binary_sha,
             install_root=VALIDATION_BINARY_ROOT,
-            installed_name="irohad",
+            installed_name="iroha3d",
             maximum_bytes=deploy.MAX_BINARY_BYTES,
             label="binary",
         )

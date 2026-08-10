@@ -203,6 +203,16 @@ extractor or handler runs. After a valid singleton token, Torii applies
 route-level access/rate policy, then exact `Content-Type` validation, then
 command-header validation, and only then decodes the body.
 
+Every typed `POST /v1/soracloud/*` operation has its own sealed route-local
+canonical-account boundary. Torii bounds the exact body and authenticates its
+method, path, exact runtime `NetworkId`, freshness nonce, and account signer
+before a typed extractor or SoraCloud handler runs; the same verified principal
+then feeds the account/origin rate and in-flight gates. The route catalog marks
+the ciphertext query as a bounded read, private uploaded-model execution as
+expensive compute, and all retained or ledger-changing commands as mutations.
+This rule does not apply to the separately cataloged public-runtime gateway
+exceptions below.
+
 Those admission and authentication failures also take precedence over strict
 `Accept` coalescing and negotiation. A syntactically valid supported `Accept`
 preference is honored for the primary rejection; malformed, non-ASCII, or
@@ -226,7 +236,7 @@ authentication and network policy rather than by claiming a separate socket.
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
 | `GET /openapi`, `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only |
-| `GET /v1/mcp`, `POST /v1/mcp` | protocol | capability document / MCP JSON-RPC | MCP/auth policy | tool transport, not ordinary generated REST operations |
+| `GET /v1/mcp`, `POST /v1/mcp` | protocol | capability document / MCP JSON-RPC | GET is public; POST is a bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not ordinary generated REST operations |
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
 | `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced bootstrap/session, rate-limit, lockout, and WebAuthn challenge policy | credential exchange cannot require an already-established operator request signature; it never enters SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |

@@ -2197,6 +2197,8 @@ fn process_ingest_file(
     request_params.sequence = sequence;
     request_params = request_params.with_client_blob_id(manifest_hash);
     let request = da::build_da_request(
+        config.network_id,
+        config.account.clone(),
         payload_bytes,
         &request_params,
         combined_metadata,

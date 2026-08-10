@@ -101,6 +101,41 @@ contradictory verification responses, and Merkle paths whose direction/length
 does not match the advertised bundle location. Requests are capped at 64 KiB
 and buffered responses at 8 MiB.
 
+## Authoritative Sumeragi status and operational diagnostics
+
+`HttpClientTransport.getSumeragiStatus()` reads only
+`GET /v1/sumeragi/status` into the closed protocol-v4
+`SumeragiStatusModels.SumeragiV2Status` model.
+`getSumeragiDiagnostics()` separately reads
+`GET /v1/sumeragi/diagnostics` into
+`SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus`; diagnostics are durable
+operational evidence and must not be treated as consensus authority.
+
+```java
+final SumeragiStatusModels.SumeragiV2Status status =
+    transport.getSumeragiStatus().join();
+assert status.protocolVersion() == 4;
+System.out.printf(
+    "height=%s view=%s leader=%s%n",
+    status.height(), status.view(), status.leader());
+
+final SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus diagnostics =
+    transport.getSumeragiDiagnostics().join();
+for (SumeragiDiagnosticsModels.NativeAmxParticipantApplication row
+    : diagnostics.nativeAmxParticipantApplications()) {
+  System.out.printf(
+      "lane=%d height=%s state=%s%n",
+      row.laneId(), row.participantHeight(), row.state());
+}
+```
+
+Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
+at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
+type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
+fields and tags, and current Native AMX V2 evidence. The parsers reject
+status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
+participant rows, and inconsistent carrier identities.
+
 ## Offline peer transport V1 (Java)
 
 The first-release peer transport has one wire family only: IPM1 messages,
@@ -1192,14 +1227,19 @@ HTTP requests:
 ```java
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
+NetworkId networkId = NetworkId.parse("<genesis-derived checksummed hash literal>");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders(networkId, "get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
-Signatures cover the canonical method/path/query/body layout plus freshness
-metadata, matching the Rust verifier Torii uses on app-facing endpoints.
+Signatures cover the exact genesis-derived `NetworkId`, canonical
+method/path/query/body layout, and freshness metadata. Labels and legacy chain
+identifiers are never accepted as a signing domain.
+Raw `witness_base64` body authentication is not exposed; multisig writes must
+use a canonical signed transaction or a closed typed signed intent.
 
 ### Sora VPN native lease flow
 
@@ -1541,8 +1581,8 @@ or compatibility-only payload in the Java resource directory.
 registry surface without reflection, Android framework dependencies, or legacy
 wire aliases. The signer-free client exposes all twelve typed
 `/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
-immutable namespace bindings, SemVer requirement ASTs, chain/genesis lock
-identity, finalized cursors, and authoritative archive commitments. Unknown
+immutable namespace bindings, SemVer requirement ASTs, one exact genesis-derived
+`NetworkId`, finalized cursors, and authoritative archive commitments. Unknown
 fields, unsupported versions, and duplicate parent-local dependency aliases
 fail closed.
 

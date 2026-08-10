@@ -8,9 +8,10 @@
 //! refuses every operational requirement while any corresponding handoff is
 //! open.
 //!
-//! The audit is not release evidence and is not consumed by readiness yet.  It
-//! exists so that connecting it later is an explicit, reviewable change rather
-//! than an inference from types, digests, or a structurally valid proof shell.
+//! The release manifest and readiness gate consume the complete audit digest,
+//! blocker mask, and aggregate availability. This makes later implementation
+//! flips reviewable without allowing an unrelated readiness bit to bypass an
+//! open receipt handoff.
 
 #![allow(
     dead_code,
@@ -93,8 +94,8 @@ pub(super) struct ZkAmsMkheReceiptCapabilityAuditV1 {
     pub(super) native_materialized_hyrax_receipt_sealed: bool,
     /// The terminal prover consumes that native materialized-opening receipt.
     pub(super) terminal_prover_consumes_native_materialized_receipt: bool,
-    /// Whether the frozen RNS-Link family geometry equals native release
-    /// materialization (`X=89`, replicated `U=1_048_576`).
+    /// Whether native release geometry (`X=89`, replicated `U=1_048_576`) is
+    /// enforced end to end from state-owned openings through proof checking.
     pub(super) rns_link_family_geometry_matches_native: bool,
     /// Whether the wire carries enough authenticated data to verify all 38
     /// radix/CRT-carry and negacyclic-quotient response equations.
@@ -110,7 +111,7 @@ pub(super) struct ZkAmsMkheReceiptCapabilityAuditV1 {
     pub(super) split_decryption_receipts_enforced: bool,
     /// The approximately 1,855-bit smudge relation proves equality to the CPK secret.
     pub(super) persistent_decryption_equality_complete: bool,
-    /// The decryption-use selector structurally binds roster, epoch, ciphertext,
+    /// The opaque context-issued party use binds roster, epoch, ciphertext,
     /// statement, record, sample, and commitment transcript replay axes.
     pub(super) persistent_decryption_replay_axes_specified: bool,
     /// Exact open-handoff bit set.
@@ -199,14 +200,18 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
         // Canonical decoding is only structural.  It explicitly returns an
         // unverified envelope and cannot mint an algebraic receipt.
         rns_link_transport_bound: true,
-        // These are genuine in-process checks over state-owned witnesses. They
-        // do not turn producer-controlled wire responses into proof evidence.
+        // These are genuine in-process checks over state-owned witnesses. The
+        // native BGV openings are now consumed as one pointer-tied 43-opening
+        // set, but its result remains unverified metadata and does not turn
+        // producer-controlled wire responses into proof evidence.
         native_bgv_opening_receipt_sealed: true,
         native_materialized_hyrax_receipt_sealed: true,
         terminal_prover_consumes_native_materialized_receipt: true,
-        // Native materialization has 89 public inputs in one X chunk and
-        // repeats U across all 1,048,576 error rows (16 chunks); the frozen
-        // shell instead declares X as 524,288 values and U as one value.
+        // The private schema and packed-state preflight now describe 89 public
+        // inputs in one X chunk and replicated U in 16 chunks, and all 43
+        // native openings are tied to that exact owner/order. This stays false
+        // until the unverified result feeds a complete proof verifier, so
+        // matching native objects cannot be mistaken for algebraic equality.
         rns_link_family_geometry_matches_native: false,
         // A point, one evaluation scalar, and one nonzero response per section
         // do not encode opening/IPA equations for either relation.
@@ -217,8 +222,13 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
         // decryption statements without an RNS-Link receipt parameter.
         terminal_materialization_receipt_enforced: false,
         split_decryption_receipts_enforced: false,
-        // The commitment/use selector exists, but no complete wide relation
-        // links the smudge witness and decryption share to that commitment.
+        // One atomic ceremony call consumes all eight complete CPK verifier
+        // capabilities and emits both the secret-free ordered context and the
+        // move-only bindings admitted into party states. The retained context
+        // binds fresh use sets to later statements. Prove/verify/split/
+        // reconstruct bind its actual points to the shared-secret transcript.
+        // Keep this false until the transitive short-solution/SIS equality
+        // argument and replacement release-size KAT are certified.
         persistent_decryption_equality_complete: false,
         persistent_decryption_replay_axes_specified: true,
         blocker_mask: 0,
@@ -235,8 +245,8 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
 /// structurally decoded RNS-Link envelope as a substitute.
 ///
 /// This function currently returns [`ZkAmsMkheErrorV1::ReleaseUnavailable`]
-/// for every consumer.  It is intentionally ready for a future readiness or
-/// admission caller, but is not itself evidence that such a caller is wired.
+/// for every consumer. The manifest/readiness binding records that fact but is
+/// not itself evidence that an operational consumer is wired.
 pub(super) fn require_zk_ams_mkhe_receipt_capability_v1(
     consumer: ZkAmsMkheReceiptCapabilityConsumerV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -347,9 +357,8 @@ mod tests {
     use crate::vega::zk_ams::mkhe::{
         active::ZkAmsMkheGovernedActiveRosterV1,
         active_exact_binding::{
-            PersistentDecryptionUseSelectorV1, VerifiedDirectRelationProofReceiptV1,
-            VerifiedPersistentWitnessBindingSetV1, VerifiedPersistentWitnessBindingV1,
-            VerifiedPersistentWitnessDecryptionUseV1, VerifiedPersistentWitnessDirectRelationUseV1,
+            VerifiedDirectRelationProofReceiptV1, VerifiedPersistentWitnessBindingV1,
+            VerifiedPersistentWitnessDirectRelationUseV1,
             mint_collective_secret_binding_from_verified_cpk_v1,
             verify_and_consume_direct_relation_use_v1,
         },
@@ -358,20 +367,26 @@ mod tests {
             ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
             aggregate_zk_ams_mkhe_collective_public_key_v1,
         },
-        cpk_relation::VerifiedZkAmsMkheCpkBindingSourceV1,
+        cpk_relation::{VerifiedZkAmsMkheCpkBindingSourceV1, VerifiedZkAmsMkheCpkContributionV1},
         decryption::{
             ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheDecryptionSplitTransportV1,
             ZkAmsMkheDecryptionStatementV1, split_zk_ams_mkhe_decryption_share_v1,
         },
         manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
-        packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1},
+        persistent_decryption_equality::{
+            ZkAmsMkhePersistentDecryptionPartyUseV1,
+            ZkAmsMkhePersistentDecryptionVerificationContextV1,
+            prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1,
+        },
         phase23_encrypted::{
             ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23PackedAccumulatorSetV1,
             zk_ams_phase23_materialize_release_accumulators_v1,
         },
         phase23_rns_link::{
-            VerifiedZkAmsPhase23NativeBgvOpeningV1, ZkAmsPhase23RnsLinkChunkCommitmentV1,
-            ZkAmsPhase23RnsLinkContextV1, verify_zk_ams_phase23_native_bgv_opening_v1,
+            StateOwnedRnsLinkAccumulatorOpeningsV1,
+            ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
+            ZkAmsPhase23RnsLinkChunkCommitmentV1, ZkAmsPhase23RnsLinkContextV1,
+            ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
         },
         phase23_rns_link_wire::ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
     };
@@ -389,18 +404,30 @@ mod tests {
             [u8; 32],
             [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
         ) -> Result<ZkAmsMkheCollectivePublicKeyV1, ZkAmsMkheErrorV1>;
-    type BindDecryptionUseV1 =
-        for<'a, 'b> fn(
-            &'a VerifiedPersistentWitnessBindingSetV1,
-            &'b ZkAmsMkheGovernedActiveRosterV1,
-            PersistentDecryptionUseSelectorV1,
-        )
-            -> Result<VerifiedPersistentWitnessDecryptionUseV1, ZkAmsMkheErrorV1>;
+    type PrepareSecretFreePersistentDecryptionV1 = for<'a, 'b> fn(
+        &'a ZkAmsMkheGovernedActiveRosterV1,
+        ZkAmsMkheDecryptionStatementV1<'b>,
+        [VerifiedZkAmsMkheCpkContributionV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    ) -> Result<
+        (
+            ZkAmsMkhePersistentDecryptionVerificationContextV1,
+            [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+            [VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        ),
+        ZkAmsMkheErrorV1,
+    >;
     type VerifyDirectRelationV1 =
         fn(
             VerifiedPersistentWitnessDirectRelationUseV1,
             &[u8],
         ) -> Result<VerifiedDirectRelationProofReceiptV1, ZkAmsMkheErrorV1>;
+    type BindPersistentDecryptionStatementV1 = for<'a, 'b> fn(
+        &'a ZkAmsMkhePersistentDecryptionVerificationContextV1,
+        ZkAmsMkheDecryptionStatementV1<'b>,
+    ) -> Result<
+        [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        ZkAmsMkheErrorV1,
+    >;
     type DecodeBoundRnsLinkV1 = for<'a, 'b> fn(
         &'a [u8],
         ZkAmsPhase23RnsLinkContextV1,
@@ -409,14 +436,45 @@ mod tests {
         ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
         ZkAmsMkheErrorV1,
     >;
-    type VerifyNativeBgvOpeningV1 =
+    type BeginStateOwnedNativeBgvOpeningsV1 =
         for<'a> fn(
+            &'a ZkAmsPhase23PackedAccumulatorSetV1,
             &'a ZkAmsMkheCollectivePublicKeyV1,
-            ZkAmsT256PackingLayoutV1,
-            &'a ZkAmsT256PackedPlaintextV1,
-            &'a ZkAmsMkheCollectiveCiphertextV1,
-            ZkAmsMkheCollectiveEncryptionOpeningV1,
-        ) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1<'a>, ZkAmsMkheErrorV1>;
+            [&'a ZkAmsMkheCollectiveCiphertextV1;
+                ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
+        ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1>;
+    type AbsorbStateOwnedNativeBgvOpeningV1 = for<'a> fn(
+        &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
+        ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ) -> Result<(), ZkAmsMkheErrorV1>;
+    type FinishStateOwnedNativeBgvOpeningsV1 = for<'a> fn(
+        StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
+    ) -> Result<
+        ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
+        ZkAmsMkheErrorV1,
+    >;
+
+    fn begin_state_owned_native_bgv_openings_v1<'a>(
+        packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
+        common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
+        ciphertexts: [&'a ZkAmsMkheCollectiveCiphertextV1;
+            ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
+    ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1> {
+        StateOwnedRnsLinkAccumulatorOpeningsV1::new(packed_owner, common_key, ciphertexts)
+    }
+
+    fn absorb_state_owned_native_bgv_opening_v1<'a>(
+        stream: &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
+        opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        stream.absorb_next_opening_v1(opening)
+    }
+
+    fn finish_state_owned_native_bgv_openings_v1<'a>(
+        stream: StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
+    ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
+        stream.finish_into_unverified_metadata_v1()
+    }
     type MaterializeWithoutReceiptV1 =
         fn(
             [u8; 32],
@@ -427,23 +485,30 @@ mod tests {
             u8,
             &ZkAmsPhase23PackedAccumulatorSetV1,
         ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1>;
-    type SplitWithoutReceiptV1 =
-        for<'a, 'b> fn(
+    type SplitWithPersistentReceiptV1 =
+        for<'a, 'b, 'c> fn(
             ZkAmsMkheDecryptionStatementV1<'a>,
-            &'b ZkAmsMkheAuthenticatedDecryptionShareV1,
-        ) -> Result<ZkAmsMkheDecryptionSplitTransportV1, ZkAmsMkheErrorV1>;
+            &'b ZkAmsMkhePersistentDecryptionVerificationContextV1,
+            &'c ZkAmsMkheAuthenticatedDecryptionShareV1,
+        )
+            -> Result<ZkAmsMkheDecryptionSplitTransportV1, ZkAmsMkheErrorV1>;
 
     #[test]
     fn source_surface_guards_distinguish_receipts_from_bypasses() {
         let _: MintCpkBindingV1 = mint_collective_secret_binding_from_verified_cpk_v1;
         let _: AggregateCpkWithoutReceiptV1 = aggregate_zk_ams_mkhe_collective_public_key_v1;
-        let _: BindDecryptionUseV1 = VerifiedPersistentWitnessBindingSetV1::bind_decryption_use;
+        let _: PrepareSecretFreePersistentDecryptionV1 =
+            prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1;
+        let _: BindPersistentDecryptionStatementV1 =
+            ZkAmsMkhePersistentDecryptionVerificationContextV1::bind_statement_v1;
         let _: VerifyDirectRelationV1 = verify_and_consume_direct_relation_use_v1;
         let _: DecodeBoundRnsLinkV1 =
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified;
-        let _: VerifyNativeBgvOpeningV1 = verify_zk_ams_phase23_native_bgv_opening_v1;
+        let _: BeginStateOwnedNativeBgvOpeningsV1 = begin_state_owned_native_bgv_openings_v1;
+        let _: AbsorbStateOwnedNativeBgvOpeningV1 = absorb_state_owned_native_bgv_opening_v1;
+        let _: FinishStateOwnedNativeBgvOpeningsV1 = finish_state_owned_native_bgv_openings_v1;
         let _: MaterializeWithoutReceiptV1 = zk_ams_phase23_materialize_release_accumulators_v1;
-        let _: SplitWithoutReceiptV1 = split_zk_ams_mkhe_decryption_share_v1;
+        let _: SplitWithPersistentReceiptV1 = split_zk_ams_mkhe_decryption_share_v1;
     }
 
     #[test]

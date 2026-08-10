@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Optional
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -94,7 +95,7 @@ private class WalletSignature(val algorithm: Int, signature: ByteArray) {
     val signature: ByteArray = signature.copyOf()
 }
 
-private class Constraints(val chainId: String)
+private class Constraints(val networkId: NetworkId)
 
 private val DIRECTION_ADAPTER: TypeAdapter<ConnectDirection> =
     object : TypeAdapter<ConnectDirection> {
@@ -127,11 +128,15 @@ private val ROLE_ADAPTER: TypeAdapter<ConnectRole> =
 private val CONSTRAINTS_ADAPTER: TypeAdapter<Constraints> =
     object : TypeAdapter<Constraints> {
         override fun encode(encoder: NoritoEncoder, value: Constraints) {
-            STRING.encode(encoder, value.chainId)
+            encoder.writeBytes(value.networkId.bytes())
         }
 
-        override fun decode(decoder: NoritoDecoder): Constraints =
-            Constraints(STRING.decode(decoder))
+        override fun decode(decoder: NoritoDecoder): Constraints {
+            require(decoder.remaining() == NetworkId.BYTE_LENGTH) {
+                "Connect NetworkId must contain exactly ${NetworkId.BYTE_LENGTH} bytes"
+            }
+            return Constraints(NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH)))
+        }
     }
 
 private val WALLET_SIGNATURE_ADAPTER: TypeAdapter<WalletSignature> =
@@ -357,7 +362,7 @@ object ConnectFrameCodec {
         skipLengthPrefixedField(cursor, "open.permissions")
         cursor.ensureFullyConsumed("open control")
 
-        val open = OpenControl(appPk, constraints.chainId)
+        val open = OpenControl(appPk, constraints.networkId)
         return DecodedFrame(sid, direction, sequence, FrameType.OPEN, open, null, null, null)
     }
 

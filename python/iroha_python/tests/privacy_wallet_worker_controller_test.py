@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-
 MODULE_PATH = Path(__file__).parents[1] / "src/iroha_python/privacy_wallet_worker.py"
 SPEC = importlib.util.spec_from_file_location("privacy_wallet_worker_source", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -67,8 +66,7 @@ class FakeProcess:
 def binding() -> worker.PrivacyWalletWitnessBindingV1:
     intent = b'{"public":"intent"}'
     return worker.PrivacyWalletWitnessBindingV1(
-        chain_id="taira-testnet",
-        genesis_digest=b"\x11" * 32,
+        network_id=b"\x11" * 32,
         signer_wallet_id="wallet-1",
         protocol_id=PROTOCOL,
         compiled_profile_digest=b"\x22" * 32,
@@ -107,7 +105,7 @@ def lease_payload(*, handle: bytes = b"\x51" * 32) -> bytes:
     )
 
 
-def signed_payload() -> bytes:
+def signed_payload(*, network_id: bytes = b"\x11" * 32) -> bytes:
     adaptive = b"adaptive-signed-wire"
     versioned = b"versioned-signed-wire"
     return b"".join(
@@ -115,7 +113,7 @@ def signed_payload() -> bytes:
             b"\x03",
             put_text(PROTOCOL),
             put_text(OPERATION),
-            put_text("taira-testnet"),
+            network_id,
             put_text("alice@wonderland"),
             put_text("ed0120" + "a" * 64),
             put_bytes_u32(adaptive),
@@ -207,17 +205,19 @@ def test_public_intent_digest_matches_the_rust_domain_contract() -> None:
         ({"protocol_id": "sis-with-hints"}, ValueError),
         ({"protocol_id": "jindo-lattice-pcs-zk-v0"}, ValueError),
         ({"protocol_id": "iroha-zk-x509-stark-p256-v0"}, ValueError),
-        ({"chain_id": " taira-testnet"}, ValueError),
+        ({"chain_id": "taira-testnet"}, TypeError),
+        ({"genesis_digest": b"\x11" * 32}, TypeError),
+        ({"network_id": b"\0" * 32}, ValueError),
+        ({"network_id": b"\x10" * 32}, ValueError),
         ({"nonce": b"\0" * 32}, ValueError),
-        ({"genesis_digest": bytearray(b"\x11" * 32)}, TypeError),
+        ({"network_id": bytearray(b"\x11" * 32)}, TypeError),
     ],
 )
-def test_binding_rejects_aliases_controls_zero_and_mutable_digests(
+def test_binding_rejects_retired_fields_aliases_zero_and_mutable_digests(
     change: dict[str, object], exception: type[Exception]
 ) -> None:
     values = {
-        "chain_id": "taira-testnet",
-        "genesis_digest": b"\x11" * 32,
+        "network_id": b"\x11" * 32,
         "signer_wallet_id": "wallet-1",
         "protocol_id": PROTOCOL,
         "compiled_profile_digest": b"\x22" * 32,
@@ -269,6 +269,8 @@ def test_import_transports_only_absolute_path_and_public_binding(
     assert command == worker.PrivacyWalletWorkerCommandV1.IMPORT
     assert sequence == 1
     assert os.fspath(credential_path).encode() in payload
+    assert b"\x11" * 32 in payload
+    assert b"taira-testnet" not in payload
     assert witness_sentinel not in payload
 
 
@@ -335,13 +337,40 @@ def test_execute_api_has_no_witness_or_bundle_byte_parameter_and_returns_typed_p
     )
     assert isinstance(result, worker.PrivacyWalletSignedActionV1)
     assert result.protocol_id == PROTOCOL
-    assert result.chain_id == "taira-testnet"
+    assert result.network_id == b"\x11" * 32
+    assert not hasattr(result, "chain_id")
     assert result.adaptive_signed_transaction == b"adaptive-signed-wire"
     assert result.versioned_signed_transaction == b"versioned-signed-wire"
     [(command, sequence, payload)] = written_frames(process)
     assert (command, sequence) == (worker.PrivacyWalletWorkerCommandV1.EXECUTE, 1)
     assert b'{"public":"intent"}' in payload
     assert b'{"public":"plan"}' in payload
+
+
+def test_same_display_label_cannot_substitute_a_different_network_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first_display_label = "same-privacy-network-label"
+    second_display_label = "same-privacy-network-label"
+    assert first_display_label == second_display_label
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.EXECUTE,
+            1,
+            signed_payload(network_id=b"\x12" * 32),
+        ),
+    )
+    with pytest.raises(worker.PrivacyWalletWorkerErrorV1, match="identity"):
+        client.execute(
+            worker.PrivacyWalletWitnessHandleV1(b"\x51" * 32),
+            binding(),
+            canonical_public_intent=b'{"public":"intent"}',
+            canonical_execution_plan=b'{"public":"plan"}',
+        )
+    assert client.closed
+    assert process.killed
 
 
 @pytest.mark.parametrize("mutation", ["tag", "sequence", "command", "suffix", "truncate"])

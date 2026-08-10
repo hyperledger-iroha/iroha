@@ -10,31 +10,35 @@ fn court_permission_constant_matches_typed_permission() {
 
 #[test]
 fn custody_account_derivation_is_stable() {
-    let chain_id: iroha_data_model::ChainId = "00000000-0000-0000-0000-000000000001"
-        .parse()
-        .expect("chain id");
+    let network_id = escrow_test_network_id(1);
     let asset_definition: AssetDefinitionId =
         "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset");
     let escrow_id = EscrowId::new(Hash::new("escrow"));
-    let custody = escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+    let custody = escrow_custody_account_id(&network_id, &escrow_id, &asset_definition)
         .expect("custody account derivation succeeds");
     assert_eq!(
         custody,
-        escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+        escrow_custody_account_id(&network_id, &escrow_id, &asset_definition)
             .expect("custody account derivation is repeatable")
     );
-
-    let legacy_seed_material = format!(
-        "{ESCROW_CUSTODY_ACCOUNT_DOMAIN}|{}|{}|{asset_definition}",
-        chain_id.as_str(),
-        hex::encode(escrow_id.as_hash().as_ref()),
-    );
-    let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
-    let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
-        .expect("legacy public seed derives");
     assert_ne!(
         custody,
-        AccountId::new(legacy_keypair.public_key().clone()),
+        escrow_custody_account_id(&escrow_test_network_id(2), &escrow_id, &asset_definition,)
+            .expect("different exact network custody derivation succeeds"),
+        "same-label deployments with different genesis hashes need disjoint custody",
+    );
+
+    let mut public_seed_material = Vec::new();
+    public_seed_material.extend_from_slice(ESCROW_CUSTODY_ACCOUNT_DOMAIN.as_bytes());
+    public_seed_material.extend_from_slice(network_id.as_bytes());
+    public_seed_material.extend_from_slice(escrow_id.as_hash().as_ref());
+    public_seed_material.extend_from_slice(asset_definition.to_string().as_bytes());
+    let public_seed: [u8; Hash::LENGTH] = Hash::new(public_seed_material).into();
+    let public_seed_keypair = KeyPair::try_from_seed(public_seed.to_vec(), Algorithm::Ed25519)
+        .expect("public seed derives");
+    assert_ne!(
+        custody,
+        AccountId::new(public_seed_keypair.public_key().clone()),
         "protocol custody must not expose a signing key through public seed derivation"
     );
 }

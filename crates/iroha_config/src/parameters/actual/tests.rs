@@ -1344,6 +1344,12 @@ mod tests {
         assert_nexus_change("DA sampling policy", changed);
 
         let mut changed = nexus.clone();
+        changed.da.ingest_quota_window_blocks =
+            NonZeroU64::new(changed.da.ingest_quota_window_blocks.get() + 1)
+                .expect("incremented DA quota window stays non-zero");
+        assert_nexus_change("DA ingest quota policy", changed);
+
+        let mut changed = nexus.clone();
         changed.da.audit.interval += Duration::from_nanos(1);
         assert_nexus_change("DA audit policy", changed);
 

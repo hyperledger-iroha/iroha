@@ -69,7 +69,8 @@ pub enum Command {
     /// Contract alias helpers
     #[command(subcommand)]
     Alias(AliasCommand),
-    /// Derive a canonical contract address locally from authority, deploy nonce, and dataspace
+    /// Derive a canonical contract address locally from exact network identity, authority, nonce,
+    /// and dataspace
     DeriveAddress(DeriveAddressArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
     Call(CallArgs),
@@ -2226,9 +2227,9 @@ pub struct DeriveAddressArgs {
     /// Successful deploy nonce consumed for address derivation
     #[arg(long)]
     pub deploy_nonce: u64,
-    /// Exact chain identifier committed into the contract address
+    /// Exact genesis-derived network identity committed into the contract address
     #[arg(long)]
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Public network profile used to decode the authority account literal
     #[arg(long)]
     pub profile: Option<String>,
@@ -2253,7 +2254,7 @@ impl Run for DeriveAddressArgs {
             .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &self.chain_id,
+            &self.network_id,
             &authority,
             self.deploy_nonce,
             dataspace_id,
@@ -2266,7 +2267,7 @@ impl Run for DeriveAddressArgs {
             "dataspace": (self.dataspace),
             "dataspace_id": (dataspace_id.as_u64()),
             "deploy_nonce": (self.deploy_nonce),
-            "chain_id": (self.chain_id),
+            "network_id": (self.network_id),
             "profile": (profile_name),
             "chain_discriminant": (chain_discriminant),
             "contract_address": (contract_address),
@@ -5782,7 +5783,12 @@ mod tests {
         let arguments = ContractArgumentRecord::try_new(argument_bytes)
             .expect("bounded contract argument record");
         let contract_address =
-            ContractAddress::derive(&ctx.config().chain, &authority, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(
+                &ctx.config().network_id,
+                &authority,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
                 .expect("derive contract address");
 
         let fixture_domain =
@@ -5998,7 +6004,9 @@ mod tests {
     fn resolve_contract_target_accepts_contract_address() {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             1,
             iroha::data_model::nexus::DataSpaceId::new(0),

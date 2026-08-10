@@ -21,7 +21,7 @@ readonly CLAIM_PHYSICAL_CUT_FIXED_CONFIG="serve_scheduler_claim_physical_cut_fix
 readonly CLAIM_LOGICAL_OVERTAKE_BUG_CONFIG="serve_scheduler_claim_logical_overtake_bug.cfg"
 readonly CLAIM_RANKED_REENTRY_FIXED_CONFIG="serve_scheduler_claim_ranked_reentry_fixed.cfg"
 readonly CLAIM_RAW_DESCENT_BUG_CONFIG="serve_scheduler_claim_raw_descent_bug.cfg"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then

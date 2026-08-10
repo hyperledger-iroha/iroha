@@ -660,6 +660,7 @@ def onboard_account(
     alias: str,
     account_id: str,
     *,
+    network_id: str,
     onboarding_token: str,
     permissions: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -684,7 +685,11 @@ def onboard_account(
             "account onboarding planning failed: "
             f"status={plan_status} body={plan_response!r}"
         )
-    receipt = validate_onboarding_plan_receipt(plan_response, plan_request)
+    receipt = validate_onboarding_plan_receipt(
+        plan_response,
+        plan_request,
+        expected_network_id=network_id,
+    )
 
     apply_status, apply_response = _http_json(
         "POST",
@@ -718,6 +723,8 @@ def onboard_account(
 def validate_onboarding_plan_receipt(
     payload: Any,
     expected_request: dict[str, Any],
+    *,
+    expected_network_id: str,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("account onboarding plan receipt must be an object")
@@ -728,21 +735,27 @@ def validate_onboarding_plan_receipt(
         raise RuntimeError(
             "account onboarding plan receipt request differs from the submitted intent"
         )
-    for key in (
+    expected_body_keys = {
+        "version",
+        "request",
         "authority",
-        "chain_id",
+        "network_id",
         "anchor",
         "resource",
         "acquisition",
         "quote_guard",
         "instructions",
+        "owner_auto_renew_instruction",
         "valid_until_ms",
-    ):
-        if key not in body:
-            raise RuntimeError(f"account onboarding plan receipt body is missing {key}")
-    for key in ("plan_hash", "signature"):
-        if key not in payload:
-            raise RuntimeError(f"account onboarding plan receipt is missing {key}")
+    }
+    if set(body) != expected_body_keys:
+        raise RuntimeError("account onboarding plan receipt body has invalid fields")
+    if body.get("network_id") != expected_network_id:
+        raise RuntimeError(
+            "account onboarding plan receipt network_id differs from the exact local network"
+        )
+    if set(payload) != {"body", "plan_hash", "signature"}:
+        raise RuntimeError("account onboarding plan receipt has invalid fields")
     return payload
 
 
@@ -1138,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
             args.torii_root,
             alias,
             account_id,
+            network_id=network_id,
             onboarding_token=onboarding_token,
             permissions=args.permissions,
         )

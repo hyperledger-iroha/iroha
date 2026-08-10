@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import tempfile
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "run_sumeragi_v2_100k_chaos.sh"
+PROCESS_POLICY = ROOT_DIR / "scripts" / "sumeragi_v2_release_process_policy.sh"
+MARKER_PUBLISHER = ROOT_DIR / "scripts" / "publish_release_marker.py"
 MANIFEST = "a" * 64
 HEAD = "1" * 40
 TREE = "2" * 40
@@ -57,6 +62,13 @@ CHAOS_FIELDS = {
     "under_quorum_interval": "97",
     "certificate_source": "external_fixture",
 }
+_EXTERNAL_ROOTS: list[Path] = []
+
+
+@atexit.register
+def _cleanup_external_roots() -> None:
+    for root in _EXTERNAL_ROOTS:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _fixture(
@@ -77,6 +89,8 @@ def _fixture(
     bin_dir.mkdir()
     launcher = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, launcher)
+    shutil.copy2(PROCESS_POLICY, scripts / PROCESS_POLICY.name)
+    shutil.copy2(MARKER_PUBLISHER, scripts / MARKER_PUBLISHER.name)
 
     harness = formal / "run_sumeragi_v2_harness.sh"
     harness.write_text(
@@ -164,8 +178,11 @@ case "${{1:-}}" in
       printf '%s\n' '{identity}'
     fi
     ;;
-  *seal_workspace_source.py) exit 0 ;;
-  *) exec /usr/bin/python3 "$@" ;;
+  *seal_workspace_source.py)
+    printf '%s\n' "$*" >>"$CHAOS_SEAL_CAPTURE"
+    exit 0
+    ;;
+  *) exec "$CHAOS_REAL_PYTHON3" "$@" ;;
 esac
 """,
         encoding="utf-8",
@@ -177,8 +194,23 @@ esac
     env["CHAOS_FAKE_RUN_MODE"] = run_mode
     env["CHAOS_IDENTITY_COUNTER"] = str(counter)
     env["CHAOS_DRIFT_AFTER"] = str(drift_after)
+    env["CHAOS_REAL_PYTHON3"] = sys.executable
+    env["CHAOS_SEAL_CAPTURE"] = str(tmp_path / "seal-invocations.log")
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = manifest
-    evidence = tmp_path / "evidence"
+    external_root = Path(
+        tempfile.mkdtemp(prefix="iroha-chaos-launcher-test-", dir="/private/tmp")
+    )
+    _EXTERNAL_ROOTS.append(external_root)
+    target = external_root / "target"
+    artifacts = external_root / "artifacts"
+    target.mkdir(mode=0o700)
+    artifacts.mkdir(mode=0o700)
+    env["CARGO_TARGET_DIR"] = str(target)
+    env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifacts)
+    env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        external_root / "cancel-request.json"
+    )
+    evidence = artifacts / "evidence"
     env["SUMERAGI_V2_CHAOS_EVIDENCE_DIR"] = str(evidence)
     return launcher, env, evidence
 
@@ -202,8 +234,9 @@ def _invocation(evidence: Path) -> Path:
 
 def test_chaos_launcher_publishes_source_bound_completion(tmp_path: Path) -> None:
     launcher, env, evidence = _fixture(tmp_path)
-    pointer = tmp_path / "chaos-completion-path"
+    pointer = Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "chaos-completion-path"
     env["IROHA_CHAOS_COMPLETION_PATH_FILE"] = str(pointer)
+    env["IROHA_RELEASE_SEALED_WORKTREE"] = "1"
 
     result = _run(launcher, env)
 
@@ -222,12 +255,16 @@ def test_chaos_launcher_publishes_source_bound_completion(tmp_path: Path) -> Non
     assert fields["cargo_lock_sha256"] == LOCK
     for field, expected in CHAOS_FIELDS.items():
         assert fields[field] == expected
+    seal_invocations = Path(env["CHAOS_SEAL_CAPTURE"]).read_text(encoding="utf-8")
+    assert "--verify --root" in seal_invocations
+    assert "--no-writable-paths" in seal_invocations
+    assert "--writable target" not in seal_invocations
     assert not (evidence / ".chaos-100k.lock").exists()
 
 
 def test_chaos_launcher_rejects_post_run_identity_drift(tmp_path: Path) -> None:
     launcher, env, evidence = _fixture(tmp_path, drift_after=2)
-    pointer = tmp_path / "chaos-completion-path"
+    pointer = Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "chaos-completion-path"
     env["IROHA_CHAOS_COMPLETION_PATH_FILE"] = str(pointer)
 
     result = _run(launcher, env)
@@ -289,6 +326,35 @@ def test_chaos_launcher_rejects_duplicate_completion_evidence(tmp_path: Path) ->
 
 def test_chaos_launcher_refuses_stale_writer_lock(tmp_path: Path) -> None:
     launcher, env, evidence = _fixture(tmp_path)
+
+    partial_env = env.copy()
+    partial_env.pop("IROHA_RELEASE_ARTIFACT_ROOT")
+    partial_env.pop("IROHA_RELEASE_CANCEL_REQUEST_PATH")
+    partial = _run(launcher, partial_env)
+    assert partial.returncode == 2
+    assert "must be supplied all-or-none" in partial.stderr
+    assert not evidence.exists()
+
+    escaped_env = env.copy()
+    escaped = tmp_path / "escaped-evidence"
+    escaped_env["SUMERAGI_V2_CHAOS_EVIDENCE_DIR"] = str(escaped)
+    escaped_result = _run(launcher, escaped_env)
+    assert escaped_result.returncode == 2
+    assert "escapes its authenticated root" in escaped_result.stderr
+    assert not escaped.exists()
+
+    cancel_path = Path(env["IROHA_RELEASE_CANCEL_REQUEST_PATH"])
+    cancel_path.write_text(
+        '{"reason":"operator-request","schema_version":1}\n',
+        encoding="utf-8",
+    )
+    cancel_path.chmod(0o600)
+    cancelled = _run(launcher, env)
+    assert cancelled.returncode == 125
+    assert "chaos-100k:entry" in cancelled.stderr
+    assert not evidence.exists()
+    cancel_path.unlink()
+
     lock = evidence / ".chaos-100k.lock"
     lock.mkdir(parents=True)
 

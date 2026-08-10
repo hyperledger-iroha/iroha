@@ -7,8 +7,12 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 public final class CanonicalRequestSignerTests {
+
+  private static final NetworkId NETWORK_ID = TestNetworkIds.canonical();
 
   private CanonicalRequestSignerTests() {}
 
@@ -18,6 +22,7 @@ public final class CanonicalRequestSignerTests {
     unsignedBodyAuthJsonRemovesOnlyTopLevelProofFields();
     callbackBodySignatureReceivesCanonicalMessage();
     canonicalAuthRejectsPaddedFreshnessAndAccountFields();
+    canonicalAuthCannotReplayAcrossSameLabelNetworks();
     System.out.println("[IrohaAndroid] Canonical request signer tests passed.");
   }
 
@@ -35,7 +40,7 @@ public final class CanonicalRequestSignerTests {
     final String nonce = "callback-header-nonce";
     final byte[] expectedMessage =
         CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            "post", uri, body, timestampMs, nonce);
+            NETWORK_ID, "post", uri, body, timestampMs, nonce);
     final byte[] expectedSignature = fakeSignature(expectedMessage);
     final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
     final ToriiCanonicalRequestAuth auth =
@@ -49,7 +54,8 @@ public final class CanonicalRequestSignerTests {
             nonce);
 
     final Map<String, String> headers =
-        CanonicalRequestSigner.buildHeaders("post", uri, body, auth, timestampMs, nonce);
+        CanonicalRequestSigner.buildHeaders(
+            NETWORK_ID, "post", uri, body, auth, timestampMs, nonce);
 
     assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback header message mismatch";
     assert "alice".equals(headers.get(CanonicalRequestSigner.HEADER_ACCOUNT))
@@ -72,7 +78,7 @@ public final class CanonicalRequestSignerTests {
     body.put("z", "last");
     body.put(CanonicalRequestSigner.BODY_SIGNATURE_BASE64, "remove");
     body.put("nested", nested);
-    body.put(CanonicalRequestSigner.BODY_WITNESS_BASE64, "remove-too");
+    body.put("witness_base64", "remove-too");
     body.put(CanonicalRequestSigner.BODY_ACCOUNT_ID, "alice");
     body.put(CanonicalRequestSigner.BODY_TIMESTAMP_MS, 7L);
     body.put(CanonicalRequestSigner.BODY_NONCE, "n");
@@ -103,10 +109,11 @@ public final class CanonicalRequestSignerTests {
     body.put("operation_id", "operation-2");
 
     final Map<String, Object> signed =
-        CanonicalRequestSigner.withBodySignature("post", uri, body, auth, timestampMs, nonce);
+        CanonicalRequestSigner.withBodySignature(
+            NETWORK_ID, "post", uri, body, auth, timestampMs, nonce);
     final byte[] expectedMessage =
         CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
-            "post", uri, signed, timestampMs, nonce);
+            NETWORK_ID, "post", uri, signed, timestampMs, nonce);
 
     assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback body message mismatch";
     assert "alice".equals(signed.get(CanonicalRequestSigner.BODY_ACCOUNT_ID))
@@ -119,7 +126,7 @@ public final class CanonicalRequestSignerTests {
             .encodeToString(fakeSignature(expectedMessage))
             .equals(signed.get(CanonicalRequestSigner.BODY_SIGNATURE_BASE64))
         : "callback body signature mismatch";
-    assert !signed.containsKey(CanonicalRequestSigner.BODY_WITNESS_BASE64)
+    assert !signed.containsKey("witness_base64")
         : "callback body auth must not include witness";
   }
 
@@ -133,11 +140,12 @@ public final class CanonicalRequestSignerTests {
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.canonicalRequestSignatureMessage(
-                "post", uri, bodyBytes, timestampMs, " nonce"),
+                NETWORK_ID, "post", uri, bodyBytes, timestampMs, " nonce"),
         "padded signature nonce");
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.buildHeaders(
+                NETWORK_ID,
                 "post",
                 uri,
                 bodyBytes,
@@ -148,6 +156,7 @@ public final class CanonicalRequestSignerTests {
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.buildHeaders(
+                NETWORK_ID,
                 "post",
                 uri,
                 bodyBytes,
@@ -158,6 +167,7 @@ public final class CanonicalRequestSignerTests {
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.withBodySignature(
+                NETWORK_ID,
                 "post",
                 uri,
                 body,
@@ -168,6 +178,7 @@ public final class CanonicalRequestSignerTests {
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.withBodySignature(
+                NETWORK_ID,
                 "post",
                 uri,
                 body,
@@ -175,11 +186,29 @@ public final class CanonicalRequestSignerTests {
                 timestampMs,
                 "nonce "),
         "padded body nonce");
-    assertIllegalArgument(
-        () ->
-            CanonicalRequestSigner.withBodyWitness(
-                body, "alice", timestampMs, "nonce", " witness"),
-        "padded witness");
+  }
+
+  private static void canonicalAuthCannotReplayAcrossSameLabelNetworks() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/accounts?label=same");
+    final byte[] canonical =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            NETWORK_ID,
+            "GET",
+            uri,
+            new byte[0],
+            1_717_171_717_003L,
+            "network-bound-nonce");
+    final byte[] foreign =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            TestNetworkIds.fromSeed(7L),
+            "GET",
+            uri,
+            new byte[0],
+            1_717_171_717_003L,
+            "network-bound-nonce");
+
+    assert !Arrays.equals(canonical, foreign)
+        : "same-label requests on different genesis networks must not share signing bytes";
   }
 
   private static void assertIllegalArgument(final Runnable body, final String label) {

@@ -385,6 +385,8 @@ erasure profile, retention policy, optional metadata, and signing material:
 
 ```swift
 var submission = ToriiDaBlobSubmission(
+    networkId: networkId,                       // exact genesis-derived NetworkId
+    owner: authorityI105,                       // canonical authenticated AccountId
     payload: payloadData,
     laneId: 42,
     epoch: 7,
@@ -408,12 +410,16 @@ retention tag). When the NoritoBridge XCFramework is linked the builder hashes t
 automatically, but environments without the bridge must still provide a 32-byte `clientBlobId`
 (the CLI’s `blake3(payload)` output matches). Signers can pass a raw Ed25519 seed (`privateKey`),
 hex string (`privateKeyHex`), or a pre-computed `signatureHex` +
-`submitterPublicKeyHex`. Metadata entries accept raw `Data` values with visibility/encryption flags so the
-JSON matches Torii’s Norito schema.
+`signerPublicKeyHex`. The builder always produces a signed request, including
+for `noSubmit` artifact preparation. Its digest binds the exact `NetworkId`,
+canonical owner controller bytes, lane/epoch/sequence, canonical payload BLAKE3
+commitment and length, and the complete request-content commitment. Metadata
+entries accept raw `Data` values with visibility/encryption flags so the JSON
+matches Torii’s Norito schema.
 
 `submitDaBlob` returns `ToriiDaIngestSubmitResult` which exposes the acceptance status, the optional
 `ToriiDaIngestReceipt` (decoded digests, queued timestamp, operator signature, `rentQuote` micro values),
-the `sora-pdp-commitment` response header, and the signing artefacts (client blob id, submitter, signature)
+the `sora-pdp-commitment` response header, and the signing artefacts (client blob id, payload hash, signer, signature)
 that were sent to Torii.
 
 ## Hardware Acceleration

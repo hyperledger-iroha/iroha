@@ -201,7 +201,7 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
             expected_deploy_nonce: 0,
             contract_address: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 &authority,
                 0,
                 DataSpaceId::UNIVERSAL,

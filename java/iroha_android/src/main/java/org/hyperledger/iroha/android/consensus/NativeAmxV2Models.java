@@ -4,12 +4,12 @@
 package org.hyperledger.iroha.android.consensus;
 
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
 
 /**
@@ -210,8 +210,8 @@ public final class NativeAmxV2Models {
       return unsigned64(delegate.getEpoch(), "attestation.epoch");
     }
 
-    public ConsensusHash chainIdHash() {
-      return new ConsensusHash(delegate.getChainIdHash());
+    public NetworkId networkId() {
+      return NetworkId.parse(delegate.getNetworkId().getLiteral());
     }
 
     public SourceId sourceId() {
@@ -703,8 +703,8 @@ public final class NativeAmxV2Models {
       return new SourceId(delegate.getSourceId());
     }
 
-    public ConsensusHash chainIdHash() {
-      return new ConsensusHash(delegate.getChainIdHash());
+    public NetworkId networkId() {
+      return NetworkId.parse(delegate.getNetworkId().getLiteral());
     }
 
     public ConsensusHash planDigest() {
@@ -830,7 +830,8 @@ public final class NativeAmxV2Models {
 
   /** Parse and strictly validate UTF-8 Native AMX receipt-group JSON. */
   public static ReceiptGroup parseReceiptGroup(final byte[] json) {
-    return parseReceiptGroup(new String(json, StandardCharsets.UTF_8));
+    return parseReceiptGroup(
+        SumeragiJsonSupport.decodeUtf8(json, "Native AMX receipt group"));
   }
 
   /** Validate a map returned by the Java SDK JSON parser. */
@@ -845,7 +846,7 @@ public final class NativeAmxV2Models {
 
   /** Parse and strictly validate a standalone UTF-8 receipt. */
   public static Receipt parseReceipt(final byte[] json) {
-    return parseReceipt(new String(json, StandardCharsets.UTF_8));
+    return parseReceipt(SumeragiJsonSupport.decodeUtf8(json, "Native AMX V2 receipt"));
   }
 
   /** Validate a standalone receipt map returned by the Java SDK JSON parser. */

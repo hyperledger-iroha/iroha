@@ -532,7 +532,7 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
     quantity: "2",
   });
   const payload = {
-    domain: { Network: NETWORK_ID.literal },
+    domain: { kind: "network", value: NETWORK_ID.literal },
     authority: AUTHORITY_ID,
     creation_time_ms: 10,
     instructions: { Instructions: [instruction] },
@@ -592,6 +592,7 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
         },
       };
       const signed = signQuotedTransactionPayload({
+        networkId: NETWORK_ID,
         payload: draft,
         quotedFeePayment: quotedIntent,
         privateKey: PRIVATE_KEY,
@@ -599,8 +600,9 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
       });
       assert.deepEqual(signed.signedTransaction, Buffer.from([0x20, 0x21]));
       assert.deepEqual(signed.hash, Buffer.alloc(32, 0x22));
-      assert.equal(signCaptures[0][0], payloadJson);
-      assert.deepEqual(JSON.parse(signCaptures[0][1]), quotedIntent);
+      assert.deepEqual(Buffer.from(signCaptures[0][0]), NETWORK_ID_BYTES);
+      assert.equal(signCaptures[0][1], payloadJson);
+      assert.deepEqual(JSON.parse(signCaptures[0][2]), quotedIntent);
     },
   );
   assert.equal(draftCaptures.length, 1);
@@ -615,7 +617,7 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
     quantity: "1",
   });
   const payload = {
-    domain: { Network: NETWORK_ID.literal },
+    domain: { kind: "network", value: NETWORK_ID.literal },
     authority: AUTHORITY_ID,
     fee_payment: {
       payer: "authority",
@@ -672,8 +674,54 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
   assert.equal(calls[0][0], "quote");
   assert.equal(calls[0][2].canonicalAuth.accountId, AUTHORITY_ID_INPUT);
   assert.equal(calls[1][0], "sign");
-  assert.equal(calls[1][1], JSON.stringify(payload));
-  assert.deepEqual(JSON.parse(calls[1][2]), quotedIntent);
+  assert.deepEqual(Buffer.from(calls[1][1]), NETWORK_ID_BYTES);
+  assert.equal(calls[1][2], JSON.stringify(payload));
+  assert.deepEqual(JSON.parse(calls[1][3]), quotedIntent);
+});
+
+baseTest("quoted transaction signers require one nominal NetworkId", () => {
+  let nativeCalls = 0;
+  const binding = {
+    signQuotedTransactionPayload() {
+      nativeCalls += 1;
+      throw new Error("native signer must not run");
+    },
+    signQuotedIvmProvedTransactionPayload() {
+      nativeCalls += 1;
+      throw new Error("native signer must not run");
+    },
+  };
+  withNativeBinding(binding, () => {
+    for (const signer of [
+      (networkInput) =>
+        signQuotedTransactionPayload({
+          ...networkInput,
+          payload: {},
+          quotedFeePayment: AUTHORITY_FEE_PAYMENT,
+          privateKey: PRIVATE_KEY,
+        }),
+      (networkInput) =>
+        signQuotedIvmProvedTransactionPayload({
+          ...networkInput,
+          payload: {},
+          attachment: {},
+          quotedFeePayment: AUTHORITY_FEE_PAYMENT,
+          privateKey: PRIVATE_KEY,
+        }),
+    ]) {
+      assert.throws(
+        () => signer({ networkId: NETWORK_ID.literal }),
+        /input\.networkId must be a NetworkId/u,
+      );
+      for (const retired of ["chain", "chainId", "chain_id"]) {
+        assert.throws(
+          () => signer({ networkId: NETWORK_ID, [retired]: "retired" }),
+          /is unsupported; provide the nominal networkId field/u,
+        );
+      }
+    }
+  });
+  assert.equal(nativeCalls, 0);
 });
 
 baseTest("buildRegisterPinManifestInstruction binds the canonical pin fields", () => {
@@ -740,7 +788,7 @@ baseTest("buildRegisterPinManifestTransaction rejects a retired submitted epoch"
 test("buildRegisterPinManifestTransaction quotes and signs exactly one instruction", async () => {
   const draftCalls = [];
   const payload = {
-    domain: { Network: NETWORK_ID.literal },
+    domain: { kind: "network", value: NETWORK_ID.literal },
     authority: AUTHORITY_ID,
     fee_payment: {
       payer: "authority",
@@ -799,7 +847,7 @@ test("buildRegisterPinManifestTransaction quotes and signs exactly one instructi
 
 test("proved-IVM quote draft preserves the proof attachment through signing", () => {
   const payload = {
-    domain: { Network: NETWORK_ID.literal },
+    domain: { kind: "network", value: NETWORK_ID.literal },
     authority: AUTHORITY_ID,
     fee_payment: {
       payer: "authority",
@@ -843,6 +891,7 @@ test("proved-IVM quote draft preserves the proof attachment through signing", ()
         },
       });
       const signed = signQuotedIvmProvedTransactionPayload({
+        networkId: NETWORK_ID,
         payload: draft,
         quotedFeePayment: payload.fee_payment,
         privateKey: PRIVATE_KEY,
@@ -854,9 +903,10 @@ test("proved-IVM quote draft preserves the proof attachment through signing", ()
   );
   assert.equal(calls[0][0], "draft");
   assert.equal(calls[1][0], "sign");
-  assert.equal(calls[1][1], JSON.stringify(payload));
-  assert.equal(calls[1][2], JSON.stringify(attachment));
-  assert.deepEqual(JSON.parse(calls[1][3]), payload.fee_payment);
+  assert.deepEqual(Buffer.from(calls[1][1]), NETWORK_ID_BYTES);
+  assert.equal(calls[1][2], JSON.stringify(payload));
+  assert.equal(calls[1][3], JSON.stringify(attachment));
+  assert.deepEqual(JSON.parse(calls[1][4]), payload.fee_payment);
 });
 
 test("feePaymentIntentToNoritoJson binds exact sponsor revision and limits", () => {
@@ -1855,7 +1905,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
         nonce,
       };
       const payload = {
-        domain: { Network: NETWORK_ID.literal },
+        domain: { kind: "network", value: NETWORK_ID.literal },
         authority,
         fee_payment: JSON.parse(feePaymentJson),
       };
@@ -1866,12 +1916,14 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
       };
     },
     signQuotedIvmProvedTransactionPayload: (
+      networkId,
       payloadJson,
       attachmentJson,
       quotedFeePaymentJson,
       secret,
     ) => {
       captures.signed = {
+        networkId: Buffer.from(networkId),
         payload: JSON.parse(payloadJson),
         attachment: JSON.parse(attachmentJson),
         quotedFeePayment: JSON.parse(quotedFeePaymentJson),
@@ -1926,6 +1978,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
   });
   assert.deepEqual(captures.draft.proved, proved);
   assert.deepEqual(captures.draft.attachment, attachment);
+  assert.deepEqual(captures.signed.networkId, NETWORK_ID_BYTES);
   assert.deepEqual(captures.signed.attachment, attachment);
   assert.deepEqual(captures.signed.quotedFeePayment, quotedIntent);
   assert.deepEqual(captures.feeQuoteDraft.payload, captures.signed.payload);
@@ -3232,160 +3285,133 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 
-baseTest("confidential proof builders reject padded chain IDs and hex fields before native dispatch", () => {
-  const calls = [];
+baseTest("confidential proof builders preserve exact canonical native results", () => {
+  const backend = "halo2/ipa";
   const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "confidential-transfer-v2" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+    id: { backend },
+    record: {
+      circuit_id: "confidential-transfer-v2",
+      backend,
+      inline_key: {
+        backend,
+        bytes_b64: Buffer.from([1, 2, 3]).toString("base64"),
+      },
+    },
   };
   const spendKey = Buffer.alloc(32, 0x42);
-  const rho = Buffer.alloc(32, 0x51).toString("hex");
-  const diversifier = Buffer.alloc(32, 0x52).toString("hex");
-  const ownerTag = Buffer.alloc(32, 0x53).toString("hex");
-  const rootHint = Buffer.alloc(32, 0x54).toString("hex");
-  const treeCommitment = Buffer.alloc(32, 0x55).toString("hex");
-  const baseRequest = {
-    chainId: "test-chain",
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    spendKey,
-    treeCommitments: [treeCommitment],
-    inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier, leafIndex: 0 }],
-    outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: ownerTag }],
-    rootHintHex: rootHint,
-    verifyingKey,
+  const rhoHex = Buffer.alloc(32, 0x51).toString("hex");
+  const diversifierHex = Buffer.alloc(32, 0x52).toString("hex");
+  const ownerTagHex = Buffer.alloc(32, 0x53).toString("hex");
+  const rootHintHex = Buffer.alloc(32, 0x54).toString("hex");
+  const treeCommitment = Buffer.alloc(32, 0x55);
+  const input = {
+    amount: "7",
+    rhoHex,
+    diversifierHex,
+    leafIndex: 0,
   };
+  const transferOutput = { amount: "7", rhoHex, ownerTagHex };
+  const unshieldOutput = { amount: "1", rhoHex };
+  const nullifier = Buffer.alloc(32, 0x61);
+  const outputCommitment = Buffer.alloc(32, 0x62);
+  const root = Buffer.alloc(32, 0x63);
+  const proof = Buffer.from([0x64]);
+  const calls = [];
+
   withNativeBinding(
     {
       buildConfidentialTransferProofV2: (...args) => {
-        calls.push(args);
+        calls.push(["transfer", args]);
         return {
-          nullifiers: [],
-          outputCommitments: [],
-          root: Buffer.alloc(32, 0x61),
-          proof: Buffer.from([0x62]),
+          nullifiers: [nullifier],
+          outputCommitments: [outputCommitment],
+          root,
+          proof,
         };
       },
-      buildConfidentialUnshieldProofV2: () => {
-        throw new Error("unshield v2 publicAmount should fail before native call");
+      buildConfidentialUnshieldProofV2: (...args) => {
+        calls.push(["unshield-v2", args]);
+        return { nullifiers: [nullifier], root, proof };
       },
-      buildConfidentialUnshieldProofV3: () => {
-        throw new Error("unshield v3 publicAmount should fail before native call");
+      buildConfidentialUnshieldProofV3: (...args) => {
+        calls.push(["unshield-v3", args]);
+        return {
+          nullifiers: [nullifier],
+          outputCommitments: [outputCommitment],
+          root,
+          proof,
+        };
       },
     },
     () => {
-      buildConfidentialTransferProofV2(baseRequest);
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0][0], "test-chain");
-      assert.equal(calls[0][1], ASSET_DEFINITION_ID);
-      assert.deepEqual(calls[0][3], [treeCommitment]);
-      assert.equal(calls[0][4][0].rhoHex, rho);
-      assert.equal(calls[0][4][0].diversifierHex, diversifier);
-      assert.equal(calls[0][5][0].ownerTagHex, ownerTag);
+      const transfer = buildConfidentialTransferProofV2({
+        networkId: NETWORK_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        spendKey,
+        treeCommitments: [treeCommitment],
+        inputs: [input],
+        outputs: [transferOutput],
+        rootHintHex,
+        verifyingKey,
+      });
+      assert.deepEqual(transfer, {
+        nullifiers: [nullifier],
+        root,
+        proof,
+        outputCommitments: [outputCommitment],
+      });
 
-      calls.length = 0;
-      for (const [label, patch, message] of [
-        [
-          "chainId",
-          { chainId: " test-chain" },
-          /confidentialTransferProofV2\.chainId must not contain surrounding whitespace/u,
-        ],
-        [
-          "assetDefinitionId",
-          { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
-          /confidentialTransferProofV2\.assetDefinitionId must not contain surrounding whitespace/u,
-        ],
-        [
-          "input amount",
-          { inputs: [{ amount: " 7", rhoHex: rho, diversifierHex: diversifier }] },
-          /inputs\[0\]\.amount must not contain surrounding whitespace/u,
-        ],
-        [
-          "inputs rho",
-          { inputs: [{ amount: "7", rhoHex: `${rho} `, diversifierHex: diversifier }] },
-          /inputs\[0\]\.rho must not contain surrounding whitespace/u,
-        ],
-        [
-          "input diversifier",
-          { inputs: [{ amount: "7", rhoHex: rho, diversifierHex: ` ${diversifier}` }] },
-          /inputs\[0\]\.diversifier must not contain surrounding whitespace/u,
-        ],
-        [
-          "missing input diversifier",
-          { inputs: [{ amount: "7", rhoHex: rho }] },
-          /inputs\[0\]\.diversifier is required/u,
-        ],
-        [
-          "input diversifier snake alias",
-          { inputs: [{ amount: "7", rhoHex: rho, diversifier_hex: diversifier }] },
-          /inputs\[0\]\.diversifier must use canonical diversifierHex/u,
-        ],
-        [
-          "input diversifier raw alias",
-          { inputs: [{ amount: "7", rhoHex: rho, diversifier: Buffer.alloc(32, 0x52) }] },
-          /inputs\[0\]\.diversifier must use canonical diversifierHex/u,
-        ],
-        [
-          "output amount",
-          { outputs: [{ amount: "7\n", rhoHex: rho, ownerTagHex: ownerTag }] },
-          /outputs\[0\]\.amount must not contain surrounding whitespace/u,
-        ],
-        [
-          "output ownerTag",
-          { outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: `${ownerTag}\n` }] },
-          /outputs\[0\]\.ownerTag must not contain surrounding whitespace/u,
-        ],
-        [
-          "treeCommitments",
-          { treeCommitments: [` ${treeCommitment}`] },
-          /treeCommitments\[0\] must not contain surrounding whitespace/u,
-        ],
-        [
-          "rootHintHex",
-          { rootHintHex: `${rootHint} ` },
-          /rootHintHex must not contain surrounding whitespace/u,
-        ],
-      ]) {
-        assert.throws(
-          () => buildConfidentialTransferProofV2({ ...baseRequest, ...patch }),
-          message,
-          label,
-        );
-      }
+      const unshieldV2 = buildConfidentialUnshieldProofV2({
+        networkId: NETWORK_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        spendKey,
+        treeCommitments: [treeCommitment],
+        inputs: [input],
+        publicAmount: "7",
+        rootHintHex,
+        verifyingKey,
+      });
+      assert.deepEqual(unshieldV2, { nullifiers: [nullifier], root, proof });
 
-      assert.throws(
-        () =>
-          buildConfidentialUnshieldProofV2({
-            chainId: "test-chain",
-            assetDefinitionId: ASSET_DEFINITION_ID,
-            spendKey,
-            treeCommitments: [treeCommitment],
-            inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier }],
-            publicAmount: " 7",
-            rootHintHex: rootHint,
-            verifyingKey,
-          }),
-        /publicAmount must not contain surrounding whitespace/u,
-      );
-      assert.throws(
-        () =>
-          buildConfidentialUnshieldProofV3({
-            chainId: "test-chain",
-            assetDefinitionId: ASSET_DEFINITION_ID,
-            spendKey,
-            treeCommitments: [treeCommitment],
-            inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier }],
-            outputs: [{ amount: "7", rhoHex: rho }],
-            publicAmount: "7\n",
-            rootHintHex: rootHint,
-            verifyingKey,
-          }),
-        /publicAmount must not contain surrounding whitespace/u,
-      );
+      const unshieldV3 = buildConfidentialUnshieldProofV3({
+        networkId: NETWORK_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        spendKey,
+        treeCommitments: [treeCommitment],
+        inputs: [input],
+        outputs: [unshieldOutput],
+        publicAmount: "6",
+        rootHintHex,
+        verifyingKey,
+      });
+      assert.deepEqual(unshieldV3, {
+        nullifiers: [nullifier],
+        root,
+        proof,
+        outputCommitments: [outputCommitment],
+      });
+
+      buildConfidentialUnshieldProofV3({
+        networkId: NETWORK_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        spendKey,
+        treeCommitments: [treeCommitment],
+        inputs: [input],
+        publicAmount: "7",
+        rootHintHex,
+        verifyingKey,
+      });
     },
   );
 
-  assert.deepEqual(calls, []);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls[0][1][3], [treeCommitment.toString("hex")]);
+  assert.deepEqual(calls[0][1][4], [input]);
+  assert.deepEqual(calls[0][1][5], [transferOutput]);
+  assert.equal(calls[1][0], "unshield-v2");
+  assert.equal(calls[1][1][9].toString("base64"), "AQID");
+  assert.deepEqual(calls[2][1][5], [unshieldOutput]);
+  assert.deepEqual(calls[3][1][5], []);
 });
 
 baseTest("retired generic confidential transaction builders are not exported", () => {
@@ -3396,6 +3422,11 @@ baseTest("retired generic confidential transaction builders are not exported", (
 });
 
 test("supported confidential transaction builders wrap expected instruction payloads", () => {
+  const proof = {
+    backend: "halo2/ipa",
+    proof: Buffer.from("proof"),
+    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_governance" },
+  };
   const register = captureInstructionObject(() =>
     buildRegisterZkAssetTransaction({
       networkId: NETWORK_ID,

@@ -254,7 +254,9 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     }
 
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &owner,
         17,
         DataSpaceId::UNIVERSAL,

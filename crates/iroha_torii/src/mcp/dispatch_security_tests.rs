@@ -3,6 +3,203 @@
 use super::*;
 
 #[test]
+fn catalog_dispatch_matching_handles_exact_parameters_and_wildcards() {
+    assert!(route_template_matches(
+        "/v1/gov/proposals/{id}",
+        "/v1/gov/proposals/abc123"
+    ));
+    assert!(!route_template_matches(
+        "/v1/gov/proposals/{id}",
+        "/v1/gov/proposals"
+    ));
+    assert!(route_template_matches(
+        "/v1/app-api/cid/{cid}/{*path}",
+        "/v1/app-api/cid/bafy/path/to/resource"
+    ));
+    assert!(!route_template_matches(
+        "/v1/app-api/cid/{cid}/{*path}",
+        "/v1/app-api/cid/bafy"
+    ));
+    assert!(!route_template_matches(
+        "/v1/gov/proposals/{id}",
+        "/v1/gov/proposals/abc123/extra"
+    ));
+}
+
+#[test]
+fn catalog_dispatch_prefers_exact_paths_and_rejects_ambiguous_templates() {
+    const ROUTES: &[RouteDescriptor] = &[
+        RouteDescriptor::new(
+            "test.dispatch.exact",
+            CatalogHttpMethod::Get,
+            "/v1/test/fixed",
+            ApiSurface::Public,
+            route_catalog::Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        ),
+        RouteDescriptor::new(
+            "test.dispatch.parameter_a",
+            CatalogHttpMethod::Get,
+            "/v1/test/{id}",
+            ApiSurface::Public,
+            route_catalog::Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        ),
+        RouteDescriptor::new(
+            "test.dispatch.parameter_b",
+            CatalogHttpMethod::Get,
+            "/v1/test/{name}",
+            ApiSurface::Public,
+            route_catalog::Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        ),
+    ];
+    let groups = [CatalogProjectionGroup {
+        routes: ROUTES,
+        enabled_features: EnabledFeatures::none(),
+    }];
+    let exact = catalog_descriptor_for_dispatch(&groups, &Method::GET, "/v1/test/fixed")
+        .expect("exact static route wins");
+    assert_eq!(exact.stable_route_id(), "test.dispatch.exact");
+    assert!(catalog_descriptor_for_dispatch(&groups, &Method::GET, "/v1/test/other").is_err());
+}
+
+#[test]
+fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
+    assert_eq!(
+        target_extra_header_policy(&Method::GET, "/v1/node/capabilities")
+            .expect("cataloged account route"),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+    );
+    assert_eq!(
+        target_extra_header_policy(&Method::GET, "/health").expect("cataloged public route"),
+        ExtraHeaderPolicy::Default
+    );
+    assert!(target_extra_header_policy(&Method::POST, "/v1/mcp").is_err());
+    assert!(target_extra_header_policy(&Method::POST, "/v1/not-cataloged").is_err());
+}
+
+#[test]
+fn canonical_target_headers_require_one_complete_unambiguous_proof() {
+    let complete = norito::json!({
+        "X-Iroha-Account": "account",
+        "X-Iroha-Signature": "signature",
+        "X-Iroha-Timestamp-Ms": "1725000000123",
+        "X-Iroha-Nonce": "nonce"
+    });
+    let mut out = HeaderMap::new();
+    apply_extra_headers_with_policy(
+        &mut out,
+        Some(&complete),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication,
+    )
+    .expect("complete inner proof");
+    assert_eq!(
+        out.get(HEADER_X_IROHA_NONCE)
+            .and_then(|value| value.to_str().ok()),
+        Some("nonce")
+    );
+
+    for invalid in [
+        norito::json!({
+            "X-Iroha-Account": "account",
+            "X-Iroha-Signature": "signature"
+        }),
+        norito::json!({
+            "X-Iroha-Witness": "witness",
+            "X-Iroha-Signature": "conflict"
+        }),
+        norito::json!({
+            "X-Iroha-Account": "account",
+            "x-iroha-account": "case alias",
+            "X-Iroha-Signature": "signature",
+            "X-Iroha-Timestamp-Ms": "1725000000123",
+            "X-Iroha-Nonce": "nonce"
+        }),
+    ] {
+        apply_extra_headers_with_policy(
+            &mut HeaderMap::new(),
+            Some(&invalid),
+            ExtraHeaderPolicy::CanonicalAccountAuthentication,
+        )
+        .expect_err("ambiguous or incomplete target proof must fail closed");
+    }
+}
+
+#[test]
+fn outer_mcp_account_headers_are_never_reused_as_inner_route_proof() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        HEADER_X_IROHA_ACCOUNT,
+        HeaderValue::from_static("outer-account"),
+    );
+    inbound.insert(
+        HEADER_X_IROHA_SIGNATURE,
+        HeaderValue::from_static("outer-signature"),
+    );
+    inbound.insert(
+        HEADER_X_API_TOKEN,
+        HeaderValue::from_static("outer-api-token"),
+    );
+    let mut dispatched = HeaderMap::new();
+    forward_auth_headers(&mut dispatched, &inbound).expect("transport credentials");
+    assert!(!dispatched.contains_key(HEADER_X_IROHA_ACCOUNT));
+    assert!(!dispatched.contains_key(HEADER_X_IROHA_SIGNATURE));
+    assert!(dispatched.contains_key(HEADER_X_API_TOKEN));
+}
+
+#[test]
+fn outer_transport_credentials_reject_ambiguous_duplicate_headers() {
+    for name in [
+        header::AUTHORIZATION,
+        HeaderName::from_static(HEADER_X_API_TOKEN),
+    ] {
+        let mut inbound = HeaderMap::new();
+        inbound.append(name.clone(), HeaderValue::from_static("first"));
+        inbound.append(name, HeaderValue::from_static("second"));
+        assert!(forward_auth_headers(&mut HeaderMap::new(), &inbound).is_err());
+    }
+}
+
+#[test]
+fn operator_target_headers_are_complete_and_cannot_leak_to_public_routes() {
+    let headers = norito::json!({
+        "X-Iroha-Operator-Public-Key": "key",
+        "X-Iroha-Operator-Timestamp-Ms": "1725000000123",
+        "X-Iroha-Operator-Nonce": "nonce",
+        "X-Iroha-Operator-Signature": "signature"
+    });
+    let mut operator = HeaderMap::new();
+    apply_extra_headers_with_policy(
+        &mut operator,
+        Some(&headers),
+        ExtraHeaderPolicy::OperatorAuthentication,
+    )
+    .expect("complete operator proof");
+    assert!(operator.contains_key(HEADER_X_IROHA_OPERATOR_SIGNATURE));
+
+    let mut public = HeaderMap::new();
+    apply_extra_headers_with_policy(&mut public, Some(&headers), ExtraHeaderPolicy::Default)
+        .expect("public route ignores reserved authentication headers");
+    assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_PUBLIC_KEY));
+    assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS));
+    assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_NONCE));
+    assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_SIGNATURE));
+}
+
+#[test]
+fn every_mcp_post_response_is_private_and_non_cacheable() {
+    let response = private_no_store_response(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("private, no-store"))
+    );
+}
+
+#[test]
 fn apply_body_projection_keeps_requested_fields() {
     let structured = norito::json!({
         "status": 200,

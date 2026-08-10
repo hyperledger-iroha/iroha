@@ -9,7 +9,7 @@ and CI usage.
 
 - Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
   already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
+- `iroha3d`, `iroha`, and `kagami` compiled for the desired target. The
   bundler reuses binaries from `target/<profile>/`.
 - Sufficient disk space for the bundle output under `target/` or a custom
   destination.
@@ -17,7 +17,9 @@ and CI usage.
 Build the dependencies once before running the bundler:
 
 ```bash
-cargo build -p irohad -p iroha_cli -p iroha_kagami
+cargo build -p irohad --bin iroha3d
+cargo build -p iroha_cli --bin iroha
+cargo build -p iroha_kagami --bin kagami
 ```
 
 ## Building the bundle
@@ -94,7 +96,7 @@ environment variables:
   validators.
 - `--torii-start`, `--p2p-start` – change the base ports used when allocating
   services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
+- `--irohad` / `MOCHI_IROHAD` – point at a specific `iroha3d` binary.
 - `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
 - `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
 - `--restart-mode <never|on-failure>` – disable automatic restarts or force the

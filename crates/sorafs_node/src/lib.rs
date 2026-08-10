@@ -201,13 +201,20 @@ pub use provider_ingest_outbox::{
     ProviderIngestRetryOutcomeV1, ProviderIngestSealedCheckpointRecordV1,
     ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1, ProviderIngestStatusV1,
 };
+use provider_ingest_runtime::CompletedMusubiStoreInstanceV1;
 pub use provider_ingest_runtime::{
     PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1,
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
-    ProviderIngestCompletedMusubiCaptureCandidateV1, ProviderIngestCompletedMusubiCaptureLedgerV1,
-    ProviderIngestCompletedMusubiCapturePageV1, ProviderIngestCompletedMusubiCaptureScannerV1,
+    ProviderIngestCompletedMusubiAttestationDriveErrorV1,
+    ProviderIngestCompletedMusubiAttestationDriveOutcomeV1,
+    ProviderIngestCompletedMusubiAttestationDriverV1,
+    ProviderIngestCompletedMusubiCaptureCoordinatorV1,
+    ProviderIngestCompletedMusubiCaptureRequestV1,
     ProviderIngestCompletedMusubiCaptureSourcePageV1,
-    ProviderIngestCompletedMusubiCaptureSourceRowV1, ProviderIngestCompletionPayloadBuilderV1,
+    ProviderIngestCompletedMusubiCaptureSourceRowV1,
+    ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+    ProviderIngestCompletedMusubiSignedCaptureLedgerV1,
+    ProviderIngestCompletedMusubiSignedCapturePageV1, ProviderIngestCompletionPayloadBuilderV1,
     ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
     ProviderIngestCompletionSignerBindingErrorV1, ProviderIngestCompletionSignerBindingV1,
     ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerQualificationV1,
@@ -227,6 +234,7 @@ pub use provider_ingest_runtime::{
     ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
     ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
+    provider_ingest_completed_musubi_capture_transcript_digest_v1,
 };
 use repair_ledger_projection::RepairLedgerTaskProjectionV1;
 /// Outcome returned when recording a PoR verdict.
@@ -429,7 +437,7 @@ use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -547,10 +555,6 @@ pub use transparency::{
 
 #[cfg(test)]
 use crate::metering::ReplicationUsageSample;
-use crate::provider_attestation_journal::MusubiProviderAttestationJournalV1;
-use crate::provider_ingest_runtime::{
-    ProviderIngestCompletedMusubiReconcileErrorV1, ProviderIngestCompletedMusubiReconcileOutcomeV1,
-};
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
     metering::{CapacityMeter, MeteringSnapshot},
@@ -3717,6 +3721,7 @@ pub struct NodeHandle {
     orderbook_transaction_forwarder: OrderbookTransactionForwarder,
     reserve_transaction_forwarder: ReserveTransactionForwarder,
     provider_ingest_outbox: Option<ProviderIngestOutbox>,
+    completed_musubi_store_instance: Option<CompletedMusubiStoreInstanceV1>,
     por_finalized_replay_archive: Option<OpaquePorFinalizedReplayArchive>,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
@@ -5027,6 +5032,9 @@ pub enum FinalizedProviderIngestError {
     /// Supervised runtime construction failed.
     #[error(transparent)]
     Runtime(#[from] ProviderIngestRuntimeErrorV1),
+    /// The one completed-Musubi capture tenure for this store was already reserved.
+    #[error("completed-Musubi capture coordinator tenure is already taken")]
+    CompletedMusubiCaptureCoordinatorTaken,
     /// Finalized pin, provider assignment, manifest, or CAR plan disagree.
     #[error("finalized-ledger provider ingest binding mismatch: {0}")]
     BindingMismatch(&'static str),
@@ -6361,6 +6369,9 @@ impl NodeHandle {
             native_repair_singleflight::NativeRepairSingleflightV1::new(
                 repair_config.worker_concurrency(),
             );
+        let completed_musubi_store_instance = (storage.is_some()
+            && provider_ingest_outbox.is_some())
+        .then(CompletedMusubiStoreInstanceV1::new);
         let mut node = Self {
             config,
             repair_config,
@@ -6377,6 +6388,7 @@ impl NodeHandle {
             orderbook_transaction_forwarder,
             reserve_transaction_forwarder,
             provider_ingest_outbox,
+            completed_musubi_store_instance,
             por_finalized_replay_archive,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
@@ -16302,38 +16314,42 @@ impl NodeHandle {
             .map_err(Into::into)
     }
 
-    /// Construct a read-only scanner for finalized local-provider Musubi completions.
+    /// Reserve this store incarnation's completed-Musubi capture coordinator.
     ///
-    /// The scanner owns its finalized-page cursor. Its raw ledger receives no
-    /// claim factory or opaque claim; the scanner validates each returned
-    /// projection and privately seals it. It can expose only validated
-    /// authorization and opaque completed-row claims and has no storage,
-    /// signer, journal, inventory, transaction, or registry mutation
-    /// capability.
+    /// The reservation is shared by every clone of this handle and is never
+    /// reset, including when the returned coordinator is dropped or its lazy
+    /// signed-reader binding is temporarily unavailable. A separately
+    /// constructed handle owns a distinct reservation. This call retains the
+    /// exact erased reader without consulting it, allowing height-zero daemon
+    /// startup to await genesis before the private coordinator binds a capture
+    /// session.
+    ///
+    /// The returned opaque coordinator intentionally has no public operational
+    /// surface: it cannot expose scanner pages, finalized claims, approval
+    /// requests, or any signing, journal, inventory, transaction, or registry
+    /// effect.
     ///
     /// # Errors
     ///
-    /// Returns an error when provider ingest is disabled, the configured
-    /// provider/chain/genesis identity is invalid, or the page bound is zero or
-    /// exceeds the hard finalized-page limit.
-    // TODO: Relocate this construction beside the daemon-owned archive, or move
-    // authenticated archive verification under this crate's ownership, before
-    // wiring the daemon capture worker. The raw ledger no longer receives the
-    // private claim factory, but exposing this generic builder would still let
-    // an arbitrary projection be treated as chain-authoritative provenance.
-    #[allow(dead_code)]
-    pub(crate) fn build_provider_ingest_completed_musubi_capture_scanner<Ledger>(
+    /// Returns an error when provider ingest is disabled, another caller
+    /// already consumed the tenure, the configured provider/network
+    /// identity is invalid, or the page bound is outside the hard finalized
+    /// limit. Once an enabled store's reservation is attempted, every failure
+    /// is non-resetting so a different reader cannot be substituted.
+    #[doc(hidden)]
+    pub fn take_provider_ingest_completed_musubi_capture_coordinator(
         &self,
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         max_page_rows: usize,
-        ledger: Arc<Ledger>,
-    ) -> Result<ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>, FinalizedProviderIngestError>
-    where
-        Ledger: ProviderIngestCompletedMusubiCaptureLedgerV1,
+        ledger: Arc<dyn ProviderIngestCompletedMusubiSignedCaptureLedgerV1>,
+    ) -> Result<ProviderIngestCompletedMusubiCaptureCoordinatorV1, FinalizedProviderIngestError>
     {
-        if self.provider_ingest_outbox.is_none() {
-            return Err(FinalizedProviderIngestError::Disabled);
+        let completed_musubi_store_instance = self
+            .completed_musubi_store_instance
+            .clone()
+            .ok_or(FinalizedProviderIngestError::Disabled)?;
+        if !completed_musubi_store_instance.try_take_capture_coordinator() {
+            return Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken);
         }
         let provider_id =
             self.config
@@ -16341,116 +16357,14 @@ impl NodeHandle {
                 .ok_or(FinalizedProviderIngestError::BindingMismatch(
                     "provider identity is not configured",
                 ))?;
-        ProviderIngestCompletedMusubiCaptureScannerV1::new(
+        ProviderIngestCompletedMusubiCaptureCoordinatorV1::new_pending(
+            completed_musubi_store_instance,
             *provider_id.as_bytes(),
-            chain_id,
-            genesis_block_hash,
+            network_id,
             max_page_rows,
             ledger,
         )
         .map_err(Into::into)
-    }
-
-    /// Reconcile one scanner page into the durable approval-intent journal.
-    ///
-    /// Every candidate is rebound to the digest-selected admitted manifest,
-    /// its exact stored CAR plan is reconstructed, and all semantic verifier
-    /// passes run under the callback-scoped lifecycle lease before the request
-    /// is idempotently enqueued. This method performs no signing, inventory
-    /// handoff, transaction submission, or registry mutation.
-    ///
-    /// Scanner progress is restored on any plan, verification, or journal
-    /// failure. Because the capture ledger contract is replay-safe and journal
-    /// enqueue is idempotent, retrying then reconstructs the exact page without
-    /// skipping a partially enqueued suffix.
-    ///
-    /// # Errors
-    ///
-    /// Returns a path-free error when capture validation, admitted-plan
-    /// reconstruction, lifecycle-leased verification, or durable enqueue
-    /// fails.
-    #[allow(dead_code)]
-    pub(crate) async fn reconcile_provider_ingest_completed_musubi_capture_page<Ledger>(
-        &self,
-        scanner: &mut ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>,
-        journal: &MusubiProviderAttestationJournalV1,
-    ) -> Result<
-        ProviderIngestCompletedMusubiReconcileOutcomeV1,
-        ProviderIngestCompletedMusubiReconcileErrorV1,
-    >
-    where
-        Ledger: ProviderIngestCompletedMusubiCaptureLedgerV1,
-    {
-        let progress = scanner.progress();
-        let page = scanner
-            .next_page()
-            .await
-            .map_err(|_| ProviderIngestCompletedMusubiReconcileErrorV1::Capture)?;
-        let mut inserted = 0_usize;
-        let mut existing = 0_usize;
-        for candidate in page.candidates() {
-            let authorization = candidate.authorization();
-            let stored = match self.manifest_metadata_by_digest(&authorization.manifest_digest()) {
-                Ok(stored) => stored,
-                Err(_) => {
-                    scanner.restore_progress(progress);
-                    return Err(
-                        ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable,
-                    );
-                }
-            };
-            let Some(profile) =
-                sorafs_car::chunker_registry::lookup_by_handle(stored.chunk_profile_handle())
-                    .map(|descriptor| descriptor.profile)
-            else {
-                scanner.restore_progress(progress);
-                return Err(ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable);
-            };
-            let plan = match stored.try_to_car_plan_with_hint(profile, None) {
-                Ok(plan) => plan,
-                Err(_) => {
-                    scanner.restore_progress(progress);
-                    return Err(
-                        ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable,
-                    );
-                }
-            };
-            let request = match self.with_admitted_payload_read_lease(
-                &authorization.manifest_digest(),
-                |lease| {
-                    lease.verify_completed_musubi_bundle(
-                        &plan,
-                        authorization,
-                        candidate.completed_claim(),
-                    )
-                },
-            ) {
-                Ok(Ok(request)) => request,
-                Ok(Err(_)) | Err(_) => {
-                    scanner.restore_progress(progress);
-                    return Err(ProviderIngestCompletedMusubiReconcileErrorV1::VerificationFailed);
-                }
-            };
-            match journal.enqueue(&request).await {
-                Ok(MusubiProviderAttestationEnqueueOutcomeV1::Inserted { .. }) => {
-                    inserted = inserted.saturating_add(1);
-                }
-                Ok(MusubiProviderAttestationEnqueueOutcomeV1::Existing { .. }) => {
-                    existing = existing.saturating_add(1);
-                }
-                Err(_) => {
-                    scanner.restore_progress(progress);
-                    return Err(ProviderIngestCompletedMusubiReconcileErrorV1::JournalUnavailable);
-                }
-            }
-        }
-        Ok(ProviderIngestCompletedMusubiReconcileOutcomeV1 {
-            finalized_cursor: page.finalized_cursor(),
-            candidates: page.candidates().len(),
-            inserted,
-            existing,
-            scan_complete: page.scan_complete(),
-        })
     }
 
     /// Construct the supervised finalized-ledger provider-ingest runtime.
@@ -16470,8 +16384,7 @@ impl NodeHandle {
         Clock,
     >(
         &self,
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         claim_owner: ProviderIngestClaimOwnerV1,
         policy: ProviderIngestRuntimePolicyV1,
         ledger: Arc<Ledger>,
@@ -16511,8 +16424,7 @@ impl NodeHandle {
             .ok_or(FinalizedProviderIngestError::Disabled)?;
         ProviderIngestRuntimeV1::new(
             *provider_id.as_bytes(),
-            chain_id,
-            genesis_block_hash,
+            network_id,
             claim_owner,
             policy,
             outbox,
@@ -16663,6 +16575,63 @@ impl NodeHandle {
                 Ok(manifest_id)
             }
             Err(err) => Err(NodeStorageError::from(err)),
+        }
+    }
+
+    /// Reverify one completed-Musubi capture under this handle's exact storage instance.
+    ///
+    /// Generic finalized-ledger claims carry no capture-store authority and
+    /// are rejected before a lifecycle lease or payload reader is opened. A
+    /// marker-bound claim can be verified only by the `NodeHandle` instance
+    /// (or one of its clones) that constructed its private capture scanner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a permanent error for an unbound or foreign-instance claim and
+    /// a retryable error when admitted storage is temporarily unavailable.
+    #[doc(hidden)]
+    pub fn verify_provider_ingest_completed_musubi_capture_bundle(
+        &self,
+        plan: &CarBuildPlan,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ) -> Result<ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestLocalStorageErrorV1>
+    {
+        let Some(completed_musubi_store_instance) = self.completed_musubi_store_instance.as_ref()
+        else {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        };
+        if !completed_claim.matches_completed_musubi_store_instance(completed_musubi_store_instance)
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        match self.with_admitted_payload_read_lease(&authorization.manifest_digest(), |lease| {
+            lease.verify_completed_musubi_bundle(
+                completed_musubi_store_instance,
+                plan,
+                authorization,
+                completed_claim,
+            )
+        }) {
+            Ok(Ok(request))
+                if request
+                    .matches_completed_musubi_store_instance(completed_musubi_store_instance) =>
+            {
+                Ok(request)
+            }
+            Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
+                Err(ProviderIngestLocalStorageErrorV1::Permanent)
+            }
+            Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
+                Err(ProviderIngestLocalStorageErrorV1::Retryable)
+            }
+            Err(AdmittedPayloadReadLeaseErrorV1::Disabled) => {
+                Err(ProviderIngestLocalStorageErrorV1::Permanent)
+            }
+            Err(
+                AdmittedPayloadReadLeaseErrorV1::NotAdmitted
+                | AdmittedPayloadReadLeaseErrorV1::StorageUnavailable,
+            ) => Err(ProviderIngestLocalStorageErrorV1::Retryable),
         }
     }
 
@@ -17150,9 +17119,12 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature, SignatureOf};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf,
+    };
     use iroha_data_model::{
         ChainId,
+        block::BlockHeader,
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
         name::Name,
@@ -18152,16 +18124,23 @@ mod tests {
     fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
         struct DisabledCaptureLedger;
 
-        impl ProviderIngestCompletedMusubiCaptureLedgerV1 for DisabledCaptureLedger {
-            fn read_completed_musubi_capture_page(
+        impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for DisabledCaptureLedger {
+            fn capture_verifier_binding(
                 &self,
-                _at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
-                _after_order_id: Option<[u8; 32]>,
-                _limit: usize,
+            ) -> Result<
+                ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+                ProviderIngestFinalizedLedgerErrorV1,
+            > {
+                Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
+            }
+
+            fn read_signed_completed_musubi_capture_page(
+                &self,
+                _request: ProviderIngestCompletedMusubiCaptureRequestV1,
             ) -> ProviderIngestFutureV1<
                 '_,
                 Result<
-                    ProviderIngestCompletedMusubiCaptureSourcePageV1,
+                    ProviderIngestCompletedMusubiSignedCapturePageV1,
                     ProviderIngestFinalizedLedgerErrorV1,
                 >,
             > {
@@ -18177,9 +18156,10 @@ mod tests {
             Err(FinalizedProviderIngestError::Disabled)
         ));
         assert!(matches!(
-            handle.build_provider_ingest_completed_musubi_capture_scanner(
-                ChainId::from("provider-ingest-capture-disabled"),
-                [0x4A; 32],
+            handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0x4B; 32]),
+                )),
                 1,
                 Arc::new(DisabledCaptureLedger),
             ),
@@ -18600,7 +18580,6 @@ mod tests {
         let policy_digest = policy.digest().expect("digest orderbook policy");
         let context = OrderbookTransactionContextV1 {
             network_id: transaction_network_id(0x65),
-            chain_id: ChainId::from("orderbook-forwarder-restart-test"),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,
                 policy_digest,

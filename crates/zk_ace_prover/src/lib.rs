@@ -20,14 +20,13 @@ use iroha_data_model::{
     asset::AssetBalanceScope,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, ChainId, NetworkId},
+    prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyConsensusLimitsV1, PrivacyNullifierV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAcePolicyRecordV1, PrivacyZkAcePolicyRecordValidationErrorV1,
-        ZkAcePqAuthorizationStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyNullifierV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
+        PrivacyZkAcePolicyRecordValidationErrorV1, ZkAcePqAuthorizationStatementV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -134,8 +133,6 @@ impl ZkAcePrivacyTransferV1 {
 pub struct ZkAcePrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
     pub network_id: NetworkId,
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
     /// Exact single-key transaction authority.
     pub authority: AccountId,
     /// Required creation time, resolved once before two-pass construction.
@@ -374,8 +371,6 @@ pub enum ZkAcePrivacyActionBuildErrorV1 {
     ZeroGenesisHash,
     /// The signed transaction domain differs from the supplied canonical genesis hash.
     NetworkIdMismatch,
-    /// The chain identifier is empty or exceeds the consensus maximum.
-    InvalidChainId,
     /// Creation time cannot be represented in the transaction wire.
     CreationTimeOutOfRange,
     /// TTL cannot be represented in the transaction wire.
@@ -433,9 +428,6 @@ impl core::fmt::Display for ZkAcePrivacyActionBuildErrorV1 {
                 Self::ZeroGenesisHash => "ZK-ACE action requires a non-zero canonical genesis hash",
                 Self::NetworkIdMismatch => {
                     "ZK-ACE action transaction network does not match the canonical genesis hash"
-                }
-                Self::InvalidChainId => {
-                    "ZK-ACE action chain id is outside the first-release byte bound"
                 }
                 Self::CreationTimeOutOfRange => {
                     "ZK-ACE action creation time cannot be represented in milliseconds"
@@ -502,14 +494,6 @@ impl From<ZkAceNativeErrorV1> for ZkAcePrivacyActionBuildErrorV1 {
 fn validate_transaction_context_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
 ) -> Result<(), ZkAcePrivacyActionBuildErrorV1> {
-    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
-    if chain_id_bytes == 0
-        || chain_id_bytes
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(ZkAcePrivacyActionBuildErrorV1::InvalidChainId);
-    }
     if context.creation_time.as_millis() > u128::from(u64::MAX) {
         return Err(ZkAcePrivacyActionBuildErrorV1::CreationTimeOutOfRange);
     }
@@ -634,7 +618,7 @@ where
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     let native_statement = ZkAcePqAuthorizationStatementV1 {
         context: PrivacyStatementContextV1 {
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
             parameter_id: profile.parameter_id,
@@ -668,7 +652,7 @@ where
     let authorization_digest = derive_zk_ace_privacy_authorization_digest(&authorization_inputs)
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::AuthorizationDigest)?;
     final_statement.replay_nullifier =
-        witness.replay_nullifier_v1(&authorization_digest, &context.chain_id);
+        witness.replay_nullifier_v1(&authorization_digest, &context.network_id);
 
     let typed_statement = PrivacyStatementV1::ZkAcePqAuthorizationV0(final_statement.clone());
     let statement_digest = typed_statement
@@ -925,7 +909,6 @@ mod tests {
             >::from_untyped_unchecked(
                 Hash::prehashed([0x77; 32])
             )),
-            chain_id: ChainId::from("taira-zk-ace-builder-test"),
             authority,
             creation_time: Duration::from_secs(1_700_000_000),
             time_to_live: Some(Duration::from_secs(3_600)),

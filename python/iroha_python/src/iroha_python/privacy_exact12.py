@@ -322,6 +322,33 @@ def _decode_fields_v1(payload: bytes, count: int, context: str, maximum: int) ->
     return fields
 
 
+def _decode_network_id_v1(payload: bytes, context: str) -> bytes:
+    """Decode one transparent exact NetworkId and reject unmarked hash bytes."""
+
+    if len(payload) != _HASH_BYTES_V1 or payload[-1] & 1 == 0:
+        raise PrivacyExact12FixtureErrorV1(
+            f"{context} must contain exactly 32 marked Iroha hash bytes"
+        )
+    return payload
+
+
+def _decode_network_transaction_domain_v1(payload: bytes, context: str) -> bytes:
+    """Require the first-release ordinary TransactionDomain::Network wire."""
+
+    reader = _ReaderV1(payload, context)
+    variant = reader.read_u32("variant")
+    if variant != 0:
+        raise PrivacyExact12FixtureErrorV1(
+            f"{context} must use TransactionDomain::Network; genesis is not client-signable"
+        )
+    network_id = reader.read_field("network_id", maximum=_HASH_BYTES_V1)
+    reader.require_end()
+    _decode_network_id_v1(network_id, f"{context}.network_id")
+    if struct.pack("<I", 0) + _encode_field_v1(network_id) != payload:
+        raise PrivacyExact12FixtureErrorV1(f"{context} is not canonical")
+    return network_id
+
+
 def _schema_hash_v1(type_name: str) -> bytes:
     return hashlib.sha256(_SCHEMA_HASH_DOMAIN_V1 + type_name.encode("utf-8")).digest()[:16]
 
@@ -474,20 +501,7 @@ def _decode_statement_context_v1(
         f"{context}.context",
         PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
     )
-    chain_reader = _ReaderV1(context_fields[0], f"{context}.context.chain_id")
-    chain_length = chain_reader.read_compact_length("utf8_length")
-    if chain_length == 0 or chain_length > 128 or chain_length != chain_reader.remaining:
-        raise PrivacyExact12FixtureErrorV1(f"{context} has an invalid chain identifier")
-    chain_bytes = chain_reader.read_bytes(chain_length, "utf8")
-    chain_reader.require_end()
-    try:
-        chain_id = chain_bytes.decode("utf-8", "strict")
-    except UnicodeDecodeError as error:
-        raise PrivacyExact12FixtureErrorV1(
-            f"{context} chain identifier is not canonical UTF-8"
-        ) from error
-    if chain_id.encode("utf-8") != chain_bytes:
-        raise PrivacyExact12FixtureErrorV1(f"{context} chain identifier is not canonical UTF-8")
+    _decode_network_id_v1(context_fields[0], f"{context}.context.network_id")
     if len(context_fields[1]) != 4 or struct.unpack("<I", context_fields[1])[0] != 0:
         raise PrivacyExact12FixtureErrorV1(f"{context} carries a substituted action index")
     intent = _decode_digest_wrapper_v1(
@@ -775,9 +789,10 @@ def _decode_transaction_payload_v1(
         expected_statement_archive=expected_statement_archive,
         context=f"{context}.executable",
     )
-    if fields[0] != statement_context[0]:
+    transaction_network_id = _decode_network_transaction_domain_v1(fields[0], f"{context}.domain")
+    if transaction_network_id != statement_context[0]:
         raise PrivacyExact12FixtureErrorV1(
-            f"{context} chain does not match the privacy statement context"
+            f"{context} NetworkId does not match the privacy statement context"
         )
     expected_creation_time = 1_700_000_000_000 + row_index
     if len(fields[2]) != 8 or struct.unpack("<Q", fields[2])[0] != expected_creation_time:

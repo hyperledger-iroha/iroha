@@ -36,7 +36,7 @@ def _candidate() -> dict[str, object]:
         "capability_schema_sha256": _digest("capability-schema"),
         "cargo_lock_sha256": contract.FROZEN_CARGO_LOCK_SHA256,
         "dpn_validator_release_commit": "b" * 40,
-        "irohad_sha256": _digest("irohad"),
+        "irohad_sha256": _digest("iroha3d"),
         "protocol_matrix_sha256": contract.EXACT12_MATRIX_SHA256,
         "source_commit": "a" * 40,
         "workspace_source_manifest_sha256": _digest("source-manifest"),

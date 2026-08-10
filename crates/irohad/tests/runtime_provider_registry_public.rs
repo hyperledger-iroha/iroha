@@ -225,6 +225,7 @@ fn external_crate_can_name_standard_broker_executable_shell() {
 fn external_crate_can_name_standalone_governance_view_projection() {
     let projection: fn(
         &iroha_data_model::ChainId,
+        iroha_data_model::NetworkId,
         &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<
         IrohaRuntimeProviderBindingsV1,
@@ -252,7 +253,7 @@ fn external_crate_can_name_secret_free_broker_catalog_handoff() {
 
 #[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
-    let source = include_str!("../src/bin/irohad.rs");
+    let source = include_str!("../src/bin/iroha3d.rs");
     let compact: String = source
         .chars()
         .filter(|character| !character.is_whitespace())

@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Shared top-level builder for private Sumeragi v2 release-binary bundles.
 #
-# Callers must define wait_for_external_cargo and run_cargo.  They pass the
-# canonical repository root and the already verified workspace source digest to
-# each public function below.
+# Callers must source the shared release process policy, including its root
+# predicate and Cargo wrapper. They pass the canonical repository root and the
+# already verified workspace source digest to each public function below.
 
 sumeragi_v2_localnet_binary_attestation_valid() {
   local prebuilt_repo_root="$1"
   local prebuilt_source_manifest_sha256="$2"
-  if [[ -z "${IROHA_TEST_TARGET_DIR:-}" \
+  if [[ -z "${CARGO_TARGET_DIR:-}" \
+    || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+    || -z "${IROHA_TEST_TARGET_DIR:-}" \
     || -z "${IROHA_RELEASE_PREBUILT_MANIFEST_SHA256:-}" ]]; then
     return 1
   fi
   python3 -I -S "${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py" validate \
     --repo-root "$prebuilt_repo_root" \
     --source-manifest "$prebuilt_source_manifest_sha256" \
+    --cargo-target-dir "$CARGO_TARGET_DIR" \
+    --artifact-root "$IROHA_RELEASE_ARTIFACT_ROOT" \
     --bundle-dir "$IROHA_TEST_TARGET_DIR" \
     --manifest-sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"
 }
@@ -23,18 +27,14 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
   local prebuilt_repo_root="$1"
   local prebuilt_source_manifest_sha256="$2"
   local prebuilt_helper="${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py"
-  local prebuilt_workspace_target
-  if ! prebuilt_workspace_target="$(
-    python3 -I -S -c \
-      'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))' \
-      "${prebuilt_repo_root}/target"
-  )" || [[ -z "$prebuilt_workspace_target" ]]; then
-    echo "failed to resolve the repository-authorized release target" >&2
+  if [[ -z "${CARGO_TARGET_DIR:-}" \
+    || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" ]]; then
+    echo "authenticated CARGO_TARGET_DIR and IROHA_RELEASE_ARTIFACT_ROOT are required" >&2
     return 1
   fi
-  local prebuilt_source_root="${prebuilt_workspace_target}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}"
-  local prebuilt_programs_root="${prebuilt_source_root}/programs"
-  local prebuilt_build_root="${prebuilt_source_root}/program-build-cache"
+  require_disjoint_release_roots "$prebuilt_repo_root" || return $?
+  local prebuilt_build_root="${CARGO_TARGET_DIR}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}/program-build-cache"
+  local prebuilt_programs_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}/programs"
   local prebuilt_default_cache="${prebuilt_build_root}/default"
   local prebuilt_message_control_cache="${prebuilt_build_root}/message-control"
 
@@ -55,6 +55,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
   python3 -I -S "$prebuilt_helper" prepare-cache \
     --repo-root "$prebuilt_repo_root" \
     --source-manifest "$prebuilt_source_manifest_sha256" \
+    --cargo-target-dir "$CARGO_TARGET_DIR" \
     --default-cache "$prebuilt_default_cache" \
     --message-control-cache "$prebuilt_message_control_cache"
 
@@ -97,16 +98,16 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
     # metadata survived in the fixed cache.  Remove only the four exact
     # top-level outputs so this invocation must relink them.
     rm -f -- \
-      "${prebuilt_default_cache}/release/irohad" \
+      "${prebuilt_default_cache}/release/iroha3d" \
       "${prebuilt_default_cache}/release/iroha" \
       "${prebuilt_default_cache}/release/kagami" \
-      "${prebuilt_message_control_cache}/release/irohad" || exit $?
+      "${prebuilt_message_control_cache}/release/iroha3d" || exit $?
 
     (
       export CARGO_TARGET_DIR="$prebuilt_default_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin irohad || exit $?
+      run_cargo build --locked --offline --release -p irohad --bin iroha3d || exit $?
       run_cargo build --locked --offline --release -p iroha_cli --bin iroha || exit $?
       run_cargo build --locked --offline --release -p iroha_kagami --bin kagami || exit $?
     ) || exit $?
@@ -114,20 +115,20 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       export CARGO_TARGET_DIR="$prebuilt_message_control_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin irohad \
+      run_cargo build --locked --offline --release -p irohad --bin iroha3d \
         --features test-network-message-control || exit $?
     ) || exit $?
 
     # Keep the mandatory process snapshot outside redirected stdout so the
     # exact version transcript contains only the tool's bytes.
-    wait_for_external_cargo || exit $?
-    command cargo --version >"$prebuilt_cargo_version_file" || exit $?
-    wait_for_external_cargo || exit $?
+    run_cargo --version >"$prebuilt_cargo_version_file" || exit $?
     command rustc -vV >"$prebuilt_rustc_version_file" || exit $?
 
     python3 -I -S "$prebuilt_helper" create \
       --repo-root "$prebuilt_repo_root" \
       --source-manifest "$prebuilt_source_manifest_sha256" \
+      --cargo-target-dir "$CARGO_TARGET_DIR" \
+      --artifact-root "$IROHA_RELEASE_ARTIFACT_ROOT" \
       --default-cache "$prebuilt_default_cache" \
       --message-control-cache "$prebuilt_message_control_cache" \
       --programs-root "$prebuilt_programs_root" \
@@ -171,8 +172,8 @@ sumeragi_v2_export_source_bound_localnet_binaries() {
     echo "refusing to publish unattested source-bound localnet binaries" >&2
     return 1
   fi
-  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/irohad"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/irohad"
+  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
   export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
   export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"
 }

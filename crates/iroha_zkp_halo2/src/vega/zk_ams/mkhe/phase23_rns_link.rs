@@ -13,9 +13,11 @@
 //!   canonical order before Fiat--Shamir evaluation points can be derived;
 //! * a transcript-bound cubic bitness sumcheck and logarithmic T256 IPA share
 //!   one commitment and reject proof splicing;
-//! * a sibling-private native receipt can bind one canonical packed chunk to
-//!   the exact 38-limb plaintext lift and both state-owned RLWE equations; it
-//!   deliberately does not authenticate any whole-proof wire response;
+//! * a sibling-private move-only owner binds all 43 native openings to one
+//!   canonical packed accumulator in exact family/chunk order after checking
+//!   each 38-limb plaintext lift and both state-owned RLWE equations; it
+//!   deliberately returns only unverified metadata and does not authenticate
+//!   any whole-proof wire response;
 //! * the exact integer and arbitrary-point form of
 //!   `A*R + p*E + M - C = (X^N + 1)*H (mod q)` is exercised by a tiny oracle,
 //!   including the radix carry equation that prevents modular wraparound from
@@ -52,12 +54,13 @@ use super::{
     packing::{
         ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
         decode_zk_ams_t256_packed_plaintext_v1, packed_plaintext_rns_binding_digest_v1,
-        rns_polynomial_digest,
+        zk_ams_t256_packing_layout_v1,
     },
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
-        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1,
-        zk_ams_phase23_release_map_set_digest_v1,
+        ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
+        zk_ams_phase23_release_map_set_digest_v1, zk_ams_phase23_release_maps_v1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
@@ -70,15 +73,17 @@ const RNS_LINK_FAMILY_COUNT_V1: usize = 6;
 const RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1: usize = 16;
 const RNS_LINK_MAX_LOGICAL_VALUES_V1: usize =
     ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 * RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1;
-const RNS_LINK_X_LOGICAL_VALUES_V1: usize =
-    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1 * MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
-const RNS_LINK_U_LOGICAL_VALUES_V1: usize = 1;
+const RNS_LINK_X_LOGICAL_VALUES_V1: usize = ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1;
+const RNS_LINK_U_SEMANTIC_VALUES_V1: usize = 1;
+const RNS_LINK_U_LOGICAL_VALUES_V1: usize =
+    ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1 * MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
 const RNS_LINK_E_LOGICAL_VALUES_V1: usize =
     ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1 * MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
 const RNS_LINK_RE_LOGICAL_VALUES_V1: usize = ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1;
-const RNS_LINK_W_LOGICAL_VALUES_V1: usize = RNS_LINK_X_LOGICAL_VALUES_V1;
+const RNS_LINK_W_LOGICAL_VALUES_V1: usize =
+    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1 * MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
 const RNS_LINK_RW_LOGICAL_VALUES_V1: usize = ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1;
-const RNS_LINK_RELEASE_COMMITMENTS_V1: usize = 8 + 1 + 16 + 1 + 8 + 1;
+const RNS_LINK_RELEASE_COMMITMENTS_V1: usize = 1 + 16 + 16 + 1 + 8 + 1;
 const RNS_LINK_IPA_MAX_VECTOR_LEN_V1: usize = 2_048;
 const RNS_LINK_IPA_MAX_ROUNDS_V1: usize = 11;
 const RNS_LINK_IPA_CHALLENGE_RETRIES_V1: usize = 128;
@@ -141,6 +146,10 @@ const IPA_EVALUATION_LABEL_V1: &[u8] = b"rns-link-ipa-evaluation";
 const IPA_LEFT_LABEL_V1: &[u8] = b"rns-link-ipa-left";
 const IPA_RIGHT_LABEL_V1: &[u8] = b"rns-link-ipa-right";
 const IPA_CHALLENGE_LABEL_V1: &[u8] = b"rns-link-ipa-challenge";
+const NATIVE_GEOMETRY_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.rns-link.native-release-geometry";
+const NATIVE_PACKED_PREFLIGHT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.rns-link.native-packed-preflight";
 
 const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     CONTEXT_DOMAIN_V1,
@@ -184,11 +193,14 @@ const _: () = {
     assert!(RNS_LINK_EVALUATIONS_PER_LIMB_V1 == 5);
     assert!(RNS_LINK_REJECTION_ATTEMPTS_V1 == 128);
     assert!(RNS_LINK_MAX_LOGICAL_VALUES_V1 == 1_048_576);
-    assert!(RNS_LINK_X_LOGICAL_VALUES_V1 == 524_288);
+    assert!(RNS_LINK_X_LOGICAL_VALUES_V1 == 89);
+    assert!(RNS_LINK_U_SEMANTIC_VALUES_V1 == 1);
+    assert!(RNS_LINK_U_LOGICAL_VALUES_V1 == 1_048_576);
     assert!(RNS_LINK_E_LOGICAL_VALUES_V1 == 1_048_576);
     assert!(RNS_LINK_RE_LOGICAL_VALUES_V1 == 1_024);
+    assert!(RNS_LINK_W_LOGICAL_VALUES_V1 == 524_288);
     assert!(RNS_LINK_RW_LOGICAL_VALUES_V1 == 512);
-    assert!(RNS_LINK_RELEASE_COMMITMENTS_V1 == 35);
+    assert!(RNS_LINK_RELEASE_COMMITMENTS_V1 == 43);
     assert!(RNS_LINK_IPA_MAX_VECTOR_LEN_V1 == 1 << RNS_LINK_IPA_MAX_ROUNDS_V1);
     assert!(RNS_LINK_IPA_CHALLENGE_RETRIES_V1 == 128);
     assert!(RNS_LINK_BITNESS_MAX_VALUES_V1 == 1 << RNS_LINK_BITNESS_MAX_SUMCHECK_ROUNDS_V1);
@@ -232,7 +244,8 @@ const RNS_LINK_FAMILY_ORDER_V1: [ZkAmsPhase23RnsLinkFamilyV1; RNS_LINK_FAMILY_CO
     ZkAmsPhase23RnsLinkFamilyV1::RW,
 ];
 
-fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
+/// Exact packed logical-value count for one canonical native family.
+pub(super) const fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::X => RNS_LINK_X_LOGICAL_VALUES_V1,
         ZkAmsPhase23RnsLinkFamilyV1::U => RNS_LINK_U_LOGICAL_VALUES_V1,
@@ -243,14 +256,363 @@ fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     }
 }
 
+const fn expected_semantic_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
+    match family {
+        ZkAmsPhase23RnsLinkFamilyV1::U => RNS_LINK_U_SEMANTIC_VALUES_V1,
+        _ => expected_logical_values_v1(family),
+    }
+}
+
+const fn expected_hyrax_rows_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
+    match family {
+        ZkAmsPhase23RnsLinkFamilyV1::X | ZkAmsPhase23RnsLinkFamilyV1::U => 0,
+        ZkAmsPhase23RnsLinkFamilyV1::E | ZkAmsPhase23RnsLinkFamilyV1::RE => {
+            ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
+        }
+        ZkAmsPhase23RnsLinkFamilyV1::W | ZkAmsPhase23RnsLinkFamilyV1::RW => {
+            ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1
+        }
+    }
+}
+
+/// One family row in the sole native release geometry.
+///
+/// `semantic_value_count` records the padding-free accumulator shape. The
+/// `packed_value_count` differs only for `U`, whose one relaxation scalar is
+/// replicated into every constraint-row slot before encrypted evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
+    family: ZkAmsPhase23RnsLinkFamilyV1,
+    semantic_value_count: u32,
+    packed_value_count: u32,
+    chunk_count: u16,
+    final_chunk_used_slots: u32,
+    hyrax_row_count: u32,
+    packing_layout_digest: [u8; 32],
+}
+
+/// Geometry derived from the canonical native relation and packing map.
+///
+/// This descriptor is public statement metadata only. It is deliberately not
+/// a proof, a receipt, or release evidence, and there is no conversion from it
+/// to any verified RNS-Link capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
+    profile_digest: [u8; 32],
+    map_set_digest: [u8; 32],
+    rns_limb_count: u16,
+    relation_row_count: u32,
+    paper_column_count: u32,
+    families: [ZkAmsPhase23RnsLinkFamilyGeometryV1; RNS_LINK_FAMILY_COUNT_V1],
+    commitment_count: u16,
+    digest: [u8; 32],
+}
+
+impl ZkAmsPhase23RnsLinkReleaseGeometryV1 {
+    fn family(
+        &self,
+        family: ZkAmsPhase23RnsLinkFamilyV1,
+    ) -> Result<ZkAmsPhase23RnsLinkFamilyGeometryV1, ZkAmsMkheErrorV1> {
+        self.families
+            .iter()
+            .copied()
+            .find(|geometry| geometry.family == family)
+            .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
+    }
+}
+
+fn validate_ordered_native_family_chunk_counts_v1(
+    geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
+    families: &[(ZkAmsPhase23RnsLinkFamilyV1, usize)],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if families.len() != RNS_LINK_FAMILY_COUNT_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    let mut total = 0_usize;
+    for ((actual_family, actual_chunks), expected_family) in
+        families.iter().copied().zip(RNS_LINK_FAMILY_ORDER_V1)
+    {
+        let expected = geometry.family(expected_family)?;
+        if actual_family != expected_family || actual_chunks != usize::from(expected.chunk_count) {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        total = total
+            .checked_add(actual_chunks)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    }
+    if total != usize::from(geometry.commitment_count) {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn validate_replicated_u_chunk_coefficients_v1(
+    chunks: &[ZkAmsT256PackedPlaintextV1],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let first = chunks.first().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+    if chunks[1..]
+        .iter()
+        .any(|chunk| chunk.coefficients != first.coefficients)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn validate_replicated_u_decoded_slots_v1(slots: &[[u8; 32]]) -> Result<(), ZkAmsMkheErrorV1> {
+    let first = slots.first().ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+    if slots[1..].iter().any(|value| value != first) {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
+-> Result<ZkAmsPhase23RnsLinkReleaseGeometryV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    if profile.moduli.len() != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let rns_limb_count =
+        u16::try_from(profile.moduli.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let maps = zk_ams_phase23_release_maps_v1()?;
+    let [a, b, c] = maps.abc();
+    if a.row_count != b.row_count
+        || a.row_count != c.row_count
+        || a.column_count != b.column_count
+        || a.column_count != c.column_count
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let relation_row_count = a.row_count;
+    let paper_column_count = a.column_count;
+    let public_and_relaxation = u32::try_from(
+        ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1
+            .checked_add(1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    )
+    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let witness_value_count = paper_column_count
+        .checked_sub(public_and_relaxation)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let preimage = maps.commitment_preimage_layout();
+    let commitment_columns = u32::try_from(MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    if relation_row_count
+        != u32::try_from(RNS_LINK_E_LOGICAL_VALUES_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+        || witness_value_count
+            != u32::try_from(RNS_LINK_W_LOGICAL_VALUES_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+        || preimage.message_value_count() != relation_row_count
+        || preimage.row_count()
+            != u32::try_from(ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+        || preimage.message_columns() != commitment_columns
+        || preimage.blinding_count() != preimage.row_count()
+        || witness_value_count % commitment_columns != 0
+        || witness_value_count / commitment_columns
+            != u32::try_from(ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+
+    let mut families = [ZkAmsPhase23RnsLinkFamilyGeometryV1 {
+        family: ZkAmsPhase23RnsLinkFamilyV1::X,
+        semantic_value_count: 0,
+        packed_value_count: 0,
+        chunk_count: 0,
+        final_chunk_used_slots: 0,
+        hyrax_row_count: 0,
+        packing_layout_digest: [0; 32],
+    }; RNS_LINK_FAMILY_COUNT_V1];
+    let mut commitment_count = 0_usize;
+    for (index, family) in RNS_LINK_FAMILY_ORDER_V1.iter().copied().enumerate() {
+        let semantic_value_count = u32::try_from(expected_semantic_values_v1(family))
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+        let packed_value_count = u32::try_from(expected_logical_values_v1(family))
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+        let layout = zk_ams_t256_packing_layout_v1(packed_value_count)?;
+        let chunk_count =
+            u16::try_from(layout.chunk_count).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+        commitment_count = commitment_count
+            .checked_add(usize::from(chunk_count))
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        families[index] = ZkAmsPhase23RnsLinkFamilyGeometryV1 {
+            family,
+            semantic_value_count,
+            packed_value_count,
+            chunk_count,
+            final_chunk_used_slots: layout.final_chunk_used_slots,
+            hyrax_row_count: u32::try_from(expected_hyrax_rows_v1(family))
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+            packing_layout_digest: layout.digest,
+        };
+    }
+    if commitment_count != RNS_LINK_RELEASE_COMMITMENTS_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+
+    let profile_digest = profile.digest()?;
+    let map_set_digest = maps.digest();
+    let commitment_count =
+        u16::try_from(commitment_count).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut frame = Vec::with_capacity(NATIVE_GEOMETRY_DOMAIN_V1.len() + 384);
+    frame.extend_from_slice(NATIVE_GEOMETRY_DOMAIN_V1);
+    frame.push(RNS_LINK_VERSION_V1);
+    frame.extend_from_slice(&profile_digest);
+    frame.extend_from_slice(&map_set_digest);
+    frame.extend_from_slice(&rns_limb_count.to_be_bytes());
+    frame.extend_from_slice(&relation_row_count.to_be_bytes());
+    frame.extend_from_slice(&paper_column_count.to_be_bytes());
+    frame.extend_from_slice(&commitment_count.to_be_bytes());
+    for family in families {
+        frame.push(family.family as u8);
+        frame.extend_from_slice(&family.semantic_value_count.to_be_bytes());
+        frame.extend_from_slice(&family.packed_value_count.to_be_bytes());
+        frame.extend_from_slice(&family.chunk_count.to_be_bytes());
+        frame.extend_from_slice(&family.final_chunk_used_slots.to_be_bytes());
+        frame.extend_from_slice(&family.hyrax_row_count.to_be_bytes());
+        frame.extend_from_slice(&family.packing_layout_digest);
+    }
+    let digest = keccak256(&frame);
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    Ok(ZkAmsPhase23RnsLinkReleaseGeometryV1 {
+        profile_digest,
+        map_set_digest,
+        rns_limb_count,
+        relation_row_count,
+        paper_column_count,
+        families,
+        commitment_count,
+        digest,
+    })
+}
+
+/// Allocation-bounded result of checking the exact native packed accumulator
+/// family geometry and recomputing every packed/RNS chunk binding.
+///
+/// This type intentionally carries `Unverified` in its name: ciphertext
+/// openings, radix/CRT carries, negacyclic quotients, and Hyrax equality are
+/// not inputs to this preflight. Consequently it cannot authorize challenge
+/// derivation, receipt minting, terminal materialization, or decryption.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
+    geometry_digest: [u8; 32],
+    ordered_native_chunk_root: [u8; 32],
+    chunk_count: u16,
+    digest: [u8; 32],
+}
+
+/// Check the packed state against geometry derived from the canonical native
+/// relation. All digests in the returned object are recomputed from the exact
+/// borrowed chunks; this boundary accepts no caller-nominated digest shell.
+pub(super) fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(
+    packed: &ZkAmsPhase23PackedAccumulatorSetV1,
+) -> Result<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1, ZkAmsMkheErrorV1> {
+    let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
+    let x = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::X)?;
+    let e = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::E)?;
+    let r_e = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::RE)?;
+    let w = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::W)?;
+    let r_w = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::RW)?;
+    if packed.shape.x != x.semantic_value_count
+        || packed.shape.e != e.semantic_value_count
+        || packed.shape.r_e != r_e.semantic_value_count
+        || packed.shape.w != w.semantic_value_count
+        || packed.shape.r_w != r_w.semantic_value_count
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+
+    let family_chunks = [
+        (ZkAmsPhase23RnsLinkFamilyV1::X, packed.x.as_slice()),
+        (ZkAmsPhase23RnsLinkFamilyV1::U, packed.u.as_slice()),
+        (ZkAmsPhase23RnsLinkFamilyV1::E, packed.e.as_slice()),
+        (ZkAmsPhase23RnsLinkFamilyV1::RE, packed.r_e.as_slice()),
+        (ZkAmsPhase23RnsLinkFamilyV1::W, packed.w.as_slice()),
+        (ZkAmsPhase23RnsLinkFamilyV1::RW, packed.r_w.as_slice()),
+    ];
+    let family_chunk_counts = family_chunks.map(|(family, chunks)| (family, chunks.len()));
+    validate_ordered_native_family_chunk_counts_v1(&geometry, &family_chunk_counts)?;
+    let mut root_frame = Vec::with_capacity(
+        NATIVE_PACKED_PREFLIGHT_DOMAIN_V1.len() + 128 + RNS_LINK_RELEASE_COMMITMENTS_V1 * 112,
+    );
+    root_frame.extend_from_slice(NATIVE_PACKED_PREFLIGHT_DOMAIN_V1);
+    root_frame.push(RNS_LINK_VERSION_V1);
+    root_frame.extend_from_slice(&geometry.digest);
+    for (family, chunks) in family_chunks {
+        let expected = geometry.family(family)?;
+        let layout = zk_ams_t256_packing_layout_v1(expected.packed_value_count)?;
+        if layout.digest != expected.packing_layout_digest {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        if family == ZkAmsPhase23RnsLinkFamilyV1::U {
+            validate_replicated_u_chunk_coefficients_v1(chunks)?;
+        }
+        root_frame.push(family as u8);
+        root_frame.extend_from_slice(&expected.semantic_value_count.to_be_bytes());
+        root_frame.extend_from_slice(&expected.packed_value_count.to_be_bytes());
+        root_frame.extend_from_slice(&expected.chunk_count.to_be_bytes());
+        for (index, chunk) in chunks.iter().enumerate() {
+            if chunk.chunk_index
+                != u32::try_from(index).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            let decoded = ZeroizingNativeDecodedPlaintextV1(
+                decode_zk_ams_t256_packed_plaintext_v1(layout, chunk)?,
+            );
+            if decoded.0.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            if family == ZkAmsPhase23RnsLinkFamilyV1::U {
+                validate_replicated_u_decoded_slots_v1(&decoded.0)?;
+            }
+            let rns_binding_digest = packed_plaintext_rns_binding_digest_v1(layout, chunk)?;
+            if rns_binding_digest == [0; 32] {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            root_frame.extend_from_slice(&chunk.chunk_index.to_be_bytes());
+            root_frame.extend_from_slice(&chunk.used_slots.to_be_bytes());
+            root_frame.extend_from_slice(&chunk.digest);
+            root_frame.extend_from_slice(&rns_binding_digest);
+        }
+    }
+    let ordered_native_chunk_root = keccak256(&root_frame);
+    if ordered_native_chunk_root == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    let mut digest_frame = Vec::with_capacity(NATIVE_PACKED_PREFLIGHT_DOMAIN_V1.len() + 70);
+    digest_frame.extend_from_slice(NATIVE_PACKED_PREFLIGHT_DOMAIN_V1);
+    digest_frame.push(RNS_LINK_VERSION_V1);
+    digest_frame.extend_from_slice(&geometry.digest);
+    digest_frame.extend_from_slice(&ordered_native_chunk_root);
+    digest_frame.extend_from_slice(&geometry.commitment_count.to_be_bytes());
+    let digest = keccak256(&digest_frame);
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
+        geometry_digest: geometry.digest,
+        ordered_native_chunk_root,
+        chunk_count: geometry.commitment_count,
+        digest,
+    })
+}
+
 #[derive(Clone)]
 struct RnsLinkImmutableAlgorithmManifestInputsV1 {
     version: u8,
     profile_digest: [u8; 32],
     map_set_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
-    dimensions: [u64; 21],
-    family_shapes: [(u8, u64); RNS_LINK_FAMILY_COUNT_V1],
+    native_geometry_digest: [u8; 32],
+    dimensions: [u64; 22],
+    family_shapes: [(u8, u64, u64, u16, u32, [u8; 32]); RNS_LINK_FAMILY_COUNT_V1],
     domains: [&'static [u8]; RNS_LINK_MANIFEST_DOMAINS_V1.len()],
     transcript_labels: [&'static [u8]; RNS_LINK_MANIFEST_TRANSCRIPT_LABELS_V1.len()],
     format_descriptors: [&'static [u8]; RNS_LINK_MANIFEST_FORMAT_DESCRIPTORS_V1.len()],
@@ -263,10 +625,12 @@ fn usize_as_manifest_u64_v1(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
 
 fn canonical_algorithm_manifest_inputs_v1()
 -> Result<RnsLinkImmutableAlgorithmManifestInputsV1, ZkAmsMkheErrorV1> {
+    let native_geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
     let dimensions = [
         usize_as_manifest_u64_v1(ZK_AMS_MKHE_MAX_PROOF_BYTES_V1)?,
         usize_as_manifest_u64_v1(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)?,
         usize_as_manifest_u64_v1(MASKED_RELAXED_COMMITMENT_COLUMNS_V1)?,
+        usize_as_manifest_u64_v1(ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1)?,
         usize_as_manifest_u64_v1(RNS_LINK_EVALUATIONS_PER_LIMB_V1)?,
         usize_as_manifest_u64_v1(RNS_LINK_REJECTION_ATTEMPTS_V1)?,
         usize_as_manifest_u64_v1(RNS_LINK_FAMILY_COUNT_V1)?,
@@ -286,11 +650,16 @@ fn canonical_algorithm_manifest_inputs_v1()
         usize_as_manifest_u64_v1(RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1)?,
         1, // Exactly one Pedersen blinding coordinate, with public weight zero.
     ];
-    let mut family_shapes = [(0_u8, 0_u64); RNS_LINK_FAMILY_COUNT_V1];
-    for (index, family) in RNS_LINK_FAMILY_ORDER_V1.iter().copied().enumerate() {
+    let mut family_shapes =
+        [(0_u8, 0_u64, 0_u64, 0_u16, 0_u32, [0_u8; 32]); RNS_LINK_FAMILY_COUNT_V1];
+    for (index, family) in native_geometry.families.iter().copied().enumerate() {
         family_shapes[index] = (
-            family as u8,
-            usize_as_manifest_u64_v1(expected_logical_values_v1(family))?,
+            family.family as u8,
+            u64::from(family.semantic_value_count),
+            u64::from(family.packed_value_count),
+            family.chunk_count,
+            family.hyrax_row_count,
+            family.packing_layout_digest,
         );
     }
     Ok(RnsLinkImmutableAlgorithmManifestInputsV1 {
@@ -298,6 +667,7 @@ fn canonical_algorithm_manifest_inputs_v1()
         profile_digest: release_profile_v1().digest()?,
         map_set_digest: zk_ams_phase23_release_map_set_digest_v1()?,
         generator_basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+        native_geometry_digest: native_geometry.digest,
         dimensions,
         family_shapes,
         domains: RNS_LINK_MANIFEST_DOMAINS_V1,
@@ -336,6 +706,7 @@ fn immutable_algorithm_manifest_digest_from_inputs_v1(
     frame.extend_from_slice(&inputs.profile_digest);
     frame.extend_from_slice(&inputs.map_set_digest);
     frame.extend_from_slice(&inputs.generator_basis_digest);
+    frame.extend_from_slice(&inputs.native_geometry_digest);
     frame.extend_from_slice(
         &u16::try_from(inputs.dimensions.len())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
@@ -349,9 +720,15 @@ fn immutable_algorithm_manifest_digest_from_inputs_v1(
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
             .to_be_bytes(),
     );
-    for (family, logical_values) in inputs.family_shapes {
+    for (family, semantic_values, packed_values, chunk_count, hyrax_rows, packing_layout_digest) in
+        inputs.family_shapes
+    {
         frame.push(family);
-        frame.extend_from_slice(&logical_values.to_be_bytes());
+        frame.extend_from_slice(&semantic_values.to_be_bytes());
+        frame.extend_from_slice(&packed_values.to_be_bytes());
+        frame.extend_from_slice(&chunk_count.to_be_bytes());
+        frame.extend_from_slice(&hyrax_rows.to_be_bytes());
+        frame.extend_from_slice(&packing_layout_digest);
     }
     append_manifest_byte_strings_v1(&mut frame, &inputs.domains)?;
     append_manifest_byte_strings_v1(&mut frame, &inputs.transcript_labels)?;
@@ -447,7 +824,13 @@ impl ZkAmsPhase23RnsLinkContextV1 {
     }
 }
 
-/// Roots of all tables that must exist before Fiat--Shamir sampling.
+/// Producer-claimed roots of tables that must exist before Fiat--Shamir
+/// sampling.
+///
+/// The type remains part of the private structural checkpoint, but production
+/// has no digest-only constructor. Tests can build hostile shells; a release
+/// prover must instead gain a constructor that consumes state-owned openings
+/// and actual committed tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     layout_digest: [u8; 32],
@@ -461,6 +844,7 @@ pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
 }
 
 impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         layout_digest: [u8; 32],
@@ -524,6 +908,9 @@ pub(super) struct ZkAmsPhase23RnsLinkChunkCommitmentV1 {
 }
 
 impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
+    /// Test-only constructor for structural and hostile-shell coverage.
+    /// Production deliberately has no caller-digest construction corridor.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         family: ZkAmsPhase23RnsLinkFamilyV1,
@@ -828,7 +1215,14 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 
 // TODO: Bind the first operational consumer's statement and replay context in
 // its consuming API before this local check can authorize any state change.
-/// Opaque capability for one native, in-process packed BGV opening.
+/// Safe-Rust seal for the sole production opening-consumer boundary.
+///
+/// The private field is constructible only in this module and its descendants.
+/// This type deliberately implements neither cloning, default construction,
+/// decoding, nor serialization, and carries no evidence or authority.
+pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
+
+/// Private checked value for one native, in-process packed BGV opening.
 ///
 /// This is intentionally narrower than an RNS-Link proof receipt. It is minted
 /// only while the state-owned encryption opening is available and after the
@@ -839,10 +1233,11 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 ///
 /// The capability borrows the exact checked artifacts, is move-only, and can
 /// be consumed once. It is not a serializable digest token and cannot be used
-/// to authorize a substituted object or a later job. No operational consumer
-/// exists yet; a future consumer must add its own statement/replay context at
-/// the call site instead of treating this local result as cross-job authority.
-pub(super) struct VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
+/// to authorize a substituted object or a later job. Its only set-level
+/// consumer returns unverified preflight metadata; a future proof consumer
+/// must add its own statement/replay context instead of treating either local
+/// result as cross-job authority.
+struct VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
     key: &'a ZkAmsMkheCollectivePublicKeyV1,
     layout: ZkAmsT256PackingLayoutV1,
     plaintext: &'a ZkAmsT256PackedPlaintextV1,
@@ -887,9 +1282,9 @@ impl Drop for ZeroizingNativeDecodedPlaintextV1 {
 impl<'a> VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
     /// Consume this local result once after revalidating the exact borrowed
     /// public artifacts, and run the intended in-process use while those
-    /// immutable borrows remain live. No transferable digest authority is
-    /// returned by this boundary.
-    pub(super) fn consume(
+    /// immutable borrows remain live. No value or transferable digest
+    /// authority is returned by this boundary.
+    fn consume(
         self,
         consumer: impl FnOnce(
             &'a ZkAmsMkheCollectivePublicKeyV1,
@@ -910,6 +1305,21 @@ impl<'a> VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
         consumer(self.key, self.layout, self.plaintext, self.ciphertext)
     }
 }
+
+#[allow(
+    dead_code,
+    reason = "the q-native PCS is a private Stage-A prototype and cannot authorize release until its FRI theorem, external-store residency, and release KAT blockers are closed"
+)]
+#[path = "phase23_rns_link_q_pcs.rs"]
+mod q_pcs;
+
+#[path = "phase23_rns_link_state_owned.rs"]
+mod state_owned;
+#[cfg(test)]
+pub(super) use state_owned::{
+    StateOwnedRnsLinkAccumulatorOpeningsV1, ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
+    ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
+};
 
 fn validate_native_bgv_public_artifacts_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -947,42 +1357,25 @@ fn validate_native_bgv_public_artifacts_v1(
 
 /// Verify one real release-profile encryption opening and mint a move-only,
 /// in-process result borrowing the exact checked public objects.
-pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1<'a>(
+fn verify_zk_ams_phase23_native_bgv_opening_v1<'a>(
     key: &'a ZkAmsMkheCollectivePublicKeyV1,
     layout: ZkAmsT256PackingLayoutV1,
     plaintext: &'a ZkAmsT256PackedPlaintextV1,
     ciphertext: &'a ZkAmsMkheCollectiveCiphertextV1,
     opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
 ) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1<'a>, ZkAmsMkheErrorV1> {
-    let profile = release_profile_v1();
     let rns_binding_digest =
         validate_native_bgv_public_artifacts_v1(key, layout, plaintext, ciphertext)?;
 
-    // The owned opening is single-use and zeroizes when this call returns or
-    // unwinds. Its adapter rechecks the exact public context and both release-
-    // RNS RLWE equations before lending any witness reference.
-    opening.with_validated_proof_witness_v1(
+    // The owned opening is single-use and zeroizes when this unit-only call
+    // returns or unwinds. No secret witness reference crosses modules.
+    opening.verify_and_consume_phase23_native_bgv_opening_v1(
+        ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(()),
         key,
         layout,
         plaintext,
         ciphertext,
-        |canonical_plaintext, plaintext_lift, ephemeral, error_zero, error_one| {
-            if canonical_plaintext != plaintext.coefficients.as_slice()
-                || canonical_plaintext.len() != profile.ring_degree
-                || plaintext_lift.coefficients.len()
-                    != profile
-                        .ring_degree
-                        .checked_mul(profile.moduli.len())
-                        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-                || rns_polynomial_digest(&profile, plaintext_lift)? != rns_binding_digest
-                || ephemeral.coefficients.len() != profile.ring_degree
-                || error_zero.coefficients.len() != profile.ring_degree
-                || error_one.coefficients.len() != profile.ring_degree
-            {
-                return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-            }
-            Ok(())
-        },
+        rns_binding_digest,
     )?;
 
     Ok(VerifiedZkAmsPhase23NativeBgvOpeningV1 {
@@ -992,6 +1385,31 @@ pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1<'a>(
         ciphertext,
         rns_binding_digest,
     })
+}
+
+/// Unit-test bridge for the heavyweight release-size exercise. It exposes no
+/// checked value and is absent from production and sibling APIs.
+#[cfg(test)]
+pub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1<'a>(
+    key: &'a ZkAmsMkheCollectivePublicKeyV1,
+    layout: ZkAmsT256PackingLayoutV1,
+    plaintext: &'a ZkAmsT256PackedPlaintextV1,
+    ciphertext: &'a ZkAmsMkheCollectiveCiphertextV1,
+    opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    verify_zk_ams_phase23_native_bgv_opening_v1(key, layout, plaintext, ciphertext, opening)?
+        .consume(
+            |actual_key, actual_layout, actual_plaintext, actual_ciphertext| {
+                if !core::ptr::eq(actual_key, key)
+                    || actual_layout != layout
+                    || !core::ptr::eq(actual_plaintext, plaintext)
+                    || !core::ptr::eq(actual_ciphertext, ciphertext)
+                {
+                    return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+                }
+                Ok(())
+            },
+        )
 }
 
 // Compile-time API guards: mutable readiness and KAT evidence have no place in
@@ -3138,6 +3556,177 @@ mod tests {
     }
 
     #[test]
+    fn native_release_geometry_uses_public_x_and_replicated_u() {
+        let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1().unwrap();
+        let expected = [
+            (ZkAmsPhase23RnsLinkFamilyV1::X, 89, 89, 1, 89, 0),
+            (ZkAmsPhase23RnsLinkFamilyV1::U, 1, 1_048_576, 16, 65_536, 0),
+            (
+                ZkAmsPhase23RnsLinkFamilyV1::E,
+                1_048_576,
+                1_048_576,
+                16,
+                65_536,
+                1_024,
+            ),
+            (
+                ZkAmsPhase23RnsLinkFamilyV1::RE,
+                1_024,
+                1_024,
+                1,
+                1_024,
+                1_024,
+            ),
+            (
+                ZkAmsPhase23RnsLinkFamilyV1::W,
+                524_288,
+                524_288,
+                8,
+                65_536,
+                512,
+            ),
+            (ZkAmsPhase23RnsLinkFamilyV1::RW, 512, 512, 1, 512, 512),
+        ];
+        for (family, semantic, packed, chunks, final_used, hyrax_rows) in expected {
+            let actual = geometry.family(family).unwrap();
+            assert_eq!(actual.semantic_value_count, semantic);
+            assert_eq!(actual.packed_value_count, packed);
+            assert_eq!(actual.chunk_count, chunks);
+            assert_eq!(actual.final_chunk_used_slots, final_used);
+            assert_eq!(actual.hyrax_row_count, hyrax_rows);
+            assert_ne!(actual.packing_layout_digest, [0; 32]);
+        }
+        assert_eq!(geometry.rns_limb_count, 38);
+        assert_eq!(geometry.relation_row_count, 1_048_576);
+        assert_eq!(geometry.paper_column_count, 524_378);
+        assert_eq!(geometry.commitment_count, 43);
+        assert_ne!(geometry.digest, [0; 32]);
+
+        let canonical_headers = geometry
+            .families
+            .map(|family| (family.family, usize::from(family.chunk_count)));
+        validate_ordered_native_family_chunk_counts_v1(&geometry, &canonical_headers).unwrap();
+
+        let legacy_headers = [
+            (ZkAmsPhase23RnsLinkFamilyV1::X, 8),
+            (ZkAmsPhase23RnsLinkFamilyV1::U, 1),
+            (ZkAmsPhase23RnsLinkFamilyV1::E, 16),
+            (ZkAmsPhase23RnsLinkFamilyV1::RE, 1),
+            (ZkAmsPhase23RnsLinkFamilyV1::W, 8),
+            (ZkAmsPhase23RnsLinkFamilyV1::RW, 1),
+        ];
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &legacy_headers),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        let mut collapsed_u = canonical_headers;
+        collapsed_u[1].1 = 1;
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &collapsed_u),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        let mut reordered = canonical_headers;
+        reordered.swap(0, 1);
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &reordered),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        let mut duplicate = canonical_headers;
+        duplicate[1] = duplicate[0];
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &duplicate),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &canonical_headers[..5]),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        let mut excess = canonical_headers;
+        excess[1].1 = 17;
+        assert_eq!(
+            validate_ordered_native_family_chunk_counts_v1(&geometry, &excess),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+
+        let legacy_shell = ZkAmsPhase23PackedAccumulatorSetV1 {
+            shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
+                524_288, 1_048_576, 1_024, 524_288, 512,
+            )
+            .unwrap(),
+            x: Vec::new(),
+            u: Vec::new(),
+            e: Vec::new(),
+            r_e: Vec::new(),
+            w: Vec::new(),
+            r_w: Vec::new(),
+        };
+        assert_eq!(
+            preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(&legacy_shell),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+
+        let missing_chunks = ZkAmsPhase23PackedAccumulatorSetV1 {
+            shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
+                89, 1_048_576, 1_024, 524_288, 512,
+            )
+            .unwrap(),
+            x: Vec::new(),
+            u: Vec::new(),
+            e: Vec::new(),
+            r_e: Vec::new(),
+            w: Vec::new(),
+            r_w: Vec::new(),
+        };
+        assert_eq!(
+            preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(&missing_chunks),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+    }
+
+    #[test]
+    fn native_replicated_u_preflight_rejects_cross_chunk_and_intra_chunk_changes() {
+        fn packed(coefficients: Vec<[u8; 32]>) -> ZkAmsT256PackedPlaintextV1 {
+            ZkAmsT256PackedPlaintextV1 {
+                version: 1,
+                profile_digest: [1; 32],
+                layout_digest: [2; 32],
+                chunk_index: 0,
+                used_slots: 1,
+                coefficients,
+                digest: [3; 32],
+            }
+        }
+
+        let identical = vec![
+            packed(vec![[7; 32], [9; 32]]),
+            packed(vec![[7; 32], [9; 32]]),
+        ];
+        validate_replicated_u_chunk_coefficients_v1(&identical).unwrap();
+        let changed = vec![
+            packed(vec![[7; 32], [9; 32]]),
+            packed(vec![[7; 32], [8; 32]]),
+        ];
+        assert_eq!(
+            validate_replicated_u_chunk_coefficients_v1(&changed),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        assert_eq!(
+            validate_replicated_u_chunk_coefficients_v1(&[]),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+
+        validate_replicated_u_decoded_slots_v1(&[[11; 32]; 4]).unwrap();
+        assert_eq!(
+            validate_replicated_u_decoded_slots_v1(&[[11; 32], [12; 32]]),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+        assert_eq!(
+            validate_replicated_u_decoded_slots_v1(&[]),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+    }
+
+    #[test]
     fn every_manifest_label_degree_dimension_and_count_axis_is_bound() {
         let canonical = canonical_algorithm_manifest_inputs_v1().unwrap();
         let baseline = immutable_algorithm_manifest_digest_from_inputs_v1(&canonical).unwrap();
@@ -3149,12 +3738,13 @@ mod tests {
             immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
             baseline
         );
-        for digest_axis in 0..3 {
+        for digest_axis in 0..4 {
             let mut changed = canonical.clone();
             match digest_axis {
                 0 => changed.profile_digest[0] ^= 1,
                 1 => changed.map_set_digest[0] ^= 1,
                 2 => changed.generator_basis_digest[0] ^= 1,
+                3 => changed.native_geometry_digest[0] ^= 1,
                 _ => unreachable!(),
             }
             assert_ne!(
@@ -3185,7 +3775,35 @@ mod tests {
             assert_ne!(
                 immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
                 baseline,
-                "family logical-count axis {index}"
+                "family semantic-count axis {index}"
+            );
+            let mut changed = canonical.clone();
+            changed.family_shapes[index].2 ^= 1;
+            assert_ne!(
+                immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
+                baseline,
+                "family packed-count axis {index}"
+            );
+            let mut changed = canonical.clone();
+            changed.family_shapes[index].3 ^= 1;
+            assert_ne!(
+                immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
+                baseline,
+                "family chunk-count axis {index}"
+            );
+            let mut changed = canonical.clone();
+            changed.family_shapes[index].4 ^= 1;
+            assert_ne!(
+                immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
+                baseline,
+                "family Hyrax-row axis {index}"
+            );
+            let mut changed = canonical.clone();
+            changed.family_shapes[index].5[0] ^= 1;
+            assert_ne!(
+                immutable_algorithm_manifest_digest_from_inputs_v1(&changed).unwrap(),
+                baseline,
+                "family packing-layout axis {index}"
             );
         }
         for index in 0..canonical.domains.len() {
@@ -3316,9 +3934,10 @@ mod tests {
 
         let mut commitment_variants = Vec::new();
         let mut changed = baseline_commitments.clone();
-        for commitment in &mut changed[..8] {
-            commitment.digests.layout_digest = digest(b"changed-x-layout");
-        }
+        // X is exactly one native chunk. Mutating a prefix of eight would now
+        // straddle X and U and make the commitment set structurally invalid,
+        // hiding whether the layout axis actually changes the challenge.
+        changed[0].digests.layout_digest = digest(b"changed-x-layout");
         commitment_variants.push(changed);
         for mutate in [
             |digests: &mut ZkAmsPhase23RnsLinkCommitmentDigestsV1| {
@@ -3396,13 +4015,16 @@ mod tests {
         let family = ZkAmsPhase23RnsLinkFamilyV1::X;
         let valid_digests = commitment_digests(family, 0);
         let logical_value_count = u32::try_from(RNS_LINK_X_LOGICAL_VALUES_V1).unwrap();
-        let used_slots = u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1).unwrap();
-        let absent = canonical_absent_chunk_bitmap_v1(8).unwrap();
+        let chunk_count =
+            u16::try_from(RNS_LINK_X_LOGICAL_VALUES_V1.div_ceil(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1))
+                .unwrap();
+        let used_slots = logical_value_count;
+        let absent = canonical_absent_chunk_bitmap_v1(chunk_count).unwrap();
         assert_eq!(
             ZkAmsPhase23RnsLinkChunkCommitmentV1::new(
                 family,
                 0,
-                8,
+                chunk_count,
                 logical_value_count,
                 used_slots,
                 absent,
@@ -3415,7 +4037,7 @@ mod tests {
             ZkAmsPhase23RnsLinkChunkCommitmentV1::new(
                 family,
                 0,
-                8,
+                chunk_count,
                 logical_value_count,
                 used_slots,
                 0,
@@ -3428,7 +4050,7 @@ mod tests {
             ZkAmsPhase23RnsLinkChunkCommitmentV1::new(
                 family,
                 0,
-                8,
+                chunk_count,
                 logical_value_count,
                 used_slots - 1,
                 absent,
@@ -3443,7 +4065,7 @@ mod tests {
             ZkAmsPhase23RnsLinkChunkCommitmentV1::new(
                 family,
                 0,
-                8,
+                chunk_count,
                 logical_value_count,
                 used_slots,
                 absent,

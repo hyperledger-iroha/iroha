@@ -63,7 +63,7 @@ Implementation Notes:
 | Task | Details |
 |------|---------|
 | Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Ledger pin quotas | Consensus transactionally maintains global and per-account live manifest counts/bytes, bounded lineage depth/fanout, an ordered expiry index, and lifecycle-status indexes. Generic transaction admission cannot bypass these ceilings; retirement and consensus-time expiry release charges atomically. |
+| Ledger pin quotas | Consensus transactionally maintains global and per-account retained-record counts, live-content bytes, bounded retained lineage depth/fanout, an ordered expiry index, and lifecycle-status indexes. Generic transaction admission cannot bypass these ceilings; retirement and consensus-time expiry release live-content bytes atomically while retained records continue consuming count and fanout. |
 | Fetch concurrency | Global semaphore (`max_parallel_fetches`) + per-provider budgets (from SF-2d). |
 | Pin queue | Limit outstanding ingestion jobs; provide Norito status endpoint. |
 | PoR cadence | Background worker triggered by `por_sample_interval_secs`. |

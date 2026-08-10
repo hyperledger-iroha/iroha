@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 
 use fastpq_prover::poseidon_manifest;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     proof::VerifyingKeyId,
@@ -76,7 +76,7 @@ pub(super) struct ZkAceAirRelationInputsV1 {
     pub(super) identity_commitment: [u8; 32],
     pub(super) tx_digest: [u8; 32],
     pub(super) authorization_digest: [u8; 32],
-    pub(super) chain_id: ChainId,
+    pub(super) network_id: NetworkId,
     pub(super) domain_tag: String,
     pub(super) action_class: String,
     pub(super) replay_nullifier: [u8; 32],
@@ -94,7 +94,7 @@ impl ZkAceAirRelationInputsV1 {
         identity_commitment: [u8; 32],
         tx_digest: [u8; 32],
         authorization_digest: [u8; 32],
-        chain_id: ChainId,
+        network_id: NetworkId,
         replay_nullifier: [u8; 32],
         policy_hash: [u8; 32],
         from: AccountId,
@@ -107,7 +107,7 @@ impl ZkAceAirRelationInputsV1 {
             identity_commitment,
             tx_digest,
             authorization_digest,
-            chain_id,
+            network_id,
             domain_tag: ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
             action_class: ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
             replay_nullifier,
@@ -130,7 +130,7 @@ impl ZkAceAirRelationInputsV1 {
 /// is ordered and independently length-framed by
 /// [`zk_ace_poseidon2_domain_hash`], whose byte packing is fixed to seven-byte
 /// little-endian Goldilocks limbs.
-pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=chain-id:utf8|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
+pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
 const AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:air-public-digest:v1";
 
 fn air_public_transcript_parts_v1(
@@ -152,7 +152,7 @@ fn air_public_transcript_parts_v1(
         public_inputs.identity_commitment.to_vec(),
         public_inputs.tx_digest.to_vec(),
         public_inputs.authorization_digest.to_vec(),
-        public_inputs.chain_id.as_str().as_bytes().to_vec(),
+        public_inputs.network_id.as_bytes().to_vec(),
         public_inputs.domain_tag.as_bytes().to_vec(),
         public_inputs.action_class.as_bytes().to_vec(),
         public_inputs.replay_nullifier.to_vec(),
@@ -1133,7 +1133,7 @@ fn replay_message_words(public_inputs: &ZkAceAirRelationInputsV1) -> Vec<Message
     words.push(MessageWord::Constant(32));
     words.extend((10..15).map(MessageWord::Witness));
     append_framed_constant_part(&mut words, &public_inputs.authorization_digest);
-    append_framed_constant_part(&mut words, public_inputs.chain_id.as_str().as_bytes());
+    append_framed_constant_part(&mut words, public_inputs.network_id.as_bytes());
     append_framed_constant_part(&mut words, public_inputs.action_class.as_bytes());
     append_framed_constant_part(&mut words, public_inputs.domain_tag.as_bytes());
     words
@@ -2584,7 +2584,7 @@ fn validate_relation_inputs(
         &public_inputs.to,
         &public_inputs.asset,
         public_inputs.amount,
-        &public_inputs.chain_id,
+        &public_inputs.network_id,
         ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
         &public_inputs.policy_hash,
     )
@@ -3190,9 +3190,9 @@ pub(super) fn verify_zk_ace_stark_v1(
 mod tests {
     use std::{str::FromStr as _, sync::OnceLock};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -3222,7 +3222,11 @@ mod tests {
             identity_blinding: [0x22; 32],
             replay_secret: [0x33; 32],
         };
-        let chain_id = ChainId::from("taira-privacy-zk-ace-test");
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x48; 32]),
+            ),
+        );
         let source = account(1);
         let destination = account(2);
         let asset = asset();
@@ -3238,7 +3242,7 @@ mod tests {
             &destination,
             &asset,
             19,
-            &chain_id,
+            &network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             &policy_hash,
         )
@@ -3246,7 +3250,7 @@ mod tests {
         let replay_nullifier = derive_zk_ace_replay_nullifier(
             &witness.replay_secret,
             &authorization_digest,
-            &chain_id,
+            &network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );
@@ -3255,7 +3259,7 @@ mod tests {
                 identity_commitment,
                 tx_digest,
                 authorization_digest,
-                chain_id,
+                network_id,
                 replay_nullifier,
                 policy_hash,
                 source,
@@ -3368,7 +3372,7 @@ mod tests {
         assert_eq!(parts[2], public_inputs.identity_commitment);
         assert_eq!(parts[3], public_inputs.tx_digest);
         assert_eq!(parts[4], public_inputs.authorization_digest);
-        assert_eq!(parts[5], public_inputs.chain_id.as_str().as_bytes());
+        assert_eq!(parts[5], public_inputs.network_id.as_bytes());
         assert_eq!(parts[6], public_inputs.domain_tag.as_bytes());
         assert_eq!(parts[7], public_inputs.action_class.as_bytes());
         assert_eq!(parts[8], public_inputs.replay_nullifier);
@@ -3966,7 +3970,13 @@ mod tests {
             ("identity", |value| value.identity_commitment[0] ^= 1),
             ("transfer", |value| value.tx_digest[0] ^= 1),
             ("authorization", |value| value.authorization_digest[0] ^= 1),
-            ("chain", |value| value.chain_id = ChainId::from("foreign")),
+            ("network", |value| {
+                value.network_id = NetworkId::from_genesis_hash(HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::prehashed([0x49; 32])
+                ))
+            }),
             ("domain", |value| value.domain_tag.push('x')),
             ("action", |value| value.action_class.push('x')),
             ("nullifier", |value| value.replay_nullifier[0] ^= 1),

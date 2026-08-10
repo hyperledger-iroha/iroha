@@ -5927,7 +5927,7 @@ mod tests {
                 "/expectations.json".to_owned(),
             ),
             ("cargo-lock".to_owned(), "/Cargo.lock".to_owned()),
-            ("validator-binary".to_owned(), "/irohad".to_owned()),
+            ("validator-binary".to_owned(), "/iroha3d".to_owned()),
         ]);
         assert!(parse_common_inputs(&options).is_ok());
 

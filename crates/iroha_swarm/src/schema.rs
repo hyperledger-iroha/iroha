@@ -776,12 +776,12 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             format!(
                 "{materialize}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
                  HOME=/opt/iroha USER=iroha \
-                 IROHA_BUILD_LINE={} irohad{sora} --config /config/peer.toml \
+                 IROHA_BUILD_LINE={} iroha3d{sora} --config /config/peer.toml \
                  --config-blake3 {config_blake3}",
                 runtime.build_line.as_str()
             )
         }
-        None => "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec irohad".to_owned(),
+        None => "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned(),
     };
     format!(
         r#"/bin/sh -eu -c "

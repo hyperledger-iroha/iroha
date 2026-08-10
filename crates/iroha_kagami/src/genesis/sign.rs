@@ -744,7 +744,7 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         default_nexus = actual::Nexus::default();
         &default_nexus.dataspace_catalog
     };
-    // Match fresh-node and `irohad --check-config` semantics exactly: genesis aliases are
+    // Match fresh-node and `iroha3d --check-config` semantics exactly: genesis aliases are
     // pre-seeded before the block executes so declarative EnsureAlias instructions repair
     // derived state without charging or depending on policy activation order.
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &provisional.0, dataspace_catalog);
@@ -779,7 +779,6 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         provisional.0,
         &topology,
-        genesis.chain_id(),
         &authority,
         &TimeSource::new_system(),
         &state,

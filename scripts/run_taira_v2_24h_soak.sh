@@ -25,35 +25,7 @@ sha256_file() {
   fi
 }
 
-wait_for_external_cargo() {
-  local active_compilers
-  while true; do
-    ps -axo pid,etime,command
-    active_compilers="$(
-      ps -axo pid=,command= | awk '
-        {
-          executable = $2
-          sub(/^.*\//, "", executable)
-          if (executable == "cargo" || executable == "rustc") {
-            print
-          }
-        }
-      '
-    )"
-    if [[ -z "$active_compilers" ]]; then
-      return
-    fi
-    printf '%s\n' \
-      "waiting for active Cargo/rustc processes before Taira command:" \
-      "$active_compilers" >&2
-    sleep 10
-  done
-}
-
-run_cargo() {
-  wait_for_external_cargo
-  command cargo "$@"
-}
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
 
 source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"
 
@@ -133,9 +105,31 @@ if [[ ! "$head_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
   echo "Taira release soak requires exact parent HEAD, tree, and Cargo.lock identities" >&2
   exit 1
 fi
-readonly source_bound_root="${REPO_ROOT}/target/sumeragi-v2-release/${source_manifest_sha256}"
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  && -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  taira_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-taira.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$taira_invocation_root/target" \
+    "$taira_invocation_root/artifacts"
+  export CARGO_TARGET_DIR="$taira_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$taira_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$taira_invocation_root/cancel-request.json"
+elif [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "Taira requires CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and IROHA_RELEASE_CANCEL_REQUEST_PATH together" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$REPO_ROOT"
+require_external_release_artifact_root "$REPO_ROOT"
+require_disjoint_release_roots "$REPO_ROOT"
+release_gate_boundary "taira:entry" || exit $?
+readonly source_bound_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${source_manifest_sha256}"
 readonly evidence_root="${source_bound_root}/evidence/taira-v2-24h"
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export IROHA_TEST_SKIP_BUILD=1
@@ -145,15 +139,16 @@ export IROHA_TEST_BUILD_PROFILE=release
 export PROFILE=release
 export RUST_LOG=info
 export CARGO_NET_OFFLINE=true
-export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
+release_gate_boundary "taira:before-prebuilt-bundle" || exit $?
 ensure_source_bound_localnet_binaries
 export_source_bound_localnet_binaries
+release_gate_boundary "taira:after-prebuilt-bundle" || exit $?
 
 # A source digest intentionally selects one build/evidence root. Serialize the
-# complete 24-hour run so two release jobs cannot overwrite that root's binary
-# cache or retained evidence. A hard-killed run leaves the lock behind and must
-# be inspected explicitly instead of being mistaken for a safe retry.
+# complete 24-hour run so two release jobs cannot overwrite retained evidence.
+# An abnormally interrupted run leaves the lock behind and must be inspected
+# explicitly instead of being mistaken for a safe retry.
 mkdir -p -- "$evidence_root"
 readonly soak_lock_path="${evidence_root}/.taira_v2_24h_soak.lock"
 if ! mkdir -- "$soak_lock_path"; then
@@ -199,6 +194,7 @@ if [[ "$inventory_count" != 1 ]]; then
   exit 1
 fi
 
+release_gate_boundary "taira:before-soak" || exit $?
 set +e
 run_cargo test --locked --offline --release -p integration_tests --test consensus_and_da \
   "$TAIRA_SOAK_TEST" -- \
@@ -210,6 +206,7 @@ if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
   echo "Taira production soak command failed (cargo=${pipeline_status[0]}, tee=${pipeline_status[1]})" >&2
   exit 1
 fi
+release_gate_boundary "taira:after-soak-natural-completion" || exit $?
 
 running_total="$(grep -Ec '^running [0-9]+ tests?$' "$run_log" || true)"
 running_one="$(grep -Fxc 'running 1 test' "$run_log" || true)"
@@ -259,6 +256,7 @@ if ! localnet_binary_attestation_valid; then
   echo "source-bound localnet binary bundle changed before Taira completion" >&2
   exit 1
 fi
+release_gate_boundary "taira:before-evidence-publication" || exit $?
 mv -- "$partial_evidence_path" "$evidence_path"
 evidence_sha256="$(sha256_file "$evidence_path")"
 log_sha256="$(sha256_file "$run_log")"
@@ -308,5 +306,6 @@ fi
 printf '%s\n' "$completion_body" |
   python3 -I -S "${REPO_ROOT}/scripts/publish_release_marker.py" \
     "${marker_publish_args[@]}"
+release_gate_boundary "taira:after-evidence-publication" || exit $?
 
 echo "Taira v2 production soak passed with exactly one test; retained evidence=${evidence_path}; completion=${completion_attestation}" >&2

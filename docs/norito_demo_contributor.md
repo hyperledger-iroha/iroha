@@ -11,7 +11,7 @@ Norito bridge/Connect stack into Xcode projects, see the
 1. Install the Rust toolchain defined in `rust-toolchain.toml`.
 2. Install Swift 5.9+ and Xcode command line tools on macOS.
 3. (Optional) Install [SwiftLint](https://github.com/realm/SwiftLint) for linting.
-4. Run `cargo build -p irohad` to ensure the node compiles on your host.
+4. Run `cargo build -p irohad --bin iroha3d` to ensure the node compiles on your host.
 5. Copy `examples/ios/NoritoDemoXcode/Configs/demo.env.example` to `.env` and adjust the
    values to match your environment. The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).

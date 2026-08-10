@@ -52,6 +52,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
+const ALIAS_SETUP_FIXTURE_V1: &str = "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json";
 const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
 const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manifest.json";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
@@ -104,6 +105,7 @@ fn workspace_root() -> PathBuf {
 struct NoritoRpcVerificationReport {
     generated_at: String,
     fixture_count: usize,
+    alias_setup_fixture: ManifestDigestReport,
     canonical_manifest: ManifestDigestReport,
     schema_manifest: ManifestDigestReport,
     sdk_manifests: Vec<SdkManifestReport>,
@@ -130,6 +132,28 @@ pub enum JsonOutput {
     Stdout,
     /// Write the report to the provided file, creating parent directories.
     File(PathBuf),
+}
+
+/// Canonical JSON bytes for the independently typed V1 alias-setup fixture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AliasSetupFixtureBytes {
+    bytes: Vec<u8>,
+}
+
+impl AliasSetupFixtureBytes {
+    /// Validate canonical publication framing and retired identity-key absence.
+    ///
+    /// # Errors
+    /// Returns an error unless `bytes` is a newline-terminated, closed V1 alias-setup JSON object
+    /// carrying one parseable exact `network_id` and no retired chain/genesis identity aliases.
+    pub fn try_new(bytes: Vec<u8>) -> Result<Self> {
+        validate_alias_setup_fixture_bytes(&bytes)?;
+        Ok(Self { bytes })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// Root receiving the complete canonical and SDK fixture publication.
@@ -230,6 +254,101 @@ fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
+    let Some(body) = bytes.strip_suffix(b"\n") else {
+        bail!("alias-setup fixture JSON must end with exactly one newline");
+    };
+    if body.last() != Some(&b'}') || bytes.contains(&b'\r') {
+        bail!("alias-setup fixture JSON must use canonical LF-only object framing");
+    }
+    let value: Value = json::from_slice(bytes).context("invalid alias-setup fixture JSON")?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("alias-setup fixture root must be an object"))?;
+    require_exact_fields(
+        root,
+        &[
+            "schema_version",
+            "account_alias_cases",
+            "resolved_name_json_vectors",
+            "quote_guard_json_vector",
+            "permission_scope_json_vector",
+            "account_onboarding_receipt_vector",
+            "plan_hash_vectors",
+            "instruction_frame_vectors",
+            "report_json_vector",
+        ],
+        "alias-setup fixture root",
+    )?;
+    if root.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        bail!("alias-setup fixture schema_version must be exactly 1");
+    }
+    reject_alias_setup_secret_and_retired_keys(&value, "alias-setup fixture")?;
+
+    let onboarding = root
+        .get("account_onboarding_receipt_vector")
+        .and_then(Value::as_object)
+        .and_then(|vector| vector.get("receipt_json"))
+        .and_then(Value::as_object)
+        .and_then(|receipt| receipt.get("body"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("alias-setup fixture is missing the typed onboarding receipt body"))?;
+    let network_literal = onboarding
+        .get("network_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("alias-setup fixture onboarding body requires network_id"))?;
+    let network_id = parse_network_id(network_literal)
+        .context("alias-setup fixture onboarding network_id is not canonical")?;
+    if network_id.to_string() != network_literal {
+        bail!("alias-setup fixture onboarding network_id must use its canonical literal");
+    }
+    Ok(())
+}
+
+fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> Result<()> {
+    const FORBIDDEN_KEYS: &[&str] = &[
+        "chain",
+        "chainId",
+        "chain_id",
+        "genesis",
+        "genesisHash",
+        "genesis_hash",
+        "privateKey",
+        "private_key",
+    ];
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if FORBIDDEN_KEYS.contains(&key.as_str()) {
+                    bail!("{context} contains forbidden field `{key}`");
+                }
+                reject_alias_setup_secret_and_retired_keys(child, context)?;
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                reject_alias_setup_secret_and_retired_keys(child, context)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn write_alias_setup_fixture(
+    publication_root: &Path,
+    fixture: &AliasSetupFixtureBytes,
+) -> Result<()> {
+    let path = publication_root.join(ALIAS_SETUP_FIXTURE_V1);
+    ensure_safe_owned_path(publication_root, &path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("alias-setup fixture output has no parent"))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    fs::write(&path, fixture.as_slice())
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
@@ -377,8 +496,11 @@ fn parse_schema_hash_hex(input: &str) -> Result<[u8; 16]> {
 }
 
 /// Verify canonical fixture bytes, schema hashes, and SDK manifest parity.
-pub fn run_verify(json_out: Option<JsonOutput>) -> Result<()> {
-    let report = build_verification_report()?;
+pub fn run_verify(
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+    json_out: Option<JsonOutput>,
+) -> Result<()> {
+    let report = build_verification_report(alias_setup_fixture)?;
 
     println!(
         "norito-rpc fixtures verified ({} entries)",
@@ -409,11 +531,17 @@ fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
     Ok(())
 }
 
-fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
+fn build_verification_report(
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+) -> Result<NoritoRpcVerificationReport> {
     let resolved = FixtureOptions::new(None).resolve_paths()?;
     let root = resolved.output_root.clone();
     let rendered = tempdir().context("failed to create private fixture verification tree")?;
-    let expected = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let expected = render_fixture_publication(
+        &resolved.fixtures_json,
+        alias_setup_fixture,
+        rendered.path(),
+    )?;
     compare_owned_publication(
         rendered.path(),
         &root,
@@ -484,6 +612,7 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 
     let canonical_manifest = manifest_digest(&canonical_path, &root)?;
     let schema_manifest = manifest_digest(&schema_manifest_path, &root)?;
+    let alias_setup_fixture = manifest_digest(&root.join(ALIAS_SETUP_FIXTURE_V1), &root)?;
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("timestamp formatting must succeed");
@@ -491,6 +620,7 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
     Ok(NoritoRpcVerificationReport {
         generated_at: timestamp,
         fixture_count: canonical.fixtures.len(),
+        alias_setup_fixture,
         canonical_manifest,
         schema_manifest,
         sdk_manifests,
@@ -498,10 +628,17 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 }
 
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
-pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
+pub fn generate_fixtures(
+    options: FixtureOptions,
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+) -> Result<()> {
     let resolved = options.resolve_paths()?;
     let rendered = tempdir().context("failed to create private fixture publication tree")?;
-    let generated = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let generated = render_fixture_publication(
+        &resolved.fixtures_json,
+        alias_setup_fixture,
+        rendered.path(),
+    )?;
     let owned_paths = owned_publication_paths(&generated.fixtures)?;
     let removals = preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
     publish_owned_publication(
@@ -523,11 +660,16 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     Ok(())
 }
 
-fn render_fixture_publication(fixtures_json: &Path, publication_root: &Path) -> Result<Manifest> {
+fn render_fixture_publication(
+    fixtures_json: &Path,
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+    publication_root: &Path,
+) -> Result<Manifest> {
     let canonical_dir = publication_root.join(CANONICAL_FIXTURE_DIRECTORY);
     fs::create_dir_all(&canonical_dir)
         .with_context(|| format!("failed to create {}", canonical_dir.display()))?;
     generate_fixture_artifacts(fixtures_json, &canonical_dir)?;
+    write_alias_setup_fixture(publication_root, alias_setup_fixture)?;
 
     let manifest_path = canonical_dir.join(MANIFEST_BASENAME);
     let manifest = Manifest::load(&manifest_path).with_context(|| {
@@ -1622,6 +1764,7 @@ fn sync_sdk_fixture_mirrors(
 fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
     let canonical_dir = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
     let mut paths = vec![
+        PathBuf::from(ALIAS_SETUP_FIXTURE_V1),
         canonical_dir.join(PAYLOADS_BASENAME),
         canonical_dir.join(MANIFEST_BASENAME),
         canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME),
@@ -2906,6 +3049,12 @@ mod tests {
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 
+    fn checked_in_alias_setup_fixture() -> AliasSetupFixtureBytes {
+        let path = workspace_root().join(ALIAS_SETUP_FIXTURE_V1);
+        AliasSetupFixtureBytes::try_new(fs::read(&path).expect("read alias-setup fixture"))
+            .expect("validate alias-setup fixture")
+    }
+
     #[test]
     fn register_asset_definition_fixture_source_is_current_and_semantic() {
         let register = semantic_register_asset_definition().expect("semantic register source");
@@ -4130,7 +4279,8 @@ mod tests {
 
     #[test]
     fn verification_report_lists_expected_sdks() {
-        let report = build_verification_report().expect("report");
+        let alias_setup_fixture = checked_in_alias_setup_fixture();
+        let report = build_verification_report(&alias_setup_fixture).expect("report");
         assert!(report.fixture_count > 0);
         let mut labels: Vec<&str> = report
             .sdk_manifests

@@ -1377,6 +1377,48 @@ mod tests {
     }
 
     #[test]
+    fn public_pin_fee_scales_with_bytes_replicas_and_retention() {
+        let schedule = PricingScheduleRecord::launch_default();
+        let one_gib = u64::try_from(BYTES_PER_GIB).expect("GiB constant fits u64");
+        let base = schedule
+            .public_pin_fee(StorageClass::Hot, one_gib, 1, 0, SECONDS_PER_WEEK)
+            .expect("base public pin fee");
+        let larger = schedule
+            .public_pin_fee(
+                StorageClass::Hot,
+                one_gib.checked_mul(2).expect("two GiB fits u64"),
+                1,
+                0,
+                SECONDS_PER_WEEK,
+            )
+            .expect("larger public pin fee");
+        let replicated = schedule
+            .public_pin_fee(StorageClass::Hot, one_gib, 2, 0, SECONDS_PER_WEEK)
+            .expect("replicated public pin fee");
+        let longer = schedule
+            .public_pin_fee(
+                StorageClass::Hot,
+                one_gib,
+                1,
+                0,
+                SECONDS_PER_WEEK
+                    .checked_mul(2)
+                    .expect("two settlement windows fit u64"),
+            )
+            .expect("longer public pin fee");
+
+        assert!(larger > base, "stored bytes must increase the prepaid fee");
+        assert!(
+            replicated > base,
+            "replica count must increase the prepaid fee"
+        );
+        assert!(
+            longer > base,
+            "retention duration must increase the prepaid fee"
+        );
+    }
+
+    #[test]
     fn provider_credit_low_balance_tracking() {
         let mut credit = ProviderCreditRecord::new(
             ProviderId::default(),

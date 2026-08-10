@@ -1,11 +1,14 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Hyperledger.Iroha;
 
 /// <summary>
 /// Exact deployment identity derived from the consensus hash of the genesis header.
 /// </summary>
+[JsonConverter(typeof(NetworkIdJsonConverter))]
 public sealed class NetworkId : IEquatable<NetworkId>
 {
     public const int ByteLength = 32;
@@ -94,4 +97,26 @@ public sealed class NetworkId : IEquatable<NetworkId>
 
         return (ushort)crc;
     }
+}
+
+internal sealed class NetworkIdJsonConverter : JsonConverter<NetworkId>
+{
+    public override NetworkId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException("NetworkId must be a canonical string literal.");
+        }
+        try
+        {
+            return NetworkId.Parse(reader.GetString()!);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException("NetworkId must be a canonical checksummed literal.", error);
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, NetworkId value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.ToString());
 }

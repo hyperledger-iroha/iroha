@@ -2,13 +2,14 @@
 
 #[tokio::test]
 async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
-    let (state, _queue, chain_id) = mk_basic_context();
-    let chain_id_str = chain_id.as_str().to_string();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let network_id = *state.network_id_ref();
     let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
     let root_hint = hex::encode([0u8; 32]);
     let dto = super::ZkBallotV1Dto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str.clone(),
+        network_id,
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
         envelope_b64: envelope_b64.clone(),
@@ -23,7 +24,7 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
     let raw = Bytes::from(
         norito::json::to_vec(&norito::json!({
             "authority": ACCOUNT_AUTHORITY,
-            "chain_id": chain_id_str,
+            "network_id": network_id,
             "election_id": "ref-1",
             "backend": "halo2/ipa",
             "envelope_b64": envelope_b64,
@@ -33,8 +34,8 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
         .unwrap(),
     );
     let res = super::handle_gov_ballot_zk_v1(
-        chain_id,
         state,
+        &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
@@ -51,12 +52,12 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
 
 #[tokio::test]
 async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
-    let (state, _queue, chain_id) = mk_basic_context();
-    let chain_id_str = chain_id.as_str().to_string();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
     let dto = super::ZkBallotV1Dto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str,
+        network_id: *state.network_id_ref(),
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
         envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
@@ -69,8 +70,8 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
     let res = super::handle_gov_ballot_zk_v1(
-        chain_id,
         state,
+        &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
@@ -89,12 +90,13 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
 async fn zk_v1_handlers_reject_noncanonical_direction() {
     use iroha_data_model::isi::governance::BallotProof;
 
-    let (state, _queue, chain_id) = mk_basic_context();
-    let chain_id_str = chain_id.as_str().to_string();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let network_id = *state.network_id_ref();
     let envelope_b64 = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]);
     let dto = super::ZkBallotV1Dto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str.clone(),
+        network_id,
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
         envelope_b64,
@@ -107,8 +109,8 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
     let response = super::handle_gov_ballot_zk_v1(
-        chain_id.clone(),
         state.clone(),
+        &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
@@ -122,7 +124,7 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
 
     let dto = super::ZkBallotV1BallotProofDto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str,
+        network_id,
         election_id: "ref-1".to_string(),
         ballot: BallotProof {
             backend: "halo2/ipa".into(),
@@ -137,8 +139,8 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
     let response = super::handle_gov_ballot_zk_v1_ballotproof(
-        chain_id,
         state,
+        &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
@@ -152,14 +154,16 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
 }
 
 #[tokio::test]
-async fn zk_v1_handlers_reject_non_token_backends_before_context_lookup() {
+async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission() {
     use iroha_data_model::isi::governance::BallotProof;
 
-    let (state, _queue, chain_id) = mk_basic_context();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let network_id = *state.network_id_ref();
     for backend in ["", " halo2/ipa", "halo2/ipa ", "halo2 ipa", "halo2\nipa"] {
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: "deliberately-wrong-chain".to_owned(),
+            network_id,
             election_id: "ref-1".to_owned(),
             backend: backend.to_owned(),
             envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
@@ -173,13 +177,13 @@ async fn zk_v1_handlers_reject_non_token_backends_before_context_lookup() {
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let response = super::handle_gov_ballot_zk_v1(
-            chain_id.clone(),
             state.clone(),
+            &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("backend rejection must precede chain lookup");
+        .expect("backend rejection must follow exact-network admission");
         assert!(!response.0.accepted, "backend `{backend:?}`");
         assert!(
             response.0.tx_instructions.is_empty(),
@@ -196,7 +200,7 @@ async fn zk_v1_handlers_reject_non_token_backends_before_context_lookup() {
 
         let dto = super::ZkBallotV1BallotProofDto {
             authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: "deliberately-wrong-chain".to_owned(),
+            network_id,
             election_id: "ref-1".to_owned(),
             ballot: BallotProof {
                 backend: backend.into(),
@@ -212,13 +216,13 @@ async fn zk_v1_handlers_reject_non_token_backends_before_context_lookup() {
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let response = super::handle_gov_ballot_zk_v1_ballotproof(
-            chain_id.clone(),
             state.clone(),
+            &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("backend rejection must precede chain lookup");
+        .expect("backend rejection must follow exact-network admission");
         assert!(!response.0.accepted, "backend `{backend:?}`");
         assert!(
             response.0.tx_instructions.is_empty(),
@@ -242,19 +246,26 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
     use iroha_data_model::isi::governance::BallotProof;
     use tower::ServiceExt as _;
 
-    let (state, _queue, chain_id) = mk_basic_context();
-    let chain_id_str = chain_id.as_str().to_string();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let network_id = *state.network_id_ref();
     // Route for zk-v1/ballot-proof
     let app = Router::new().route(
         "/v1/gov/ballots/zk-v1/ballot-proof",
         post({
             let state = state.clone();
-            let chain_id = chain_id.clone();
+            let authenticated = authenticated.clone();
             move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1BallotProofDto>| {
                 let telemetry = MaybeTelemetry::disabled();
+                let authenticated = authenticated.clone();
                 async move {
-                    super::handle_gov_ballot_zk_v1_ballotproof(chain_id, state, telemetry, body)
-                        .await
+                    super::handle_gov_ballot_zk_v1_ballotproof(
+                        state,
+                        &authenticated,
+                        telemetry,
+                        body,
+                    )
+                    .await
                 }
             }
         }),
@@ -278,7 +289,7 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
     };
     let dto = super::ZkBallotV1BallotProofDto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str,
+        network_id,
         election_id: "ref-1".to_string(),
         ballot,
     };
@@ -313,8 +324,9 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
 async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
     use iroha_data_model::isi::governance::BallotProof;
 
-    let (state, _queue, chain_id) = mk_basic_context();
-    let chain_id_str = chain_id.as_str().to_string();
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let network_id = *state.network_id_ref();
     let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
     let root_hint = hex::encode([0xAAu8; 32]);
     let ballot = BallotProof {
@@ -329,7 +341,7 @@ async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
     };
     let dto = super::ZkBallotV1BallotProofDto {
         authority: ACCOUNT_AUTHORITY.to_string(),
-        chain_id: chain_id_str.clone(),
+        network_id,
         election_id: "ref-1".to_string(),
         ballot,
     };
@@ -337,7 +349,7 @@ async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
     let raw = Bytes::from(
         norito::json::to_vec(&norito::json!({
             "authority": ACCOUNT_AUTHORITY,
-            "chain_id": chain_id_str,
+            "network_id": network_id,
             "election_id": "ref-1",
             "ballot": {
                 "backend": "halo2/ipa",
@@ -349,8 +361,8 @@ async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
         .unwrap(),
     );
     let res = super::handle_gov_ballot_zk_v1_ballotproof(
-        chain_id,
         state,
+        &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )

@@ -217,6 +217,7 @@ __all__ = [
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
+    "inspect_privacy_exact12_action_driver_transaction_context_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
     "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
@@ -1704,7 +1705,7 @@ def derive_confidential_note_v2(
 
 def build_confidential_transfer_proof_v2(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     tree_commitments: Iterable[bytes | bytearray | memoryview | str],
@@ -1724,7 +1725,7 @@ def build_confidential_transfer_proof_v2(
         "verifying_key",
     )
     result = _crypto.build_confidential_transfer_proof_v2(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(tree_commitments),
@@ -1740,7 +1741,7 @@ def build_confidential_transfer_proof_v2(
 
 def build_confidential_transfer_proof_v2_with_paths(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     input_paths: Iterable[Mapping[str, Any]],
@@ -1760,7 +1761,7 @@ def build_confidential_transfer_proof_v2_with_paths(
         "verifying_key",
     )
     result = _crypto.build_confidential_transfer_proof_v2_with_paths(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(input_paths),
@@ -1776,7 +1777,7 @@ def build_confidential_transfer_proof_v2_with_paths(
 
 def build_confidential_unshield_proof_v3(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     tree_commitments: Iterable[bytes | bytearray | memoryview | str],
@@ -1797,7 +1798,7 @@ def build_confidential_unshield_proof_v3(
         "verifying_key",
     )
     result = _crypto.build_confidential_unshield_proof_v3(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(tree_commitments),
@@ -1814,7 +1815,7 @@ def build_confidential_unshield_proof_v3(
 
 def build_confidential_unshield_proof_v3_with_paths(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     input_paths: Iterable[Mapping[str, Any]],
@@ -1835,7 +1836,7 @@ def build_confidential_unshield_proof_v3_with_paths(
         "verifying_key",
     )
     result = _crypto.build_confidential_unshield_proof_v3_with_paths(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(input_paths),
@@ -2275,9 +2276,75 @@ def signed_transaction_envelope_from_versioned_v1(
     return result
 
 
+def inspect_privacy_exact12_action_driver_transaction_context_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    candidate_binding_sha256: bytes | bytearray | memoryview,
+    request_id: bytes | bytearray | memoryview,
+    network_id: NetworkId,
+    creation_time_millis: int,
+    ttl_millis: int,
+    nonce: int,
+) -> Mapping[str, Any]:
+    """Authenticate one qualification action's exact signed public context.
+
+    The Rust boundary derives the expected signer internally from the candidate
+    and request identities. It returns only authenticated public identity; no
+    signing key or witness material crosses the extension boundary.
+    """
+
+    byte_inputs = (
+        (signed_transaction_versioned, "signed_transaction_versioned", None),
+        (candidate_binding_sha256, "candidate_binding_sha256", 32),
+        (request_id, "request_id", 32),
+    )
+    normalized: list[bytes] = []
+    for value, field, expected_length in byte_inputs:
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{field} must be bytes-like")
+        encoded = bytes(value)
+        if expected_length is not None and len(encoded) != expected_length:
+            raise ValueError(f"{field} must be exactly {expected_length} bytes")
+        normalized.append(encoded)
+    network_id = _require_network_id(network_id)
+    if (
+        not isinstance(creation_time_millis, int)
+        or isinstance(creation_time_millis, bool)
+        or not isinstance(ttl_millis, int)
+        or isinstance(ttl_millis, bool)
+        or not isinstance(nonce, int)
+        or isinstance(nonce, bool)
+    ):
+        raise TypeError("transaction time fields and nonce must be integers")
+    if not 1 <= creation_time_millis <= 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("creation_time_millis must be one nonzero u64")
+    if not 1 <= ttl_millis <= 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("ttl_millis must be one nonzero u64")
+    if not 1 <= nonce <= 0xFFFF_FFFF:
+        raise ValueError("nonce must be one nonzero u32")
+    try:
+        result = _crypto.inspect_privacy_exact12_action_driver_transaction_context_v1(
+            normalized[0],
+            normalized[1],
+            normalized[2],
+            network_id,
+            creation_time_millis,
+            ttl_millis,
+            nonce,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing the Exact12 action-driver context inspector; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid Exact12 action-driver transaction context") from None
+    if not isinstance(result, Mapping):
+        raise RuntimeError("native Exact12 action-driver context inspector returned malformed data")
+    return result
+
+
 def privacy_vega_device_authentication_digest_v1(
-    chain_id: str,
-    canonical_genesis_hash: bytes | bytearray | memoryview,
+    network_id: NetworkId,
     transaction_intent_digest: bytes | bytearray | memoryview,
     issuer_id: bytes | bytearray | memoryview,
     issuer_record_epoch: int,
@@ -2293,17 +2360,15 @@ def privacy_vega_device_authentication_digest_v1(
     """Derive Vega ``H_dev`` for an explicit prepared transaction intent.
 
     The native derivation fixes the ISO 18013-5 document profile, action index,
-    governed Vega artifacts, chain, genesis, date, threshold, reader challenge,
+    governed Vega artifacts, exact NetworkId, date, threshold, reader challenge,
     session transcript, and canonical nonzero transaction intent. This helper
     handles public binding data only; generic Vega construction and every
     credential-bearing operation must use
     :class:`PrivacyWalletWorkerControllerV1`.
     """
 
-    if not isinstance(chain_id, str):
-        raise TypeError("chain_id must be a string")
+    network_id = _require_network_id(network_id)
     byte_inputs = (
-        (canonical_genesis_hash, "canonical_genesis_hash"),
         (transaction_intent_digest, "transaction_intent_digest"),
         (issuer_id, "issuer_id"),
         (issuer_record_digest, "issuer_record_digest"),
@@ -2316,8 +2381,7 @@ def privacy_vega_device_authentication_digest_v1(
             raise TypeError(f"{field} must be bytes-like")
     try:
         result = _crypto.privacy_vega_device_authentication_digest_v1(
-            chain_id,
-            bytes(canonical_genesis_hash),
+            network_id,
             bytes(transaction_intent_digest),
             bytes(issuer_id),
             issuer_record_epoch,

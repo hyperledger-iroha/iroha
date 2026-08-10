@@ -24,7 +24,7 @@ use norito::codec::{Decode, Encode};
 use norito::json;
 
 use super::RelayId;
-use crate::{ChainId, account::AccountId, asset::AssetDefinitionId};
+use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
 
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
@@ -796,16 +796,16 @@ pub fn derive_vpn_address_slot_v1(quote_id: [u8; 32]) -> VpnAddressSlotV1 {
     VpnAddressSlotV1(index)
 }
 
-/// Derive the canonical lease identifier for a chain-bound operator quote.
+/// Derive the canonical lease identifier for an exact-network-bound operator quote.
 #[must_use]
 pub fn derive_vpn_lease_id_v1(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     quote_id: [u8; 32],
     client_account_id: &AccountId,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"soranet-vpn-lease-id-v1");
-    hasher.update(&chain_id.encode());
+    hasher.update(network_id.as_bytes());
     hasher.update(&quote_id);
     hasher.update(&client_account_id.encode());
     *hasher.finalize().as_bytes()
@@ -814,14 +814,14 @@ pub fn derive_vpn_lease_id_v1(
 /// Derive the canonical session identifier and embed its address slot.
 #[must_use]
 pub fn derive_vpn_session_id_v1(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     quote_id: [u8; 32],
     client_account_id: &AccountId,
     address_slot: VpnAddressSlotV1,
 ) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"soranet-vpn-session-id-v1");
-    hasher.update(&chain_id.encode());
+    hasher.update(network_id.as_bytes());
     hasher.update(&quote_id);
     hasher.update(&client_account_id.encode());
     hasher.update(&address_slot.index().to_be_bytes());
@@ -1007,8 +1007,8 @@ pub struct VpnQuotePolicyV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct VpnQuoteBodyV1 {
-    /// Exact chain on which this quote may open a lease.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network on which this quote may open a lease.
+    pub network_id: NetworkId,
     /// Operator-issued quote identifier.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
@@ -1824,7 +1824,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use hex::FromHex;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
@@ -1859,6 +1859,12 @@ mod tests {
         checked_random_keypair().public_key().clone()
     }
 
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     fn quantity_nanos(value: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u64 nano-XOR test value fits Quantity")
@@ -1871,7 +1877,7 @@ mod tests {
     }
 
     fn sample_quote_body(
-        chain_id: ChainId,
+        network_id: NetworkId,
         quote_id: [u8; 32],
         address_slot: VpnAddressSlotV1,
         client_account_id: AccountId,
@@ -1883,9 +1889,9 @@ mod tests {
                 .expect("static universal domain"),
             "xor".parse().expect("static XOR name"),
         );
-        let lease_id = derive_vpn_lease_id_v1(&chain_id, quote_id, &client_account_id);
+        let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id, &client_account_id);
         let session_id =
-            derive_vpn_session_id_v1(&chain_id, quote_id, &client_account_id, address_slot);
+            derive_vpn_session_id_v1(&network_id, quote_id, &client_account_id, address_slot);
         let address_plan = derive_vpn_address_plan_v1(address_slot);
         let tariff = VpnTariffV1 {
             lease_fee: quantity_nanos(10_000),
@@ -1894,7 +1900,7 @@ mod tests {
             egress_fee_per_mib: quantity_nanos(200),
         };
         VpnQuoteBodyV1 {
-            chain_id,
+            network_id,
             quote_id,
             lease_id,
             session_id,
@@ -2552,7 +2558,7 @@ mod tests {
         let slot = VpnAddressSlotV1::new(VPN_ADDRESS_SLOT_COUNT_V1 - 1).expect("last slot");
         let client = AccountId::new(checked_random_public_key());
         let session_id =
-            derive_vpn_session_id_v1(&ChainId::from("vpn-slot-chain"), [0xA5; 32], &client, slot);
+            derive_vpn_session_id_v1(&test_network_id(0x31), [0xA5; 32], &client, slot);
         assert_eq!(VpnAddressSlotV1::from_session_id(session_id), slot);
         assert_eq!(
             derive_vpn_session_address_plan_v1(session_id),
@@ -2561,11 +2567,11 @@ mod tests {
     }
 
     #[test]
-    fn operator_quote_signature_binds_chain_economics_identity_trust_and_slot() {
+    fn operator_quote_signature_binds_network_economics_identity_trust_and_slot() {
         let operator = checked_random_keypair();
         let client = AccountId::new(checked_random_public_key());
         let body = sample_quote_body(
-            ChainId::from("vpn-quote-chain"),
+            test_network_id(0x41),
             [0x71; 32],
             VpnAddressSlotV1::new(17).expect("fixture slot"),
             client,
@@ -2578,7 +2584,7 @@ mod tests {
 
         let mut substitutions = Vec::new();
         let mut changed = quote.clone();
-        changed.body.chain_id = ChainId::from("different-chain");
+        changed.body.network_id = test_network_id(0x42);
         substitutions.push(changed);
         let mut changed = quote.clone();
         changed.body.tariff.lease_fee = quantity_nanos(1);
@@ -2610,7 +2616,7 @@ mod tests {
     fn operator_quote_reports_malformed_generic_algorithm_signature_payload() {
         let operator = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         let body = sample_quote_body(
-            ChainId::from("vpn-malformed-signature-chain"),
+            test_network_id(0x51),
             [0x73; 32],
             VpnAddressSlotV1::new(19).expect("fixture slot"),
             AccountId::new(checked_random_public_key()),
@@ -2634,11 +2640,12 @@ mod tests {
         let mut quote_0198 = [0_u8; 32];
         quote_0198[30..].copy_from_slice(&[0x01, 0x98]);
         let slot = VpnAddressSlotV1::new(91).expect("fixture slot");
-        let chain_id = ChainId::from("vpn-collision-chain");
+        let network_id = test_network_id(0x61);
         let first_client = AccountId::new(checked_random_public_key());
         let second_client = AccountId::new(checked_random_public_key());
-        let first_session = derive_vpn_session_id_v1(&chain_id, quote_0009, &first_client, slot);
-        let second_session = derive_vpn_session_id_v1(&chain_id, quote_0198, &second_client, slot);
+        let first_session = derive_vpn_session_id_v1(&network_id, quote_0009, &first_client, slot);
+        let second_session =
+            derive_vpn_session_id_v1(&network_id, quote_0198, &second_client, slot);
 
         assert_ne!(
             first_session, second_session,

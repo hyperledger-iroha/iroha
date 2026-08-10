@@ -182,11 +182,19 @@ generic transaction builders.
    `artifacts/android/codegen_fixtures/<timestamp>/instruction_examples.zip`,
    writes the SHA-256 sidecar, and records `metadata.json`. CI can call this
    helper before publishing SDK parity fixtures.
-4. **CI gate.** The `android-codegen-parity` workflow runs
-   `make android-codegen-verify` in CI so pull requests fail if
-   `instruction_manifest.json`, `builder_index.json`, or the generated docs fall
-   out of sync; the run uploads `artifacts/android/codegen_parity_summary.json`
-   for auditing.
+4. **CI gate.** The OpenAPI release-input workflow runs
+   `bash ci/check_android_codegen.sh`. The gate clones the exact clean commit
+   twice without hard links, seals both source mirrors read-only, assigns each
+   replay a fresh external `/private/tmp/.../target`, and routes both Cargo
+   invocations through the shared pinned no-interference policy. Generated docs
+   and parity summaries stay out of tree and must agree with each other and the
+   checked-in files byte-for-byte. Standalone runs create an all-or-none
+   authenticated artifact/cancellation channel pair; inherited runs must supply
+   both. The retained work root contains the raw stages, while the log,
+   deterministic archives, summaries, and final `COMPLETED.json` receipt remain
+   below the authenticated artifact root. Completion publication is bracketed
+   by cooperative cancellation checks that never interrupt an in-flight child.
+   The gate reports both authenticated channel paths before replay begins.
 5. **Recorded metadata.** `specs/sdk/android/generated/codegen_manifest_metadata.json`
    now stores the blessed SHA-256 digests and entry counts for the instruction
    manifest and builder index. The helper `scripts/check_android_codegen_parity.py`
@@ -197,6 +205,8 @@ generic transaction builders.
 
 Closed: the generator, fixtures, documentation, and CI gate are all in place.
 Future schema changes should follow the change-log workflow
-(`specs/sdk/android/norito_instruction_changes.md`) and rerun
-`make android-codegen-verify` to refresh the recorded hashes and regenerated
-docs.
+(`specs/sdk/android/norito_instruction_changes.md`). Generate reviewed candidate
+outputs out of tree first; update recorded hashes and docs only after the two
+independent sealed replays are byte-identical. The developer make targets use
+`scripts/sumeragi_v2_release_cargo_proxy.sh` and therefore require a fresh,
+owner-private external `CARGO_TARGET_DIR`.

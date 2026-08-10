@@ -194,7 +194,9 @@ mod norito_rpc_fixture_tests {
             );
             let encoded_len = require_u64(entry, "encoded_len", name);
             let signed_len = require_u64(entry, "signed_len", name);
-            let chain = require_str(entry, "chain", name);
+            let network_id = require_str(entry, "network_id", name)
+                .parse::<NetworkId>()
+                .unwrap_or_else(|err| panic!("{name}: network_id parse failed: {err}"));
             let authority = require_str(entry, "authority", name);
             let _chain_guard = authority_prefix(authority).map(ChainDiscriminantGuard::enter);
             let creation_time_ms = require_u64(entry, "creation_time_ms", name);
@@ -254,7 +256,11 @@ mod norito_rpc_fixture_tests {
                 signed_hash,
                 "{name}: signed_hash mismatch"
             );
-            assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
+            assert_eq!(
+                signed_tx.network_id(),
+                Some(&network_id),
+                "{name}: network_id mismatch"
+            );
             let expected_authority = AccountId::parse_encoded(authority).map_or_else(
                 |err| panic!("{name}: authority parse failed: {err}"),
                 crate::account::ParsedAccountId::into_account_id,

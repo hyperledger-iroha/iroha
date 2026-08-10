@@ -114,6 +114,10 @@ use sorafs_manifest::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod account_onboarding;
+pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod confidential_note_ffi;
+
 #[cfg(all(
     feature = "kagemusha-candidate-evidence-lab",
     target_os = "ios",
@@ -3166,68 +3170,6 @@ pub unsafe extern "C" fn connect_norito_detached_transaction_scaffold_finalize_e
     bridge_result_to_code(result)
 }
 
-#[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ConnectAccountOnboardingPlanRequestV1 {
-    version: u8,
-    alias: String,
-    account_id: String,
-    permissions: Vec<String>,
-}
-
-#[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ConnectAccountOnboardingPlanBodyV1 {
-    version: u8,
-    request: ConnectAccountOnboardingPlanRequestV1,
-    authority: AccountId,
-    chain_id: ChainId,
-    anchor: iroha_data_model::alias_setup::AliasPlanAnchorV1,
-    resource: iroha_data_model::alias_setup::AliasPlanResourceV1,
-    acquisition: iroha_data_model::alias_setup::AliasLeaseAcquisitionV1,
-    quote_guard: iroha_data_model::alias_setup::AliasQuoteGuardV1,
-    instructions: Vec<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
-    #[norito(default)]
-    owner_auto_renew_instruction: Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
-    valid_until_ms: u64,
-}
-
-/// Encode an exact sponsored-onboarding plan body from its typed JSON form.
-///
-/// The returned buffer is the bare canonical Norito encoding committed by the
-/// V1 receipt hash. Callers release it with [`connect_norito_free`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_account_onboarding_plan_body_v1(
-    json_ptr: *const c_uchar,
-    json_len: c_ulong,
-    out_body_ptr: *mut *mut c_uchar,
-    out_body_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_body_ptr, out_body_len);
-    let result = (|| {
-        if out_body_ptr.is_null() || out_body_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let json_len = usize::try_from(json_len).map_err(|_| BridgeError::AccountOnboardingBody)?;
-        if json_len == 0 || json_len > DETACHED_TRANSACTION_JSON_MAX_BYTES || json_ptr.is_null() {
-            return Err(BridgeError::AccountOnboardingBody);
-        }
-        let input = unsafe { slice::from_raw_parts(json_ptr, json_len) };
-        let body: ConnectAccountOnboardingPlanBodyV1 =
-            norito::json::from_slice(input).map_err(|_| BridgeError::AccountOnboardingBody)?;
-        if body.version != 1 || body.request.version != 1 {
-            return Err(BridgeError::AccountOnboardingBody);
-        }
-        use norito::codec::Encode as _;
-        let encoded = body.encode();
-        if encoded.is_empty() {
-            return Err(BridgeError::AccountOnboardingBody);
-        }
-        unsafe { write_bytes_bridge(out_body_ptr, out_body_len, &encoded) }
-    })();
-    bridge_result_to_code(result)
-}
-
 fn alias_instruction_json(instruction: &InstructionBox, wire_id: &str) -> BridgeResult<Vec<u8>> {
     use iroha_data_model::isi::alias_setup::{
         CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias, RebindAccountAlias,
@@ -3414,15 +3356,14 @@ fn validation_fee_current_policy_proof_request_v1(
 
 fn validation_fee_current_policy_proof_verify_v1(
     proof_archive: &[u8],
-    chain_id: ChainId,
-    bound_genesis_hash: [u8; 32],
+    network_id: NetworkId,
     policy_chain_genesis_hash: [u8; 32],
     trusted_checkpoint_height: u64,
     trusted_checkpoint_context_id: [u8; 32],
 ) -> BridgeResult<Vec<u8>> {
     if proof_archive.is_empty()
         || proof_archive.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
-        || !validation_fee_is_canonical_iroha_hash(&bound_genesis_hash)
+        || !validation_fee_is_canonical_iroha_hash(network_id.as_bytes())
         || !validation_fee_is_canonical_iroha_hash(&policy_chain_genesis_hash)
         || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
     {
@@ -3436,8 +3377,7 @@ fn validation_fee_current_policy_proof_verify_v1(
     }
     let projection = proof
         .verify_with_immutable_binding(
-            chain_id,
-            bound_genesis_hash,
+            network_id,
             policy_chain_genesis_hash,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
@@ -3486,16 +3426,14 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_requ
 /// Locally verify one canonical proof page and return bounded canonical JSON.
 ///
 /// Verification binds the full registry to finality, the synthetic ordinary
-/// write, the exact chain id, every policy's deployment genesis, policy
-/// version one's hash, and the caller's durable checkpoint.
+/// write, the exact genesis-derived network id, policy version one's hash,
+/// and the caller's durable checkpoint.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_verify_v1(
     proof_norito_ptr: *const c_uchar,
     proof_norito_len: c_ulong,
-    chain_id_ptr: *const c_uchar,
-    chain_id_len: c_ulong,
-    bound_genesis_hash_ptr: *const c_uchar,
-    bound_genesis_hash_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
     policy_chain_genesis_hash_ptr: *const c_uchar,
     policy_chain_genesis_hash_len: c_ulong,
     trusted_checkpoint_height: u64,
@@ -3509,30 +3447,23 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
         clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
         let proof_len =
             usize::try_from(proof_norito_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
-        let chain_id_len =
-            usize::try_from(chain_id_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
         if proof_norito_ptr.is_null()
             || proof_len == 0
             || proof_len > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
-            || chain_id_ptr.is_null()
-            || chain_id_len == 0
-            || chain_id_len > 256
         {
             return Err(BridgeError::ValidationFeePolicyProof);
         }
         let proof = unsafe { slice::from_raw_parts(proof_norito_ptr, proof_len) };
-        let chain_id_bytes = unsafe { slice::from_raw_parts(chain_id_ptr, chain_id_len) };
-        let chain_id = std::str::from_utf8(chain_id_bytes)
-            .map_err(|_| BridgeError::ValidationFeePolicyProof)?
-            .parse::<ChainId>()
-            .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
-        let bound_genesis_hash = unsafe {
+        let network_id = unsafe {
             read_fixed_array::<32>(
-                bound_genesis_hash_ptr,
-                bound_genesis_hash_len,
+                network_id_ptr,
+                network_id_len,
                 BridgeError::ValidationFeePolicyProof,
             )
         }?;
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed(network_id)),
+        );
         let policy_chain_genesis_hash = unsafe {
             read_fixed_array::<32>(
                 policy_chain_genesis_hash_ptr,
@@ -3549,8 +3480,7 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
         }?;
         let projection = validation_fee_current_policy_proof_verify_v1(
             proof,
-            chain_id,
-            bound_genesis_hash,
+            network_id,
             policy_chain_genesis_hash,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
@@ -4376,7 +4306,7 @@ pub unsafe extern "C" fn connect_norito_decode_control_approve_sig(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_open_chain_id(
+pub unsafe extern "C" fn connect_norito_decode_control_open_network_id(
     inp_ptr: *const c_uchar,
     inp_len: c_ulong,
     out_ptr: *mut *mut c_uchar,
@@ -4391,13 +4321,13 @@ pub unsafe extern "C" fn connect_norito_decode_control_open_chain_id(
             Ok(f) => f,
             Err(_) => return -2,
         };
-        let chain_id = match frame.kind {
+        let network_id = match frame.kind {
             proto::FrameKind::Control(proto::ConnectControlV1::Open { constraints, .. }) => {
-                constraints.chain_id
+                constraints.network_id
             }
             _ => return -3,
         };
-        if let Err(code) = write_bytes(out_ptr, out_len, chain_id.as_bytes()) {
+        if let Err(code) = write_bytes(out_ptr, out_len, network_id.as_bytes()) {
             return code;
         }
         0
@@ -4828,7 +4758,8 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
     app_pk_len: c_ulong,
     app_meta_ptr: *const c_uchar,
     app_meta_len: c_ulong,
-    chain_id_ptr: *const c_char,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
     perms_ptr: *const c_uchar,
     perms_len: c_ulong,
     out_ptr: *mut *mut c_uchar,
@@ -4837,7 +4768,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
     unsafe {
         if sid_ptr.is_null()
             || app_pk_ptr.is_null()
-            || chain_id_ptr.is_null()
+            || network_id_ptr.is_null()
             || out_ptr.is_null()
             || out_len.is_null()
         {
@@ -4860,8 +4791,13 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
             arr.copy_from_slice(pk);
             arr
         };
-        let chain_cstr = std::ffi::CStr::from_ptr(chain_id_ptr);
-        let chain_id = chain_cstr.to_string_lossy().to_string();
+        let network_id = match network_id_from_raw_bytes(std::slice::from_raw_parts(
+            network_id_ptr,
+            network_id_len as usize,
+        )) {
+            Ok(network_id) => network_id,
+            Err(_) => return -4,
+        };
         let app_meta = match parse_app_meta_bytes(app_meta_ptr, app_meta_len) {
             Ok(meta) => meta,
             Err(code) => return code,
@@ -4906,7 +4842,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
         let ctrl = proto::ConnectControlV1::Open {
             app_pk,
             app_meta,
-            constraints: proto::Constraints { chain_id },
+            constraints: proto::Constraints { network_id },
             permissions,
         };
         let frame = proto::ConnectFrameV1 {
@@ -6085,7 +6021,7 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
             .validate()
             .map_err(|_| BridgeError::KagemushaProve)?;
         let roster_bytes = norito::to_bytes(roster).map_err(|_| BridgeError::KagemushaProve)?;
-        if roster.chain_id != self.manifest().chain_id
+        if roster.network_id != self.manifest().network_id
             || roster.artifact_generation != self.manifest().generation
             || descriptor.artifact_generation != self.manifest().generation
             || descriptor.size_bytes
@@ -6512,7 +6448,7 @@ impl KagemushaSensitiveArchive for KagemushaNoteOpeningV2 {
 #[derive(norito::Encode)]
 struct KagemushaRedemptionChangeOpeningDerivationV4 {
     domain: String,
-    chain_id: ChainId,
+    network_id: NetworkId,
     asset: AssetDefinitionId,
     input_note_commitment: [u8; 32],
     input_spend_nullifier: [u8; 32],
@@ -6590,7 +6526,7 @@ impl KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
         let expected = derive_kagemusha_owned_note_v2(
-            &self.output.chain_id,
+            &self.output.network_id,
             &self.output.asset,
             self.output.amount,
             &self.opening,
@@ -6672,7 +6608,7 @@ impl KagemushaRecursiveSpendPeerSplitChangePrepareResultV4 {
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
         let expected = derive_kagemusha_owned_note_v2(
-            &self.output.chain_id,
+            &self.output.network_id,
             &self.output.asset,
             self.output.amount,
             &self.opening,
@@ -7221,7 +7157,7 @@ fn validate_kagemusha_recursive_spend_bundle_shape_v4(
         .proof_envelope
         .validate()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    if statement.current_note.chain_id != statement.chain_id
+    if statement.current_note.network_id != statement.network_id
         || statement.current_note.asset != statement.asset
         || statement.current_note.amount.scale != statement.asset_scale
         || statement.final_root == [0; 32]
@@ -7284,7 +7220,7 @@ fn validate_kagemusha_recursive_spend_topup_anchor_shape_v4(
         || anchor.asset_scale != anchor.amount.scale
         || anchor.current_note.amount != anchor.amount
         || anchor.asset.account() != &anchor.payer
-        || anchor.current_note.chain_id != anchor.chain_id
+        || anchor.current_note.network_id != anchor.network_id
         || anchor.current_note.asset != *anchor.asset.definition()
         || anchor.initial_root == [0; 32]
         || anchor.finalized_root == [0; 32]
@@ -7324,7 +7260,7 @@ fn validate_kagemusha_recursive_spend_init_request_shape_v4(
         || request.topup_finality_proof.anchor.topup_operation_id != anchor.topup_operation_id
         || request.topup_finality_proof.anchor.anchor_digest != anchor.anchor_digest
         || request.topup_finality_proof.commit_qc.height_context.height != anchor.finalized_height
-        || request.topup_finality_roster_artifact.chain_id != anchor.chain_id
+        || request.topup_finality_roster_artifact.network_id != anchor.network_id
         || request.topup_finality_roster_artifact.network_id
             != request
                 .topup_finality_proof
@@ -7358,7 +7294,7 @@ fn validate_kagemusha_recursive_spend_verify_request_shape_v4(
         || request.maximum_hops > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
         || request.bundle.statement.peer_hop_count > request.maximum_hops
         || request.artifact_binding != request.bundle.statement.artifact_binding
-        || request.recipient_request.chain_id != request.bundle.statement.chain_id
+        || request.recipient_request.network_id != request.bundle.statement.network_id
         || request.recipient_request.asset != request.bundle.statement.asset
         || request.recipient_request.amount != request.bundle.statement.current_note.amount
     {
@@ -7475,7 +7411,7 @@ impl KagemushaRecursiveSpendAppendLocalRequestV4 {
             let canonical = norito::to_bytes(&input.previous_bundle)
                 .map_err(|_| BridgeError::KagemushaProve)?;
             let digest: [u8; 32] = Sha256::digest(canonical).into();
-            if statement.chain_id != first_statement.chain_id
+            if statement.network_id != first_statement.network_id
                 || statement.asset != first_statement.asset
                 || statement.asset_scale != first_statement.asset_scale
                 || statement.final_root != first_statement.final_root
@@ -7553,7 +7489,7 @@ impl KagemushaRecursiveSpendAppendLocalRequestV4 {
                     )
                     .ok_or(BridgeError::KagemushaProve)
             })?;
-        if recipient_request.chain_id != first.chain_id
+        if recipient_request.network_id != first.network_id
             || recipient_request.asset != first.asset
             || recipient_request.amount.scale != first.asset_scale
             || recipient_request.amount.atomic_units > total
@@ -7701,7 +7637,7 @@ impl KagemushaRecursiveSpendVerifyLocalRequestV4 {
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 struct KagemushaTopUpShieldBuildRequestV4 {
     version: u16,
-    chain_id: ChainId,
+    network_id: NetworkId,
     asset: AssetId,
     amount: iroha_data_model::offline::KagemushaScaledAmountV2,
     payer: AccountId,
@@ -7795,7 +7731,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
             root: request.zero_path.root,
         };
         let proof_result = build_kagemusha_topup_shield_proof_v2(
-            &request.chain_id,
+            &request.network_id,
             &request.asset.definition().to_string(),
             &request.payer.to_string(),
             request.operation_id,
@@ -7825,7 +7761,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
             asset: request.asset.clone(),
             amount: request.amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id: request.chain_id.clone(),
+                network_id: request.network_id,
                 asset: request.asset.definition().clone(),
                 note_commitment: proof.output_commitment,
                 spend_nullifier: proof.spend_nullifier,
@@ -7959,7 +7895,7 @@ fn require_kagemusha_recursive_spend_artifact_binding_v4(
 
 fn validate_kagemusha_recursive_spend_release_context_v4(
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset: &iroha_data_model::asset::id::AssetDefinitionId,
     asset_scale: u32,
     block_height: u64,
@@ -7968,7 +7904,7 @@ fn validate_kagemusha_recursive_spend_release_context_v4(
     installed.validate_live_inventory()?;
     let manifest = installed.manifest();
     if block_height == 0
-        || &manifest.chain_id != chain_id
+        || &manifest.network_id != network_id
         || &manifest.asset != asset
         || manifest.asset_scale != asset_scale
         || block_height < manifest.activation_height
@@ -8439,7 +8375,6 @@ fn kagemusha_recipient_output_derive_v2(
     let mut opening: KagemushaNoteOpeningV2 = decode_canonical_kagemusha_archive(opening_archive)?;
     let outcome = (|| {
         opening.validate()?;
-        let chain_id = request.chain_id.to_string();
         let asset_id = request.asset.to_string();
         let owner_tag = Zeroizing::new(
             confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
@@ -8456,7 +8391,7 @@ fn kagemusha_recipient_output_derive_v2(
         )
         .map_err(|_| BridgeError::KagemushaProve)?;
         let nullifier = confidential_v2::derive_confidential_nullifier_v2(
-            &chain_id,
+            &request.network_id,
             &asset_id,
             &opening.spend_key,
             opening.rho,
@@ -8469,7 +8404,7 @@ fn kagemusha_recipient_output_derive_v2(
         .map_err(|_| BridgeError::KagemushaProve)?;
         let result = KagemushaRecipientOutputDerivationResultV2 {
             recipient_output: KagemushaSpendableNoteDescriptorV2 {
-                chain_id: request.chain_id.clone(),
+                network_id: request.network_id,
                 asset: request.asset.clone(),
                 note_commitment: commitment,
                 spend_nullifier: nullifier,
@@ -8487,7 +8422,7 @@ fn kagemusha_recipient_output_derive_v2(
 }
 
 fn derive_kagemusha_owned_note_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset: &AssetDefinitionId,
     amount: iroha_data_model::offline::KagemushaScaledAmountV2,
     opening: &KagemushaNoteOpeningV2,
@@ -8505,7 +8440,7 @@ fn derive_kagemusha_owned_note_v2(
     );
     let asset_id = asset.to_string();
     let note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
-        chain_id: chain_id.clone(),
+        network_id: *network_id,
         asset: asset.clone(),
         note_commitment: confidential_v2::derive_confidential_note_v2(
             &asset_id,
@@ -8515,7 +8450,7 @@ fn derive_kagemusha_owned_note_v2(
         )
         .map_err(|_| BridgeError::KagemushaProve)?,
         spend_nullifier: confidential_v2::derive_confidential_nullifier_v2(
-            chain_id.as_str(),
+            network_id,
             &asset_id,
             &opening.spend_key,
             opening.rho,
@@ -8538,7 +8473,7 @@ fn prepare_kagemusha_redemption_change_opening_v4(
         .validate_public_binding()
         .map_err(|_| BridgeError::KagemushaProve)?;
     derive_kagemusha_redemption_change_opening_v4(
-        &bundle.statement.chain_id,
+        &bundle.statement.network_id,
         &bundle.statement.asset,
         &bundle.statement.current_note,
         input_opening,
@@ -8549,7 +8484,7 @@ fn prepare_kagemusha_redemption_change_opening_v4(
 }
 
 fn derive_kagemusha_redemption_change_opening_v4(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset: &AssetDefinitionId,
     input_note: &iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2,
     input_opening: &KagemushaNoteOpeningV2,
@@ -8569,7 +8504,7 @@ fn derive_kagemusha_redemption_change_opening_v4(
     if *operation_id == [0; 32]
         || *entropy == [0; 32]
         || entropy == operation_id
-        || &input_note.chain_id != chain_id
+        || &input_note.network_id != network_id
         || &input_note.asset != asset
         || change_amount.scale != input_note.amount.scale
         || change_amount.atomic_units >= input_note.amount.atomic_units
@@ -8577,14 +8512,14 @@ fn derive_kagemusha_redemption_change_opening_v4(
         return Err(BridgeError::KagemushaProve);
     }
     let expected_input =
-        derive_kagemusha_owned_note_v2(chain_id, asset, input_note.amount, input_opening)?;
+        derive_kagemusha_owned_note_v2(network_id, asset, input_note.amount, input_opening)?;
     if expected_input != *input_note {
         return Err(BridgeError::KagemushaProve);
     }
 
     let derivation = KagemushaRedemptionChangeOpeningDerivationV4 {
         domain: KAGEMUSHA_REDEMPTION_CHANGE_OPENING_DERIVATION_DOMAIN_V4.to_owned(),
-        chain_id: chain_id.clone(),
+        network_id: *network_id,
         asset: asset.clone(),
         input_note_commitment: input_note.note_commitment,
         input_spend_nullifier: input_note.spend_nullifier,
@@ -8609,7 +8544,7 @@ fn derive_kagemusha_redemption_change_opening_v4(
         diversifier,
     };
     opening.validate()?;
-    let output = derive_kagemusha_owned_note_v2(chain_id, asset, change_amount, &opening)?;
+    let output = derive_kagemusha_owned_note_v2(network_id, asset, change_amount, &opening)?;
     if output.note_commitment == input_note.note_commitment
         || output.spend_nullifier == input_note.spend_nullifier
     {
@@ -8659,14 +8594,14 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
             .map_err(|_| BridgeError::KagemushaProve)?;
         opening.validate()?;
         let statement = &bundle.statement;
-        if statement.chain_id != first_statement.chain_id
+        if statement.network_id != first_statement.network_id
             || statement.asset != first_statement.asset
             || statement.asset_scale != first_statement.asset_scale
             || statement.final_root != first_statement.final_root
             || statement.next_zero_leaf_index != first_statement.next_zero_leaf_index
             || statement.artifact_binding != first_statement.artifact_binding
             || statement.verifier_key_id != first_statement.verifier_key_id
-            || statement.current_note.chain_id != statement.chain_id
+            || statement.current_note.network_id != statement.network_id
             || statement.current_note.asset != statement.asset
             || statement.current_note.amount.scale != statement.asset_scale
             || opening.spend_key != input_openings[0].spend_key
@@ -8674,7 +8609,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
             return Err(BridgeError::KagemushaProve);
         }
         let expected_note = derive_kagemusha_owned_note_v2(
-            &statement.chain_id,
+            &statement.network_id,
             &statement.asset,
             statement.current_note.amount,
             opening,
@@ -8697,7 +8632,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
 
     let payment_amount = recipient_request.amount();
     let recipient_output = recipient_request.recipient_output();
-    if recipient_request.chain_id() != &first_statement.chain_id
+    if recipient_request.network_id() != &first_statement.network_id
         || recipient_request.asset() != &first_statement.asset
         || payment_amount.scale != first_statement.asset_scale
         || change_amount.scale != first_statement.asset_scale
@@ -8706,7 +8641,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
             .atomic_units
             .checked_add(change_amount.atomic_units)
             != Some(total_atomic_units)
-        || recipient_output.chain_id != first_statement.chain_id
+        || recipient_output.network_id != first_statement.network_id
         || recipient_output.asset != first_statement.asset
         || recipient_output.amount != payment_amount
     {
@@ -8751,7 +8686,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
     };
     opening.validate()?;
     let output = derive_kagemusha_owned_note_v2(
-        &first_statement.chain_id,
+        &first_statement.network_id,
         &first_statement.asset,
         change_amount,
         &opening,
@@ -8813,7 +8748,7 @@ fn kagemusha_recursive_spend_init_operation_v4(
     use iroha_core::zk::{
         confidential_v2::{
             KagemushaTopUpShieldPublicInputsV2, derive_confidential_asset_tag_v3,
-            derive_confidential_chain_tag_v3, derive_kagemusha_topup_operation_tag_v3,
+            derive_confidential_network_tag_v3, derive_kagemusha_topup_operation_tag_v3,
             derive_kagemusha_topup_payer_tag_v3,
         },
         kagemusha_v2::KagemushaStepOperationVectorV4,
@@ -8831,7 +8766,7 @@ fn kagemusha_recursive_spend_init_operation_v4(
         leaf_index: kagemusha_encode_u32_scalar_v4(anchor.shield_leaf_index),
         asset_tag: derive_confidential_asset_tag_v3(&anchor.asset.definition().to_string())
             .map_err(|_| BridgeError::KagemushaProve)?,
-        chain_tag: derive_confidential_chain_tag_v3(anchor.chain_id.as_str())
+        network_tag: derive_confidential_network_tag_v3(&anchor.network_id)
             .map_err(|_| BridgeError::KagemushaProve)?,
         payer_tag: derive_kagemusha_topup_payer_tag_v3(&anchor.payer.to_string())
             .map_err(|_| BridgeError::KagemushaProve)?,
@@ -8858,7 +8793,7 @@ fn kagemusha_recursive_spend_init_statement_v4(
         .compact_ref()
         .map_err(|_| BridgeError::KagemushaProve)?;
     let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: anchor.chain_id.clone(),
+        network_id: anchor.network_id,
         asset: anchor.asset.definition().clone(),
         asset_scale: anchor.asset_scale,
         final_root: anchor.finalized_root,
@@ -8931,7 +8866,7 @@ fn kagemusha_recursive_spend_redemption_change_statement_v4(
     let verifier_key_id =
         kagemusha_recursive_spend_step_eq_verifier_id_v4(artifact_binding.manifest_sha256);
     let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: redemption.chain_id.clone(),
+        network_id: redemption.network_id,
         asset: redemption.asset.clone(),
         asset_scale: redemption.input_note.amount.scale,
         final_root,
@@ -9065,7 +9000,7 @@ fn execute_kagemusha_recursive_spend_init_v4(
     local.validate_shape()?;
     let anchor = &local.request.topup_anchor;
     let expected_note = derive_kagemusha_owned_note_v2(
-        &anchor.chain_id,
+        &anchor.network_id,
         anchor.asset.definition(),
         anchor.amount,
         &local.opening,
@@ -9187,7 +9122,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
     let first = &local.previous_inputs[ordered[0].1]
         .previous_bundle
         .statement;
-    if recipient_request.chain_id != first.chain_id
+    if recipient_request.network_id != first.network_id
         || recipient_request.asset != first.asset
         || recipient_request.amount.scale != first.asset_scale
     {
@@ -9205,12 +9140,12 @@ fn execute_kagemusha_recursive_spend_append_v4(
         let opening = &local.input_openings[*index];
         let membership = &local.input_membership_witnesses[*index];
         let expected_note = derive_kagemusha_owned_note_v2(
-            &statement.chain_id,
+            &statement.network_id,
             &statement.asset,
             statement.current_note.amount,
             opening,
         )?;
-        if statement.chain_id != first.chain_id
+        if statement.network_id != first.network_id
             || statement.asset != first.asset
             || statement.asset_scale != first.asset_scale
             || statement.final_root != first.final_root
@@ -9290,8 +9225,12 @@ fn execute_kagemusha_recursive_spend_append_v4(
                     first.asset_scale,
                 )
                 .map_err(|_| BridgeError::KagemushaProve)?;
-                let note =
-                    derive_kagemusha_owned_note_v2(&first.chain_id, &first.asset, amount, opening)?;
+                let note = derive_kagemusha_owned_note_v2(
+                    &first.network_id,
+                    &first.asset,
+                    amount,
+                    opening,
+                )?;
                 let owner_tag = iroha_core::zk::confidential_v2::
                     derive_confidential_owner_tag_v2_with_diversifier(
                         &opening.spend_key,
@@ -9316,7 +9255,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
             &vk_box,
         )?;
         let transfer_proof = build_confidential_transfer_proof_v2_with_paths(
-            &first.chain_id,
+            &first.network_id,
             &asset_id,
             spend_key.as_slice(),
             &input_paths,
@@ -9333,7 +9272,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
             output_commitments,
             transfer_root,
             asset_tag,
-            chain_tag,
+            network_tag,
         ) = parse_transfer_public_inputs(&transfer_proof.proof.bytes)
             .map_err(|_| BridgeError::KagemushaProve)?;
         let transfer_public = KagemushaStepTransferPublicV4 {
@@ -9342,7 +9281,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
             output_commitments,
             root: transfer_root,
             asset_tag,
-            chain_tag,
+            network_tag,
         };
         if transfer_proof.nullifiers
             != split_inputs
@@ -9364,7 +9303,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
         );
         proof_attachment.vk_commitment = Some(local.transfer_verifier_commitment);
         let split = KagemushaRecursiveSpendSplitIntentV4 {
-            chain_id: first.chain_id.clone(),
+            network_id: first.network_id,
             asset: first.asset.clone(),
             inputs: split_inputs,
             topup_anchor_refs: topup_anchor_refs.into_iter().collect(),
@@ -9570,7 +9509,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
     )?;
     let statement = &bundle.statement;
     let expected_input = derive_kagemusha_owned_note_v2(
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.current_note.amount,
         &local.input_opening,
@@ -9603,7 +9542,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
                 && opening.diversifier == default_confidential_diversifier_v2() =>
         {
             Some(derive_kagemusha_owned_note_v2(
-                &statement.chain_id,
+                &statement.network_id,
                 &statement.asset,
                 iroha_data_model::offline::KagemushaScaledAmountV2::new(
                     amount,
@@ -9647,7 +9586,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         &vk_box,
     )?;
     let proof = build_confidential_unshield_proof_v3_with_paths(
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset.to_string(),
         &local.input_opening.spend_key,
         &input_paths,
@@ -9666,7 +9605,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         root,
         public_amount,
         asset_tag,
-        chain_tag,
+        network_tag,
     ) = parse_unshield_public_inputs_v3(&proof.proof.bytes)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let expected_output_commitments = change_output
@@ -9694,14 +9633,14 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         root,
         public_amount,
         asset_tag,
-        chain_tag,
+        network_tag,
     };
     let public_inputs_digest = public_inputs
         .digest()
         .map_err(|_| BridgeError::KagemushaProve)?;
     let parent_bundle_digest = bundle.digest().map_err(|_| BridgeError::KagemushaProve)?;
     let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
-        chain_id: statement.chain_id.clone(),
+        network_id: statement.network_id,
         asset: statement.asset.clone(),
         input_note: statement.current_note.clone(),
         parent_branch_claims: statement.branch_claims.clone(),
@@ -10090,17 +10029,13 @@ struct KagemushaProjectedRecipientReceiveOfferV2 {
 }
 
 fn kagemusha_recipient_lineage_query_create_v2(
-    chain_id: ChainId,
+    network_id: NetworkId,
     recipient: AccountId,
     receiver_device_id: String,
     asset: AssetDefinitionId,
     trusted_checkpoint_height: u64,
 ) -> BridgeResult<Vec<u8>> {
     if trusted_checkpoint_height == 0
-        || chain_id.as_str().is_empty()
-        || chain_id.as_str().len() > 256
-        || chain_id.as_str().trim() != chain_id.as_str()
-        || chain_id.as_str().chars().any(char::is_control)
         || receiver_device_id.is_empty()
         || receiver_device_id.len() > 128
         || receiver_device_id.trim() != receiver_device_id
@@ -10112,7 +10047,7 @@ fn kagemusha_recipient_lineage_query_create_v2(
         &iroha_torii_shared::offline_api::OfflineRecipientLineageRequest {
             version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
             selector: iroha_torii_shared::offline_api::OfflineRecipientLineageSelectorV2 {
-                chain_id,
+                network_id,
                 recipient,
                 receiver_device_id,
                 asset,
@@ -10513,8 +10448,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_veri
 /// Build a request-independent v2 Torii receiver-lineage selector query.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create_v2(
-    chain_id_ptr: *const c_uchar,
-    chain_id_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
     chain_discriminant: u16,
     recipient_ptr: *const c_uchar,
     recipient_len: c_ulong,
@@ -10528,10 +10463,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_query_ptr, out_query_len)?;
-        let chain_id = String::from_utf8(unsafe {
-            read_kagemusha_archive_bytes_bounded(chain_id_ptr, chain_id_len, 256)
-        }?)
-        .map_err(|_| BridgeError::KagemushaProve)?;
+        let network_id =
+            unsafe { read_network_id_bridge(network_id_ptr.cast::<c_char>(), network_id_len) }?;
         let recipient = String::from_utf8(unsafe {
             read_kagemusha_archive_bytes_bounded(recipient_ptr, recipient_len, 1_024)
         }?)
@@ -10549,9 +10482,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create
         }?)
         .map_err(|_| BridgeError::KagemushaProve)?;
         let query = kagemusha_recipient_lineage_query_create_v2(
-            chain_id
-                .parse::<ChainId>()
-                .map_err(|_| BridgeError::KagemushaProve)?,
+            network_id,
             parse_account_id_for_chain(recipient, chain_discriminant)?,
             receiver_device_id,
             parse_asset_definition(asset)?,
@@ -11405,7 +11336,7 @@ fn validate_kagemusha_recursive_spend_branch_against_installed_v4(
     opening.validate()?;
     let statement = &bundle.statement;
     let expected_note = derive_kagemusha_owned_note_v2(
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.current_note.amount,
         opening,
@@ -11715,7 +11646,7 @@ fn verify_kagemusha_topup_roster_binding_v4(
         .validate()
         .map_err(|_| BridgeError::KagemushaProve)?;
     let roster_bytes = norito::to_bytes(roster).map_err(|_| BridgeError::KagemushaProve)?;
-    if roster.chain_id != manifest.chain_id
+    if roster.network_id != manifest.network_id
         || roster.artifact_generation != manifest.generation
         || descriptor.artifact_generation != manifest.generation
         || descriptor.size_bytes
@@ -11790,7 +11721,7 @@ fn validate_kagemusha_topup_provenance_for_bundle_against_installed_v4(
         .map_err(|_| BridgeError::KagemushaProve)?;
     validate_kagemusha_recursive_spend_release_context_v4(
         installed,
-        &bundle.statement.chain_id,
+        &bundle.statement.network_id,
         &bundle.statement.asset,
         bundle.statement.asset_scale,
         block_height,
@@ -13626,7 +13557,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
     let anchor = &local.request.topup_anchor;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &anchor.chain_id,
+        &anchor.network_id,
         anchor.asset.definition(),
         anchor.asset_scale,
         anchor.finalized_height,
@@ -13732,7 +13663,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
     let statement = &local.previous_inputs[0].previous_bundle.statement;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.asset_scale,
         local.block_height,
@@ -13816,7 +13747,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
     let statement = &request.bundle.statement;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.asset_scale,
         request.block_height,
@@ -13833,12 +13764,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
             .topup_finality_evidence
             .iter()
             .any(|evidence| {
-                evidence.topup_anchor.chain_id != statement.chain_id
+                evidence.topup_anchor.network_id != statement.network_id
                     || evidence.topup_anchor.asset.definition() != &statement.asset
                     || evidence.topup_anchor.asset_scale != statement.asset_scale
                     || validate_kagemusha_recursive_spend_release_context_v4(
                         &installed,
-                        &evidence.topup_anchor.chain_id,
+                        &evidence.topup_anchor.network_id,
                         evidence.topup_anchor.asset.definition(),
                         evidence.topup_anchor.asset_scale,
                         evidence.topup_anchor.finalized_height,
@@ -13912,7 +13843,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
     };
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &local.bundle.statement.chain_id,
+        &local.bundle.statement.network_id,
         &local.bundle.statement.asset,
         local.bundle.statement.asset_scale,
         local.block_height,
@@ -13990,7 +13921,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     let anchor = &local.request.topup_anchor;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &anchor.chain_id,
+        &anchor.network_id,
         anchor.asset.definition(),
         anchor.asset_scale,
         anchor.finalized_height,
@@ -14095,7 +14026,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     let statement = &local.previous_inputs[0].previous_bundle.statement;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.asset_scale,
         local.block_height,
@@ -14175,7 +14106,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     let statement = &request.bundle.statement;
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &statement.chain_id,
+        &statement.network_id,
         &statement.asset,
         statement.asset_scale,
         request.block_height,
@@ -14190,12 +14121,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
             .topup_finality_evidence
             .iter()
             .any(|evidence| {
-                evidence.topup_anchor.chain_id != statement.chain_id
+                evidence.topup_anchor.network_id != statement.network_id
                     || evidence.topup_anchor.asset.definition() != &statement.asset
                     || evidence.topup_anchor.asset_scale != statement.asset_scale
                     || validate_kagemusha_recursive_spend_release_context_v4(
                         &installed,
-                        &evidence.topup_anchor.chain_id,
+                        &evidence.topup_anchor.network_id,
                         evidence.topup_anchor.asset.definition(),
                         evidence.topup_anchor.asset_scale,
                         evidence.topup_anchor.finalized_height,
@@ -14269,7 +14200,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     };
     if validate_kagemusha_recursive_spend_release_context_v4(
         &installed,
-        &local.bundle.statement.chain_id,
+        &local.bundle.statement.network_id,
         &local.bundle.statement.asset,
         local.bundle.statement.asset_scale,
         local.block_height,
@@ -14328,58 +14259,7 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     }
 }
 
-#[cfg(test)]
-mod validation_fee_policy_proof_bridge_tests {
-    use super::*;
-
-    #[test]
-    fn request_encoder_validates_context_without_serializing_it() {
-        let first_context = [1_u8; 32];
-        let mut second_context = [3_u8; 32];
-        second_context[0] = 9;
-        let first = validation_fee_current_policy_proof_request_v1(17, first_context)
-            .expect("encode first request");
-        let second = validation_fee_current_policy_proof_request_v1(17, second_context)
-            .expect("encode second request");
-        assert_eq!(first, second);
-        let decoded: ValidationFeeCurrentPolicyProofRequestV1 =
-            decode_from_bytes(&first).expect("decode request");
-        assert_eq!(
-            decoded,
-            ValidationFeeCurrentPolicyProofRequestV1 {
-                version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-                trusted_checkpoint_height: 17,
-            }
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(0, first_context).is_err(),
-            "zero height must fail closed"
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(17, [0; 32]).is_err(),
-            "zero context must fail closed"
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(17, [2; 32]).is_err(),
-            "unmarked context must fail closed"
-        );
-    }
-
-    #[test]
-    fn proof_verifier_rejects_malformed_archive() {
-        assert!(
-            validation_fee_current_policy_proof_verify_v1(
-                b"not norito",
-                ChainId::from("validation-fee-test"),
-                [1; 32],
-                [3; 32],
-                1,
-                [5; 32],
-            )
-            .is_err()
-        );
-    }
-}
+include!("validation_fee_policy_proof_bridge_tests.rs");
 
 #[cfg(test)]
 mod detached_transaction_scaffold_tests {
@@ -14445,7 +14325,7 @@ mod detached_transaction_scaffold_tests {
     fn contract_scaffold(authority_keypair: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &detached_test_network_id(),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -15051,6 +14931,8 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
     const CURRENT_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+    const CURRENT_TAIRA_NETWORK_ID: &str =
+        "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     // The runtime alias is exactly `sbd#cbsi`; offline wire objects carry its typed ID.
     const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
@@ -15448,7 +15330,11 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
-            chain_id: ChainId::from("sbd-streaming-install-test"),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(Hash::new(
+                b"sbd-streaming-install-test-network",
+            ))),
             asset,
             asset_scale: 2,
             activation_height: 1,
@@ -15936,7 +15822,7 @@ mod kagemusha_bridge_tests {
                 0,
             );
             let context = HeightContext {
-                network_id: network_id.clone(),
+                network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height,
                 epoch: 0,
@@ -16066,17 +15952,19 @@ mod kagemusha_bridge_tests {
             .finality_chain
             .first()
             .expect("nonempty receiver-offer finality chain");
-        let chain = lineage.selector.chain_id.as_str().as_bytes();
-        let chain_length = u16::try_from(chain.len()).expect("fixture chain ID fits u16");
-        let mut payload = Vec::with_capacity(DOMAIN.len() + 2 + 4 * 8 + 2 + chain.len() + 32);
+        let network_id = lineage.selector.network_id.to_string();
+        let network_id = network_id.as_bytes();
+        let network_id_length =
+            u16::try_from(network_id.len()).expect("fixture NetworkId fits u16");
+        let mut payload = Vec::with_capacity(DOMAIN.len() + 2 + 4 * 8 + 2 + network_id.len() + 32);
         payload.extend_from_slice(DOMAIN);
         payload.extend_from_slice(&1_u16.to_be_bytes());
         payload.extend_from_slice(&1_u64.to_be_bytes());
         payload.extend_from_slice(&RECEIVER_OFFER_PUBLISHER_ISSUED_AT_MS_V1.to_be_bytes());
         payload.extend_from_slice(&RECEIVER_OFFER_PUBLISHER_EXPIRES_AT_MS_V1.to_be_bytes());
         payload.extend_from_slice(&anchor.finality_artifact.height.to_be_bytes());
-        payload.extend_from_slice(&chain_length.to_be_bytes());
-        payload.extend_from_slice(chain);
+        payload.extend_from_slice(&network_id_length.to_be_bytes());
+        payload.extend_from_slice(network_id);
         payload.extend_from_slice(anchor.finality_artifact.context_id().0.as_ref());
 
         let key_pair = receiver_offer_publisher_key_pair_v1();
@@ -16108,14 +15996,14 @@ mod kagemusha_bridge_tests {
             OfflineRecipientReceiveOfferV2, OfflineRecipientRegistrationLineage,
         };
 
-        let chain_id = CURRENT_TAIRA_CHAIN_ID
-            .parse::<ChainId>()
-            .expect("current Taira chain id");
+        let network_id = CURRENT_TAIRA_NETWORK_ID
+            .parse::<NetworkId>()
+            .expect("current Taira NetworkId");
         let sbd_asset = CBSI_SBD_ASSET_DEFINITION_ID
             .parse::<AssetDefinitionId>()
             .expect("canonical SBD asset definition");
         let request = peer_split_recipient_request_for_asset_v4(
-            &chain_id,
+            &network_id,
             &sbd_asset,
             KagemushaScaledAmountV2::new(625, 2).expect("receiver-offer amount"),
             0xE1,
@@ -16162,11 +16050,7 @@ mod kagemusha_bridge_tests {
         };
         let ordinary_writes_root = receiver_offer_sparse_root(&active_receiver_witness);
         assert!(active_receiver_witness.verify(ordinary_writes_root));
-        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            Hash::new(b"receiver-offer-finality-test-genesis"),
-        ));
+        assert_eq!(*request.network_id(), network_id);
         let finality_chain = receiver_offer_finality_chain(
             &network_id,
             proof_count,
@@ -16177,7 +16061,7 @@ mod kagemusha_bridge_tests {
             .last()
             .expect("nonempty offer finality chain");
         let selector = OfflineRecipientLineageSelectorV2 {
-            chain_id: request.chain_id().clone(),
+            network_id,
             recipient: request.recipient().clone(),
             receiver_device_id: request.receiver_device_id().to_owned(),
             asset: request.asset().clone(),
@@ -16215,7 +16099,7 @@ mod kagemusha_bridge_tests {
         offer: &iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
     ) -> iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 {
         peer_split_recipient_request_for_asset_and_request_v4(
-            &offer.lineage.selector.chain_id,
+            &offer.lineage.selector.network_id,
             &offer.lineage.selector.asset,
             KagemushaScaledAmountV2::new(700, 2).expect("fresh receiver-offer amount"),
             0xE1,
@@ -16315,9 +16199,8 @@ mod kagemusha_bridge_tests {
         };
 
         let one = realistic_recipient_receive_offer_v2(1);
-        assert_eq!(one.request.chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
         assert_eq!(one.request.asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
-        assert_eq!(one.lineage.selector.chain_id, one.request.chain_id);
+        assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
         assert_eq!(one_bytes.len(), 12_363);
@@ -16336,7 +16219,7 @@ mod kagemusha_bridge_tests {
         let fresh_amount_request = recipient_offer_fresh_amount_request_v2(&one);
         assert_ne!(fresh_amount_request.amount, one.request.amount);
         assert_ne!(fresh_amount_request.request_id, one.request.request_id);
-        assert_eq!(fresh_amount_request.chain_id, one.request.chain_id);
+        assert_eq!(fresh_amount_request.network_id, one.request.network_id);
         assert_eq!(fresh_amount_request.asset, one.request.asset);
         assert_eq!(fresh_amount_request.recipient, one.request.recipient);
         assert_eq!(
@@ -16544,6 +16427,13 @@ mod kagemusha_bridge_tests {
             .receiver_device_id
             .push_str("-wrong");
         assert!(selector_mismatch.validate_structure().is_err());
+        let mut network_mismatch = offer.clone();
+        network_mismatch.lineage.selector.network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"foreign receiver-offer network",
+            )),
+        );
+        assert!(network_mismatch.validate_structure().is_err());
         let mut asset_mismatch = offer.clone();
         asset_mismatch.lineage.selector.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("alternate domain"),
@@ -18240,7 +18130,7 @@ mod kagemusha_bridge_tests {
 
     #[cfg(feature = "privacy-production-enabled")]
     fn configured_taira_topup_finality_roster_v4(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         generation: &str,
     ) -> Option<iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2> {
         use std::io::Read as _;
@@ -18294,7 +18184,7 @@ mod kagemusha_bridge_tests {
         roster
             .validate()
             .expect("configured Taira release roster must have valid BLS PoPs");
-        assert_eq!(&roster.chain_id, chain_id);
+        assert_eq!(&roster.network_id, network_id);
         assert_eq!(roster.artifact_generation, generation);
         assert_eq!(roster.windows.len(), 1);
         let window = &roster.windows[0];
@@ -18314,18 +18204,8 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_topup_finality_network_id_v2() -> iroha_data_model::NetworkId {
-        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(Hash::new(
-            b"production SBD acceptance network",
-        )))
-    }
-
-    #[cfg(feature = "privacy-production-enabled")]
     fn production_topup_finality_roster_v2(
         network_id: iroha_data_model::NetworkId,
-        chain_id: &ChainId,
         generation: &str,
     ) -> (
         iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
@@ -18368,7 +18248,6 @@ mod kagemusha_bridge_tests {
         (
             KagemushaTopUpFinalityRosterArtifactV2 {
                 version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-                chain_id: chain_id.clone(),
                 network_id,
                 artifact_generation: generation.to_owned(),
                 windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
@@ -18467,22 +18346,16 @@ mod kagemusha_bridge_tests {
         let receiver_offer = realistic_recipient_receive_offer_v2(1);
         let fresh_recipient_request = recipient_offer_fresh_amount_request_v2(&receiver_offer);
         let fresh_recipient_opening = peer_split_recipient_opening_for_request_seed_v4(0xE2);
-        let chain_id = receiver_offer.lineage.selector.chain_id.clone();
+        let network_id = receiver_offer.lineage.selector.network_id;
         let asset = receiver_offer.lineage.selector.asset.clone();
-        assert_eq!(chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
         assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
+        assert_eq!(fresh_recipient_request.network_id, network_id);
         assert_eq!(fresh_recipient_request.asset, asset);
         let configured_taira_roster =
-            configured_taira_topup_finality_roster_v4(&chain_id, generation);
+            configured_taira_topup_finality_roster_v4(&network_id, generation);
         let taira_release_catalog = configured_taira_roster.is_some();
         let (topup_roster, topup_signing_keys) = configured_taira_roster.map_or_else(
-            || {
-                production_topup_finality_roster_v2(
-                    production_topup_finality_network_id_v2(),
-                    &chain_id,
-                    generation,
-                )
-            },
+            || production_topup_finality_roster_v2(network_id, generation),
             |roster| (roster, Vec::new()),
         );
         let activation_height = if taira_release_catalog {
@@ -18611,7 +18484,7 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
-            chain_id,
+            network_id,
             asset,
             asset_scale: 2,
             activation_height,
@@ -19044,7 +18917,7 @@ mod kagemusha_bridge_tests {
         let payer = sample_account(0xA3);
         let amount = KagemushaScaledAmountV2::new(1_000, 2).expect("release-key regression amount");
         let current_note = derive_kagemusha_owned_note_v2(
-            &fixture.manifest.chain_id,
+            &fixture.manifest.network_id,
             &fixture.manifest.asset,
             amount,
             &sender_opening,
@@ -19066,7 +18939,7 @@ mod kagemusha_bridge_tests {
         );
         let topup_anchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            chain_id: fixture.manifest.chain_id.clone(),
+            network_id: fixture.manifest.network_id,
             payer: payer.clone(),
             asset: AssetId::new(fixture.manifest.asset.clone(), payer),
             asset_scale: fixture.manifest.asset_scale,
@@ -19087,7 +18960,7 @@ mod kagemusha_bridge_tests {
         .expect("release-key regression top-up anchor");
         let (local_roster, local_signing_keys) = production_topup_finality_roster_v2(
             production_topup_finality_network_id_v2(),
-            &fixture.manifest.chain_id,
+            &fixture.manifest.network_id,
             &fixture.manifest.generation,
         );
         let topup_finality_proof = production_topup_finality_proof_v2(
@@ -19158,7 +19031,7 @@ mod kagemusha_bridge_tests {
             .expect("release-key regression input membership witness");
 
         let recipient_request = peer_split_recipient_request_for_asset_and_request_v4(
-            &fixture.manifest.chain_id,
+            &fixture.manifest.network_id,
             &fixture.manifest.asset,
             amount,
             0xA6,
@@ -19215,7 +19088,7 @@ mod kagemusha_bridge_tests {
         let transfer_vk =
             confidential_transfer_v2_vk_box().expect("release-key regression transfer verifier");
         let transfer_proof = build_confidential_transfer_proof_v2_with_paths(
-            &fixture.manifest.chain_id,
+            &fixture.manifest.network_id,
             &fixture.manifest.asset.to_string(),
             &sender_opening.spend_key,
             &input_paths,
@@ -19232,7 +19105,7 @@ mod kagemusha_bridge_tests {
             output_commitments,
             transfer_root,
             asset_tag,
-            chain_tag,
+            network_tag,
         ) = parse_transfer_public_inputs(&transfer_proof.proof.bytes)
             .expect("release-key regression transfer public inputs");
         assert_eq!(
@@ -19250,10 +19123,10 @@ mod kagemusha_bridge_tests {
             output_commitments,
             root: transfer_root,
             asset_tag,
-            chain_tag,
+            network_tag,
         };
         let split = KagemushaRecursiveSpendSplitIntentV4 {
-            chain_id: fixture.manifest.chain_id.clone(),
+            network_id: fixture.manifest.network_id,
             asset: fixture.manifest.asset.clone(),
             inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
                 bundle_digest: init_bundle
@@ -19584,7 +19457,7 @@ mod kagemusha_bridge_tests {
         );
         let topup_build = KagemushaTopUpShieldBuildRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
-            chain_id: fixture.manifest.chain_id.clone(),
+            network_id: fixture.manifest.network_id,
             asset: AssetId::new(fixture.manifest.asset.clone(), payer.clone()),
             amount: topup_amount,
             payer: payer.clone(),
@@ -19627,7 +19500,7 @@ mod kagemusha_bridge_tests {
 
         let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            chain_id: fixture.manifest.chain_id.clone(),
+            network_id: fixture.manifest.network_id,
             payer,
             asset: topup_unsigned.asset.clone(),
             asset_scale: fixture.manifest.asset_scale,
@@ -21423,7 +21296,7 @@ mod kagemusha_bridge_tests {
                 "\"physical_device_qualified\":false,",
                 "\"bridge_abi_version\":{},",
                 "\"wire_version\":4,",
-                "\"chain_id\":{},",
+                "\"network_id\":{},",
                 "\"canonical_sbd_asset_definition_id\":{},",
                 "\"asset_scale\":2,",
                 "\"evaluated_block_height\":43,",
@@ -21482,7 +21355,7 @@ mod kagemusha_bridge_tests {
                 "}}\n"
             ),
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            json_string(fixture.manifest.chain_id.as_str()),
+            json_string(&fixture.manifest.network_id.to_string()),
             json_string(&fixture.manifest.asset.to_string()),
             json_string(&lifecycle.offline_readiness.evaluated_block_hash),
             json_string(&lifecycle.topup_anchor.payer.to_string()),
@@ -22420,6 +22293,12 @@ mod kagemusha_bridge_tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn kagemusha_test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
+    }
+
     fn sample_asset(account: AccountId) -> AssetId {
         let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("domain id"),
@@ -22449,9 +22328,7 @@ mod kagemusha_bridge_tests {
             kagemusha_recursive_spend_verifier_key_id_v4,
         };
 
-        let chain_id: ChainId = "kagemusha-redemption-change-c-ffi"
-            .parse()
-            .expect("chain id");
+        let network_id = kagemusha_test_network_id(b"kagemusha-redemption-change-c-ffi");
         let asset = sample_asset(sample_account(63)).definition().clone();
         let input_opening = KagemushaNoteOpeningV2 {
             spend_key: [0x91; 32],
@@ -22462,7 +22339,7 @@ mod kagemusha_bridge_tests {
         };
         let input_amount = KagemushaScaledAmountV2::new(1_000, 2).expect("input amount");
         let current_note =
-            derive_kagemusha_owned_note_v2(&chain_id, &asset, input_amount, &input_opening)
+            derive_kagemusha_owned_note_v2(&network_id, &asset, input_amount, &input_opening)
                 .expect("current note");
         let anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
             topup_operation_id: [0x93; 32],
@@ -22480,7 +22357,7 @@ mod kagemusha_bridge_tests {
             artifact_binding.manifest_sha256,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id,
+            network_id,
             asset,
             asset_scale: input_amount.scale,
             final_root: [0x96; 32],
@@ -22556,7 +22433,7 @@ mod kagemusha_bridge_tests {
         seed: u8,
     ) -> iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 {
         peer_split_recipient_request_for_asset_v4(
-            &bundle.statement.chain_id,
+            &bundle.statement.network_id,
             &bundle.statement.asset,
             payment_amount,
             seed,
@@ -22564,13 +22441,13 @@ mod kagemusha_bridge_tests {
     }
 
     fn peer_split_recipient_request_for_asset_v4(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         asset: &AssetDefinitionId,
         payment_amount: KagemushaScaledAmountV2,
         seed: u8,
     ) -> iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 {
         peer_split_recipient_request_for_asset_and_request_v4(
-            chain_id,
+            network_id,
             asset,
             payment_amount,
             seed,
@@ -22594,7 +22471,7 @@ mod kagemusha_bridge_tests {
 
     #[allow(clippy::too_many_arguments)]
     fn peer_split_recipient_request_for_asset_and_request_v4(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         asset: &AssetDefinitionId,
         payment_amount: KagemushaScaledAmountV2,
         receiver_seed: u8,
@@ -22618,7 +22495,7 @@ mod kagemusha_bridge_tests {
         let request_id = [request_seed; 32];
         let recipient_opening = peer_split_recipient_opening_for_request_seed_v4(request_seed);
         let derivation_request = KagemushaRecipientOutputDerivationRequestV2 {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             asset: asset.clone(),
             amount: payment_amount,
             request_id,
@@ -22629,7 +22506,7 @@ mod kagemusha_bridge_tests {
             kagemusha_recipient_output_derive_v2(&derivation_archive, &opening_archive)
                 .expect("recipient output derivation");
         let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             asset: asset.clone(),
             amount: payment_amount,
             recipient: sample_account(receiver_seed.wrapping_add(3)),
@@ -22673,7 +22550,7 @@ mod kagemusha_bridge_tests {
             KagemushaScaledAmountV2::new(400, first.statement.asset_scale).expect("second amount");
         let mut bundle = first.clone();
         bundle.statement.current_note = derive_kagemusha_owned_note_v2(
-            &bundle.statement.chain_id,
+            &bundle.statement.network_id,
             &bundle.statement.asset,
             amount,
             &opening,
@@ -23179,7 +23056,7 @@ mod kagemusha_bridge_tests {
     fn recipient_output_derivation_binds_typed_opening_and_never_exports_spend_key() {
         let asset = sample_asset(sample_account(61));
         let request = KagemushaRecipientOutputDerivationRequestV2 {
-            chain_id: "kagemusha-recipient-output".parse().expect("chain id"),
+            network_id: kagemusha_test_network_id(b"kagemusha-recipient-output"),
             asset: asset.definition().clone(),
             amount: KagemushaScaledAmountV2::new(625, 2).expect("scaled amount"),
             request_id: [0x41; 32],
@@ -23303,7 +23180,7 @@ mod kagemusha_bridge_tests {
 
     #[test]
     fn redemption_change_opening_is_exact_input_bound_and_uses_native_default_diversifier() {
-        let chain_id: ChainId = "kagemusha-redemption-change".parse().expect("chain id");
+        let network_id = kagemusha_test_network_id(b"kagemusha-redemption-change");
         let asset = sample_asset(sample_account(62)).definition().clone();
         let input_opening = KagemushaNoteOpeningV2 {
             spend_key: [0x81; 32],
@@ -23315,11 +23192,11 @@ mod kagemusha_bridge_tests {
         let input_amount = KagemushaScaledAmountV2::new(1_000, 2).expect("input amount");
         let change_amount = KagemushaScaledAmountV2::new(375, 2).expect("change amount");
         let input_note =
-            derive_kagemusha_owned_note_v2(&chain_id, &asset, input_amount, &input_opening)
+            derive_kagemusha_owned_note_v2(&network_id, &asset, input_amount, &input_opening)
                 .expect("input note");
 
         let first = derive_kagemusha_redemption_change_opening_v4(
-            &chain_id,
+            &network_id,
             &asset,
             &input_note,
             &input_opening,
@@ -23329,7 +23206,7 @@ mod kagemusha_bridge_tests {
         )
         .expect("first change opening");
         let repeated = derive_kagemusha_redemption_change_opening_v4(
-            &chain_id,
+            &network_id,
             &asset,
             &input_note,
             &input_opening,
@@ -23356,12 +23233,12 @@ mod kagemusha_bridge_tests {
         );
         assert_eq!(
             first.output,
-            derive_kagemusha_owned_note_v2(&chain_id, &asset, change_amount, &first.opening)
+            derive_kagemusha_owned_note_v2(&network_id, &asset, change_amount, &first.opening)
                 .expect("projected change note")
         );
 
         let different_operation = derive_kagemusha_redemption_change_opening_v4(
-            &chain_id,
+            &network_id,
             &asset,
             &input_note,
             &input_opening,
@@ -23371,7 +23248,7 @@ mod kagemusha_bridge_tests {
         )
         .expect("operation-bound change opening");
         let different_entropy = derive_kagemusha_redemption_change_opening_v4(
-            &chain_id,
+            &network_id,
             &asset,
             &input_note,
             &input_opening,
@@ -23381,7 +23258,7 @@ mod kagemusha_bridge_tests {
         )
         .expect("entropy-bound change opening");
         let different_amount = derive_kagemusha_redemption_change_opening_v4(
-            &chain_id,
+            &network_id,
             &asset,
             &input_note,
             &input_opening,
@@ -23401,7 +23278,7 @@ mod kagemusha_bridge_tests {
         };
         assert!(
             derive_kagemusha_redemption_change_opening_v4(
-                &chain_id,
+                &network_id,
                 &asset,
                 &input_note,
                 &wrong_opening,
@@ -23413,7 +23290,7 @@ mod kagemusha_bridge_tests {
         );
         assert!(
             derive_kagemusha_redemption_change_opening_v4(
-                &chain_id,
+                &network_id,
                 &asset,
                 &input_note,
                 &input_opening,
@@ -23430,7 +23307,7 @@ mod kagemusha_bridge_tests {
         ] {
             assert!(
                 derive_kagemusha_redemption_change_opening_v4(
-                    &chain_id,
+                    &network_id,
                     &asset,
                     &input_note,
                     &input_opening,
@@ -23501,7 +23378,10 @@ mod kagemusha_bridge_tests {
         result.validate().expect("validate canonical result");
         assert!(result == expected);
         assert_eq!(result.version, 4);
-        assert_eq!(result.output.chain_id, request.bundle.statement.chain_id);
+        assert_eq!(
+            result.output.network_id,
+            request.bundle.statement.network_id
+        );
         assert_eq!(result.output.asset, request.bundle.statement.asset);
         assert_eq!(result.output.amount, request.change_amount);
     }
@@ -27767,7 +27647,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let sid = [0x11u8; 32];
         let app_pk = [0x22u8; 32];
-        let chain = CString::new("chain").expect("valid chain id");
+        let network_id = Hash::new(b"connect-open-bridge-genesis");
         let app_meta = json_object([
             ("name", JsonValue::from("demo")),
             ("url", JsonValue::from("https://example.test")),
@@ -27785,7 +27665,8 @@ mod accel_tests {
                 app_pk.len() as c_ulong,
                 app_meta_bytes.as_ptr(),
                 app_meta_bytes.len() as c_ulong,
-                chain.as_ptr(),
+                network_id.as_ref().as_ptr(),
+                Hash::LENGTH as c_ulong,
                 ptr::null::<c_uchar>(),
                 0,
                 &mut out_ptr,
@@ -27808,6 +27689,23 @@ mod accel_tests {
         assert_eq!(meta_status, 0, "expected app metadata decode success");
         assert!(!meta_ptr.is_null());
 
+        let mut network_ptr: *mut c_uchar = ptr::null_mut();
+        let mut network_len: c_ulong = 0;
+        let network_status = unsafe {
+            connect_norito_decode_control_open_network_id(
+                out_ptr,
+                out_len,
+                &mut network_ptr,
+                &mut network_len,
+            )
+        };
+        assert_eq!(network_status, 0, "expected exact network decode success");
+        assert_eq!(network_len as usize, Hash::LENGTH);
+        assert_eq!(
+            unsafe { slice::from_raw_parts(network_ptr, network_len as usize) },
+            network_id.as_ref()
+        );
+
         let meta_bytes = unsafe { slice::from_raw_parts(meta_ptr, meta_len as usize) };
         let parsed: JsonValue =
             norito::json::from_slice(meta_bytes).expect("parse app metadata json");
@@ -27825,6 +27723,9 @@ mod accel_tests {
         unsafe {
             if !meta_ptr.is_null() {
                 free(meta_ptr as *mut _);
+            }
+            if !network_ptr.is_null() {
+                free(network_ptr as *mut _);
             }
             if !out_ptr.is_null() {
                 free(out_ptr as *mut _);
@@ -30114,8 +30015,7 @@ fn java_native_validation_fee_current_policy_proof_request_v1(
 fn java_native_validation_fee_current_policy_proof_verify_v1(
     env: &mut jni::JNIEnv<'_>,
     proof_norito: jni::objects::JByteArray<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
-    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
     trusted_checkpoint_height: jni::sys::jlong,
     trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
@@ -30128,18 +30028,13 @@ fn java_native_validation_fee_current_policy_proof_verify_v1(
             VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
         )
         .ok_or_else(|| "proofNorito must be a bounded nonempty archive".to_owned())?;
-        let chain_id = read_java_byte_array_bounded(env, &chain_id, "chainId", 256)
-            .ok_or_else(|| "chainId must be bounded nonempty UTF-8".to_owned())
-            .and_then(|bytes| {
-                String::from_utf8(bytes).map_err(|_| "chainId must be UTF-8".to_owned())
-            })?
-            .parse::<ChainId>()
-            .map_err(|_| "chainId is invalid".to_owned())?;
-        let bound_genesis_hash: [u8; 32] =
-            read_java_byte_array_bounded(env, &bound_genesis_hash, "boundGenesisHash", 32)
-                .ok_or_else(|| "boundGenesisHash must contain exactly 32 bytes".to_owned())?
-                .try_into()
-                .map_err(|_| "boundGenesisHash must contain exactly 32 bytes".to_owned())?;
+        let network_id: [u8; 32] = read_java_byte_array_bounded(env, &network_id, "networkId", 32)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?
+            .try_into()
+            .map_err(|_| "networkId must contain exactly 32 bytes".to_owned())?;
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed(network_id)),
+        );
         let policy_chain_genesis_hash: [u8; 32] = read_java_byte_array_bounded(
             env,
             &policy_chain_genesis_hash,
@@ -30164,8 +30059,7 @@ fn java_native_validation_fee_current_policy_proof_verify_v1(
         .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
         validation_fee_current_policy_proof_verify_v1(
             &proof,
-            chain_id,
-            bound_genesis_hash,
+            network_id,
             policy_chain_genesis_hash,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
@@ -30229,8 +30123,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     proof_norito: jni::objects::JByteArray<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
-    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
     trusted_checkpoint_height: jni::sys::jlong,
     trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
@@ -30238,8 +30131,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
     java_native_validation_fee_current_policy_proof_verify_v1(
         &mut env,
         proof_norito,
-        chain_id,
-        bound_genesis_hash,
+        network_id,
         policy_chain_genesis_hash,
         trusted_checkpoint_height,
         trusted_checkpoint_context_id,
@@ -33485,7 +33377,7 @@ fn java_native_kagemusha_branch_claims_conflict_v2(
 #[allow(clippy::too_many_arguments)]
 fn java_native_kagemusha_prepare_recipient_request_v2(
     env: &mut jni::JNIEnv<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -33503,9 +33395,7 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
     java_kagemusha_archive_array_result(env, "recipient request preparation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
-            .parse::<ChainId>()
-            .map_err(|error| format!("chainId must be canonical: {error}"))?;
+        let network_id = java_network_id(env, &network_id)?;
         let asset = parse_asset_definition(java_kagemusha_text(env, &asset, "asset")?)
             .map_err(|_| "asset must be a canonical asset-definition address".to_owned())?;
         let amount = java_kagemusha_amount(env, &atomic_units, scale)?;
@@ -33535,7 +33425,7 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
         let mut opening = java_kagemusha_note_opening_v2(env, &spend_key, &rho, &diversifier)?;
         let derivation_request =
             iroha_data_model::offline::KagemushaRecipientOutputDerivationRequestV2 {
-                chain_id: chain_id.clone(),
+                network_id,
                 asset: asset.clone(),
                 amount,
                 request_id,
@@ -33556,7 +33446,7 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
             iroha_data_model::offline::kagemusha_receiver_key_reference_v2(&receiver_public_key)
                 .map_err(|_| "receiver key reference derivation failed".to_owned())?;
         let payload = iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2 {
-            chain_id,
+            network_id,
             asset,
             amount,
             recipient,
@@ -33840,7 +33730,7 @@ fn java_native_kagemusha_verify_recipient_request_v2(
 ))]
 fn java_native_kagemusha_create_recipient_lineage_query_v2(
     env: &mut jni::JNIEnv<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
@@ -33850,9 +33740,7 @@ fn java_native_kagemusha_create_recipient_lineage_query_v2(
     java_kagemusha_archive_array_result(env, "recipient lineage query creation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
-            .parse::<ChainId>()
-            .map_err(|error| format!("chainId must be canonical: {error}"))?;
+        let network_id = java_network_id(env, &network_id)?;
         let recipient = parse_account_id_for_chain(
             java_kagemusha_text(env, &recipient, "recipient")?,
             chain_discriminant,
@@ -33866,7 +33754,7 @@ fn java_native_kagemusha_create_recipient_lineage_query_v2(
             .filter(|height| *height != 0)
             .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
         let query = kagemusha_recipient_lineage_query_create_v2(
-            chain_id,
+            network_id,
             recipient,
             receiver_device_id,
             asset,
@@ -34141,7 +34029,7 @@ fn java_native_kagemusha_project_recipient_request_v2(
         java_kagemusha_byte_arrays(
             env,
             &[
-                request.chain_id.as_str().as_bytes().to_vec(),
+                request.network_id.as_bytes().to_vec(),
                 request.asset.to_string().into_bytes(),
                 request.amount.atomic_units.to_string().into_bytes(),
                 request.amount.scale.to_string().into_bytes(),
@@ -36000,7 +35888,7 @@ fn java_native_kagemusha_build_append_request_with_policy_v4(
         }
         let first_statement = &keyed_inputs[0].bundle.statement;
         if keyed_inputs.iter().any(|input| {
-            input.bundle.statement.chain_id != first_statement.chain_id
+            input.bundle.statement.network_id != first_statement.network_id
                 || input.bundle.statement.asset != first_statement.asset
                 || input.bundle.statement.asset_scale != first_statement.asset_scale
                 || input.bundle.statement.final_root != first_statement.final_root
@@ -37197,7 +37085,7 @@ fn java_kagemusha_bridge_failure(label: &str, error: BridgeError) -> JavaKagemus
 #[allow(clippy::too_many_arguments)]
 fn java_native_kagemusha_prepare_top_up_v4(
     env: &mut jni::JNIEnv<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
@@ -37218,10 +37106,7 @@ fn java_native_kagemusha_prepare_top_up_v4(
         let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4()
             .map_err(|error| java_kagemusha_bridge_failure("top-up", error))?;
         let invalid = |message: String| JavaKagemushaLifecycleFailure::Invalid(message);
-        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")
-            .map_err(invalid)?
-            .parse::<ChainId>()
-            .map_err(|error| invalid(format!("chainId must be canonical: {error}")))?;
+        let network_id = java_network_id(env, &network_id).map_err(invalid)?;
         let (asset_definition, balance_scope) = parse_asset_definition_with_balance_scope(
             java_kagemusha_text(env, &asset_definition, "assetDefinitionId").map_err(invalid)?,
         )
@@ -37309,7 +37194,7 @@ fn java_native_kagemusha_prepare_top_up_v4(
         })?;
         let mut request = KagemushaTopUpShieldBuildRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
-            chain_id,
+            network_id,
             asset,
             amount,
             payer,
@@ -39942,7 +39827,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -39959,7 +39844,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_recipient_request_v2(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         asset,
         atomic_units,
@@ -40021,7 +39906,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
@@ -40030,7 +39915,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_recipient_lineage_query_v2(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         recipient,
         receiver_device_id,
@@ -40723,7 +40608,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
@@ -40742,7 +40627,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_top_up_v4(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         asset_definition,
         payer,
@@ -41209,7 +41094,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -41226,7 +41111,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_recipient_request_v2(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         asset,
         atomic_units,
@@ -41288,7 +41173,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
@@ -41297,7 +41182,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_recipient_lineage_query_v2(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         recipient,
         receiver_device_id,
@@ -41990,7 +41875,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
@@ -42009,7 +41894,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_top_up_v4(
         &mut env,
-        chain_id,
+        network_id,
         chain_discriminant,
         asset_definition,
         payer,
@@ -45377,9 +45262,11 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_lineage_c_boundary_uses_explicit_chain_and_resolved_asset_id() {
+    fn kagemusha_lineage_c_boundary_uses_explicit_network_and_resolved_asset_id() {
         const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
         const SORA_CHAIN_DISCRIMINANT: u16 = 753;
+        const NETWORK_ID: &str =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 
         let key_pair = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair");
@@ -45388,10 +45275,9 @@ mod tests {
             .expect("account address")
             .to_i105_for_discriminant(TAIRA_CHAIN_DISCRIMINANT)
             .expect("Taira recipient");
-        let chain_id = b"taira";
+        let network_id = NETWORK_ID.as_bytes();
         let receiver_device_id = b"receiver-device";
-        // Runtime/app configuration uses the exact `sbd#cbsi` selector. This
-        // low-level ABI receives its exact resolved deployed typed definition ID.
+        // The ABI receives the exact deployed typed ID resolved from the `sbd#cbsi` selector.
         let asset = AssetDefinitionId::parse_address_literal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
             .expect("deployed typed SBD definition ID")
             .to_string()
@@ -45404,8 +45290,8 @@ mod tests {
         let mut output_len = 0;
         let status = unsafe {
             connect_norito_kagemusha_recipient_lineage_query_create_v2(
-                chain_id.as_ptr(),
-                chain_id.len() as c_ulong,
+                network_id.as_ptr(),
+                network_id.len() as c_ulong,
                 TAIRA_CHAIN_DISCRIMINANT,
                 recipient.as_ptr(),
                 recipient.len() as c_ulong,
@@ -45421,12 +45307,23 @@ mod tests {
         assert_eq!(status, 0);
         assert!(!output.is_null());
         assert_ne!(output_len, 0);
+        let query_bytes = unsafe {
+            slice::from_raw_parts(output, usize::try_from(output_len).expect("query length"))
+        };
+        let query = norito::decode_from_bytes::<
+            iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
+        >(query_bytes)
+        .expect("decode canonical lineage query");
+        assert_eq!(
+            query.selector.network_id,
+            NETWORK_ID.parse().expect("NetworkId")
+        );
         connect_norito_free(output);
 
         let status = unsafe {
             connect_norito_kagemusha_recipient_lineage_query_create_v2(
-                chain_id.as_ptr(),
-                chain_id.len() as c_ulong,
+                network_id.as_ptr(),
+                network_id.len() as c_ulong,
                 SORA_CHAIN_DISCRIMINANT,
                 recipient.as_ptr(),
                 recipient.len() as c_ulong,
@@ -45440,6 +45337,27 @@ mod tests {
             )
         };
         assert_eq!(status, ERR_AUTHORITY_PARSE);
+        assert!(output.is_null());
+        assert_eq!(output_len, 0);
+
+        let lowercase_network_id = NETWORK_ID.to_ascii_lowercase();
+        let status = unsafe {
+            connect_norito_kagemusha_recipient_lineage_query_create_v2(
+                lowercase_network_id.as_ptr(),
+                lowercase_network_id.len() as c_ulong,
+                TAIRA_CHAIN_DISCRIMINANT,
+                recipient.as_ptr(),
+                recipient.len() as c_ulong,
+                receiver_device_id.as_ptr(),
+                receiver_device_id.len() as c_ulong,
+                asset.as_ptr(),
+                asset.len() as c_ulong,
+                1,
+                &mut output,
+                &mut output_len,
+            )
+        };
+        assert_eq!(status, ERR_NETWORK_ID_PARSE);
         assert!(output.is_null());
         assert_eq!(output_len, 0);
         assert_eq!(connect_norito_chain_discriminant_scope_exit(ambient), 0);
@@ -45519,6 +45437,9 @@ mod tests {
 
     #[test]
     fn account_onboarding_body_bridge_returns_exact_bare_norito() {
+        use crate::account_onboarding::{
+            ConnectAccountOnboardingPlanBodyV1, ConnectAccountOnboardingPlanRequestV1,
+        };
         use iroha_data_model::alias_setup::{
             AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
             AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
@@ -45548,7 +45469,11 @@ mod tests {
                 permissions: vec!["CanManageAlias".to_owned()],
             },
             authority,
-            chain_id: ChainId::from("onboarding-bridge-test"),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new([0xA1])
+            )),
             anchor: AliasPlanAnchorV1 {
                 block_height: 9,
                 block_hash: Hash::new(b"onboarding-bridge-anchor"),
@@ -45589,6 +45514,23 @@ mod tests {
         let actual = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         connect_norito_free(out_ptr);
         assert_eq!(actual, expected);
+
+        let encoded_json = norito::json::to_json(&body).expect("onboarding body JSON text");
+        let exact_field = format!("\"network_id\":\"{}\"", body.network_id);
+        assert!(encoded_json.contains(&exact_field));
+        let genesis = encoded_json.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
+        assert!(norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(&genesis).is_err());
+        for retired in ["chain", "chainId", "chain_id"] {
+            let replaced = encoded_json.replacen(
+                &exact_field,
+                &format!("\"{retired}\":\"onboarding-bridge-test\""),
+                1,
+            );
+            assert!(
+                norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(&replaced).is_err(),
+                "retired onboarding receipt key {retired} must fail closed"
+            );
+        }
     }
 
     #[test]

@@ -29,7 +29,7 @@ use iroha_config::parameters::{
     is_production_runtime_handle,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::sorafs::CompleteReplicationOrder,
     musubi::ArchiveId,
@@ -534,15 +534,10 @@ impl ProviderIngestClaimOwnerV1 {
     }
 }
 
-/// Exact finalized chain and archive identity retained for one Musubi ingest job.
-///
-/// `ChainId` is additionally constrained by the provider-ingest policy's
-/// 255-byte completion-chain bound, and the remaining fields are fixed-width
-/// digests. Generic replication jobs omit this context entirely.
+/// Exact finalized network and archive identity retained for one Musubi ingest job.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestMusubiContextV1 {
-    chain_id: ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: NetworkId,
     archive_id: ArchiveId,
 }
 
@@ -551,32 +546,23 @@ impl FinalizedProviderIngestMusubiContextV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the chain identity is empty or overlong, or when
-    /// either fixed-width identity uses its forbidden all-zero sentinel.
+    /// Returns an error when the network identity is malformed or the archive is inert.
     pub fn new(
-        chain_id: ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: NetworkId,
         archive_id: ArchiveId,
     ) -> Result<Self, ProviderIngestOutboxError> {
         let context = Self {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             archive_id,
         };
         context.validate()?;
         Ok(context)
     }
 
-    /// Exact configured chain identity.
+    /// Exact configured deployment identity.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    /// Exact configured genesis block hash.
-    #[must_use]
-    pub const fn genesis_block_hash(&self) -> [u8; 32] {
-        self.genesis_block_hash
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Exact finalized Musubi archive identity.
@@ -589,15 +575,9 @@ impl FinalizedProviderIngestMusubiContextV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty or overlong chain identity or an inert
-    /// genesis/archive digest.
+    /// Returns an error for an invalid network identity or inert archive digest.
     pub fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
-        if self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len()
-                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
-            || self.genesis_block_hash == [0; 32]
-            || self.archive_id.is_zero()
-        {
+        if self.network_id.as_bytes()[31] & 1 != 1 || self.archive_id.is_zero() {
             return Err(ProviderIngestOutboxError::InvalidAuthorization);
         }
         Ok(())
@@ -808,8 +788,7 @@ impl FinalizedProviderIngestAuthorizationV1 {
             }
             Some(context) => {
                 hasher.update(&[1]);
-                hash_length_prefixed(&mut hasher, context.chain_id().as_str().as_bytes());
-                hasher.update(&context.genesis_block_hash());
+                hasher.update(context.network_id().as_bytes());
                 hasher.update(context.archive_id().as_bytes());
             }
         }
@@ -1164,8 +1143,6 @@ struct StoredFinalizedCompletionAuthorityObservationV1 {
 pub struct ProviderIngestCompletionSigningContextV1 {
     /// Finalized baseline preceding payload construction and signing.
     pub baseline_finalized_cursor: ProviderIngestFinalizedCursorV1,
-    /// Exact chain to which the completion may be submitted.
-    pub chain_id: ChainId,
     /// Exact genesis-derived network identity signed into the payload.
     pub network_id: NetworkId,
     /// Current finalized owner of the configured provider identity.
@@ -1185,7 +1162,6 @@ impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
         formatter
             .debug_struct("ProviderIngestCompletionSigningContextV1")
             .field("baseline_finalized_cursor", &self.baseline_finalized_cursor)
-            .field("chain_id", &self.chain_id)
             .field("network_id", &self.network_id)
             .field("provider_owner", &self.provider_owner)
             .field("signer_policy", &self.signer_policy)
@@ -5437,9 +5413,7 @@ fn validate_completion_signing_context(
     validate_completion_signer_policy(context.signer_policy)?;
     if context.assignment_revision == 0
         || context.completion_epoch == 0
-        || context.chain_id.as_str().is_empty()
-        || context.chain_id.as_str().len()
-            > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+        || context.network_id.as_bytes()[31] & 1 != 1
         || !completion_account_id_fits_canonical_bound(&context.provider_owner)
         || context.expected_payload.network_id() != Some(&context.network_id)
         || context.expected_payload.authority() != &context.provider_owner
@@ -6625,10 +6599,10 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
+        block::BlockHeader,
         isi::InstructionBox,
         musubi::{
             MusubiArchiveCommitmentV1, MusubiContentDigestV1, MusubiSemanticReleaseDigestV1,
@@ -6653,6 +6627,12 @@ mod tests {
         >::from_untyped_unchecked(
             iroha_crypto::Hash::new(b"provider-ingest-outbox-test"),
         ))
+    }
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            [seed; 32],
+        )))
     }
 
     fn policy() -> ProviderIngestOutboxPolicyV1 {
@@ -7253,8 +7233,7 @@ mod tests {
         let generic = authorization(order, height);
         let commitment = musubi_commitment(&generic, context_seed);
         let context = FinalizedProviderIngestMusubiContextV1::new(
-            ChainId::from("provider-ingest-musubi-test"),
-            [context_seed.wrapping_add(0x40); 32],
+            network_id(context_seed.wrapping_add(0x40)),
             commitment.archive_id(),
         )
         .expect("Musubi context");
@@ -7410,7 +7389,6 @@ mod tests {
     ) -> ProviderIngestCompletionSigningContextV1 {
         ProviderIngestCompletionSigningContextV1 {
             baseline_finalized_cursor,
-            chain_id: ChainId::from("provider-ingest-outbox-test"),
             network_id: *transaction
                 .network_id()
                 .expect("ordinary completion transaction network"),
@@ -9002,17 +8980,10 @@ mod tests {
     fn musubi_context_is_bounded_and_separates_job_identity() {
         let generic = authorization(0x5A, 7);
         let commitment = musubi_commitment(&generic, 0x31);
-        let first_context = FinalizedProviderIngestMusubiContextV1::new(
-            ChainId::from("provider-ingest-musubi-a"),
-            [0x41; 32],
-            commitment.archive_id(),
-        )
-        .expect("first context");
-        assert_eq!(
-            first_context.chain_id().as_str(),
-            "provider-ingest-musubi-a"
-        );
-        assert_eq!(first_context.genesis_block_hash(), [0x41; 32]);
+        let first_context =
+            FinalizedProviderIngestMusubiContextV1::new(network_id(0x41), commitment.archive_id())
+                .expect("first context");
+        assert_eq!(first_context.network_id(), &network_id(0x41));
         assert_eq!(first_context.archive_id(), commitment.archive_id());
         first_context.validate().expect("valid bounded context");
 
@@ -9022,22 +8993,21 @@ mod tests {
         assert_eq!(decoded, first_context);
 
         let first = authorization_with_musubi_context(&generic, first_context.clone());
-        let second_context = FinalizedProviderIngestMusubiContextV1::new(
-            ChainId::from("provider-ingest-musubi-a"),
-            [0x42; 32],
-            commitment.archive_id(),
-        )
-        .expect("second context");
+        let second_context =
+            FinalizedProviderIngestMusubiContextV1::new(network_id(0x42), commitment.archive_id())
+                .expect("second context");
         let second = authorization_with_musubi_context(&generic, second_context);
         assert_ne!(generic.job_id(), first.job_id());
         assert_ne!(first.job_id(), second.job_id());
         assert!(!generic.same_binding(&first));
         assert!(!first.same_binding(&second));
 
-        let mut zero_genesis = first_context.clone();
-        zero_genesis.genesis_block_hash = [0; 32];
+        let mut unmarked_network = first_context.clone();
+        unmarked_network.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
+        );
         assert_eq!(
-            zero_genesis.validate(),
+            unmarked_network.validate(),
             Err(ProviderIngestOutboxError::InvalidAuthorization)
         );
         let mut zero_archive = first_context;
@@ -9234,8 +9204,7 @@ mod tests {
         let (original, receipt) = musubi_authorization_and_receipt(0x5C, 7, 0x33);
         let original_context = original.musubi_context().expect("Musubi context");
         let substituted_context = FinalizedProviderIngestMusubiContextV1::new(
-            original_context.chain_id().clone(),
-            [0xF1; 32],
+            network_id(0xF1),
             original_context.archive_id(),
         )
         .expect("substituted context");
@@ -9484,7 +9453,7 @@ mod tests {
             .signing_context
             .as_mut()
             .expect("signed context")
-            .chain_id = ChainId::from("substituted-chain");
+            .network_id = network_id(0xF2);
         assert_eq!(
             validate_checkpoint(&substituted_context, policy()),
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
@@ -9561,7 +9530,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_signing_context_binds_chain_owner_payload_and_claim_generation() {
+    fn prepared_signing_context_binds_network_owner_payload_and_claim_generation() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
         let authorization = authorization(0x66, 7);
         let job_id = authorization.job_id();
@@ -9570,17 +9539,11 @@ mod tests {
         let transaction = signed_completion(&authorization, 8, 8);
         let valid = completion_context(&transaction, 8, cursor(8));
 
-        let mut wrong_chain = valid.clone();
-        wrong_chain.chain_id = ChainId::from("wrong-chain");
+        let mut wrong_network = valid.clone();
+        wrong_network.network_id = network_id(0xF3);
         assert_eq!(
-            outbox.claim_completion_signing(job_id, wrong_chain, 102),
+            outbox.claim_completion_signing(job_id, wrong_network, 102),
             Err(ProviderIngestOutboxError::InvalidSigningContext)
-        );
-        assert!(
-            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1)
-                .parse::<ChainId>()
-                .is_err(),
-            "oversized chain id must fail before reaching the signing context"
         );
         let mut wrong_owner = valid.clone();
         wrong_owner.provider_owner = completed_by(0x77);

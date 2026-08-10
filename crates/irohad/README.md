@@ -1,6 +1,6 @@
 # Iroha Daemon (irohad)
 
-The `irohad` crate contains the Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. The capabilities of the network are determined by the feature flags used to compile the binary.
+The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. The capabilities of the network are determined by the feature flags used to compile the binary.
 
 Pass the `--language <code>` flag to override automatic language detection for informational and error messages.
 
@@ -65,7 +65,7 @@ evidence. Registry selection is a compile-time/launcher decision; the standard
 launcher has no environment or config selector that dynamically loads
 executable provider code.
 
-The stock `irohad` binary does not embed deployment providers. With the default
+The stock `iroha3d` binary does not embed deployment providers. With the default
 empty binding catalog it starts without external adapters. With a non-empty
 catalog it uses the stock local-broker client and fails before subsystem
 startup if the broker or any exact requested role is
@@ -88,14 +88,32 @@ configured adapter, chain/genesis/provider context, and finalized
 `State::provider_owners()` value, and pin inventory calls and returned data to
 their configured adapter and exact chain/genesis/archive/order scope, with
 put/get restricted to the local provider. Neither wrapper is installed or
-supervised. Stock `irohad` still rejects journal
-activation before supervisor startup until one non-generic daemon coordinator
-owns authenticated archive provenance and the private drivers, concrete
-combined durability/signer/inventory adapters and broker readiness exist, and
-the supervised fault/chaos/platform qualification is complete. Deployment must
-also enforce one rooted journal session for each exact external provider scope
-across machines, or an equivalent authenticated provider-side session fence;
-the local OS lease coordinates only processes sharing one state root.
+supervised. Because the stock broker does not support slots 57--59, ordinary
+stock launch fails during pre-Tokio provider resolution. If an injected registry
+resolves and qualifies the three roles, the shared `start_with_runtime_deps`
+activation gate still rejects the journal before supervisor startup.
+
+The inert capture foundation exposes request minting only through a doc-hidden
+`NodeHandle` method. Its clone-shared marker identifies one process-local handle
+incarnation with storage and an ingest outbox; restart creates a fresh marker.
+The marker owns a non-resetting atomic take guard across handle clones. The
+prepared daemon archive exposes its signed capture reader only as one movable
+concrete value, and a private composer consumes it into a doc-hidden
+non-generic coordinator retained on `Iroha`. Acquisition is reader-inert and
+lazy binding retries that same reader/session after height-zero bootstrap; the
+coordinator exposes no public operational surface and starts no child.
+Same-head suppression is scanner-lifetime only. Reconciliation now performs a
+qualified exact slot-59 read after fresh request verification and before
+enqueue: an existing valid item with the exact request payload suppresses
+admission, absence proceeds, and conflict or qualification failure fails closed.
+Journal enqueue remains idempotent only while its key is retained because
+delivered rows may be capacity-pruned. Concrete combined durability, signer,
+and inventory adapters, broker readiness, effect-driver ownership, supervision,
+and fault/chaos/platform qualification remain separate gates. Deployment must
+also enforce one rooted
+journal session for each exact external provider scope across machines, or an
+equivalent authenticated provider-side session fence; the local OS lease
+coordinates only processes sharing one state root.
 
 The journal's raw checkpoint/CAS types, abstract store, transition engine, and
 runtime constructor are crate-private, as is checkpoint-head orchestration. The
@@ -150,20 +168,22 @@ public catalog, and the assembled launch performs exact live server
 qualification before readiness.
 The server accepts canonical non-empty client subsets of that catalog so the
 stock daemon and packaged standalone services can share the fixed endpoint;
-the handshake still requires every binding byte-for-byte, and a session cannot
-invoke a provider outside its authenticated subset. Deployment launchers can
+the handshake requires the same exact genesis-derived `NetworkId` and every
+binding byte-for-byte, and a session cannot invoke a provider outside its
+authenticated subset. The packaged `sorafs_governance_dag` launcher therefore
+requires both `--chain-id` and `--network-id`. Deployment launchers can
 handoff that projection without sharing `actual::Config` by calling
 `IrohaRuntimeProviderBindingsV1::export_canonical_v1`; the broker side loads it
 with `load_canonical_v1`, or uses
 `load_runtime_provider_broker_catalog_file_v1` for the process shell's secure
 absolute-path handoff. The explicitly versioned canonical Norito artifact is
 bounded, non-empty, strictly ordered, and contains only the chain identity plus
-public handles, identities, revisions, bounds, and policy digests already held
-by the sanitized projection. The common CLI has no socket override, plugin,
-private-key, credential, or test-provider argument; Linux and macOS use the
-platform-fixed authenticated endpoint, while Windows and other platforms fail
-before catalog filesystem access because V1 has no equivalent authenticated
-transport.
+the mandatory exact `NetworkId`, public handles, identities, revisions, bounds,
+and policy digests already held by the sanitized projection. The common CLI has
+no socket override, plugin, private-key, credential, or test-provider argument;
+Linux and macOS use the platform-fixed authenticated endpoint, while Windows
+and other platforms fail before catalog filesystem access because V1 has no
+equivalent authenticated transport.
 
 No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
 store, network, or immutable-query implementations. Under the current static
@@ -311,7 +331,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 1. **Build the binaries.**
 
     ```bash
-    cargo build --release -p irohad
+    cargo build --release -p irohad --bin iroha3d
     cargo build --release -p iroha_kagami
     ```
 
@@ -320,7 +340,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
     ```bash
     mkdir -p deploy/peer
-    cp target/release/irohad deploy/peer/
+    cp target/release/iroha3d deploy/peer/
     cp defaults/nexus/config.toml deploy/peer/config.toml
     cp defaults/nexus/genesis.json deploy/peer/genesis.json
     ```
@@ -393,9 +413,9 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
     ```bash
     cd deploy/peer
-    ./irohad --config ./config.toml
+    ./iroha3d --config ./config.toml
     # or, for the Nexus demo profile:
-    ./irohad --sora --config ./config.toml
+    ./iroha3d --sora --config ./config.toml
     ```
 
     Repeat the validator configuration/key steps for every peer and provision

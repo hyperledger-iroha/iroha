@@ -344,7 +344,8 @@ sends the nonce-bearing body once without redirects or retries.
   hooks may add ordinary headers but cannot mutate the validated method, URI,
   content object, Authorization/Accept headers, signed content bytes, or
   canonical signing headers after request setup; canonical request signing
-  requires generated or caller-supplied 16-byte lowercase-hex nonces and
+  requires an immutable exact `NetworkId`, generated or caller-supplied
+  16-byte lowercase-hex nonces, and
   applies the same root-relative path guard and canonical query signing rejects
   the same ambiguous segments/names plus malformed-escape/control-byte drift
   before sorting or signing; SSE event-filter query preflight rejects malformed
@@ -417,7 +418,9 @@ Torii's route-specific request limits.
 `CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
 `SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii
 routes, so set `ToriiClientOptions.CanonicalRequestCredentials` with a
-canonical I105 account id before using those helpers. Session creation requires the quote id, committed
+canonical I105 account id and set `LocalSigningContext` to the exact
+genesis-derived `NetworkId` before using those helpers. Human-readable labels
+never substitute for that signing domain. Session creation requires the quote id, committed
 `OpenVpnLeaseEscrow` transaction hash, and the same metering public key that was
 bound into the quote. Empty quote/session exit class still selects Torii's
 profile default, and an empty receipt lease id still lets Torii derive the
@@ -613,7 +616,8 @@ var quoted = await client.Ledger.QuoteAndSignAsync(transaction, privateKeySeed);
 ```
 
 Configure `ToriiClientOptions.CanonicalRequestCredentials` for the same
-authority before calling the guided flow. Use
+authority and `LocalSigningContext` for the exact network before calling the
+guided flow. Use
 `client.Torii.GetFeeSponsorProgramAsync(programId)` to inspect one exact
 lifecycle record. Contract/IVM intents also require a positive gas bound.
 Metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
@@ -933,6 +937,17 @@ primary `.nupkg` and exercises that package on all five native hosts. The
 workflow is source-complete, but it is not evidence that a five-host run has
 passed until the corresponding CI artifacts exist.
 
+From the `csharp/` directory, the release package and package-consumer gate use
+the same paths as CI:
+
+```bash
+dotnet restore Hyperledger.Iroha.Sdk.sln
+dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
+dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \
+  ../ci/check_csharp_sdk_package_consumer.sh
+```
+
 The package-consumer guard creates an isolated temporary `net8.0` application,
 installs `Hyperledger.Iroha.Sdk` from `csharp/artifacts/packages`, verifies the
 consumer project uses `PackageReference` rather than `ProjectReference`, builds
@@ -941,6 +956,8 @@ route checks through the packed NuGet assembly. Set
 `CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
 the guard also verifies the NuGet runtime inventory and requires the packaged
 ABI-22 appeal-finance bridge:
+
+From the repository root, the equivalent consumer invocation is:
 
 ```bash
 CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \

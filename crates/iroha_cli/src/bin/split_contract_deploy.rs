@@ -711,8 +711,9 @@ mod tests {
     fn commit_transaction_uses_native_nonce_cas_without_generic_metadata_write() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
+        let network_id = test_network_id(b"split-contract-deploy-native-commit-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -721,7 +722,7 @@ mod tests {
             "validation_fee_pool::universal".parse()?;
         let code_hash = Hash::new(b"reviewed-contract-artifact");
         let transaction = build_commit_transaction(
-            &test_network_id(b"split-contract-deploy-native-commit-test"),
+            &network_id,
             &authority,
             key_pair.private_key(),
             Metadata::default(),
@@ -865,8 +866,9 @@ mod tests {
             .map(|index| u8::try_from(index % 251).expect("remainder fits u8"))
             .collect::<Vec<_>>();
         let mut metadata = Metadata::default();
+        let network_id = test_network_id(b"split-contract-deploy-large-native-upload-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -874,7 +876,7 @@ mod tests {
         insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
         let code_hash = ivm::contract_code_hash(&code);
         let plan = build_native_upload_plan(
-            &test_network_id(b"split-contract-deploy-large-native-upload-test"),
+            &network_id,
             &authority,
             key_pair.private_key(),
             &metadata,

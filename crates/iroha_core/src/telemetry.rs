@@ -5343,6 +5343,10 @@ pub enum PinIntentSpoolReason {
     UnknownLane,
     /// Owner account missing from WSV.
     UnknownOwner,
+    /// Signed ingest authorization was missing or invalid.
+    InvalidAuthorization,
+    /// Deterministic ingest quota rejected the intent.
+    Quota,
     /// Storage ticket was zeroed.
     ZeroStorageTicket,
     /// Intent was already sealed into a previous block.
@@ -5365,6 +5369,8 @@ impl PinIntentSpoolReason {
             PinIntentSpoolReason::AliasTooLong => "alias_too_long",
             PinIntentSpoolReason::UnknownLane => "unknown_lane",
             PinIntentSpoolReason::UnknownOwner => "unknown_owner",
+            PinIntentSpoolReason::InvalidAuthorization => "invalid_authorization",
+            PinIntentSpoolReason::Quota => "quota",
             PinIntentSpoolReason::ZeroStorageTicket => "zero_storage_ticket",
             PinIntentSpoolReason::SealedDuplicate => "sealed_duplicate",
         }
@@ -5385,6 +5391,16 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             }
             DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
+            DaPinIntentValidationError::AuthorizationMismatch { .. }
+            | DaPinIntentValidationError::WrongNetwork { .. }
+            | DaPinIntentValidationError::ZeroPayloadBytes { .. }
+            | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
+            | DaPinIntentValidationError::UnauthorizedOwner { .. } => {
+                PinIntentSpoolReason::InvalidAuthorization
+            }
+            DaPinIntentValidationError::QuotaExceeded { .. }
+            | DaPinIntentValidationError::QuotaOverflow { .. }
+            | DaPinIntentValidationError::QuotaStateCorrupt { .. } => PinIntentSpoolReason::Quota,
             DaPinIntentValidationError::DuplicateIntent { .. } => {
                 PinIntentSpoolReason::DuplicateIntent
             }
@@ -7767,37 +7783,16 @@ impl Telemetry {
         self.metrics.record_sorafs_por_scheduler_failure();
     }
 
-    /// Record aggregate `SoraFS` registry statistics exposed by Torii.
+    /// Record the consensus-maintained global `SoraFS` pin resource summary.
     #[cfg(feature = "telemetry")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_registry(
+    pub fn record_sorafs_pin_resource_usage(
         &self,
-        manifests_pending: u64,
-        manifests_approved: u64,
-        manifests_retired: u64,
-        alias_total: u64,
-        orders_pending: u64,
-        orders_completed: u64,
-        orders_expired: u64,
-        sla_met: u64,
-        sla_missed: u64,
-        completion_latencies: &[f64],
-        deadline_slack_epochs: &[f64],
+        retained_manifests: u64,
+        live_content_bytes: u64,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_registry(
-                manifests_pending,
-                manifests_approved,
-                manifests_retired,
-                alias_total,
-                orders_pending,
-                orders_completed,
-                orders_expired,
-                sla_met,
-                sla_missed,
-                completion_latencies,
-                deadline_slack_epochs,
-            );
+            self.metrics
+                .record_sorafs_pin_resource_usage(retained_manifests, live_content_bytes);
         }
     }
 
@@ -8227,6 +8222,15 @@ impl Telemetry {
 
     #[cfg(not(feature = "telemetry"))]
     /// No-op when telemetry is disabled.
+    pub fn record_sorafs_pin_resource_usage(
+        &self,
+        _retained_manifests: u64,
+        _live_content_bytes: u64,
+    ) {
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    /// No-op when telemetry is disabled.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_storage(
         &self,
@@ -8239,25 +8243,6 @@ impl Telemetry {
         _por_inflight: u64,
         _por_samples_success: u64,
         _por_samples_failed: u64,
-    ) {
-    }
-
-    #[cfg(not(feature = "telemetry"))]
-    /// No-op when telemetry is disabled.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_registry(
-        &self,
-        _manifests_pending: u64,
-        _manifests_approved: u64,
-        _manifests_retired: u64,
-        _alias_total: u64,
-        _orders_pending: u64,
-        _orders_completed: u64,
-        _orders_expired: u64,
-        _sla_met: u64,
-        _sla_missed: u64,
-        _completion_latencies: &[f64],
-        _deadline_slack_epochs: &[f64],
     ) {
     }
 
@@ -9873,6 +9858,23 @@ mod tests {
         );
 
         assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_sorafs_pin_resource_usage_records_without_actor_and_honors_gate() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.record_sorafs_pin_resource_usage(17, 4_096);
+
+        assert_eq!(metrics.torii_sorafs_pin_retained_manifests.get(), 17);
+        assert_eq!(metrics.torii_sorafs_pin_live_content_bytes.get(), 4_096);
+
+        telemetry.disable();
+        telemetry.record_sorafs_pin_resource_usage(23, 8_192);
+
+        assert_eq!(metrics.torii_sorafs_pin_retained_manifests.get(), 17);
+        assert_eq!(metrics.torii_sorafs_pin_live_content_bytes.get(), 4_096);
     }
 
     #[test]

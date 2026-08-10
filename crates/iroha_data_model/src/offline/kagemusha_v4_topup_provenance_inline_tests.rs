@@ -40,7 +40,6 @@ mod kagemusha_v4_topup_provenance_tests {
     }
 
     fn evidence(
-        chain_id: &ChainId,
         network_id: NetworkId,
         asset: &AssetDefinitionId,
         binding: &KagemushaRecursiveSpendArtifactBindingV4,
@@ -52,7 +51,7 @@ mod kagemusha_v4_topup_provenance_tests {
         let amount = KagemushaScaledAmountV2::new(500, 2).expect("test amount");
         let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            chain_id: chain_id.clone(),
+            network_id,
             payer: payer.clone(),
             asset: AssetId::new(asset.clone(), payer),
             asset_scale: 2,
@@ -61,7 +60,7 @@ mod kagemusha_v4_topup_provenance_tests {
             finalized_root: [seed.wrapping_add(2); 32],
             shield_leaf_index: u32::from(seed),
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id: chain_id.clone(),
+                network_id,
                 asset: asset.clone(),
                 note_commitment: [seed.wrapping_add(3); 32],
                 spend_nullifier: [seed.wrapping_add(4); 32],
@@ -138,7 +137,6 @@ mod kagemusha_v4_topup_provenance_tests {
     }
 
     fn fixture_with_seeds(seeds: &[u8]) -> Fixture {
-        let chain_id = ChainId::from("kagemusha-provenance-test-chain");
         let network_id = network_id(0x51);
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -153,7 +151,6 @@ mod kagemusha_v4_topup_provenance_tests {
             .expect("deterministic validator key");
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            chain_id: chain_id.clone(),
             network_id,
             artifact_generation: binding.generation.clone(),
             windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
@@ -169,7 +166,7 @@ mod kagemusha_v4_topup_provenance_tests {
         };
         let mut evidence = seeds
             .iter()
-            .map(|seed| evidence(&chain_id, network_id, &asset, &binding, *seed))
+            .map(|seed| evidence(network_id, &asset, &binding, *seed))
             .collect::<Vec<_>>();
         evidence.sort_unstable_by_key(|item| item.topup_anchor.compact_ref().expect("anchor ref"));
         let topup_anchor_refs = evidence
@@ -177,7 +174,7 @@ mod kagemusha_v4_topup_provenance_tests {
             .map(|item| item.topup_anchor.compact_ref().expect("anchor ref"))
             .collect();
         let statement = KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset.clone(),
             asset_scale: 2,
             final_root: [0x71; 32],
@@ -186,7 +183,7 @@ mod kagemusha_v4_topup_provenance_tests {
             proof_step_count: 2,
             peer_hop_count: 1,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
+                network_id,
                 asset,
                 note_commitment: [0x72; 32],
                 spend_nullifier: [0x73; 32],
@@ -274,15 +271,35 @@ mod kagemusha_v4_topup_provenance_tests {
     }
 
     #[test]
+    fn topup_finality_height_context_rejects_zero_network_identity() {
+        let fixture = fixture_with_seeds(&[0x23]);
+        let mut context = fixture.provenance.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .clone();
+        context.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+        );
+
+        assert!(matches!(
+            context.validate_structure(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context"
+            })
+        ));
+    }
+
+    #[test]
     fn provenance_rejects_wrong_context_binding_window_height_qc_and_size() {
         let fixture = fixture_with_seeds(&[0x31]);
 
-        let mut wrong_chain = fixture.statement.clone();
-        wrong_chain.chain_id = ChainId::from("wrong-chain");
+        let mut wrong_network = fixture.statement.clone();
+        wrong_network.network_id = network_id(0x52);
         assert!(
             fixture
                 .provenance
-                .validate_for_statement_at_height(&wrong_chain, Some(50))
+                .validate_for_statement_at_height(&wrong_network, Some(50))
                 .is_err()
         );
 
@@ -463,7 +480,7 @@ impl KagemushaRecursiveSpendVerifyRequestV4 {
             || self.maximum_hops > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || statement.peer_hop_count > self.maximum_hops
             || self.artifact_binding != statement.artifact_binding
-            || self.recipient_request.chain_id != statement.chain_id
+            || self.recipient_request.network_id != statement.network_id
             || self.recipient_request.asset != statement.asset
             || self.recipient_request.amount.scale != statement.asset_scale
             || statement.current_note != self.recipient_request.recipient_output
@@ -575,7 +592,7 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
             || self.operation_id != self.redemption.operation_id
             || self.recipient != self.redemption.recipient
             || self.public_amount != self.redemption.public_amount
-            || self.redemption.chain_id != statement.chain_id
+            || self.redemption.network_id != statement.network_id
             || self.redemption.asset != statement.asset
             || self.redemption.parent_bundle_digest != self.bundle.digest()?
             || self.redemption.input_note != statement.current_note
@@ -667,7 +684,7 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
             || redemption.parent_proof_step_count != input.proof_step_count
             || redemption.parent_peer_hop_count != input.peer_hop_count
             || redemption.input_root != input.final_root
-            || change.chain_id != input.chain_id
+            || change.network_id != input.network_id
             || change.asset != input.asset
             || change.asset_scale != input.asset_scale
             || change.final_root == input.final_root
@@ -705,7 +722,7 @@ impl KagemushaRecursiveSpendRedeemUnsignedV4 {
             || self.operation_id != self.redemption.operation_id
             || self.recipient != self.redemption.recipient
             || self.amount != self.redemption.public_amount
-            || self.redemption.chain_id != statement.chain_id
+            || self.redemption.network_id != statement.network_id
             || self.redemption.asset != statement.asset
             || self.redemption.parent_bundle_digest != self.bundle.digest()?
             || self.redemption.input_note != statement.current_note

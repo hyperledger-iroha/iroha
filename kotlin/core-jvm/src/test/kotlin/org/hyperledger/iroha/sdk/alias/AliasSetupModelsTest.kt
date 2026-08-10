@@ -611,7 +611,7 @@ class AliasSetupModelsTest {
             1,
             request,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
             AliasLeaseAcquisitionV1(1),
@@ -799,15 +799,15 @@ class AliasSetupModelsTest {
         )
 
         val receipt = signedOnboardingReceipt(body, signer)
-        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt))
-        assertEquals(receipt, AccountOnboardingReceiptVerifier.requireValidForRequest(body.request, receipt))
+        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt, body.networkId, null))
+        assertEquals(receipt, AccountOnboardingReceiptVerifier.requireValidForRequest(body.request, receipt, body.networkId, null))
 
         val tampered = AccountOnboardingPlanReceiptV1(
-            onboardingBody(authority, "other-chain"),
+            onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash,
             receipt.signature,
         )
-        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered, body.networkId, null))
 
         val wrongSigner = Ed25519PrivateKeyParameters(ByteArray(32) { 0x52.toByte() }, 0)
         val wrongAuthority = AccountAddress.fromAccount(
@@ -815,19 +815,20 @@ class AliasSetupModelsTest {
             "ed25519",
         ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val wrongAuthorityReceipt = signedOnboardingReceipt(onboardingBody(wrongAuthority), signer)
-        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId, null))
 
         val substitutedSelfSignedReceipt = signedOnboardingReceipt(
             onboardingBody(wrongAuthority),
             wrongSigner,
         )
-        assertTrue(AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt))
+        assertTrue(AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, null))
         assertFalse(
-            AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, authority),
+            AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, authority),
         )
         assertFailsWith<IllegalArgumentException> {
             AccountOnboardingReceiptVerifier.requireValid(
                 substitutedSelfSignedReceipt,
+                body.networkId,
                 authority,
             )
         }
@@ -864,6 +865,7 @@ class AliasSetupModelsTest {
         assertTrue(
             AccountOnboardingReceiptVerifier.verify(
                 receipt,
+                receipt.body.networkId,
                 vector.getValue("authority") as String,
             ),
         )
@@ -874,6 +876,7 @@ class AliasSetupModelsTest {
         assertFalse(
             AccountOnboardingReceiptVerifier.verify(
                 AccountOnboardingPlanReceiptV1(receipt.body, receipt.planHash, tamperedSignature),
+                receipt.body.networkId,
                 receipt.body.authority,
             ),
         )
@@ -963,7 +966,7 @@ class AliasSetupModelsTest {
 
     private fun onboardingBody(
         authority: String,
-        chainId: String = "test-chain",
+        networkId: NetworkId = TEST_NETWORK_ID,
         disposition: AliasPlanDispositionV1 = AliasPlanDispositionV1.CREATE,
     ): AccountOnboardingPlanBodyV1 {
         val intent = AliasIntentV1.AccountAlias(
@@ -981,7 +984,7 @@ class AliasSetupModelsTest {
                 account(0x22),
             ),
             authority,
-            chainId,
+            networkId,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(
                 intent,

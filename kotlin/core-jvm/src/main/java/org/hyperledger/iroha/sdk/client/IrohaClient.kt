@@ -22,6 +22,7 @@ import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
+import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -330,6 +331,7 @@ interface IrohaClient {
     fun planSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         onboardingToken: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
         val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
         future.completeExceptionally(
@@ -343,6 +345,7 @@ interface IrohaClient {
         request: AccountOnboardingPlanRequestV1,
         onboardingToken: String,
         expectedAuthority: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
         val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
         future.completeExceptionally(
@@ -355,6 +358,7 @@ interface IrohaClient {
     fun applySponsoredAccountOnboarding(
         receipt: AccountOnboardingPlanReceiptV1,
         onboardingToken: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingResponseV1> {
         val future = CompletableFuture<AccountOnboardingResponseV1>()
         future.completeExceptionally(
@@ -368,6 +372,7 @@ interface IrohaClient {
         receipt: AccountOnboardingPlanReceiptV1,
         onboardingToken: String,
         expectedAuthority: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingResponseV1> {
         val future = CompletableFuture<AccountOnboardingResponseV1>()
         future.completeExceptionally(
@@ -392,6 +397,15 @@ interface IrohaClient {
         val future = CompletableFuture<SumeragiDiagnosticsStatus>()
         future.completeExceptionally(
             IllegalStateException("getSumeragiDiagnostics requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Fetches the authoritative, fail-closed `/v1/sumeragi/status` snapshot. */
+    fun getSumeragiStatus(): CompletableFuture<SumeragiV2Status> {
+        val future = CompletableFuture<SumeragiV2Status>()
+        future.completeExceptionally(
+            IllegalStateException("getSumeragiStatus requires a concrete IrohaClient implementation")
         )
         return future
     }

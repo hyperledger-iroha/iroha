@@ -7,6 +7,8 @@ use iroha_torii_shared::connect::{
     AppMeta, ConnectControlV1, ConnectFrameV1, Constraints, Dir, FrameKind, PermissionsV1,
     encode_connect_frame_bare,
 };
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{NetworkId, block::BlockHeader};
 
 fn main() {
     let frame = ConnectFrameV1 {
@@ -21,7 +23,9 @@ fn main() {
                 icon_hash: None,
             }),
             constraints: Constraints {
-                chain_id: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+                network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"connect-dump-open-genesis"),
+                )),
             },
             permissions: Some(PermissionsV1 {
                 methods: vec!["SIGN_REQUEST_TX".into(), "SIGN_REQUEST_RAW".into()],

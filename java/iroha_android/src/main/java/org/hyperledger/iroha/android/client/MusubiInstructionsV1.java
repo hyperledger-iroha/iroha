@@ -1109,8 +1109,7 @@ public final class MusubiInstructionsV1 {
 
   private static void encodeSeedIngressBinding(
       final NoritoEncoder encoder, final SeedIngressReceiptBinding value) {
-    writeSized(encoder, child -> encodeStringNewtype(child, value.chainId()));
-    writeSized(encoder, child -> child.writeBytes(value.genesisBlockHash()));
+    writeSized(encoder, child -> child.writeBytes(value.networkId().bytes()));
     writeSized(encoder, child -> encodeAccountId(child, value.publisher()));
     writeSized(encoder, child -> encodeAccountId(child, value.ingressBroker()));
     writeSized(encoder, child -> encodeHexDigestNewtype(child, value.seedProvider()));
@@ -1176,8 +1175,7 @@ public final class MusubiInstructionsV1 {
 
   private static void encodeProviderBinding(
       final NoritoEncoder encoder, final ProviderBundleVerificationBinding value) {
-    writeSized(encoder, child -> encodeStringNewtype(child, value.chainId()));
-    writeSized(encoder, child -> child.writeBytes(value.genesisBlockHash()));
+    writeSized(encoder, child -> child.writeBytes(value.networkId().bytes()));
     writeSized(encoder, child -> encodeHexDigestNewtype(child, value.providerId()));
     writeSized(encoder, child -> encodeAccountId(child, value.completedBy()));
     writeSized(encoder, child -> encodeCompletionAuthority(child, value.completionAuthority()));

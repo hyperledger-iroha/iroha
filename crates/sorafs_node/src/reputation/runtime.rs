@@ -29,7 +29,7 @@ use std::{
 
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     isi::sorafs::{
         AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
@@ -524,11 +524,11 @@ pub trait ReputationJournalCheckpointRuntimeV1: ReputationRuntimeProviderV1 {
     ) -> Result<(), ReputationJournalCheckpointExternalErrorV1>;
 }
 
-/// One immutable finalized chain view selected for a runtime poll.
+/// One immutable finalized network view selected for a runtime poll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationFinalizedAnchorV1 {
-    /// Exact active chain.
-    pub chain_id: ChainId,
+    /// Exact active network.
+    pub network_id: NetworkId,
     /// Finalized height and hash.
     pub identity: ReputationFinalizedIdentityV1,
     /// Timestamp of that exact finalized block in Unix milliseconds.
@@ -540,7 +540,7 @@ impl ReputationFinalizedAnchorV1 {
         self.identity
             .validate()
             .map_err(ReputationRuntimeError::Projector)?;
-        if self.chain_id.as_str().is_empty()
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.finalized_at_unix_ms == 0
             || self.finalized_at_unix_ms == u64::MAX
         {
@@ -558,7 +558,7 @@ impl ReputationFinalizedAnchorV1 {
 /// externally instead of returning this view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalSourceFinalizedViewV1 {
-    /// Exact chain, block identity, and block timestamp of the immutable view.
+    /// Exact network, block identity, and block timestamp of the immutable view.
     pub anchor: ReputationFinalizedAnchorV1,
     /// Latest chain-authoritative event for the requested source, when present.
     pub event: Option<ReputationJournalFinalizedEventV1>,
@@ -569,23 +569,23 @@ impl ReputationJournalSourceFinalizedViewV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an inert request, another chain or finalized cursor, an anchor
+    /// Rejects an inert request, another network or finalized cursor, an anchor
     /// beyond the requested upper bound, or a malformed/substituted event.
     pub fn validate_for_request(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         query: FindSorafsReputationJournalEventBySourceId,
     ) -> Result<(), ReputationRuntimeError> {
-        if chain_id.as_str().is_empty()
+        if network_id.as_bytes()[31] & 1 != 1
             || maximum_height == 0
             || query.source_id() == ReputationJournalSourceIdV1::ZERO
         {
             return Err(ReputationRuntimeError::InvalidQueryPage);
         }
         self.anchor.validate()?;
-        if &self.anchor.chain_id != chain_id {
-            return Err(ReputationRuntimeError::ChainIdMismatch);
+        if &self.anchor.network_id != network_id {
+            return Err(ReputationRuntimeError::NetworkIdMismatch);
         }
         if self.anchor.identity.height > maximum_height {
             return Err(ReputationRuntimeError::FinalizedAnchorPastTarget);
@@ -628,7 +628,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
 /// worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalDeliveryFinalizedViewV1 {
-    /// Exact chain, block identity, and block timestamp of the immutable view.
+    /// Exact network, block identity, and block timestamp of the immutable view.
     pub anchor: ReputationFinalizedAnchorV1,
     /// Complete bounded recorder-policy predecessor chain from revision one
     /// through `authority_policy`, read under the same immutable view guard.
@@ -642,7 +642,7 @@ pub struct ReputationJournalDeliveryFinalizedViewV1 {
 impl ReputationJournalDeliveryFinalizedViewV1 {
     /// Validate this response against the exact immutable query request.
     ///
-    /// This checks the chain and upper-height selection, active authority
+    /// This checks the network and upper-height selection, active authority
     /// policy, finalized block time, journal continuation, requested row
     /// bound, and the journal page's exact finalized cursor as one unit.
     ///
@@ -652,7 +652,7 @@ impl ReputationJournalDeliveryFinalizedViewV1 {
     /// malformed or does not match the exact request.
     pub fn validate_for_request(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         requested_after: Option<ReputationJournalFinalizedEventCursorV1>,
         requested_limit: u32,
         maximum_height: u64,
@@ -663,8 +663,8 @@ impl ReputationJournalDeliveryFinalizedViewV1 {
             return Err(ReputationRuntimeError::QueryResourceExhausted);
         }
         self.anchor.validate()?;
-        if &self.anchor.chain_id != chain_id {
-            return Err(ReputationRuntimeError::ChainIdMismatch);
+        if &self.anchor.network_id != network_id {
+            return Err(ReputationRuntimeError::NetworkIdMismatch);
         }
         if self.anchor.identity.height > maximum_height {
             return Err(ReputationRuntimeError::FinalizedAnchorPastTarget);
@@ -745,7 +745,7 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// return that exact historical anchor rather than the current head.
     fn finalized_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1>;
 
@@ -758,7 +758,7 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// report the same height.
     fn reputation_journal_delivery_view(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         _policy_query: FindSorafsReputationJournalAuthorityPolicy,
         after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -773,7 +773,7 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// authoritative absence because history was pruned must fail.
     fn reputation_journal_event_by_source_id(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         query: FindSorafsReputationJournalEventBySourceId,
     ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1>;
@@ -831,7 +831,7 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationFinalizedQueryPolicyV1 {
     version: u8,
-    chain_id: ChainId,
+    network_id: NetworkId,
     window_end_height: u64,
     ingest_policy_digest: [u8; 32],
     query_handle: String,
@@ -885,7 +885,7 @@ impl ReputationFinalizedQueryPolicyV1 {
         let ingest_policy_digest = ingest_policy.canonical_digest()?;
         Ok(Self {
             version: REPUTATION_FINALIZED_QUERY_POLICY_VERSION_V1,
-            chain_id: ingest_policy.chain_id.clone(),
+            network_id: ingest_policy.network_id,
             window_end_height: ingest_policy.window_end_height,
             ingest_policy_digest,
             query_handle,
@@ -900,8 +900,8 @@ impl ReputationFinalizedQueryPolicyV1 {
 
     /// Exact active chain selected by the policy.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Inclusive finalized target for this immutable release window.
@@ -993,7 +993,7 @@ impl ReputationCommittedProjectorRuntimeV1 {
     ) -> Result<Self, ReputationRuntimeError> {
         ingest_policy.validate()?;
         if policy.version != REPUTATION_FINALIZED_QUERY_POLICY_VERSION_V1
-            || policy.chain_id != ingest_policy.chain_id
+            || policy.network_id != ingest_policy.network_id
             || policy.window_end_height != ingest_policy.window_end_height
             || policy.ingest_policy_digest != ingest_policy.canonical_digest()?
             || projector.status()?.policy_digest != policy.ingest_policy_digest
@@ -1083,12 +1083,12 @@ impl ReputationCommittedProjectorRuntimeV1 {
         self.ensure_query_binding()?;
         let anchor_result = self
             .query
-            .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height);
+            .finalized_at_or_before(&self.policy.network_id, self.policy.window_end_height);
         self.ensure_query_binding()?;
         let anchor = anchor_result?;
         anchor.validate()?;
-        if anchor.chain_id != self.policy.chain_id {
-            return Err(ReputationRuntimeError::ChainIdMismatch);
+        if anchor.network_id != self.policy.network_id {
+            return Err(ReputationRuntimeError::NetworkIdMismatch);
         }
         if anchor.identity.height > self.policy.window_end_height {
             return Err(ReputationRuntimeError::FinalizedAnchorPastTarget);
@@ -1131,7 +1131,7 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let outcome = self
             .projector
             .ingest_finalized_batch(ReputationFinalizedBatchV1 {
-                chain_id: self.policy.chain_id.clone(),
+                network_id: self.policy.network_id,
                 finalized_at_unix_ms: anchor.finalized_at_unix_ms,
                 proof_pages,
                 journal_pages,
@@ -1573,7 +1573,7 @@ const fn committed_from_reserve_cursor(
 /// Strict durable-outbox policy for native reputation-journal producers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalProducerPolicyV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority_policy: ReputationJournalAuthorityPolicyV1,
     authority_policy_digest: [u8; 32],
     max_pending: u32,
@@ -1588,16 +1588,16 @@ impl ReputationJournalProducerPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an inert chain, invalid recorder policy, or unsafe bound.
+    /// Rejects an invalid network identity, recorder policy, or unsafe bound.
     pub fn strict_v1(
-        chain_id: ChainId,
+        network_id: NetworkId,
         authority_policy: ReputationJournalAuthorityPolicyV1,
     ) -> Result<Self, ReputationRuntimeError> {
         let authority_policy_digest = authority_policy
             .canonical_digest()
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
         let policy = Self {
-            chain_id,
+            network_id,
             authority_policy,
             authority_policy_digest,
             max_pending: REPUTATION_JOURNAL_PRODUCER_MAX_PENDING_V1,
@@ -1614,8 +1614,7 @@ impl ReputationJournalProducerPolicyV1 {
         self.authority_policy
             .validate()
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
-        if self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.authority_policy_digest == [0; 32]
             || self.authority_policy.canonical_digest().ok() != Some(self.authority_policy_digest)
             || self.max_pending == 0
@@ -1639,7 +1638,7 @@ impl ReputationJournalProducerPolicyV1 {
         hash_canonical(
             b"sorafs-reputation-journal-producer-policy-v1",
             &ReputationJournalProducerPolicyDigestMaterialV1 {
-                chain_id: self.chain_id.clone(),
+                network_id: self.network_id,
                 max_pending: self.max_pending,
                 max_completed: self.max_completed,
                 max_dead_letters: self.max_dead_letters,
@@ -1652,7 +1651,7 @@ impl ReputationJournalProducerPolicyV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationJournalProducerPolicyDigestMaterialV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     max_pending: u32,
     max_completed: u32,
     max_dead_letters: u32,
@@ -1688,7 +1687,7 @@ pub struct ReputationJournalSubmissionV1 {
     /// Monotonic local outbox sequence.
     pub sequence: u64,
     /// Exact active chain.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Exact governed transaction authority.
     pub authority: AccountId,
     /// Content-derived ledger event identity.
@@ -1864,11 +1863,11 @@ impl StoredReputationJournalDeliveryV1 {
 
     fn submission(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<ReputationJournalSubmissionV1, ReputationRuntimeError> {
         Ok(ReputationJournalSubmissionV1 {
             sequence: self.sequence,
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             authority: self.entry.recorded_by.clone(),
             event_id: self.entry.event_id,
             source_id: self.entry.source_id,
@@ -2800,7 +2799,7 @@ impl ReputationJournalProducerOutboxV1 {
             .iter()
             .find(|entry| entry.entry.event_id == event_id)
             .ok_or(ReputationRuntimeError::UnknownJournalEvent)?;
-        entry.submission(&self.policy.chain_id)
+        entry.submission(&self.policy.network_id)
     }
 
     /// Bind one never-exposed Ready row to its source-time-valid policy and
@@ -2900,7 +2899,7 @@ impl ReputationJournalProducerOutboxV1 {
             .ok_or(ReputationRuntimeError::JournalRetryExhausted)?;
         delivery.baseline_finalized = Some(baseline_finalized);
         delivery.state = ReputationJournalDeliveryStateV1::Ambiguous;
-        let submission = delivery.submission(&self.policy.chain_id)?;
+        let submission = delivery.submission(&self.policy.network_id)?;
         self.commit_journal_candidate(&mut state, candidate)?;
         Ok(submission)
     }
@@ -3446,7 +3445,7 @@ impl PorReputationJournalProducerV1 {
         query_policy: ReputationJournalDeliveryPolicyV1,
     ) -> Result<Self, ReputationRuntimeError> {
         query_policy.validate()?;
-        if outbox.policy.chain_id != query_policy.chain_id {
+        if outbox.policy.network_id != query_policy.network_id {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
         qualify_runtime_provider(
@@ -3527,7 +3526,7 @@ impl StreamTokenReputationJournalProducerV1 {
         query_policy: ReputationJournalDeliveryPolicyV1,
     ) -> Result<Self, ReputationRuntimeError> {
         query_policy.validate()?;
-        if outbox.policy.chain_id != query_policy.chain_id {
+        if outbox.policy.network_id != query_policy.network_id {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
         outbox.ensure_sealing_binding()?;
@@ -3655,13 +3654,13 @@ fn enqueue_native_payload_with_finalized_replay(
 
             query_policy.revalidate_query_provider(query)?;
             let view_result = query.reputation_journal_event_by_source_id(
-                &query_policy.chain_id,
+                &query_policy.network_id,
                 u64::MAX,
                 source_query,
             );
             query_policy.revalidate_query_provider(query)?;
             let view = view_result?;
-            view.validate_for_request(&query_policy.chain_id, u64::MAX, source_query)?;
+            view.validate_for_request(&query_policy.network_id, u64::MAX, source_query)?;
             validate_source_replay_anchor(
                 &view.anchor,
                 evicted_committed_floor,
@@ -5326,7 +5325,7 @@ fn valid_failure_receipts(receipts: &[[u8; 32]]) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalDeliveryPolicyV1 {
     version: u8,
-    chain_id: ChainId,
+    network_id: NetworkId,
     finalized_query_handle: String,
     finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
     transaction_submitter_handle: String,
@@ -5341,9 +5340,9 @@ impl ReputationJournalDeliveryPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an inert chain or dependency handle.
+    /// Rejects an invalid network identity or dependency handle.
     pub fn strict_v1(
-        chain_id: ChainId,
+        network_id: NetworkId,
         finalized_query_handle: impl Into<String>,
         finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
         transaction_submitter_handle: impl Into<String>,
@@ -5356,13 +5355,13 @@ impl ReputationJournalDeliveryPolicyV1 {
         let transaction_submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
             REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
             reputation_journal_submitter_policy_digest_v1(
-                &chain_id,
+                &network_id,
                 &transaction_submitter_handle,
             )?,
         );
         let policy = Self {
             version: REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1,
-            chain_id,
+            network_id,
             finalized_query_handle,
             finalized_query_qualification,
             transaction_submitter_handle,
@@ -5377,8 +5376,7 @@ impl ReputationJournalDeliveryPolicyV1 {
 
     fn validate(&self) -> Result<(), ReputationRuntimeError> {
         if self.version != REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1
-            || self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.page_items == 0
             || usize::try_from(self.page_items)
                 .map_or(true, |limit| limit > REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1)
@@ -5395,7 +5393,7 @@ impl ReputationJournalDeliveryPolicyV1 {
             || !self.transaction_submitter_qualification.is_valid()
             || self.transaction_submitter_qualification.policy_digest()
                 != reputation_journal_submitter_policy_digest_v1(
-                    &self.chain_id,
+                    &self.network_id,
                     &self.transaction_submitter_handle,
                 )?
         {
@@ -5441,7 +5439,7 @@ impl ReputationJournalDeliveryPolicyV1 {
     }
 }
 
-/// Derive the public V1 policy digest for a chain-bound journal submitter.
+/// Derive the public V1 policy digest for a network-bound journal submitter.
 ///
 /// The handle remains an independently configured identity; including its
 /// digest here prevents the same qualification from authorizing a substituted
@@ -5449,22 +5447,20 @@ impl ReputationJournalDeliveryPolicyV1 {
 ///
 /// # Errors
 ///
-/// Rejects an invalid chain or malformed/test-marked runtime handle, or a
+/// Rejects an invalid network identity or malformed/test-marked runtime handle, or a
 /// canonical digest failure.
 pub fn reputation_journal_submitter_policy_digest_v1(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     handle: &str,
 ) -> Result<[u8; 32], ReputationRuntimeError> {
-    if chain_id.as_str().is_empty()
-        || chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
-    {
+    if network_id.as_bytes()[31] & 1 != 1 {
         return Err(ReputationRuntimeError::InvalidRuntimePolicy);
     }
     let handle = validate_runtime_handle(handle.to_owned())?;
     hash_canonical(
         b"sorafs-reputation-journal-submitter-policy-v1",
         &ReputationJournalSubmitterPolicyDigestMaterialV1 {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             handle_digest: domain_digest(
                 b"sorafs-reputation-runtime-handle-v1",
                 handle.as_bytes(),
@@ -5475,7 +5471,7 @@ pub fn reputation_journal_submitter_policy_digest_v1(
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     handle_digest: [u8; 32],
 }
 
@@ -5484,8 +5480,8 @@ struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
 pub struct ReputationJournalTransactionRequestV1 {
     /// Monotonic local producer sequence.
     pub sequence: u64,
-    /// Exact active chain.
-    pub chain_id: ChainId,
+    /// Exact active network.
+    pub network_id: NetworkId,
     /// Governed transaction authority captured by the typed append.
     pub authority: AccountId,
     /// Content-derived native journal event identity.
@@ -5509,8 +5505,7 @@ impl ReputationJournalTransactionRequestV1 {
     /// or an idempotency key that was not derived from the exact request.
     pub fn validate(&self) -> Result<(), ReputationRuntimeError> {
         if self.sequence == 0
-            || self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.attempt == 0
             || self.attempt > REPUTATION_JOURNAL_PRODUCER_MAX_ATTEMPTS_V1
             || self.idempotency_key == [0; 32]
@@ -5545,7 +5540,7 @@ impl ReputationJournalTransactionRequestV1 {
             b"sorafs-reputation-journal-transaction-operation-v1",
             &ReputationJournalTransactionIdempotencyMaterialV1 {
                 sequence: self.sequence,
-                chain_id: self.chain_id.clone(),
+                network_id: self.network_id,
                 authority: self.authority.clone(),
                 event_id: self.event_id,
                 source_id: self.source_id,
@@ -5702,7 +5697,7 @@ impl ReputationJournalDeliveryWorkerV1 {
         submitter: Arc<dyn ReputationJournalTransactionSubmitterV1>,
     ) -> Result<Self, ReputationRuntimeError> {
         policy.validate()?;
-        if outbox.policy.chain_id != policy.chain_id {
+        if outbox.policy.network_id != policy.network_id {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
         qualify_runtime_provider(
@@ -5866,7 +5861,7 @@ impl ReputationJournalDeliveryWorkerV1 {
             let requested_after = scan.after;
             self.ensure_query_binding()?;
             let view_result = self.query.reputation_journal_delivery_view(
-                &self.policy.chain_id,
+                &self.policy.network_id,
                 u64::MAX,
                 FindSorafsReputationJournalAuthorityPolicy,
                 requested_after,
@@ -5875,7 +5870,7 @@ impl ReputationJournalDeliveryWorkerV1 {
             self.ensure_query_binding()?;
             let view = view_result?;
             view.validate_for_request(
-                &self.policy.chain_id,
+                &self.policy.network_id,
                 requested_after,
                 self.policy.page_items,
                 u64::MAX,
@@ -6051,7 +6046,7 @@ impl ReputationJournalDeliveryWorkerV1 {
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalTransactionIdempotencyMaterialV1 {
     sequence: u64,
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     event_id: ReputationJournalEventIdV1,
     source_id: ReputationJournalSourceIdV1,
@@ -6080,7 +6075,7 @@ fn journal_transaction_request(
     };
     let material = ReputationJournalTransactionIdempotencyMaterialV1 {
         sequence: submission.sequence,
-        chain_id: submission.chain_id.clone(),
+        network_id: submission.network_id,
         authority: submission.authority.clone(),
         event_id: submission.event_id,
         source_id: submission.source_id,
@@ -6093,7 +6088,7 @@ fn journal_transaction_request(
     )?;
     let request = ReputationJournalTransactionRequestV1 {
         sequence: submission.sequence,
-        chain_id: submission.chain_id,
+        network_id: submission.network_id,
         authority: submission.authority,
         event_id: submission.event_id,
         source_id: submission.source_id,
@@ -8255,7 +8250,7 @@ pub enum ReputationRuntimeError {
     InvalidFinalizedAnchor,
     /// A query returned another chain.
     #[error("reputation finalized query returned another chain")]
-    ChainIdMismatch,
+    NetworkIdMismatch,
     /// A query violated the at-or-before governed release target.
     #[error("reputation finalized query returned an anchor past the release target")]
     FinalizedAnchorPastTarget,
@@ -8564,7 +8559,7 @@ mod tests {
     use std::{collections::VecDeque, fs, path::Path};
 
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::sorafs::reputation::{
         PorTerminalStatusV1, REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
         ReputationJournalFinalizedEventV1, StreamTokenExcludedKindV1,
@@ -8586,6 +8581,14 @@ mod tests {
     use super::*;
 
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"reputation-runtime-test-genesis",
+            )),
+        )
+    }
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
@@ -8610,11 +8613,8 @@ mod tests {
     }
 
     fn producer_policy() -> ReputationJournalProducerPolicyV1 {
-        ReputationJournalProducerPolicyV1::strict_v1(
-            ChainId::from("reputation-runtime-test"),
-            journal_authority_policy(),
-        )
-        .expect("valid producer policy")
+        ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), journal_authority_policy())
+            .expect("valid producer policy")
     }
 
     const SEALED_CHECKPOINT_HANDLE: &str = "sealed://sorafs/reputation/journal-primary";
@@ -8810,7 +8810,7 @@ mod tests {
     ) -> ReputationJournalDeliveryFinalizedViewV1 {
         ReputationJournalDeliveryFinalizedViewV1 {
             anchor: ReputationFinalizedAnchorV1 {
-                chain_id: ChainId::from("reputation-runtime-test"),
+                network_id: test_network_id(),
                 identity: ReputationFinalizedIdentityV1 { height, block_hash },
                 finalized_at_unix_ms,
             },
@@ -8992,7 +8992,7 @@ mod tests {
 
     fn ingest_policy(trust_policy: &ReputationSnapshotTrustPolicyV1) -> ReputationIngestPolicyV1 {
         ReputationIngestPolicyV1::strict_v1(
-            ChainId::from("reputation-runtime-test"),
+            test_network_id(),
             1,
             10,
             trust_policy
@@ -9248,7 +9248,7 @@ mod tests {
     ) -> ReputationUnsignedMaterialDeliveryV1 {
         let material = ReputationUnsignedSigningMaterialV1 {
             version: crate::reputation::REPUTATION_UNSIGNED_MATERIAL_VERSION_V1,
-            chain_id: ChainId::from("reputation-runtime-test"),
+            network_id: test_network_id(),
             ingest_policy_digest: [0xD1; 32],
             snapshot_trust_policy_digest: signed_result.policy_digest,
             window_start_height: 1,
@@ -9303,7 +9303,7 @@ mod tests {
     impl ReputationFinalizedQueryV1 for NullQuery {
         fn finalized_at_or_before(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
             if self.drift_after_anchor {
@@ -9312,7 +9312,7 @@ mod tests {
                     .expect("qualification lock")
                     .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
                 return Ok(ReputationFinalizedAnchorV1 {
-                    chain_id: chain_id.clone(),
+                    network_id: *network_id,
                     identity: ReputationFinalizedIdentityV1 {
                         height: maximum_height,
                         block_hash: [0x91; 32],
@@ -9325,7 +9325,7 @@ mod tests {
 
         fn reputation_journal_delivery_view(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _policy_query: FindSorafsReputationJournalAuthorityPolicy,
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -9336,7 +9336,7 @@ mod tests {
 
         fn reputation_journal_event_by_source_id(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _query: FindSorafsReputationJournalEventBySourceId,
         ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
@@ -9420,7 +9420,7 @@ mod tests {
     impl ReputationFinalizedQueryV1 for ScriptedDeliveryQuery {
         fn finalized_at_or_before(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
             self.views
@@ -9433,7 +9433,7 @@ mod tests {
 
         fn reputation_journal_delivery_view(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _policy_query: FindSorafsReputationJournalAuthorityPolicy,
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -9448,7 +9448,7 @@ mod tests {
 
         fn reputation_journal_event_by_source_id(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _query: FindSorafsReputationJournalEventBySourceId,
         ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
@@ -9550,7 +9550,7 @@ mod tests {
     impl ReputationFinalizedQueryV1 for ScriptedSourceQuery {
         fn finalized_at_or_before(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
             unreachable!("source replay test uses the combined source view")
@@ -9558,7 +9558,7 @@ mod tests {
 
         fn reputation_journal_delivery_view(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _policy_query: FindSorafsReputationJournalAuthorityPolicy,
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -9569,7 +9569,7 @@ mod tests {
 
         fn reputation_journal_event_by_source_id(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _maximum_height: u64,
             _query: FindSorafsReputationJournalEventBySourceId,
         ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
@@ -9677,7 +9677,7 @@ mod tests {
     ) -> ReputationJournalSourceFinalizedViewV1 {
         ReputationJournalSourceFinalizedViewV1 {
             anchor: ReputationFinalizedAnchorV1 {
-                chain_id: ChainId::from("reputation-runtime-test"),
+                network_id: test_network_id(),
                 identity: ReputationFinalizedIdentityV1 { height, block_hash },
                 finalized_at_unix_ms,
             },
@@ -9708,7 +9708,7 @@ mod tests {
         query: Arc<ScriptedSourceQuery>,
     ) -> PorReputationJournalProducerV1 {
         let policy = ReputationJournalDeliveryPolicyV1::strict_v1(
-            outbox.policy.chain_id.clone(),
+            outbox.policy.network_id,
             SOURCE_QUERY_HANDLE,
             SOURCE_QUERY_QUALIFICATION,
             "queue.reputation.journal",
@@ -9733,7 +9733,7 @@ mod tests {
         query: Arc<ScriptedSourceQuery>,
     ) -> StreamTokenReputationJournalProducerV1 {
         let policy = ReputationJournalDeliveryPolicyV1::strict_v1(
-            outbox.policy.chain_id.clone(),
+            outbox.policy.network_id,
             SOURCE_QUERY_HANDLE,
             SOURCE_QUERY_QUALIFICATION,
             "queue.reputation.journal",
@@ -10127,7 +10127,7 @@ mod tests {
 
     #[test]
     fn exact_journal_view_validation_rejects_malformed_bootstrap_projection() {
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = test_network_id();
         let authority_policy =
             authority_record(journal_authority_policy(), FINALIZED_AT_MS - 1_000);
         let view = delivery_view(
@@ -10137,28 +10137,28 @@ mod tests {
             authority_policy.clone(),
             Vec::new(),
         );
-        view.validate_for_request(&chain_id, None, 1, u64::MAX)
+        view.validate_for_request(&network_id, None, 1, u64::MAX)
             .expect("valid exact bootstrap view");
         assert!(matches!(
-            view.validate_for_request(&chain_id, None, 0, u64::MAX),
+            view.validate_for_request(&network_id, None, 0, u64::MAX),
             Err(ReputationRuntimeError::QueryResourceExhausted)
         ));
         assert!(matches!(
-            view.validate_for_request(&chain_id, None, 1, 9),
+            view.validate_for_request(&network_id, None, 1, 9),
             Err(ReputationRuntimeError::FinalizedAnchorPastTarget)
         ));
 
         let mut malformed_continuation = view.clone();
         malformed_continuation.journal_page.has_more = true;
         assert!(matches!(
-            malformed_continuation.validate_for_request(&chain_id, None, 1, u64::MAX),
+            malformed_continuation.validate_for_request(&network_id, None, 1, u64::MAX),
             Err(ReputationRuntimeError::InvalidQueryPage)
         ));
 
         let mut missing_policy_history = view.clone();
         missing_policy_history.authority_policy_history.clear();
         assert!(matches!(
-            missing_policy_history.validate_for_request(&chain_id, None, 1, u64::MAX),
+            missing_policy_history.validate_for_request(&network_id, None, 1, u64::MAX),
             Err(ReputationRuntimeError::AuthorityPolicyLineage)
         ));
 
@@ -10166,7 +10166,7 @@ mod tests {
         future_policy.authority_policy =
             authority_record(journal_authority_policy(), FINALIZED_AT_MS + 1);
         assert!(matches!(
-            future_policy.validate_for_request(&chain_id, None, 1, u64::MAX),
+            future_policy.validate_for_request(&network_id, None, 1, u64::MAX),
             Err(ReputationRuntimeError::InvalidAuthorityPolicy)
         ));
 
@@ -10176,14 +10176,14 @@ mod tests {
             .finalized_cursor
             .finalized_at_unix_ms += 1;
         assert!(matches!(
-            mismatched_cursor.validate_for_request(&chain_id, None, 1, u64::MAX),
+            mismatched_cursor.validate_for_request(&network_id, None, 1, u64::MAX),
             Err(ReputationRuntimeError::InvalidQueryPage)
         ));
     }
 
     #[test]
     fn source_finalized_view_validation_rejects_request_and_event_substitution() {
-        let chain_id = ChainId::from("reputation-runtime-test");
+        let network_id = test_network_id();
         let outcome = verified_por(0x19);
         let source_id = ReputationJournalSourceIdV1::for_por_challenge(outcome.challenge_id);
         let query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
@@ -10195,7 +10195,7 @@ mod tests {
             por_journal_entry(provider(7), outcome),
         );
         let view = source_finalized_view(Some(event));
-        view.validate_for_request(&chain_id, u64::MAX, query)
+        view.validate_for_request(&network_id, u64::MAX, query)
             .expect("exact source response");
 
         let expected_cursor = ReputationJournalFinalizedCursorV1 {
@@ -10204,7 +10204,7 @@ mod tests {
             finalized_at_unix_ms: view.anchor.finalized_at_unix_ms,
         };
         view.validate_for_request(
-            &chain_id,
+            &network_id,
             u64::MAX,
             FindSorafsReputationJournalEventBySourceId::new(source_id, Some(expected_cursor)),
         )
@@ -10214,7 +10214,7 @@ mod tests {
         wrong_cursor.block_hash[0] ^= 1;
         assert!(matches!(
             view.validate_for_request(
-                &chain_id,
+                &network_id,
                 u64::MAX,
                 FindSorafsReputationJournalEventBySourceId::new(source_id, Some(wrong_cursor),),
             ),
@@ -10222,7 +10222,7 @@ mod tests {
         ));
         assert!(matches!(
             view.validate_for_request(
-                &chain_id,
+                &network_id,
                 9,
                 FindSorafsReputationJournalEventBySourceId::new(source_id, None),
             ),
@@ -10233,7 +10233,7 @@ mod tests {
             ReputationJournalSourceIdV1::for_por_challenge(verified_por(0x1A).challenge_id);
         assert!(matches!(
             view.validate_for_request(
-                &chain_id,
+                &network_id,
                 u64::MAX,
                 FindSorafsReputationJournalEventBySourceId::new(substituted_source, None),
             ),
@@ -12701,7 +12701,7 @@ mod tests {
                 .iter()
                 .find(|delivery| delivery.entry.event_id == event_id)
                 .expect("restored submitted delivery")
-                .submission(&restored.policy.chain_id)
+                .submission(&restored.policy.network_id)
                 .expect("restore exact submitted instruction")
         };
         assert_eq!(
@@ -12867,11 +12867,8 @@ mod tests {
         let record = authority_record(policy.clone(), FINALIZED_AT_MS - 1_000);
         let outbox = Arc::new(open_initialized_producer_outbox(
             temp.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                policy,
-            )
-            .expect("producer policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), policy)
+                .expect("producer policy"),
         ));
         let event_id = match por_producer(Arc::clone(&outbox))
             .enqueue_terminal(provider(7), verified_por(0x31))
@@ -12900,7 +12897,7 @@ mod tests {
             qualification: ReputationRuntimeProviderQualificationV1::new(
                 REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
                 reputation_journal_submitter_policy_digest_v1(
-                    &ChainId::from("reputation-runtime-test"),
+                    &test_network_id(),
                     "queue.reputation.journal",
                 )
                 .expect("submitter policy digest"),
@@ -12910,7 +12907,7 @@ mod tests {
         let worker = ReputationJournalDeliveryWorkerV1::new(
             Arc::clone(&outbox),
             ReputationJournalDeliveryPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
+                test_network_id(),
                 query.handle.clone(),
                 query_qualification,
                 submitter.handle.clone(),
@@ -12987,7 +12984,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(
                 strict_missed.path(),
                 ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
+                    test_network_id(),
                     second_policy.clone(),
                 )
                 .expect("second policy"),
@@ -12998,11 +12995,8 @@ mod tests {
         let one_missed = TempDir::new().expect("one-missed tempdir");
         let initial = ReputationJournalProducerOutboxV1::open(
             one_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                first_policy.clone(),
-            )
-            .expect("initial policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), first_policy.clone())
+                .expect("initial policy"),
         )
         .expect("initial outbox");
         initial
@@ -13012,11 +13006,8 @@ mod tests {
 
         let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
             one_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                second_policy.clone(),
-            )
-            .expect("second policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), second_policy.clone())
+                .expect("second policy"),
             &[first_record.clone(), second_record.clone()],
             finalized,
         )
@@ -13031,22 +13022,16 @@ mod tests {
         drop(recovered);
         ReputationJournalProducerOutboxV1::open(
             one_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                second_policy,
-            )
-            .expect("strict second policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), second_policy)
+                .expect("strict second policy"),
         )
         .expect("ordinary strict open accepts the recovered terminal policy");
 
         let multiple_missed = TempDir::new().expect("multiple-missed tempdir");
         let initial = ReputationJournalProducerOutboxV1::open(
             multiple_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                first_policy,
-            )
-            .expect("initial policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), first_policy)
+                .expect("initial policy"),
         )
         .expect("initial outbox");
         initial
@@ -13056,11 +13041,8 @@ mod tests {
 
         let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
             multiple_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                third_policy.clone(),
-            )
-            .expect("third policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), third_policy.clone())
+                .expect("third policy"),
             &[
                 first_record.clone(),
                 second_record.clone(),
@@ -13079,11 +13061,8 @@ mod tests {
         drop(recovered);
         ReputationJournalProducerOutboxV1::open(
             multiple_missed.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                third_policy,
-            )
-            .expect("strict third policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), third_policy)
+                .expect("strict third policy"),
         )
         .expect("recovered multi-rotation checkpoint survives strict restart");
     }
@@ -13104,11 +13083,8 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let initial = ReputationJournalProducerOutboxV1::open(
             temp.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                first_policy,
-            )
-            .expect("first policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), first_policy)
+                .expect("first policy"),
         )
         .expect("initial outbox");
         initial
@@ -13119,11 +13095,8 @@ mod tests {
         assert!(matches!(
             ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
                 temp.path(),
-                ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
-                    third_policy,
-                )
-                .expect("third policy"),
+                ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), third_policy,)
+                    .expect("third policy"),
                 &[first_record.clone(), third_record],
                 finalized,
             ),
@@ -13133,7 +13106,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
                 temp.path(),
                 ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
+                    test_network_id(),
                     second_policy.clone(),
                 )
                 .expect("second policy"),
@@ -13149,11 +13122,8 @@ mod tests {
 
         let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
             temp.path(),
-            ReputationJournalProducerPolicyV1::strict_v1(
-                ChainId::from("reputation-runtime-test"),
-                second_policy.clone(),
-            )
-            .expect("second policy"),
+            ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), second_policy.clone())
+                .expect("second policy"),
             &[first_record.clone(), second_record.clone()],
             finalized,
         )
@@ -13168,11 +13138,8 @@ mod tests {
         assert!(matches!(
             ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
                 temp.path(),
-                ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
-                    second_policy,
-                )
-                .expect("second policy"),
+                ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), second_policy,)
+                    .expect("second policy"),
                 &[first_record, substituted_record],
                 finalized,
             ),
@@ -13189,7 +13156,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
                 ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
+                    test_network_id(),
                     first_policy.clone(),
                 )
                 .expect("producer policy"),
@@ -13435,7 +13402,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
                 ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
+                    test_network_id(),
                     first_policy.clone(),
                 )
                 .expect("stale producer policy"),
@@ -13448,7 +13415,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
                 ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
+                    test_network_id(),
                     substituted_successor,
                 )
                 .expect("substituted producer policy"),
@@ -13462,22 +13429,16 @@ mod tests {
         assert!(matches!(
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
-                ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
-                    skipped_successor,
-                )
-                .expect("skipped producer policy"),
+                ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), skipped_successor,)
+                    .expect("skipped producer policy"),
             ),
             Err(ReputationRuntimeError::InvalidCheckpoint)
         ));
         let restored = Arc::new(
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
-                ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
-                    successor,
-                )
-                .expect("producer policy"),
+                ReputationJournalProducerPolicyV1::strict_v1(test_network_id(), successor)
+                    .expect("producer policy"),
             )
             .expect("restore rotated producer checkpoint"),
         );

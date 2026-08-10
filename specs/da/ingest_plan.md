@@ -69,11 +69,13 @@ computed over the Norito-encoded policy array and changes whenever a lane's
 returned with the proof and authenticated by that proof's signed block header,
 not this current snapshot.
 
-## Proposed Norito Schema
+## Canonical Norito Schema
 
 ```rust
 /// Top-level ingest request.
 pub struct DaIngestRequest {
+    pub network_id: NetworkId,            // exact genesis-derived security domain
+    pub owner: AccountId,                 // authenticated quota charge identity
     pub client_blob_id: BlobDigest,      // submitter-chosen identifier
     pub lane_id: LaneId,                 // target Nexus lane
     pub epoch: u64,                      // epoch blob belongs to
@@ -84,12 +86,30 @@ pub struct DaIngestRequest {
     pub retention_policy: RetentionPolicy,
     pub chunk_size: u32,                 // bytes (must align with profile)
     pub total_size: u64,
+    pub payload_hash: BlobDigest,         // BLAKE3 of canonical decompressed bytes
     pub compression: Compression,        // Identity, gzip, deflate, or zstd
     pub norito_manifest: Option<Vec<u8>>, // optional pre-built manifest
     pub payload: Vec<u8>,                 // raw blob data (<= configured limit)
     pub metadata: ExtraMetadata,          // optional key/value metadata map
-    pub submitter: PublicKey,             // signing key of caller
-    pub signature: Signature,             // canonical signature over request
+    pub signatures: Vec<DaIngestSignatureV1>, // canonical account-controller witnesses
+}
+
+pub struct DaIngestSignatureV1 {
+    pub signer: PublicKey,
+    pub signature: Signature,
+}
+
+// Compact immutable authorization carried into the block pin-intent sidecar.
+pub struct DaIngestAuthorizationV1 {
+    pub network_id: NetworkId,
+    pub owner: AccountId,
+    pub lane_id: LaneId,
+    pub epoch: u64,
+    pub sequence: u64,
+    pub payload_hash: BlobDigest,
+    pub payload_bytes: u64,
+    pub request_content_hash: Hash,
+    pub signatures: Vec<DaIngestSignatureV1>,
 }
 
 pub enum BlobClass {
@@ -173,7 +193,11 @@ hashing, chunking, and verifying optional manifests.
    request cannot admit replacement work while its detached computation is
    still running.
 5. `retention_policy.required_replica_count` must respect governance baseline.
-6. Signature verification against canonical hash (excluding signature field).
+6. Require the exact genesis-derived `NetworkId`, bind `owner` to the
+   authenticated account, and verify the canonical witness set against the
+   committed account controller. Single-key accounts require exactly their
+   controller key; multisig accounts require committed-member weights meeting
+   the committed threshold.
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
 8. When `norito_manifest` provided, verify schema + hash matches recalculated
    manifest after chunking; otherwise node generates manifest and stores it.
@@ -182,20 +206,31 @@ hashing, chunking, and verifying optional manifests.
    `replication_policy.md`) and rejects pre-built manifests whose retention
    metadata does not match the enforced profile.
 
-### Request signature
+### Request authorization
 
-`DaIngestRequest.signature` is an Ed25519 signature over a 32-byte BLAKE3
-digest, not over the raw blob alone. The digest starts with
-`iroha:da-ingest-request:v1\0` and then absorbs every admission-relevant field
-in request order: the 32-byte client blob id; little-endian lane, epoch and
-sequence; fixed enum tags and custom values; length-prefixed UTF-8 codec;
-erasure and FEC parameters; retention policy; chunk and total sizes;
-compression; optional manifest; transported payload; and ordered metadata
-entries including visibility and encryption labels. Variable-width values use
-an unsigned little-endian `u64` byte length. Torii verifies this digest against
-`submitter` before decompression or erasure work. Rust, JavaScript, and Swift
-builders share a golden digest vector so changing any routing, resource, policy,
-payload, or metadata field invalidates the signature.
+DA ingest uses one required, two-layer V1 signing preimage. The inner BLAKE3
+content commitment starts with `iroha:da-ingest-request:content:v1\0` and
+absorbs the client blob id, class, codec, erasure and retention policies, chunk
+size, compression, optional manifest, transported payload, and ordered metadata
+entries. Variable-width values use unsigned little-endian `u64` lengths.
+
+The outer authorization digest starts with `iroha:da-ingest-request:v1\0` and
+absorbs the exact 32 genesis-hash bytes of `NetworkId`, the length-prefixed
+canonical controller bytes of `owner`, lane, epoch, sequence, the BLAKE3
+commitment and exact byte length of the canonical decompressed payload, and the
+inner content commitment. Witnesses are non-empty and strictly ordered by
+`PublicKey`; duplicate, invalid, or non-canonical witness sets are rejected.
+There is no label-domain signature, unsigned pin intent, omitted authorization,
+or compatibility decoder.
+
+Torii checks the exact network and authenticated principal before
+decompression, erasure computation, or storage work. Consensus repeats the
+security decision from the compact
+`DaIngestAuthorizationV1` carried by every `DaPinIntent`: it verifies the
+enclosing lane/epoch/sequence tuple, exact network, signatures, payload charge,
+account existence, and the committed single-key or weighted-multisig controller
+before any quota accounting. Rust, JavaScript, and Swift builders share a
+golden digest vector.
 
 ### Chunking & Replication Flow
 
@@ -217,12 +252,35 @@ payload, or metadata field invalidates the signature.
    The receipt now embeds `rent_quote` (a `DaRentQuote`) and `stripe_layout`
    so submitters can surface the XOR obligations, reserve share, PDP/PoTR bonus expectations,
    and the 2D erasure matrix dimensions alongside the storage-ticket metadata before committing funds.
-7. Optional registry metadata:
-   - `da.registry.alias` — public, unencrypted UTF-8 alias string to seed the pin registry entry.
-   - `da.registry.owner` — public, unencrypted `AccountId` string to record registry ownership.
-   Torii copies these into the generated `DaPinIntent` so downstream pin processing can bind aliases
-   and owners without re-parsing the raw metadata map; malformed or empty values are rejected during
-   ingest validation.
+7. Optional registry metadata is limited to `da.registry.alias`, a public,
+   unencrypted UTF-8 alias used to seed the pin registry entry. Registry
+   ownership and quota identity come only from the exact-network signed
+   `owner`; metadata cannot select or rebind an owner. Controller witnesses are
+   checked before expensive ingest work and checked again from committed state
+   during block admission.
+
+### Consensus quota admission
+
+Every accepted block charges all DA pin intents to their signed `owner` under
+two deterministic ceilings: intent count and canonical payload bytes. Windows
+are derived solely from block height as `(height - 1) /
+nexus.da.ingest_quota_window_blocks`; wall-clock time and Torii-local process
+state are not inputs. The first-release defaults are 100 blocks, 1,024 intents,
+and 64 GiB per account per window, configured by:
+
+- `nexus.da.ingest_quota_window_blocks`
+- `nexus.da.ingest_quota_max_count_per_account`
+- `nexus.da.ingest_quota_max_bytes_per_account`
+
+All values are mandatory non-zero consensus-policy inputs. Validators aggregate
+the complete block with checked arithmetic, reject the entire block on an
+overflow, corrupt prior record, or either exceeded ceiling, and then commit the
+canonical usage records and pin indexes through the same `WorldBlock`. The
+native `da_ingest_quota_v1/` state namespace is opaque to generic IVM durable
+state syscalls, so neither a normal transaction nor a directly invoked contract
+can forge, reset, disclose, or delete quota counters. Replay and restart use the
+same checkpointed WSV records; the signed `(lane, epoch, sequence)` remains the
+one-shot nonce and existing pin indexes reject reuse.
 
 ## Storage / Registry Updates
 

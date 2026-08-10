@@ -180,7 +180,17 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     );
 
     kura.persist_merge_lane_block_application_receipts_from_committed_log(&entry)
-        .expect("persist exact receipt and frontier components");
+        .expect_err("receipt publication must wait for exact carrier finality");
+    let _ = persist_v2_finality_chain_through(
+        &kura,
+        NonZeroUsize::new(
+            usize::try_from(carrier.header().height().get())
+                .expect("reservation carrier height fits usize"),
+        )
+        .expect("reservation carrier height is non-zero"),
+    );
+    kura.persist_merge_lane_block_application_receipts_from_committed_log(&entry)
+        .expect("persist exact finalized receipt and frontier components");
     let shared_transient = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)
         .expect("append-intent transient fits u64");
     assert_eq!(

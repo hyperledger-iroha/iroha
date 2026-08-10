@@ -53,7 +53,7 @@ ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_300_000
 DEPLOYMENT_ID = "moderation-panel-prod-20260701"
 ENVIRONMENT = "production"
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-moderation-topology-qualification-hsm"
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-moderation-topology-qualification-software"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
 TOPOLOGY_SIGNER_POLICY_DIGEST = hashlib.sha256(
     b"sorafs-moderation-topology-signer-policy-v1"
@@ -101,6 +101,7 @@ def write_signed_topology_qualification(tmp_path: Path) -> Path:
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_backend": "software",
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
         "signer_key_fingerprint_hex": hashlib.sha256(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY

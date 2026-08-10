@@ -173,12 +173,17 @@ export function parsePrivacyCapabilitySnapshotV1(
 
 export interface PrivacyCapabilitiesNodeRequestOptions {
   signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
-export interface PrivacyCapabilitiesBrowserRequestOptions
-  extends PrivacyCapabilitiesNodeRequestOptions {
+export interface PrivacyCapabilitiesBrowserRequestOptions {
+  signal?: AbortSignal;
   headers?: Record<string, string>;
   successStatuses?: ReadonlyArray<number>;
+  authAccountId: string;
+  sign: (input: CanonicalJsonRequestSignerInput) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
 }
 
 /**
@@ -186,9 +191,7 @@ export interface PrivacyCapabilitiesBrowserRequestOptions
  * additionally requires the package-private transport capability.
  */
 export interface PrivacyCapabilitiesNodeClientV1 {
-  getNodeCapabilities(options?: {
-    signal?: AbortSignal;
-  }): Promise<unknown>;
+  getNodeCapabilities(options: PrivacyCapabilitiesNodeRequestOptions): Promise<unknown>;
 }
 
 export interface PrivacyCapabilitiesBrowserClientV1
@@ -202,11 +205,11 @@ export interface PrivacyCapabilitiesBrowserClientV1
  */
 export function getPrivacyCapabilitiesV1(
   client: PrivacyCapabilitiesBrowserClientV1,
-  options?: PrivacyCapabilitiesBrowserRequestOptions,
+  options: PrivacyCapabilitiesBrowserRequestOptions,
 ): Promise<PrivacyCapabilitySnapshotV1>;
 export function getPrivacyCapabilitiesV1(
   client: PrivacyCapabilitiesNodeClientV1,
-  options?: PrivacyCapabilitiesNodeRequestOptions,
+  options: PrivacyCapabilitiesNodeRequestOptions,
 ): Promise<PrivacyCapabilitySnapshotV1>;
 
 export type PrivacyOperationSchemaV1 =
@@ -298,7 +301,7 @@ export function decodePrivacyExact12CapabilityManifestV1(
 ): PrivacyExact12CapabilityManifestV1;
 export function getPrivacyExact12CapabilityManifestV1(
   client: PrivacyCapabilitiesNodeClientV1,
-  options?: PrivacyCapabilitiesNodeRequestOptions,
+  options: PrivacyCapabilitiesNodeRequestOptions,
 ): Promise<PrivacyExact12CapabilityManifestV1>;
 export function requirePrivacyExact12CapabilityTupleV1(
   manifest: PrivacyExact12CapabilityManifestV1,
@@ -312,3 +315,4 @@ export function requirePrivacyExact12CapabilityAdmissionV1(
 export declare class PrivacyExact12CapabilityManifestError extends TypeError {
   readonly path: string;
 }
+import type { CanonicalJsonRequestSignature, CanonicalJsonRequestSignerInput, CanonicalRequestAuth } from "./index.js";

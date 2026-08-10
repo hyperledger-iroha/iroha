@@ -705,12 +705,12 @@ printf '[kagemusha-jvm-native] building fresh four-peer localnet tools for %s\n'
   --set "TMPDIR=$MOBILE_TMPDIR" \
   -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
     -p iroha_kagami -p irohad -p iroha_cli \
-    --bin kagami --bin irohad --bin iroha
+    --bin kagami --bin iroha3d --bin iroha
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 LOCALNET_BIN_DIR="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug"
 KAGAMI_BINARY="$LOCALNET_BIN_DIR/kagami"
-IROHAD_BINARY="$LOCALNET_BIN_DIR/irohad"
+IROHAD_BINARY="$LOCALNET_BIN_DIR/iroha3d"
 IROHA_CLI_BINARY="$LOCALNET_BIN_DIR/iroha"
 for localnet_binary in "$KAGAMI_BINARY" "$IROHAD_BINARY" "$IROHA_CLI_BINARY"; do
   [[ -f "$localnet_binary" && ! -L "$localnet_binary" && -x "$localnet_binary" ]] \

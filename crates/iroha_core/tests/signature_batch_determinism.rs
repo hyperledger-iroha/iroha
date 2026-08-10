@@ -24,7 +24,7 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
-fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, NetworkId, KeyPair) {
+fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
@@ -37,8 +37,8 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, Netw
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain = ChainId::from("chain");
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let state =
+        State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     if !crypto_cfg.allowed_signing.contains(&algo) {
@@ -47,7 +47,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, Netw
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg);
-    (state, account_id, chain, network_id, kp)
+    (state, account_id, network_id, kp)
 }
 
 fn checked_signature_of<T: norito::codec::Encode>(
@@ -214,7 +214,6 @@ fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
 fn run_validate(
     state: &mut iroha_core::state::State,
     block: SignedBlock,
-    chain: &ChainId,
     authority: &AccountId,
     leader: &KeyPair,
 ) -> Result<ValidBlock, Box<iroha_core::block::BlockValidationError>> {
@@ -226,7 +225,6 @@ fn run_validate(
     ValidBlock::validate(
         block,
         &topology,
-        chain,
         authority,
         &validation_time,
         &mut state.block(header),
@@ -237,8 +235,7 @@ fn run_validate(
 
 #[test]
 fn ed25519_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, network_id, good) =
-        setup_world_with_account(Algorithm::Ed25519);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let leader = checked_bls_keypair();
@@ -282,7 +279,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
             &leader,
             &proof_policy_bundle,
         );
-        let err = run_validate(&mut state, block, &chain, &authority, &leader)
+        let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
 
         match *err {
@@ -299,8 +296,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
 
 #[test]
 fn secp256k1_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, network_id, good) =
-        setup_world_with_account(Algorithm::Secp256k1);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Secp256k1);
     let leader = checked_bls_keypair();
@@ -342,7 +338,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
             &leader,
             &proof_policy_bundle,
         );
-        let err = run_validate(&mut state, block, &chain, &authority, &leader)
+        let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {
@@ -360,8 +356,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_passes() {
-    let (mut state, authority, chain, network_id, signer) =
-        setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
@@ -388,15 +383,14 @@ fn bls_multimessage_batch_passes() {
         &leader,
         &proof_policy_bundle,
     );
-    run_validate(&mut state, block, &chain, &authority, &leader)
+    run_validate(&mut state, block, &authority, &leader)
         .expect("valid BLS multi-message batch must pass");
 }
 
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_finds_same_bad_sig() {
-    let (mut state, authority, chain, network_id, good) =
-        setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let leader = checked_bls_keypair();
@@ -438,7 +432,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
             &leader,
             &proof_policy_bundle,
         );
-        let err = run_validate(&mut state, block, &chain, &authority, &leader)
+        let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad BLS signature");
 
         match *err {
@@ -456,8 +450,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, network_id, good) =
-        setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let leader = checked_bls_keypair();
@@ -500,7 +493,7 @@ fn bls_batch_permutation_finds_same_bad_sig() {
             &leader,
             &proof_policy_bundle,
         );
-        let err = run_validate(&mut state, block, &chain, &authority, &leader)
+        let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {

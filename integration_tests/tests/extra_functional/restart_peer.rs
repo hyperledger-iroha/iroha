@@ -53,7 +53,7 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message, signature_header_value,
+    canonical_network_request_signature_message, signature_header_value,
 };
 use norito::json::{self, Value};
 use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
@@ -959,7 +959,14 @@ fn add_canonical_app_headers(
         Hash::new(url.as_str())
     );
     let uri = signing_uri(url)?;
-    let message = canonical_request_signature_message(&method, &uri, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &method,
+        &uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
         .header(HEADER_ACCOUNT, client.account.to_string())

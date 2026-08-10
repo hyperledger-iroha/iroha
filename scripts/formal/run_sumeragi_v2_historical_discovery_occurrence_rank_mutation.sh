@@ -22,7 +22,7 @@ readonly CONTINUATION_FIXED_CONFIG="historical_producer_continuation_fixed.cfg"
 readonly CONTINUATION_MUTANT_CONFIG="historical_producer_continuation_voter_only_bug.cfg"
 readonly CONTINUATION_SANY_SUCCESS_MARKER="Semantic processing of module ${CONTINUATION_MODULE}"
 readonly CONTINUATION_TEMPORAL_MARKER="Error: Temporal properties were violated."
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then

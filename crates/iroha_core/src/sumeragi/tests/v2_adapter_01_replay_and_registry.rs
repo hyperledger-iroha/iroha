@@ -1164,17 +1164,19 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
         .receive_verified(conflicting_proposal)
         .expect("report the conflicting proposal fingerprint");
     assert_eq!(conflict.disposition(), reducer::StepDisposition::Applied);
-    assert_eq!(
+    assert!(matches!(
         conflict.effects(),
-        &[AdapterEffect::ReportEquivocation {
-            offender: adapter.wire_context.roster
-                [usize::try_from(proposer).expect("small proposer index")]
-            .validator
-            .clone(),
-            round: wire_round,
-            kind: reducer::EquivocationKind::Proposal,
-        }]
-    );
+        [AdapterEffect::ReportEquivocation { evidence }]
+            if matches!(
+                evidence.as_ref(),
+                wire::SumeragiV2Equivocation::Proposal { first, second }
+                    if first.round == wire_round
+                        && second.round == wire_round
+                        && first.proposer == proposer
+                        && second.proposer == proposer
+                        && first.subject != second.subject
+            )
+    ));
 
     assert_eq!(
         adapter.reducer, reducer_before,

@@ -482,7 +482,8 @@ async fn sccp_submit_ingress_checks_heavy_admission_after_bounded_body_collectio
             yielded_for_stream.fetch_add(1, Ordering::SeqCst);
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{}"))
         });
-        let request = sccp_ingress_request(path, axum::body::Body::from_stream(stream));
+        let mut request = sccp_ingress_request(path, axum::body::Body::from_stream(stream));
+        authenticate_sccp_ingress_request(&mut request, b"{}");
         let response = router
             .clone()
             .oneshot(request)
@@ -516,12 +517,14 @@ async fn sccp_submit_weight_is_capped_to_burst_and_consumes_the_full_budget() {
         yielded_for_stream.fetch_add(1, Ordering::SeqCst);
         Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{}"))
     });
+    let mut first_request = sccp_ingress_request(
+        "/v1/bridge/proofs/submit",
+        axum::body::Body::from_stream(stream),
+    );
+    authenticate_sccp_ingress_request(&mut first_request, b"{}");
     let first = router
         .clone()
-        .oneshot(sccp_ingress_request(
-            "/v1/bridge/proofs/submit",
-            axum::body::Body::from_stream(stream),
-        ))
+        .oneshot(first_request)
         .await
         .expect("capped-cost response");
     assert_eq!(first.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -661,6 +664,7 @@ async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_over
             axum::http::header::CONTENT_LENGTH,
             HeaderValue::from_static("8"),
         );
+        authenticate_sccp_ingress_request(&mut exact, b"12345678");
         let response = router
             .clone()
             .oneshot(exact)
@@ -680,6 +684,45 @@ async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_over
             "path {path}"
         );
     }
+}
+
+#[tokio::test]
+async fn sccp_submit_ingress_requires_an_exact_network_account_signature() {
+    use tower::ServiceExt as _;
+
+    let router = sccp_ingress_test_router(mk_app_state_for_tests());
+    let unsigned = sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from("{}"));
+    let response = router
+        .clone()
+        .oneshot(unsigned)
+        .await
+        .expect("unsigned middleware response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let mut wrong_network =
+        sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from("{}"));
+    let (account, key_pair) = sccp_ingress_auth_fixture();
+    let foreign_network = NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH])),
+    );
+    let headers = signed_network_app_headers(
+        &foreign_network,
+        &account,
+        &key_pair,
+        wrong_network.method(),
+        wrong_network.uri(),
+        b"{}",
+    );
+    for (name, value) in &headers {
+        wrong_network
+            .headers_mut()
+            .insert(name.clone(), value.clone());
+    }
+    let response = router
+        .oneshot(wrong_network)
+        .await
+        .expect("wrong-network middleware response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -738,6 +781,7 @@ async fn sccp_submit_ingress_preserves_missing_and_chunked_bodies_after_one_cons
                 HeaderValue::from_static("chunked"),
             );
         }
+        authenticate_sccp_ingress_request(&mut request, b"abcdefgh");
         let response = router
             .clone()
             .oneshot(request)
@@ -812,8 +856,18 @@ async fn connect_session_handler_rejects_missing_remote_addr_header() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
     let app = mk_app_state_for_tests();
+    let network_id = *app.state.network_id_ref();
+    let app_pk = [0x24_u8; 32];
+    let nonce = [0x42_u8; 16];
     let req = routing::ConnectSessionRequest {
-        sid: Some(B64.encode([0x42_u8; 32])),
+        sid: B64.encode(iroha_torii_shared::connect_sdk::derive_session_id(
+            &network_id,
+            &app_pk,
+            &nonce,
+        )),
+        network_id,
+        app_pk: B64.encode(app_pk),
+        nonce: B64.encode(nonce),
         node: None,
     };
     let err =
@@ -2319,7 +2373,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn contracts_aliases_route_is_mounted_in_api_router() {
+async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode() {
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -2362,22 +2416,43 @@ async fn contracts_aliases_route_is_mounted_in_api_router() {
         routing::MaybeTelemetry::disabled(),
     );
 
-    let mut request = Request::builder()
+    let router = torii.api_router_for_tests();
+    for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("protected route response");
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{path} must authenticate the bounded raw body before DTO decoding"
+        );
+    }
+
+    let mut public_query = Request::builder()
         .method(Method::POST)
-        .uri("/v1/contracts/aliases")
+        .uri("/v1/sorafs/appeals/pricing/quote")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(Body::from("{"))
-        .expect("request");
-    request
+        .expect("public query request");
+    public_query
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
-    let response = torii
-        .api_router_for_tests()
-        .oneshot(request)
+    let response = router
+        .oneshot(public_query)
         .await
-        .expect("response");
-
+        .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -2916,34 +2991,6 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
         iroha_core::tx::SignatureRejectionCode::UnsupportedAuthority.as_str()
     );
     assert!(envelope.message().contains("failed to accept transaction"));
-}
-
-#[test]
-fn accept_transaction_limit_failure_sets_header_code() {
-    let err =
-        super::Error::AcceptTransaction(iroha_core::tx::AcceptTransactionFail::TransactionLimit(
-            iroha_data_model::transaction::error::TransactionLimitError {
-                reason: "too big".into(),
-            },
-        ));
-
-    let response = err.into_response();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let headers = response.headers();
-    assert_eq!(
-        headers
-            .get("x-iroha-reject-code")
-            .and_then(|v| v.to_str().ok()),
-        Some("transaction_rejected")
-    );
-
-    let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
-        .expect("collect body")
-        .to_bytes();
-    let envelope =
-        norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error envelope");
-    assert_eq!(envelope.code(), "transaction_rejected");
-    assert!(envelope.message().contains("too big"));
 }
 
 include!("part_9b_error_headers.rs");

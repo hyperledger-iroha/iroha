@@ -119,6 +119,131 @@ def test_live_jvm_cutover_satisfies_strict_source_contract() -> None:
     }
 
 
+def test_live_javascript_cutover_uses_only_authenticated_native_authority() -> None:
+    gates = MODULE._javascript_cutover_gates(ROOT)
+    assert gates == {
+        "canonical_manifest_model": True,
+        "native_canonical_manifest_validation": True,
+        "exact_native_local_tuple_match": True,
+        "transaction_admission_guard": True,
+        "authenticated_native_authority": True,
+        "browser_fail_closed": True,
+    }
+
+
+def test_live_python_pyo3_admission_is_included_in_source_parity() -> None:
+    gates = MODULE._python_cutover_gates(ROOT)
+    assert gates == {
+        "canonical_manifest_model": True,
+        "native_canonical_manifest_validation": True,
+        "exact_native_local_tuple_match": True,
+        "transaction_admission_guard": True,
+    }
+    report = MODULE.audit(ROOT)
+    assert report["sdk"]["python-pyo3"]["ready"] is True
+
+
+@pytest.mark.parametrize(
+    ("relative", "needle", "replacement", "failed_gate"),
+    (
+        (
+            MODULE._JAVASCRIPT_CAPABILITIES,
+            "native = getNativeBinding();",
+            "native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();",
+            "authenticated_native_authority",
+        ),
+        (
+            MODULE._JAVASCRIPT_CAPABILITIES,
+            "native = getNativeBinding();",
+            "native = fakeNativeBinding ?? getNativeBinding();",
+            "authenticated_native_authority",
+        ),
+        (
+            MODULE._JAVASCRIPT_NATIVE_BROWSER,
+            'throw nativeBindingError("iroha_js_host is unavailable in browser builds.");',
+            "return globalThis.__IROHA_NATIVE_BINDING__;",
+            "browser_fail_closed",
+        ),
+        (
+            MODULE._JAVASCRIPT_PACKAGE,
+            '"./dist/native.js": "./dist/native.browser.js"',
+            '"./dist/native.js": "./dist/native.js"',
+            "browser_fail_closed",
+        ),
+        (
+            MODULE._JAVASCRIPT_CAPABILITIES,
+            "admitted !== true",
+            "false",
+            "exact_native_local_tuple_match",
+        ),
+    ),
+)
+def test_javascript_native_authority_regressions_fail_source_parity(
+    monkeypatch: pytest.MonkeyPatch,
+    relative: str,
+    needle: str,
+    replacement: str,
+    failed_gate: str,
+) -> None:
+    paths = (
+        MODULE._JAVASCRIPT_CAPABILITIES,
+        MODULE._JAVASCRIPT_NATIVE,
+        MODULE._JAVASCRIPT_NATIVE_BROWSER,
+        MODULE._JAVASCRIPT_PACKAGE,
+        MODULE._JAVASCRIPT_TRANSACTION,
+        MODULE._JAVASCRIPT_TEST,
+    )
+    sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in paths}
+    assert needle in sources[relative]
+    sources[relative] = sources[relative].replace(needle, replacement)
+    monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
+    assert MODULE._javascript_cutover_gates(ROOT)[failed_gate] is False
+
+
+@pytest.mark.parametrize(
+    ("relative", "needle", "replacement", "failed_gate"),
+    (
+        (
+            MODULE._PYTHON_RUST_MANIFEST,
+            "if !row.is_network_available()",
+            "if false",
+            "exact_native_local_tuple_match",
+        ),
+        (
+            MODULE._PYTHON_RUST_BRIDGE,
+            "manifest.require_network_profile(protocol_id)?",
+            "drop(manifest);",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._PYTHON_CRYPTO,
+            "manifest = decoder(canonical)",
+            "manifest = object()",
+            "native_canonical_manifest_validation",
+        ),
+    ),
+)
+def test_python_pyo3_admission_regressions_fail_source_parity(
+    monkeypatch: pytest.MonkeyPatch,
+    relative: str,
+    needle: str,
+    replacement: str,
+    failed_gate: str,
+) -> None:
+    paths = (
+        MODULE._PYTHON_CRYPTO,
+        MODULE._PYTHON_CLIENT,
+        MODULE._PYTHON_TRANSACTION,
+        MODULE._PYTHON_RUST_MANIFEST,
+        MODULE._PYTHON_RUST_BRIDGE,
+    )
+    sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in paths}
+    assert needle in sources[relative]
+    sources[relative] = sources[relative].replace(needle, replacement)
+    monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
+    assert MODULE._python_cutover_gates(ROOT)[failed_gate] is False
+
+
 def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
     gates = MODULE._swift_cutover_gates(ROOT)
     assert gates == {

@@ -73,13 +73,13 @@ fn panel_notification_archive_signer_epoch_digest(
 }
 
 fn panel_notification_archive_signer_rotation_message(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     epoch: &ModerationPanelNotificationArchiveSignerEpochV1,
 ) -> [u8; 32] {
     domain_hash(
         PANEL_NOTIFICATION_ARCHIVE_SIGNER_ROTATION_DOMAIN_V1,
         &[
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             &epoch.epoch.to_le_bytes(),
             &epoch.activated_at_generation.to_le_bytes(),
             &epoch.archive_id,
@@ -119,7 +119,7 @@ fn verify_archive_ed25519_signature(
 
 fn validate_panel_notification_archive_signer_epochs(
     epochs: &[ModerationPanelNotificationArchiveSignerEpochV1],
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     expected_bootstrap_public_key: [u8; 32],
     expected_archive_id: [u8; 32],
 ) -> Result<(), ModerationOrchestratorError> {
@@ -172,7 +172,8 @@ fn validate_panel_notification_archive_signer_epochs(
         else {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
         };
-        let rotation_message = panel_notification_archive_signer_rotation_message(chain_id, epoch);
+        let rotation_message =
+            panel_notification_archive_signer_rotation_message(network_id, epoch);
         if predecessor_epoch_digest != predecessor.epoch_digest
             || predecessor_revocation_generation.checked_add(1)
                 != Some(epoch.activated_at_generation)
@@ -222,7 +223,7 @@ fn verify_panel_notification_archive_head_signer_epoch(
 
 fn reconcile_panel_notification_archive_signer_epochs(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     state: &mut ModerationOrchestratorCheckpointV1,
 ) -> Result<bool, ModerationOrchestratorError> {
     let mut changed = false;
@@ -263,7 +264,7 @@ fn reconcile_panel_notification_archive_signer_epochs(
     }
     validate_panel_notification_archive_signer_epochs(
         &state.panel_notification_archive_signer_epochs,
-        chain_id,
+        network_id,
         config.panel_notification_archive_bootstrap_public_key,
         config.panel_notification_archive_id,
     )?;
@@ -357,7 +358,7 @@ fn reconcile_panel_notification_archive_signer_epochs(
         candidate.push(next.clone());
         validate_panel_notification_archive_signer_epochs(
             &candidate,
-            chain_id,
+            network_id,
             config.panel_notification_archive_bootstrap_public_key,
             config.panel_notification_archive_id,
         )?;
@@ -389,12 +390,7 @@ fn hash_panel_notification_archive_head_fields(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) {
     hasher.update(&head.version.to_le_bytes());
-    hasher.update(
-        &u64::try_from(head.chain_id.len())
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
-    hasher.update(head.chain_id.as_bytes());
+    hasher.update(head.network_id.as_bytes());
     hasher.update(&head.generation.to_le_bytes());
     hash_optional_archive_digest(hasher, head.predecessor_head_digest);
     hash_optional_archive_digest(hasher, head.predecessor_operation_id);
@@ -470,10 +466,7 @@ fn panel_notification_source_attestation_message(
         &[
             &statement.version.to_le_bytes(),
             &statement.attestor_slot.to_le_bytes(),
-            &u64::try_from(statement.chain_id.len())
-                .unwrap_or(u64::MAX)
-                .to_le_bytes(),
-            statement.chain_id.as_bytes(),
+            statement.network_id.as_bytes(),
             &statement.checkpoint_namespace_digest,
             &statement.checkpoint_generation.to_le_bytes(),
             &statement.checkpoint_revision,
@@ -503,7 +496,6 @@ fn validate_panel_notification_source_attestation(
     );
     if statement.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
         || statement.attestor_slot != MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1
-        || statement.chain_id.is_empty()
         || statement.checkpoint_namespace_digest == [0; 32]
         || statement.checkpoint_generation == 0
         || statement.checkpoint_revision == [0; 32]
@@ -536,14 +528,14 @@ fn validate_panel_notification_source_attestation(
 /// provider mismatch, or any statement field not derivable from the current sealed record.
 pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
     statement: &ModerationPanelNotificationSourceAttestationV1,
-    expected_chain_id: &iroha_data_model::ChainId,
+    expected_network_id: &iroha_data_model::NetworkId,
     expected_handle: &str,
     expected_qualification: ModerationRuntimeProviderQualificationV1,
     expected_public_key: [u8; 32],
     current_record: &ModerationCheckpointStoreRecordV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
     validate_panel_notification_source_attestation(statement)?;
-    if statement.chain_id != expected_chain_id.as_str()
+    if statement.network_id != *expected_network_id
         || statement.attestor_handle != expected_handle
         || statement.attestor_revision != expected_qualification.revision()
         || statement.attestor_policy_digest != expected_qualification.policy_digest()
@@ -553,8 +545,9 @@ pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
             expected_qualification,
             MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
         )
+        || current_record.network_id != *expected_network_id
         || current_record.namespace_digest
-            != checkpoint_store::checkpoint_namespace(expected_chain_id)
+            != checkpoint_store::checkpoint_namespace(expected_network_id)
         || statement.checkpoint_namespace_digest != current_record.namespace_digest
         || statement.checkpoint_generation != current_record.checkpoint_generation
         || statement.checkpoint_revision != current_record.revision
@@ -572,7 +565,7 @@ pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
         .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
         != current_record.checkpoint_bytes
         || source.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1
-        || source.chain_id != expected_chain_id.as_str()
+        || source.network_id != *expected_network_id
         || source.generation != current_record.checkpoint_generation
         || source.panel_notification_outbox_digest != panel_notification_outbox_digest(&source)
     {
@@ -580,7 +573,7 @@ pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
     }
     let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-        chain_id: expected_chain_id.as_str().to_owned(),
+        network_id: *expected_network_id,
         checkpoint_namespace_digest: current_record.namespace_digest,
         checkpoint_generation: current_record.checkpoint_generation,
         checkpoint_revision: current_record.revision,
@@ -639,7 +632,7 @@ fn panel_notification_source_attestation_from_head(
     ModerationPanelNotificationSourceAttestationV1 {
         version: head.version,
         attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
-        chain_id: head.chain_id.clone(),
+        network_id: head.network_id,
         checkpoint_namespace_digest: head.source_checkpoint_namespace_digest,
         checkpoint_generation: head.source_checkpoint_generation,
         checkpoint_revision: head.source_checkpoint_revision,
@@ -714,7 +707,7 @@ fn panel_notification_archive_receipt_message(
         PANEL_NOTIFICATION_ARCHIVE_RECEIPT_DOMAIN_V1,
         &[
             &MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1.to_le_bytes(),
-            head.chain_id.as_bytes(),
+            head.network_id.as_bytes(),
             &head.archive_id,
             &head.archive_public_key,
             &head.operation_id,
@@ -753,7 +746,6 @@ fn verify_panel_notification_archive_head_core(
         0 => false,
     };
     if head.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
-        || head.chain_id.is_empty()
         || !lineage_valid
         || head.source_checkpoint_generation == 0
         || head.source_checkpoint_namespace_digest == [0; 32]
@@ -858,7 +850,7 @@ fn verify_panel_notification_archive_lineage_link(
         || successor.predecessor_operation_id != Some(predecessor.operation_id)
         || successor.predecessor_chain_commitment != Some(predecessor.chain_commitment)
         || successor.source_checkpoint_generation <= predecessor.source_checkpoint_generation
-        || successor.chain_id != predecessor.chain_id
+        || successor.network_id != predecessor.network_id
         || predecessor
             .cumulative_dead_letter_count
             .checked_add(u64::from(successor.dead_letter_record_count))

@@ -12,8 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use iroha_sumeragi_core::{
-    BodyState, CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, Effect,
-    EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature,
+    BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
+    Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId, OpaqueSignature,
     PayloadManifest, Phase, QuorumError, Reducer, ReducerError, Round, SignableMessage,
     SignatureShare, SignedTimeoutVote, SignedVote, StepDisposition, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
@@ -1204,7 +1204,7 @@ fn production_context() -> HeightContext {
     seed[31] = 3;
     HeightContext::new(
         ContextId::repeat(0xc1),
-        ChainId::repeat(0xc2),
+        NetworkId::repeat(0xc2),
         HEIGHT,
         None,
         0,

@@ -22,6 +22,10 @@
 //! fee-quoted signature are persisted atomically before any send, every retry first
 //! queries the exact transaction hash, and an absent transaction is submitted only
 //! while the selected finalized location is byte-identical to the signed floor.
+//!
+//! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other
+//! targets fail closed with the platform's unsupported error before inspecting
+//! or creating the selected state path.
 
 use std::{
     collections::BTreeMap,
@@ -39,9 +43,8 @@ use iroha::musubi_runtime::{
     MusubiSeedIngressCarPlanV1,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
-    block::BlockHeader,
     isi::{
         InstructionBox,
         musubi::{AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1},
@@ -81,7 +84,7 @@ use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 #[cfg(windows)]
-use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::os::windows::fs::OpenOptionsExt as _;
 
 const JOURNAL_SCHEMA: &str = "musubi-publication-journal";
 const JOURNAL_VERSION: u8 = 1;
@@ -167,10 +170,6 @@ const FINAL_HOME_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-home-release.v1";
 const FINAL_UNIVERSAL_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-universal-release.v1";
 const FINAL_CHECKPOINT_DOMAIN: &[u8] = b"iroha.musubi.final-checkpoint.v1";
 #[cfg(windows)]
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-#[cfg(windows)]
-const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-#[cfg(windows)]
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 #[cfg(windows)]
 const FILE_SHARE_WRITE: u32 = 0x0000_0002;
@@ -237,10 +236,8 @@ impl FromStr for PublicationOperationIdV1 {
 /// Public inputs that remain stable across every retry of one publication.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationRequestV1 {
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact genesis block hash for the selected deployment.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Account that will publish the release through Native AMX.
     pub publisher: AccountId,
     /// Authenticated seed-ingress broker expected to sign the staging receipt.
@@ -264,14 +261,10 @@ pub struct PublicationRequestV1 {
 }
 
 impl PublicationRequestV1 {
-    /// Return the exact network identity derived from this request's genesis commitment.
+    /// Return the exact genesis-derived network identity.
     #[must_use]
-    pub fn network_id(&self) -> NetworkId {
-        NetworkId::from_genesis_hash(
-            iroha::crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
-                iroha::crypto::Hash::prehashed(self.genesis_block_hash),
-            ),
-        )
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
     }
 
     /// Validate all immutable publication, archive, deployment, and revision bindings.
@@ -301,8 +294,7 @@ impl PublicationRequestV1 {
                 });
             }
         }
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || self.nonce.iter().all(|byte| *byte == 0)
             || self.expected_policy_revision == 0
@@ -345,8 +337,7 @@ impl PublicationRequestV1 {
 
     fn receipt_binding(&self) -> MusubiSeedIngressReceiptBindingV1 {
         MusubiSeedIngressReceiptBindingV1 {
-            chain_id: self.chain_id.clone(),
-            genesis_block_hash: self.genesis_block_hash,
+            network_id: self.network_id(),
             publisher: self.publisher.clone(),
             ingress_broker: self.ingress_broker.clone(),
             seed_provider: self.seed_provider,
@@ -550,10 +541,8 @@ pub(crate) fn archive_registration_intent_valid_until_ms(
 /// Exact finalized registry evidence that an archive identity remained absent.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveAbsenceEvidenceV1 {
-    /// Deployment-selected chain identity returned by the finalized query.
-    pub chain_id: ChainId,
-    /// Exact genesis block hash returned by the finalized query.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact genesis-derived network identity returned by the finalized query.
+    pub network_id: NetworkId,
     /// Finalized universal registry snapshot at which the archive was absent.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Consensus-committed creation time of the finalized block named by `snapshot`.
@@ -574,8 +563,7 @@ impl PublicationArchiveAbsenceEvidenceV1 {
         self.decision
             .validate()
             .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
-        if self.chain_id != request.chain_id
-            || self.genesis_block_hash != request.genesis_block_hash
+        if self.network_id != request.network_id
             || self.decision.archive_id != request.archive_commitment.archive_id()
             || self.decision.disposition != MusubiArchiveRetentionDispositionV1::RetainUnknown
         {
@@ -737,10 +725,8 @@ pub enum PublicationArchiveRegistrationAdvanceV1 {
 pub struct PublicationRegisteredArchiveV1 {
     /// Exact transaction identity whose finalized effect was recovered.
     pub finalized_transaction_hash: [u8; 32],
-    /// Deployment-selected chain identity returned by the finalized query.
-    pub chain_id: ChainId,
-    /// Exact genesis block hash returned by the finalized query.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact genesis-derived network identity returned by the finalized query.
+    pub network_id: NetworkId,
     /// Finalized registry snapshot that contains the authoritative archive record.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Authoritative archive record embedded in the finalized archive-location query page.
@@ -762,8 +748,7 @@ impl PublicationRegisteredArchiveV1 {
         let observed_finalized_transaction_hash = self.finalized_transaction_hash;
         let expected_intent_transaction_hash = intent.transaction_hash;
         if observed_finalized_transaction_hash != expected_intent_transaction_hash
-            || self.chain_id != request.chain_id
-            || self.genesis_block_hash != request.genesis_block_hash
+            || self.network_id != request.network_id
             || self.archive.registered_at_height > self.snapshot.finalized_height
             || self.archive.archive_id != intent.archive_id
             || self.archive.archive_id != request.archive_commitment.archive_id()
@@ -1091,10 +1076,7 @@ impl PublicationArchiveRegistrationV1 {
                 Ok(PublicationLocationProgressV1::Current)
             )
         });
-        let observed_genesis_hash = page.genesis_hash;
-        let expected_genesis_hash = request.genesis_block_hash;
-        if page.chain_id != request.chain_id
-            || observed_genesis_hash != expected_genesis_hash
+        if page.network_id != request.network_id()
             || page.archive.registration_projection()
                 != self.finalized_page.archive.registration_projection()
             || page.snapshot.finalized_height < self.finalized_page.snapshot.finalized_height
@@ -1468,10 +1450,7 @@ pub(crate) fn validate_archive_location_page(
 ) -> Result<(), PublicationError> {
     page.validate()
         .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
-    let observed_genesis_hash = page.genesis_hash;
-    let expected_genesis_hash = request.genesis_block_hash;
-    if page.chain_id != request.chain_id
-        || observed_genesis_hash != expected_genesis_hash
+    if page.network_id != request.network_id()
         || page.archive.registration_projection() != registered.archive.registration_projection()
         || page.snapshot.finalized_height < registered.snapshot.finalized_height
         || page.snapshot.index_revision < registered.snapshot.index_revision
@@ -1629,10 +1608,7 @@ impl PublicationReleasePreparationFloorV1 {
                     page.archive.staging_receipt.payload.issued_at_ms,
                 )
                 .is_ok();
-        let observed_genesis_hash = page.genesis_hash;
-        let expected_genesis_hash = request.genesis_block_hash;
-        if page.chain_id != request.chain_id
-            || observed_genesis_hash != expected_genesis_hash
+        if page.network_id != request.network_id()
             || !exact_archive
             || page.next_cursor.is_some()
             || page.items.len() != page.archive.location_ids.len()
@@ -1926,16 +1902,14 @@ impl PublicationReleaseAbsenceEvidenceV1 {
                     .to_owned(),
             });
         };
-        if self.resolver_page.chain_id != request.chain_id
-            || self.resolver_page.genesis_hash != request.genesis_block_hash
+        if self.resolver_page.network_id != request.network_id()
             || self.resolver_page.query.package != request.publication.manifest.release.package
             || self.resolver_page.query.requirement.as_ref() != Some(&exact_requirement)
             || self.resolver_page.query.page.cursor.is_some()
             || !self.resolver_page.items.is_empty()
             || self.resolver_page.next_cursor.is_some()
             || self.retention_query != exact_retention_query
-            || self.retention_page.chain_id != request.chain_id
-            || self.retention_page.genesis_hash != request.genesis_block_hash
+            || self.retention_page.network_id != request.network_id()
             || self.retention_page.snapshot != self.resolver_page.snapshot
             || self.retention_page.finalized_time_ms == 0
             || retention.archive_id != request.archive_commitment.archive_id()
@@ -2371,10 +2345,8 @@ impl PublicationAmxSubmissionV1 {
 /// Exact finalized home-dataspace and universal-index publication result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationFinalEvidenceV1 {
-    /// Deployment-selected chain identity returned with the universal-index row.
-    pub chain_id: ChainId,
-    /// Exact genesis block hash returned with the universal-index row.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact genesis-derived network identity returned with the universal-index row.
+    pub network_id: NetworkId,
     /// Finalized universal registry snapshot used for the exact verification.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Exact authoritative release record in the stable home dataspace.
@@ -2405,8 +2377,7 @@ impl PublicationFinalEvidenceV1 {
             .validate()
             .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
         MusubiExactReleaseSnapshotV1 {
-            chain_id: self.chain_id.clone(),
-            genesis_hash: self.genesis_block_hash,
+            network_id: request.network_id,
             snapshot: self.snapshot,
             home_release: self.home_release.clone(),
             universal_release: self.universal_release.clone(),
@@ -2415,8 +2386,7 @@ impl PublicationFinalEvidenceV1 {
         .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
         let manifest = &request.publication.manifest;
         let row = &self.universal_release;
-        if self.chain_id != request.chain_id
-            || self.genesis_block_hash != request.genesis_block_hash
+        if self.network_id != request.network_id
             || self.snapshot.finalized_height
                 < request.publication.resolution.snapshot.finalized_height
             || self.snapshot.finalized_height < submission.applied_height
@@ -2460,10 +2430,8 @@ impl PublicationFinalEvidenceV1 {
 pub struct PublicationFinalCheckpointV1 {
     /// Stable request-derived operation identity, including the public anti-replay nonce.
     pub operation_id: PublicationOperationIdV1,
-    /// Deployment-selected chain identity returned with the exact projections.
-    pub chain_id: ChainId,
-    /// Exact genesis block hash returned with the exact projections.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact genesis-derived network identity returned with the exact projections.
+    pub network_id: NetworkId,
     /// Finalized registry snapshot at which both projections were verified.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Exact structural release identity.
@@ -2504,8 +2472,7 @@ impl PublicationFinalCheckpointV1 {
             })?;
         let mut checkpoint = Self {
             operation_id: request.operation_id(),
-            chain_id: evidence.chain_id.clone(),
-            genesis_block_hash: evidence.genesis_block_hash,
+            network_id: evidence.network_id,
             snapshot: evidence.snapshot,
             release: evidence.home_release.manifest.release.clone(),
             release_digest: evidence.home_release.release_digest,
@@ -2554,8 +2521,7 @@ impl PublicationFinalCheckpointV1 {
         let manifest = &request.publication.manifest;
         if self.operation_id != request.operation_id()
             || self.operation_id != submission.operation_id
-            || self.chain_id != request.chain_id
-            || self.genesis_block_hash != request.genesis_block_hash
+            || self.network_id != request.network_id
             || self.snapshot.finalized_height
                 < request.publication.resolution.snapshot.finalized_height
             || self.snapshot.finalized_height < submission.applied_height
@@ -3508,6 +3474,9 @@ impl PublicationStagedCarSourceV1 {
         &self,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> io::Result<MusubiSeedIngressCarPlanV1> {
+        if !cfg!(unix) {
+            return Err(unsupported_publication_filesystem_error());
+        }
         let root = AtomicWriteRoot::new(&self.root)
             .map_err(|_| invalid_plan_source("staged publication plan root is unsafe"))?;
         let bytes = root
@@ -3663,6 +3632,9 @@ fn staged_car_plan_matches_commitment(
 
 impl PublicationCarSource for PublicationStagedCarSourceV1 {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
+        if !cfg!(unix) {
+            return Err(unsupported_publication_filesystem_error());
+        }
         let inspected = fs::symlink_metadata(&self.path)?;
         if self.expected_size == 0
             || self.expected_size > MUSUBI_MAX_CAR_BYTES_V1
@@ -3713,6 +3685,15 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
 
 fn invalid_plan_source(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn unsupported_publication_filesystem_error() -> io::Error {
+    // TODO: Enable non-Unix publication files only after a safe stable handle-identity,
+    // single-link, and no-follow file-open abstraction is available.
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure Musubi publication filesystem access is unsupported on this platform",
+    )
 }
 
 struct StableCarReader {
@@ -4084,8 +4065,11 @@ impl PublicationJournalStore {
     ///
     /// # Errors
     ///
-    /// Returns a journal error when the state root or publication directory cannot be opened,
-    /// created, synchronized, or proven to be a private real directory.
+    /// Returns [`PublicationError::JournalWrite`] carrying
+    /// [`crate::atomic_io::AtomicWriteErrorCode::UnsupportedPlatform`] on non-Unix targets before
+    /// inspecting or creating the state root. On Unix, returns a journal error when the state
+    /// root or publication directory cannot be opened, created, synchronized, or proven to be a
+    /// private real directory.
     pub fn open(user_state_root: &Path) -> Result<Self, PublicationError> {
         let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
         let journal_directory = root.path().join(JOURNAL_DIRECTORY);
@@ -4151,12 +4135,19 @@ impl PublicationJournalStore {
     ///
     /// # Errors
     ///
-    /// Returns not-found, journal I/O, or invalid-journal errors when the bounded journal cannot be
-    /// opened as the same safe file, decoded canonically, or fully validated.
+    /// Returns an unsupported journal I/O error on non-Unix targets before path metadata is
+    /// consulted. On Unix, returns not-found, journal I/O, or invalid-journal errors when the
+    /// bounded journal cannot be opened as the same safe file, decoded canonically, or fully
+    /// validated.
     pub fn load(
         &self,
         operation_id: PublicationOperationIdV1,
     ) -> Result<PublicationJournalV1, PublicationError> {
+        if !cfg!(unix) {
+            return Err(PublicationError::JournalIo(
+                unsupported_publication_filesystem_error(),
+            ));
+        }
         let relative = journal_relative_path(operation_id);
         let path = self.root.path().join(relative);
         let metadata = match fs::symlink_metadata(&path) {
@@ -4590,12 +4581,7 @@ fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, parent: &fs::Metadat
         && metadata.uid() == parent.uid()
 }
 
-#[cfg(windows)]
-fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
-    metadata_is_safe_regular_file(metadata) && metadata.len() == 0
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 const fn operation_lock_metadata_is_safe(_metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
     false
 }
@@ -4607,12 +4593,7 @@ fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
         && metadata.permissions().mode() & 0o7777 == 0o700
 }
 
-#[cfg(windows)]
-fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
-    metadata.is_dir() && !metadata_is_windows_reparse_point(metadata)
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 const fn journal_directory_metadata_is_safe(_metadata: &fs::Metadata) -> bool {
     false
 }
@@ -4626,36 +4607,23 @@ fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.uid() == right.uid()
 }
 
-#[cfg(windows)]
-fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    journal_directory_metadata_is_safe(left)
-        && journal_directory_metadata_is_safe(right)
-        && left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 const fn same_directory(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
 
 fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
-    metadata.is_file()
-        && !metadata.file_type().is_symlink()
-        && !metadata_is_windows_reparse_point(metadata)
-        && metadata_has_one_hard_link(metadata)
-}
-
-#[cfg(windows)]
-fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-const fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
+    #[cfg(unix)]
+    {
+        metadata.is_file()
+            && !metadata.file_type().is_symlink()
+            && metadata_has_one_hard_link(metadata)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 #[cfg(unix)]
@@ -4663,16 +4631,6 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
 
     metadata.nlink() == 1
-}
-
-#[cfg(windows)]
-fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
-    metadata.number_of_links() == Some(1)
-}
-
-#[cfg(not(any(unix, windows)))]
-const fn metadata_has_one_hard_link(_metadata: &fs::Metadata) -> bool {
-    false
 }
 
 #[cfg(unix)]
@@ -4691,27 +4649,16 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && right.nlink() == 1
 }
 
-#[cfg(windows)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_type() == right.file_type()
-        && left.file_attributes() == right.file_attributes()
-        && left.file_size() == right.file_size()
-        && left.creation_time() == right.creation_time()
-        && left.last_write_time() == right.last_write_time()
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 const fn same_file_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
 
 fn open_read_only_no_follow_nonblocking(path: &Path) -> io::Result<File> {
+    if !cfg!(unix) {
+        let _ = path;
+        return Err(unsupported_publication_filesystem_error());
+    }
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_nonblocking(&mut options);
@@ -4726,9 +4673,7 @@ fn set_no_follow_nonblocking(options: &mut OpenOptions) {
         // A substituted FIFO or device must never block before descriptor metadata rejects it.
         options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
     }
-    #[cfg(windows)]
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     let _ = options;
 }
 
@@ -4905,9 +4850,92 @@ const fn platform_nonblocking_flag() -> i32 {
     0x4
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     include!("publish_fixture_tests.rs");
     include!("publish_backend_test_support.rs");
     include!("publish_recovery_tests.rs");
+}
+
+#[cfg(all(test, not(unix)))]
+mod unsupported_platform_tests {
+    use iroha_data_model::{
+        musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
+        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
+    };
+
+    use crate::atomic_io::AtomicWriteErrorCode;
+
+    use super::{
+        PublicationCarSource, PublicationError, PublicationJournalStore, PublicationOperationIdV1,
+        PublicationStagedCarSourceV1,
+    };
+
+    fn minimal_valid_commitment() -> MusubiArchiveCommitmentV1 {
+        let descriptor = sorafs_car::chunker_registry::default_descriptor();
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: descriptor.id.0,
+                namespace: descriptor.namespace.to_owned(),
+                name: descriptor.name.to_owned(),
+                semver: descriptor.semver.to_owned(),
+                multihash_code: descriptor.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new([2; 32]),
+            por_root: MusubiContentDigestV1::new([3; 32]),
+            content_length: 1,
+            car_digest: MusubiContentDigestV1::new([4; 32]),
+            car_size: 1,
+            bundle_digest: MusubiContentDigestV1::new([5; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([6; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([7; 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        commitment.validate().expect("minimal commitment");
+        commitment
+    }
+
+    #[test]
+    fn publication_journal_open_fails_before_inspecting_or_creating_the_root() {
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let requested = parent.path().join("must-remain-absent");
+
+        let error = PublicationJournalStore::open(&requested)
+            .expect_err("non-Unix publication journal must fail");
+
+        assert!(matches!(
+            error,
+            PublicationError::JournalWrite(error)
+                if error.code() == AtomicWriteErrorCode::UnsupportedPlatform
+        ));
+        assert!(!requested.exists());
+    }
+
+    #[test]
+    fn staged_car_and_plan_readers_return_unsupported_before_metadata_io() {
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let requested = parent.path().join("must-remain-absent");
+        let operation_id = "11"
+            .repeat(32)
+            .parse::<PublicationOperationIdV1>()
+            .expect("non-zero operation id");
+        let source = PublicationStagedCarSourceV1::new(&requested, operation_id, 1);
+
+        let error = match source.open_car() {
+            Err(error) => error,
+            Ok(_) => panic!("non-Unix staged CAR read must fail"),
+        };
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+        let error = source
+            .car_plan(&minimal_valid_commitment())
+            .expect_err("non-Unix staged plan read must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(!source.path.exists());
+        assert!(!source.plan_path.exists());
+        assert!(!requested.exists());
+    }
 }

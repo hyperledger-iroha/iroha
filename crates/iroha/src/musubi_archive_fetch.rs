@@ -1118,7 +1118,7 @@ fn decode_stream_token_exact(encoded: &str) -> Result<StreamTokenV1, MusubiArchi
     );
     let token: StreamTokenV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
         .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
-    let canonical = norito::to_bytes(&token)
+    let canonical = norito::encode_canonical(&token)
         .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
     if canonical != bytes
         || token.body.requests_per_minute == 0
@@ -2223,6 +2223,36 @@ const fn permanent(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_stream_token_decode_ignores_ambient_layout_flags() {
+        let token = StreamTokenV1 {
+            body: sorafs_manifest::StreamTokenBodyV1 {
+                token_id: "01J3E4ZCMQ3GP2H3R5PSNF6Z7X".to_owned(),
+                manifest_cid: vec![0x01, 0x55, 0x01],
+                provider_id: [0xAA; 32],
+                profile_handle: "sorafs.sf1@1.0.0".to_owned(),
+                max_streams: 1,
+                ttl_epoch: 2,
+                rate_limit_bytes: 1,
+                issued_at: 1,
+                requests_per_minute: 1,
+                token_pk_version: 1,
+            },
+            signature: vec![0x5A; 64],
+        };
+        let encoded = STANDARD.encode(
+            norito::encode_canonical(&token).expect("encode canonical stream-token fixture"),
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+
+        assert_eq!(
+            decode_stream_token_exact(&encoded).expect("decode under alternate ambient flags"),
+            token
+        );
+    }
 
     #[test]
     fn signer_free_fetch_parser_ignores_account_key_material() {

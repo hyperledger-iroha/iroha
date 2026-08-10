@@ -221,8 +221,8 @@ public struct ConnectPong: Codable, Equatable, Sendable {
 }
 
 public struct ConnectConstraints: Codable, Equatable, Sendable {
-    public var chainID: String
-    public init(chainID: String) { self.chainID = chainID }
+    public var networkID: NetworkId
+    public init(networkID: NetworkId) { self.networkID = networkID }
 }
 
 public struct ConnectPermissions: Codable, Equatable, Sendable {

@@ -388,6 +388,7 @@ const SIGNATURE_FIELDS = new Set([
   "payload",
 ]);
 const SIGNABLE_FIELDS = new Set([
+  "networkId",
   "payloadBytes",
   "payloadHashHex",
   "authority",
@@ -395,7 +396,6 @@ const SIGNABLE_FIELDS = new Set([
   "signatureAlgorithm",
 ]);
 const CONFIG_FIELDS = new Set([
-  "chainId",
   "networkId",
   "baseUrl",
   "toriiBaseUrl",
@@ -455,7 +455,7 @@ const STATUS_WAIT_OPTION_FIELDS = Object.freeze([
 ]);
 const CONNECT_OPTION_FIELDS = new Set([
   "sid",
-  "chainId",
+  "networkId",
   "node",
   "appKeyPair",
   "nonce",
@@ -697,6 +697,7 @@ function normalizeAlgorithm(algorithm) {
 function nexusSignableErrorCode(error) {
   if (!(error instanceof BrowserTransactionCodecError)) return "invalid_payload";
   if (error.code === "payload_hash_mismatch") return "payload_hash_mismatch";
+  if (error.code === "network_id_mismatch") return "network_id_mismatch";
   if (error.code === "authority_mismatch") return "authority_mismatch";
   if (error.code === "invalid_hash") return "invalid_payload_hash";
   if (
@@ -729,6 +730,7 @@ function validateNexusTransferSignable(signable, constraints = {}) {
 
 function copyValidatedSignable(signable) {
   return Object.freeze({
+    networkId: signable.networkId,
     payloadBytes: Buffer.from(signable.payloadBytes),
     payloadHashHex: signable.payloadHashHex,
     authority: signable.authority,
@@ -2068,13 +2070,11 @@ export class NexusAppClient {
       this.config.connectBaseUrl ?? this.config.toriiBaseUrl ?? this.config.baseUrl,
       "config.baseUrl",
     );
-    const chainId = requireNonEmptyString(
-      options.chainId ?? this.config.chainId,
-      "chainId",
-    );
+    const networkId = options.networkId ?? this.config.networkId;
+    networkIdBytes(networkId, "networkId");
     const node = options.node ?? this.config.node ?? null;
     const preview = createConnectSessionPreview({
-      chainId,
+      networkId,
       node,
       appKeyPair: options.appKeyPair,
       nonce: options.nonce,
@@ -2082,7 +2082,7 @@ export class NexusAppClient {
     });
     const registered = await registerConnectSession(
       baseUrl,
-      preview.sidBase64Url,
+      preview,
       { node, fetchImpl: this.config.fetchImpl },
     );
     const normalizedRegistered = normalizeConnectSession(registered);
@@ -2393,6 +2393,7 @@ export class NexusAppClient {
     return {
       input: { ...payloadInput, signingPublicKey },
       signable: {
+        networkId,
         payloadBytes,
         payloadHashHex,
         authority,
@@ -2445,6 +2446,7 @@ export class NexusAppClient {
       { maxBytes: 32 },
     );
     const canonicalSignable = validateNexusTransferSignable(signable, {
+      networkId: this.config.networkId ?? null,
       authority: approvedAccount ?? configuredAuthority,
       signingPublicKey: expectedSigningPublicKey,
     });
@@ -2583,7 +2585,10 @@ export class NexusAppClient {
         ...signable,
         signingPublicKey: publicKey,
       },
-      { signingPublicKey: publicKey },
+      {
+        networkId: this.config.networkId ?? null,
+        signingPublicKey: publicKey,
+      },
     );
     const { payloadBytes, payloadHashHex } = canonicalSignable;
     validateEd25519SignatureForPayload(

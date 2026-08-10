@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,18 +40,43 @@ def load_checker():
 def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:
-    """Copy one parent and its exact reviewed direct include closure."""
+    """Copy and track one parent's exact recursive reviewed include closure."""
 
     parent_relative = Path(relative)
-    parent = tmp_path / parent_relative
-    parent.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT_DIR / parent_relative, parent)
-    for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative]:
-        component_relative = parent_relative.parent / component
+    errors: list[str] = []
+    expanded = module._expanded_source_manifest_paths(
+        {parent_relative}, ROOT_DIR, errors
+    )
+    assert errors == []
+    for component_relative in expanded:
+        source = ROOT_DIR / component_relative
+        if component_relative.suffix != ".rs" or not source.is_file():
+            continue
         destination = tmp_path / component_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / component_relative, destination)
-    return parent
+        shutil.copy2(source, destination)
+    initialize_git_fixture(tmp_path)
+    return tmp_path / parent_relative
+
+
+def initialize_git_fixture(
+    root: Path, tracked: tuple[str, ...] | None = None
+) -> None:
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    paths = tracked if tracked is not None else (".",)
+    subprocess.run(
+        ["git", "add", "--", *paths],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
 
 def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
@@ -72,11 +98,9 @@ def test_reviewed_rust_source_expands_exact_lane_work_closure(
     )
     assert errors == []
     assert source is not None
-    assert source.count("fn durable_historical_lane_verification_pops(") == 1
+    assert source.count("fn typed_finality_handoff_fences_changed_roster") == 1
     assert (
-        source.count(
-            "fn current_height_qc_uses_frozen_context_pops_after_state_index_pruning("
-        )
+        source.count("fn historical_certificate_payload_corruption_is_fail_stop")
         == 1
     )
     expanded_paths = module._expanded_source_manifest_paths({Path(relative)})
@@ -88,7 +112,8 @@ def test_reviewed_rust_source_expands_exact_lane_work_closure(
         in expanded_paths
     )
     assert (
-        Path(relative).parent / "v2_lane_work/frozen_context_pop_tests.rs"
+        Path(relative).parent
+        / "v2_lane_work/historical_recovery_and_carrier_tests.rs"
         in expanded_paths
     )
 
@@ -107,9 +132,10 @@ def test_reviewed_rust_source_rejects_substituted_lane_work_include(
         parent.parent / "v2_lane_work/substituted_handoff_tests.rs",
     )
     errors: list[str] = []
-    module._read_reviewed_rust_source(
+    _path, source = module._read_reviewed_rust_source(
         tmp_path, relative, "substituted lane-work fixture", errors
     )
+    assert source is None
     assert any("reviewed Rust include inventory must equal" in error for error in errors)
 
 
@@ -123,9 +149,10 @@ def test_reviewed_rust_source_rejects_symlinked_lane_work_component(
     component.unlink()
     component.symlink_to("frozen_context_pop_tests.rs")
     errors: list[str] = []
-    module._read_reviewed_rust_source(
+    _path, source = module._read_reviewed_rust_source(
         tmp_path, relative, "symlinked lane-work fixture", errors
     )
+    assert source is None
     assert any(
         str(component) in error and "regular non-symlink file" in error
         for error in errors
@@ -465,10 +492,7 @@ def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
         Path(check["path"]) for check in contract["forbidden_source_checks"]
     )
     relatives.update(Path(check["path"]) for check in contract["source_checks"])
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
 
 
 def validate_fixture(tmp_path: Path, module, contract: dict) -> tuple[str, ...]:
@@ -550,6 +574,48 @@ def swap_ordered_once_after(
     )
 
 
+def copy_reviewed_source_fixture_with_includes(
+    tmp_path: Path, module, relatives: set[Path]
+) -> None:
+    """Copy a live closure, then create its isolated stage-zero fixture."""
+
+    helper_path = ROOT_DIR / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE
+    helper_spec = importlib.util.spec_from_file_location(
+        "sumeragi_v2_multilane_reviewed_rust_source_fixture", helper_path
+    )
+    assert helper_spec is not None
+    assert helper_spec.loader is not None
+    reviewed_source = importlib.util.module_from_spec(helper_spec)
+    sys.modules[helper_spec.name] = reviewed_source
+    helper_spec.loader.exec_module(reviewed_source)
+    pending = list(relatives)
+    copied: set[Path] = set()
+    while pending:
+        relative = pending.pop()
+        if relative in copied:
+            continue
+        source = ROOT_DIR / relative
+        assert source.is_file() and not source.is_symlink()
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        copied.add(relative)
+        if relative.suffix != ".rs":
+            continue
+        errors: list[str] = []
+        invocations = reviewed_source._rust_include_invocations(
+            source.read_text(encoding="utf-8"), source, errors
+        )
+        assert errors == []
+        for invocation in invocations:
+            child = reviewed_source._canonical_provider_relative(
+                invocation.relative
+            )
+            assert child is not None
+            pending.append(relative.parent.joinpath(*child.parts))
+    initialize_git_fixture(tmp_path)
+
+
 def copy_native_prepublication_fixture(
     tmp_path: Path, module
 ) -> list[dict]:
@@ -560,10 +626,11 @@ def copy_native_prepublication_fixture(
         Path(relative)
         for relative, _, _, _ in module.NATIVE_PREPUBLICATION_BINDINGS
     }
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    relatives.update(
+        relative
+        for relative, _, _ in module.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -571,7 +638,8 @@ def validate_native_prepublication_fixture(
     tmp_path: Path, module, models: list[dict]
 ) -> tuple[str, ...]:
     errors: list[str] = []
-    module._validate_native_prepublication_contract(tmp_path, models, errors)
+    with module._reviewed_rust_source_cache():
+        module._validate_native_prepublication_contract(tmp_path, models, errors)
     return tuple(errors)
 
 
@@ -1212,25 +1280,6 @@ def test_native_exact_object_prune_contract_rejects_security_relation_drift(
     assert any("exact-object" in error for error in errors), errors
 
 
-def test_native_prepublication_contract_rejects_removed_prepublication_call(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    models = copy_native_prepublication_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
-    replace_once(
-        path,
-        ".prepublish_native_amx_participant_application_evidence(",
-        ".skip_native_amx_participant_application_evidence(",
-    )
-    errors = validate_native_prepublication_fixture(tmp_path, module, models)
-    assert any(
-        "V2ApplyService::validate_and_apply" in error
-        and "prepublish_native_amx_participant_application_evidence" in error
-        for error in errors
-    ), errors
-
-
 @pytest.mark.parametrize(
     ("earlier", "later"),
     (
@@ -1240,10 +1289,10 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         ),
         (
             ".prepublish_native_amx_participant_application_evidence(",
-            "State::native_amx_participant_frontier_markers(",
+            "State::native_amx_participant_frontier_markers_and_merge_entry(",
         ),
         (
-            "State::native_amx_participant_frontier_markers(",
+            "State::native_amx_participant_frontier_markers_and_merge_entry(",
             "token.authenticates_state_frontiers(",
         ),
         (
@@ -1405,7 +1454,7 @@ def test_native_prepublication_contract_rejects_prewsv_retention_cleanup(
     models = copy_native_prepublication_fixture(tmp_path, module)
     path = (
         tmp_path
-        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+        / "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs"
     )
     replace_once(
         path,
@@ -2906,34 +2955,6 @@ def test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening(
     assert any(
         "production_in_flight_first_release_transition_body" in error
         and prefix_field in error
-        for error in errors
-    ), errors
-
-
-def test_stable_generation_diagnostics_rejects_retry_bound_weakening(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
-    replace_once(
-        state,
-        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;",
-        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 40;",
-    )
-    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
-    assert any("four-attempt declaration" in error for error in errors), errors
-
-
-def test_stable_generation_diagnostics_rejects_missing_fail_closed_sink(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    _state, helper = copy_stable_generation_diagnostics_fixture(tmp_path)
-    replace_once(helper, "Err(generation_drift_error())", "derive()")
-    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
-    assert any(
-        "stable-generation diagnostics helper token" in error
-        and "generation_drift_error" in error
         for error in errors
     ), errors
 

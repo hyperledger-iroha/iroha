@@ -13,7 +13,7 @@ Bundles are produced via `scripts/build_release_bundle.sh` with `--profile` set 
 
 Each tarball contains:
 
-- `bin/` — `irohad`, `iroha`, and `kagami` built with the deploy profile.
+- `bin/` — `iroha3d`, `iroha`, and `kagami` built with the deploy profile.
 - `config/` — profile-specific genesis/client configuration (single vs. nexus). Nexus bundles include `config.toml` with lane and DA parameters.
 - `PROFILE.toml` — metadata describing profile, config, version, commit, OS/arch, and enabled feature set.
 - Metadata artefacts written alongside the tarball:

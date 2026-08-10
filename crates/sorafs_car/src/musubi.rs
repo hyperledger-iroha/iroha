@@ -9,20 +9,16 @@ use std::{
     io::{self, Read},
 };
 
-use iroha_data_model::musubi::{
-    ArchiveId, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
-    MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1, MusubiArchiveCommitmentV1,
-    MusubiArtifactDescriptorV1, MusubiContentDigestV1, MusubiSemanticReleaseManifestV1,
-    MusubiVerificationLockV1, validate_musubi_portable_path_set_v1,
-};
-use norito::{
-    DecodeLimits,
-    codec::{Decode as _, Encode as _},
-};
-
 use crate::{
-    CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore,
-    DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES, ProfileId, compute_chunk_plan_digest_sha3,
+    CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore, ProfileId,
+    compute_chunk_plan_digest_sha3,
+};
+use iroha_data_model::musubi::{
+    ArchiveId, MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1, MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+    MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
+    MUSUBI_MAX_FILES_V1, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1,
+    MusubiContentDigestV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+    validate_musubi_portable_path_set_v1,
 };
 
 /// Canonical bundle path of the archive-independent semantic release manifest.
@@ -35,31 +31,20 @@ pub const MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1: &str = ".musubi/verification-
 const SOURCE_TREE_DOMAIN_V1: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
-const DESCRIPTOR_MAX_BYTES_V1: u64 = 64 * 1024;
-const DESCRIPTOR_MAX_BYTES_USIZE_V1: usize = 64 * 1024;
-const BUNDLE_METADATA_MAX_BYTES_V1: u64 = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1;
-const BUNDLE_METADATA_MAX_BYTES_USIZE_V1: usize = 64 * 1024 * 1024;
+/// Provider verification heap/RSS qualification target used to size individual phase controls.
+///
+/// The controls below are not a proof that the complete process remains under this target.
+const PROVIDER_FETCH_MEMORY_MAX_BYTES_V1: usize = 64 * 1024 * 1024;
+/// Plan/PoR construction is a separate phase and may consume at most half the gate.
+const PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1: usize =
+    PROVIDER_FETCH_MEMORY_MAX_BYTES_V1 / 2;
+/// Maximum aggregate bytes captured for all three mandatory metadata files.
+const BUNDLE_METADATA_TOTAL_MAX_BYTES_V1: u64 =
+    2 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 + MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1;
+/// Maximum normalized source-tree transcript retained during semantic verification.
+const SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1: usize = 18 * 1024 * 1024;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
-
-const DESCRIPTOR_DECODE_LIMITS_V1: DecodeLimits =
-    DecodeLimits::new(32, DESCRIPTOR_MAX_BYTES_USIZE_V1, 256, 128 * 1024, 32);
-const SEMANTIC_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
-    1_024,
-    BUNDLE_METADATA_MAX_BYTES_USIZE_V1,
-    100_000,
-    128 * 1024 * 1024,
-    64,
-);
-// A dense valid graph can carry 1,024 nodes with 256 edges each and up to 16 requirement
-// comparators per edge. These fixed cumulative limits cover that public maximum.
-const LOCK_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
-    1_024,
-    BUNDLE_METADATA_MAX_BYTES_USIZE_V1,
-    8_000_000,
-    256 * 1024 * 1024,
-    64,
-);
 
 /// Closed, payload-free integrity surface reported by the Musubi bundle verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -238,7 +223,7 @@ impl MusubiBundleVerifierV1 {
 
         let mut chunk_store = ChunkStore::with_profile_and_heap_limit(
             plan.chunk_profile,
-            DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
+            PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
         )
         .map_err(|_| archive_error())?;
         let mut payload_reader = verified.payload_reader();
@@ -250,6 +235,7 @@ impl MusubiBundleVerifierV1 {
         {
             return Err(archive_error());
         }
+        drop(chunk_store);
 
         let parsed = verify_bundle_payload(plan, verified.payload_reader(), commitment)?;
         Ok(VerifiedMusubiBundleV1 {
@@ -312,7 +298,7 @@ impl MusubiBundleVerifierV1 {
 
         let mut chunk_store = ChunkStore::with_profile_and_heap_limit(
             plan.chunk_profile,
-            DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
+            PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
         )
         .map_err(|_| archive_error())?;
         let mut por_payload = open_payload().map_err(|_| archive_error())?;
@@ -377,8 +363,7 @@ fn validate_plan_commitment(
     {
         return Err(archive_error());
     }
-    plan.validate_for_ingest_with_limit(DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES)
-        .map_err(|_| archive_error())?;
+    validate_provider_fetch_memory_geometry(plan)?;
     validate_musubi_portable_path_set_v1(plan.files.iter().map(|file| file.path.as_slice()))
         .map_err(|_| {
             MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree)
@@ -436,6 +421,101 @@ fn validate_plan_commitment(
     Ok(())
 }
 
+fn validate_provider_fetch_memory_geometry(
+    plan: &CarBuildPlan,
+) -> Result<(), MusubiBundleVerificationErrorV1> {
+    let archive_error =
+        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
+    let source_error =
+        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree);
+
+    // Structural plan validation runs first so the subsequent joined-path accounting cannot
+    // allocate from unbounded path components supplied by an untrusted caller.
+    plan.validate_for_ingest_with_limit(PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1)
+        .map_err(|_| archive_error())?;
+    validate_bundle_metadata_capture_geometry(plan)?;
+
+    let source_material_capacity = source_material_capacity_v1(plan)?;
+    if source_material_capacity > SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1 {
+        return Err(source_error());
+    }
+    Ok(())
+}
+
+fn validate_bundle_metadata_capture_geometry(
+    plan: &CarBuildPlan,
+) -> Result<(), MusubiBundleVerificationErrorV1> {
+    let archive_error =
+        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
+    let captured_metadata_bytes = plan.files.iter().try_fold(0_u64, |total, file| {
+        let path = file.path.join("/");
+        let individual_max = match path.as_str() {
+            MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1 | MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1 => {
+                MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1
+            }
+            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1,
+            _ => return Ok(total),
+        };
+        if file.size == 0 || file.size > individual_max {
+            return Err(archive_error());
+        }
+        total.checked_add(file.size).ok_or_else(archive_error)
+    })?;
+    if captured_metadata_bytes > BUNDLE_METADATA_TOTAL_MAX_BYTES_V1 {
+        return Err(archive_error());
+    }
+    Ok(())
+}
+
+fn source_material_capacity_v1(
+    plan: &CarBuildPlan,
+) -> Result<usize, MusubiBundleVerificationErrorV1> {
+    let archive_error =
+        || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
+    let source_material_length = plan.files.iter().try_fold(
+        frame_length(u64::try_from(SOURCE_TREE_DOMAIN_V1.len()).map_err(|_| archive_error())?)
+            .and_then(|length| length.checked_add(4))
+            .ok_or_else(archive_error)?,
+        |total, file| {
+            let path = file.path.join("/");
+            if path.starts_with(".musubi/") {
+                return Ok(total);
+            }
+            total
+                .checked_add(
+                    frame_length(u64::try_from(path.len()).map_err(|_| archive_error())?)
+                        .ok_or_else(archive_error)?,
+                )
+                .and_then(|length| length.checked_add(8 + 32))
+                .ok_or_else(archive_error)
+        },
+    )?;
+    usize::try_from(source_material_length).map_err(|_| archive_error())
+}
+
+fn decode_bundle_descriptor_v1(
+    bytes: &[u8],
+) -> Result<MusubiArtifactDescriptorV1, MusubiBundleVerificationErrorV1> {
+    MusubiArtifactDescriptorV1::decode_canonical_bundle_file(bytes).map_err(|_| {
+        MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::Descriptor)
+    })
+}
+
+fn decode_bundle_semantic_release_v1(
+    bytes: &[u8],
+) -> Result<MusubiSemanticReleaseManifestV1, MusubiBundleVerificationErrorV1> {
+    MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(bytes)
+        .map_err(|_| MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::Bundle))
+}
+
+fn decode_bundle_verification_lock_v1(
+    bytes: &[u8],
+) -> Result<MusubiVerificationLockV1, MusubiBundleVerificationErrorV1> {
+    MusubiVerificationLockV1::decode_canonical_bundle_file(bytes).map_err(|_| {
+        MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::VerificationLock)
+    })
+}
+
 struct ParsedBundlePayloadV1 {
     descriptor: MusubiArtifactDescriptorV1,
     semantic_release: MusubiSemanticReleaseManifestV1,
@@ -464,26 +544,7 @@ fn verify_bundle_payload(
     let lock_error =
         || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::VerificationLock);
 
-    let source_material_length = plan.files.iter().try_fold(
-        frame_length(u64::try_from(SOURCE_TREE_DOMAIN_V1.len()).map_err(|_| archive_error())?)
-            .and_then(|length| length.checked_add(4))
-            .ok_or_else(archive_error)?,
-        |total, file| {
-            let path = file.path.join("/");
-            if path.starts_with(".musubi/") {
-                return Ok(total);
-            }
-            total
-                .checked_add(
-                    frame_length(u64::try_from(path.len()).map_err(|_| archive_error())?)
-                        .ok_or_else(archive_error)?,
-                )
-                .and_then(|length| length.checked_add(8 + 32))
-                .ok_or_else(archive_error)
-        },
-    )?;
-    let source_material_capacity =
-        usize::try_from(source_material_length).map_err(|_| archive_error())?;
+    let source_material_capacity = source_material_capacity_v1(plan)?;
     let mut source_count = 0_u32;
     let mut source_bytes = 0_u64;
     let mut source_entries = Vec::new();
@@ -498,9 +559,11 @@ fn verify_bundle_payload(
         let path = file.path.join("/");
         let capture_bound = match path.as_str() {
             MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1 | MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1 => {
-                Some(BUNDLE_METADATA_MAX_BYTES_V1)
+                Some(MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1)
             }
-            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => Some(DESCRIPTOR_MAX_BYTES_V1),
+            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => {
+                Some(MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1)
+            }
             _ => None,
         };
         if let Some(bound) = capture_bound {
@@ -568,45 +631,22 @@ fn verify_bundle_payload(
     let descriptor_bytes = descriptor_bytes.ok_or_else(archive_error)?;
     let verification_lock_bytes = verification_lock_bytes.ok_or_else(archive_error)?;
 
-    let mut descriptor_input = descriptor_bytes.as_slice();
-    let descriptor = norito::with_decode_limits(DESCRIPTOR_DECODE_LIMITS_V1, || {
-        MusubiArtifactDescriptorV1::decode(&mut descriptor_input)
-    })
-    .map_err(|_| descriptor_error())?;
-    descriptor.validate().map_err(|_| descriptor_error())?;
-    if !descriptor_input.is_empty()
-        || descriptor.encode() != descriptor_bytes
-        || descriptor.source_tree_digest != source_digest
+    let descriptor = decode_bundle_descriptor_v1(&descriptor_bytes)?;
+    if descriptor.source_tree_digest != source_digest
         || descriptor.source_file_count != source_count
         || descriptor.source_bytes != source_bytes
     {
         return Err(descriptor_error());
     }
 
-    let mut semantic_input = semantic_release_bytes.as_slice();
-    let semantic_release = norito::with_decode_limits(SEMANTIC_DECODE_LIMITS_V1, || {
-        MusubiSemanticReleaseManifestV1::decode(&mut semantic_input)
-    })
-    .map_err(|_| bundle_error())?;
-    semantic_release.validate().map_err(|_| bundle_error())?;
-    if !semantic_input.is_empty()
-        || semantic_release.encode() != semantic_release_bytes
-        || descriptor.semantic_release_manifest_digest != semantic_release.semantic_digest()
-    {
+    let semantic_release = decode_bundle_semantic_release_v1(&semantic_release_bytes)?;
+    if descriptor.semantic_release_manifest_digest != semantic_release.semantic_digest() {
         return Err(bundle_error());
     }
 
-    let mut lock_input = verification_lock_bytes.as_slice();
-    let verification_lock = norito::with_decode_limits(LOCK_DECODE_LIMITS_V1, || {
-        MusubiVerificationLockV1::decode(&mut lock_input)
-    })
-    .map_err(|_| lock_error())?;
-    verification_lock.validate().map_err(|_| lock_error())?;
+    let verification_lock = decode_bundle_verification_lock_v1(&verification_lock_bytes)?;
     let verification_lock_digest = verification_lock.digest();
-    if !lock_input.is_empty()
-        || verification_lock.encode() != verification_lock_bytes
-        || descriptor.verification_lock_digest != verification_lock_digest
-    {
+    if descriptor.verification_lock_digest != verification_lock_digest {
         return Err(lock_error());
     }
     semantic_release
@@ -740,11 +780,12 @@ fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
-// TODO: Reduce both the 512 MiB generic chunk-store admission ceiling and the captured
-// semantic/lock buffers plus cumulative Norito decode-allocation ceilings before claiming the
-// complete 64 MiB provider fetch-memory gate. `verify_payload_with_factory` avoids materializing
-// the CAR and drops the PoR store before semantic decoding, but either individual phase can still
-// exceed that release limit at maximum V1 geometry.
+// The provider-oriented verifier uses a 32 MiB plan/PoR ceiling, a 4 MiB-plus-64-KiB aggregate
+// metadata capture ceiling, a 48 MiB cumulative decoder budget, and an 18 MiB source-transcript
+// ceiling. The PoR store is dropped before bundle parsing in both entry points. Canonical
+// comparison can transiently buffer one length-delimited field up to the 2 MiB file ceiling.
+// TODO: qualify the complete process-wide 64 MiB RSS target on every supported deployment,
+// including the deployment-owned fresh-reader implementation, before promotion.
 
 #[cfg(test)]
 mod tests {
@@ -762,6 +803,7 @@ mod tests {
         nexus::DataSpaceId,
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
+    use norito::codec::Encode as _;
 
     use super::*;
     use crate::{CarWriter, FileEntry, compute_por_root};
@@ -772,6 +814,118 @@ mod tests {
         DescriptorSourceBinding,
         SemanticDependencyBinding,
         SemanticLockBinding,
+    }
+
+    #[test]
+    fn provider_fetch_memory_controls_are_individually_bounded() {
+        assert_eq!(PROVIDER_FETCH_MEMORY_MAX_BYTES_V1, 64 * 1024 * 1024);
+        assert_eq!(
+            PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
+            PROVIDER_FETCH_MEMORY_MAX_BYTES_V1 / 2
+        );
+        assert!(
+            BUNDLE_METADATA_TOTAL_MAX_BYTES_V1
+                < u64::try_from(PROVIDER_FETCH_MEMORY_MAX_BYTES_V1).expect("64 MiB fits u64")
+        );
+        assert!(
+            SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1
+                + BUNDLE_METADATA_TOTAL_MAX_BYTES_V1 as usize
+                + MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize
+                < PROVIDER_FETCH_MEMORY_MAX_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn provider_fetch_memory_geometry_has_an_inclusive_aggregate_metadata_bound() {
+        let mut fixture = bundle_fixture(FixtureFault::None);
+        for file in &mut fixture.plan.files {
+            match file.path.join("/").as_str() {
+                MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1 => {
+                    file.size = MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1;
+                }
+                MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1 => {
+                    file.size = MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1;
+                }
+                MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1 => {
+                    file.size = MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1;
+                }
+                _ => {}
+            }
+        }
+        validate_bundle_metadata_capture_geometry(&fixture.plan)
+            .expect("exact aggregate metadata cap");
+
+        let mut extra = fixture
+            .plan
+            .files
+            .iter()
+            .find(|file| file.path.join("/") == MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1)
+            .expect("descriptor file")
+            .clone();
+        extra.size = 1;
+        fixture.plan.files.push(extra);
+        assert_eq!(
+            validate_bundle_metadata_capture_geometry(&fixture.plan)
+                .expect_err("aggregate metadata one byte above the cap must fail")
+                .surface(),
+            MusubiBundleIntegritySurfaceV1::ArchiveCommitment
+        );
+    }
+
+    #[test]
+    fn provider_metadata_decoders_preserve_closed_integrity_surfaces() {
+        let fixture = bundle_fixture(FixtureFault::None);
+        assert_eq!(
+            decode_bundle_descriptor_v1(&fixture.descriptor.encode())
+                .expect("canonical descriptor"),
+            fixture.descriptor
+        );
+        assert_eq!(
+            decode_bundle_semantic_release_v1(&fixture.semantic_release.encode())
+                .expect("canonical semantic release"),
+            fixture.semantic_release
+        );
+        assert_eq!(
+            decode_bundle_verification_lock_v1(&fixture.verification_lock.encode())
+                .expect("canonical verification lock"),
+            fixture.verification_lock
+        );
+
+        let mut trailing_descriptor = fixture.descriptor.encode();
+        trailing_descriptor.push(0);
+        assert_eq!(
+            decode_bundle_descriptor_v1(&trailing_descriptor)
+                .expect_err("trailing descriptor bytes must fail")
+                .surface(),
+            MusubiBundleIntegritySurfaceV1::Descriptor
+        );
+
+        let mut noncanonical_semantic = fixture.semantic_release;
+        noncanonical_semantic.exports = vec![
+            "zeta".parse().expect("export"),
+            "alpha".parse().expect("export"),
+        ];
+        assert_eq!(
+            decode_bundle_semantic_release_v1(&noncanonical_semantic.encode())
+                .expect_err("noncanonical semantic release must fail")
+                .surface(),
+            MusubiBundleIntegritySurfaceV1::Bundle
+        );
+
+        assert_eq!(
+            decode_bundle_verification_lock_v1(&[u8::MAX; 32])
+                .expect_err("declared-length bomb must fail")
+                .surface(),
+            MusubiBundleIntegritySurfaceV1::VerificationLock
+        );
+        let oversized_descriptor =
+            vec![0; MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize + 1].into_boxed_slice();
+        assert_eq!(
+            decode_bundle_descriptor_v1(&oversized_descriptor)
+                .expect_err("oversized descriptor must fail")
+                .surface(),
+            MusubiBundleIntegritySurfaceV1::Descriptor
+        );
     }
 
     struct BundleFixture {

@@ -16,7 +16,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
@@ -341,6 +341,7 @@ pub(crate) enum V2ReservationLifecycleError {
         transaction_hash: HashOf<SignedTransaction>,
     },
     /// A merge entry names a transaction that State did not commit.
+    #[cfg(test)]
     #[error("merge reservation transaction {transaction_hash} is absent from committed State")]
     UncommittedMergeTransaction {
         /// Transaction missing from committed membership.
@@ -414,7 +415,7 @@ fn authenticate_committed_canonical_carrier(
     state: &State,
     kura: &Kura,
     entry: &MergeLedgerEntry,
-    expected_chain_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
 ) -> Result<AuthenticatedCommittedCanonicalCarrier, V2ReservationLifecycleError> {
     let invalid = |detail: &str| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
         detail: detail.to_owned(),
@@ -449,7 +450,7 @@ fn authenticate_committed_canonical_carrier(
     let applications = authenticated_autonomous_carrier_application_projections(
         &reference,
         entry,
-        expected_chain_hash,
+        expected_network_id,
     )
     .map_err(|detail| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail })?;
     let carrier_groups = crate::state::certified_merge_queue_reservation_groups(entry)?;
@@ -543,10 +544,10 @@ fn finalize_certified_merge_reservations(
     queue: &Queue,
     kura: &Kura,
     entry: &MergeLedgerEntry,
-    expected_chain_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
 ) -> Result<usize, V2ReservationLifecycleError> {
     let authenticated =
-        authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?;
+        authenticate_committed_canonical_carrier(state, kura, entry, expected_network_id)?;
     let carrier_height = authenticated.carrier_height;
     let carrier_block_hash = authenticated.carrier_block_hash;
     let groups = authenticated.groups;
@@ -659,7 +660,7 @@ fn finalize_committed_block_merge_reservations(
     queue: &Queue,
     kura: &Kura,
     block: &SignedBlock,
-    expected_chain_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
 ) -> Result<usize, V2ReservationLifecycleError> {
     let Some(entry) = committed_block_merge_entry(kura, block)? else {
         return Ok(0);
@@ -675,7 +676,7 @@ fn finalize_committed_block_merge_reservations(
     if reference.execution_batch_hash.is_none() {
         return Ok(0);
     }
-    finalize_certified_merge_reservations(state, queue, kura, &entry, expected_chain_hash)
+    finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)
 }
 
 /// Execute or resume the complete crash-safe retirement/release hand-off.
@@ -693,18 +694,14 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
     kura: &Kura,
     queue: &Queue,
     retirement: &crate::kura::AutonomousLaneSlotRetirementV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
 ) -> Result<usize, V2ReservationLifecycleError> {
-    kura.persist_autonomous_lane_slot_retirement(
-        retirement,
-        expected_chain_id_hash,
-        expected_epoch,
-    )?;
+    kura.persist_autonomous_lane_slot_retirement(retirement, expected_network_id, expected_epoch)?;
     let barrier = retirement.queue_release_barrier()?;
     let preparation_authorization = kura.authorize_autonomous_lane_queue_release_preparation(
         retirement,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )?;
     let durable_queue_barrier = queue.prepare_lane_reservation_release_barrier_with_authorization(
@@ -715,14 +712,14 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
         .finalize_autonomous_lane_slot_release_with_authorization(
             retirement,
             &barrier,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             durable_queue_barrier,
         )?;
     let source_outcome_authorization = kura
         .persist_autonomous_lifecycle_release_terminal_outcome_pending(
             retirement,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )?;
     let completion = queue.finalize_lane_reservation_release_barrier_with_authorization(
@@ -746,7 +743,7 @@ fn canonical_autonomous_carrier_disposition(
     kura: &Kura,
     active_context: &wire::HeightContext,
     state_height: u64,
-    chain_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
     group: &LaneQueueReservationReconciliationGroupV1,
     expected_payload: Option<&LaneExecutablePayloadV1>,
@@ -773,7 +770,7 @@ fn canonical_autonomous_carrier_disposition(
             && state.committed_block_hash_at_height(height - 1)
                 != retained_header.prev_block_hash())
         || (height == 1 && retained_header.prev_block_hash().is_some())
-        || Hash::prehashed(*finality.height_context.network_id.as_bytes()) != chain_hash
+        || finality.height_context.network_id != network_id
         || execution_commitment.validate().is_err()
         || execution_commitment.executed_block_wire_len == 0
         || execution_commitment.executed_block_wire_len > crate::kura::STRICT_INIT_MAX_BLOCK_BYTES
@@ -808,7 +805,7 @@ fn canonical_autonomous_carrier_disposition(
         || retained_header != block.header()
         || executed_block_wire_len != execution_commitment.executed_block_wire_len
         || executed_block_wire_hash != need.executed_block_wire_hash
-        || Hash::prehashed(*finality.height_context.network_id.as_bytes()) != chain_hash
+        || finality.height_context.network_id != network_id
     {
         return Err(V2ReservationLifecycleError::CanonicalContextMismatch { height });
     }
@@ -823,7 +820,7 @@ fn canonical_autonomous_carrier_disposition(
     for envelope in &bundle.autonomous_lane_payloads {
         let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
             envelope,
-            chain_hash,
+            network_id,
             expected_epoch,
         )
         .map_err(
@@ -875,7 +872,7 @@ fn canonical_autonomous_carrier_disposition(
             proposal_block_hash: block.hash(),
         };
         let anchored = payload
-            .attach_global_hint_exact(hint, chain_hash, expected_epoch)
+            .attach_global_hint_exact(hint, network_id, expected_epoch)
             .map_err(
                 |error| V2ReservationLifecycleError::InvalidCanonicalEnvelope {
                     height,
@@ -884,7 +881,7 @@ fn canonical_autonomous_carrier_disposition(
             )?;
         let (reservation_owner_hash, proposal_identity_hash) =
             crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-                chain_hash,
+                network_id,
                 finality.height_context.id(),
                 expected_epoch,
                 &anchored.origin_proposal,
@@ -955,7 +952,7 @@ fn canonical_autonomous_carrier_disposition(
                     .payload_block_hint
                     .expect("canonical ownership reconstruction always attaches a hint");
                 let anchored = hint_neutral
-                    .attach_global_hint_exact(hint, chain_hash, expected_epoch)
+                    .attach_global_hint_exact(hint, network_id, expected_epoch)
                     .map_err(
                         |error| V2ReservationLifecycleError::InvalidCanonicalEnvelope {
                             height,
@@ -987,545 +984,7 @@ fn canonical_autonomous_carrier_disposition(
     ))
 }
 
-/// One complete, collision-checked recovery inventory indexed once for an
-/// immutable startup authority boundary.
-struct HistoricalAutonomousRecoveryInventory {
-    records: Vec<HistoricalAutonomousLaneRecoveryRecordV1>,
-    by_recovery_id: BTreeMap<Hash, usize>,
-    by_group: BTreeMap<LaneQueueReservationGroupIdentityV1, usize>,
-}
-
-impl HistoricalAutonomousRecoveryInventory {
-    fn read(kura: &Kura) -> Result<Self, V2ReservationLifecycleError> {
-        let records = kura.historical_autonomous_lane_recovery_records_bounded(
-            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-        )?;
-        let mut by_recovery_id = BTreeMap::new();
-        let mut by_group = BTreeMap::new();
-        for (index, record) in records.iter().enumerate() {
-            if by_recovery_id.insert(record.recovery_id, index).is_some()
-                || by_group
-                    .insert(record.reservation_group.identity, index)
-                    .is_some()
-            {
-                return Err(invalid_historical_autonomous_recovery(
-                    &record.installation_input(),
-                    "bounded historical recovery inventory returned a duplicate identity",
-                ));
-            }
-        }
-        Ok(Self {
-            records,
-            by_recovery_id,
-            by_group,
-        })
-    }
-
-    fn record_for_group(
-        &self,
-        group: &LaneQueueReservationReconciliationGroupV1,
-    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
-    {
-        let Some(record) = self
-            .by_group
-            .get(&group.identity)
-            .and_then(|index| self.records.get(*index))
-        else {
-            return Ok(None);
-        };
-        if record.reservation_group != *group {
-            return Err(invalid_historical_autonomous_recovery(
-                &record.installation_input(),
-                "durable historical recovery has conflicting FIFO group membership",
-            ));
-        }
-        Ok(Some(record))
-    }
-
-    fn record_for_install(
-        &self,
-        install: &HistoricalAutonomousReservationInstallV1,
-    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
-    {
-        let Some(record) = self
-            .by_recovery_id
-            .get(&install.recovery_id)
-            .and_then(|index| self.records.get(*index))
-        else {
-            return Ok(None);
-        };
-        if record.installation_input() != *install {
-            return Err(invalid_historical_autonomous_recovery(
-                install,
-                "durable historical recovery conflicts with the requested installation",
-            ));
-        }
-        Ok(Some(record))
-    }
-
-    fn exact_record(
-        &self,
-        expected: &HistoricalAutonomousLaneRecoveryRecordV1,
-    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
-    {
-        let Some(record) = self
-            .by_recovery_id
-            .get(&expected.recovery_id)
-            .and_then(|index| self.records.get(*index))
-        else {
-            return Ok(None);
-        };
-        if record != expected {
-            return Err(invalid_historical_autonomous_recovery(
-                &expected.installation_input(),
-                "durable historical recovery conflicts with the expected canonical record",
-            ));
-        }
-        Ok(Some(record))
-    }
-}
-
-fn historical_autonomous_install_is_durable(
-    kura: &Kura,
-    inventory: &HistoricalAutonomousRecoveryInventory,
-    install: &HistoricalAutonomousReservationInstallV1,
-) -> Result<bool, V2ReservationLifecycleError> {
-    let Some(record) = inventory.record_for_install(install)? else {
-        return Ok(false);
-    };
-    kura.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
-    Ok(true)
-}
-
-/// Rebuild the complete State-aligned authority of one historical autonomous
-/// installation. The carrier body is required only at the one-time installer
-/// boundary; immutable record validation and hydration deliberately use the
-/// retained header/finality/length authorities after canonical-body pruning.
-fn preflight_historical_autonomous_lane_recovery_inner(
-    state: &State,
-    kura: &Kura,
-    input: &HistoricalAutonomousReservationInstallV1,
-    require_canonical_carrier_body: bool,
-    retained_record: Option<&HistoricalAutonomousLaneRecoveryRecordV1>,
-) -> Result<HistoricalAutonomousLaneRecoveryRecordV1, V2ReservationLifecycleError> {
-    let descriptor = &input.payload.origin_proposal.descriptor;
-    let identity = &input.reservation_group.identity;
-    let height = input.canonical_body.height;
-    if !input.has_valid_identity()
-        || height == 0
-        || input.historical_context.validate().is_err()
-        || input.historical_context.height != height
-        || input.historical_context.id() != input.historical_context_id
-        || HashOf::new(&input.historical_context) != input.historical_context_hash
-        || input.canonical_body.executed_block_wire_len == 0
-        || input.canonical_body.executed_block_wire_len > crate::kura::STRICT_INIT_MAX_BLOCK_BYTES
-        || input
-            .canonical_body
-            .execution_commitment
-            .validate()
-            .is_err()
-        || input.canonical_body.executed_block_wire_len
-            != input
-                .canonical_body
-                .execution_commitment
-                .executed_block_wire_len
-        || input.canonical_body.executed_block_wire_hash
-            != input
-                .canonical_body
-                .execution_commitment
-                .executed_block_wire_hash
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "installation identity, protocol context, or signed wire commitment is invalid",
-        ));
-    }
-
-    let state_height = u64::try_from(state.committed_height())?;
-    if state_height < height
-        || state.committed_block_hash_at_height(height) != Some(input.canonical_body.block_hash)
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "State does not retain the exact committed carrier hash",
-        ));
-    }
-    let expected_parent = height
-        .checked_sub(1)
-        .filter(|parent_height| *parent_height != 0)
-        .and_then(|parent_height| state.committed_block_hash_at_height(parent_height));
-    let (retained_header, finality) = kura
-        .v2_finality_artifact_with_header(height)?
-        .ok_or(V2ReservationLifecycleError::MissingCanonicalFinality { height })?;
-    let state_context = if retained_record.is_none() {
-        state.sumeragi_v2_height_context(height).map_err(|error| {
-            invalid_historical_autonomous_recovery(
-                input,
-                format!("State historical context is unreadable: {error}"),
-            )
-        })?
-    } else {
-        None
-    };
-    if retained_header.height().get() != height
-        || retained_header.hash() != input.canonical_body.block_hash
-        || retained_header.prev_block_hash() != expected_parent
-        || finality.height != height
-        || finality.block_hash != input.canonical_body.block_hash
-        || finality.height_context != input.historical_context
-        || HashOf::new(&finality) != input.canonical_body.finality_artifact_hash
-        || finality.commit_qc.execution_commitment != input.canonical_body.execution_commitment
-        || finality.verify().is_err()
-        || finality.validate_for_header(&retained_header).is_err()
-        || kura.durable_block_payload_len_by_hash(input.canonical_body.block_hash)
-            != Some((height, input.canonical_body.executed_block_wire_len))
-        || (retained_record.is_none() && state_context.as_ref() != Some(&input.historical_context))
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "retained header, parent, finality, State context, or durable wire length conflicts",
-        ));
-    }
-
-    let chain_hash = Hash::prehashed(*input.historical_context.network_id.as_bytes());
-    let expected_epoch = input.historical_context.epoch;
-    if retained_record.is_none() {
-        let world = state.world_view();
-        if crate::sumeragi::epoch_for_height_from_world(&world, height) != expected_epoch {
-            return Err(invalid_historical_autonomous_recovery(
-                input,
-                "State historical epoch differs from the retained finality context",
-            ));
-        }
-    }
-    let hint = input
-        .payload
-        .origin_proposal
-        .payload_block_hint
-        .ok_or_else(|| {
-            invalid_historical_autonomous_recovery(
-                input,
-                "historical payload has no exact canonical carrier hint",
-            )
-        })?;
-    if input.payload.chain_id_hash != chain_hash
-        || input.payload.epoch != expected_epoch
-        || descriptor.proposal_height != height
-        || descriptor.lane_id != identity.lane_id
-        || descriptor.dataspace_id != identity.dataspace_id
-        || descriptor.lane_incarnation != identity.lane_incarnation
-        || descriptor.lane_block_height != identity.lane_block_height
-        || descriptor.lane_block_view != identity.lane_block_view
-        || descriptor.lane_block_view != 0
-        || hint.proposal_height != height
-        || hint.proposal_view != input.carrier_view
-        || hint.proposal_block_hash != input.canonical_body.block_hash
-        || input.payload.reservation_keys != input.reservation_group.ordered_keys
-        || input.payload.validate(chain_hash, expected_epoch).is_err()
-        || (retained_record.is_none()
-            && (!state.lane_route_and_incarnation_active_at_height(
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_incarnation,
-                height,
-            ) || !state
-                .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
-                    &input.payload.origin_proposal,
-                )))
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "payload, route/incarnation, carrier hint, or predecessor authority conflicts",
-        ));
-    }
-
-    let mut expected_validators = if retained_record.is_some() {
-        descriptor.validator_set.clone()
-    } else {
-        let nexus = state.nexus_snapshot();
-        if !nexus.enabled || !super::lane_planner::proposal_lookahead_enabled(&nexus, height) {
-            input
-                .historical_context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
-        } else {
-            state.authoritative_lane_peer_ids_at_height(descriptor.lane_id, height)
-        }
-    };
-    expected_validators.sort();
-    if expected_validators
-        .windows(2)
-        .any(|pair| pair[0] == pair[1])
-        || expected_validators.is_empty()
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "State-aligned historical lane committee is empty or duplicated",
-        ));
-    }
-    let validator_count = u32::try_from(expected_validators.len())?;
-    let min_quorum = u32::try_from(
-        super::network_topology::commit_quorum_from_len(expected_validators.len()).max(1),
-    )?;
-    let base_mode_tag = match input.historical_context.mode {
-        wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
-        wire::ConsensusMode::Npos => wire::NPOS_TAG,
-    };
-    let context_mode_tag = format!(
-        "{base_mode_tag}::height-context:{}::epoch:{}",
-        hex::encode(input.historical_context_id.0.as_ref()),
-        expected_epoch
-    );
-    let expected_qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-        &context_mode_tag,
-    );
-    let expected_author =
-        deterministic_lane_author(&expected_validators, descriptor.lane_block_height).ok_or_else(
-            || {
-                invalid_historical_autonomous_recovery(
-                    input,
-                    "deterministic historical autonomous author is unavailable",
-                )
-            },
-        )?;
-    if descriptor.validator_set_hash_version
-        != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
-        || descriptor.validator_set != expected_validators
-        || descriptor.validator_set_hash != HashOf::new(&expected_validators)
-        || descriptor.validator_count != validator_count
-        || descriptor.min_quorum != min_quorum
-        || descriptor.qc_mode_tag != expected_qc_mode_tag
-        || &input.payload.producer != expected_author
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "historical committee, quorum, QC domain, or deterministic author conflicts",
-        ));
-    }
-
-    if input.reservation_group.ordered_keys.is_empty()
-        || input.reservation_group.ordered_keys.len()
-            > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "historical reservation group is empty or exceeds its hard bound",
-        ));
-    }
-    let (reservation_owner_hash, proposal_identity_hash) =
-        super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-            chain_hash,
-            input.historical_context_id,
-            expected_epoch,
-            &input.payload.origin_proposal,
-            expected_author,
-        )
-        .map_err(|error| invalid_historical_autonomous_recovery(input, error.to_string()))?;
-    let mut reservation_digests = BTreeSet::new();
-    let mut transaction_hashes = BTreeSet::new();
-    for (key, entrypoint_hash) in input
-        .reservation_group
-        .ordered_keys
-        .iter()
-        .zip(&input.payload.entrypoint_hashes)
-    {
-        if key.validate().is_err()
-            || !reservation_key_matches_group(key, identity)
-            || Hash::from(key.entrypoint_hash) != *entrypoint_hash
-            || key.reservation_owner_hash != reservation_owner_hash
-            || key.proposal_identity_hash != proposal_identity_hash
-            || !reservation_digests.insert(key.digest())
-            || !transaction_hashes.insert(key.signed_transaction_hash)
-            || (require_canonical_carrier_body
-                && state.has_committed_transaction(key.signed_transaction_hash))
-        {
-            return Err(invalid_historical_autonomous_recovery(
-                input,
-                "historical FIFO reservation identity is malformed, duplicated, or committed",
-            ));
-        }
-    }
-    if input.reservation_group.ordered_keys.len() != input.payload.entrypoint_hashes.len() {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "historical FIFO reservation order does not cover every executable entrypoint",
-        ));
-    }
-
-    let validator_pops = if let Some(record) = retained_record {
-        record.validator_pops.clone()
-    } else {
-        match super::lane_planner::pinned_autoscale_validator_pops_for_set(
-            state,
-            descriptor.lane_id,
-            &expected_validators,
-        ) {
-            Some(Some(pops)) => pops,
-            Some(None) => {
-                let world = state.world_view();
-                expected_validators
-                    .iter()
-                    .map(|peer| crate::state::live_consensus_key_pop_for_peer(&world, peer, height))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| {
-                        invalid_historical_autonomous_recovery(
-                            input,
-                            "operator-managed historical committee lacks a State-aligned PoP",
-                        )
-                    })?
-            }
-            None => {
-                return Err(invalid_historical_autonomous_recovery(
-                    input,
-                    "autoscaled historical committee has no exact incarnation-bound PoP vector",
-                ));
-            }
-        }
-    };
-    if validator_pops.len() != expected_validators.len()
-        || expected_validators
-            .iter()
-            .zip(&validator_pops)
-            .any(|(peer, pop)| {
-                pop.len() != crate::lane_consensus::LANE_BLS_PROOF_BYTES
-                    || iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_err()
-            })
-    {
-        return Err(invalid_historical_autonomous_recovery(
-            input,
-            "historical validator PoPs are missing, misordered, oversized, or invalid",
-        ));
-    }
-
-    if require_canonical_carrier_body {
-        let canonical = canonical_autonomous_carrier_disposition(
-            state,
-            kura,
-            &input.historical_context,
-            state_height,
-            chain_hash,
-            expected_epoch,
-            &input.reservation_group,
-            Some(&input.payload),
-        )?;
-        match canonical {
-            CanonicalAutonomousCarrierInspection::Available(
-                CanonicalAutonomousCarrierDisposition::ExactAutonomous(extracted),
-            ) if extracted == *input => {}
-            CanonicalAutonomousCarrierInspection::MissingBody(_) => {
-                return Err(V2ReservationLifecycleError::MissingCanonicalBody { height });
-            }
-            _ => {
-                return Err(invalid_historical_autonomous_recovery(
-                    input,
-                    "canonical carrier does not contain one unique exact autonomous envelope",
-                ));
-            }
-        }
-    }
-
-    Ok(HistoricalAutonomousLaneRecoveryRecordV1::from_install(
-        input,
-        validator_pops,
-    ))
-}
-
-/// Read-only all-authority preflight used before the first batch mutation.
-pub(crate) fn preflight_historical_autonomous_lane_recovery(
-    state: &State,
-    kura: &Kura,
-    input: &HistoricalAutonomousReservationInstallV1,
-) -> Result<HistoricalAutonomousLaneRecoveryRecordV1, V2ReservationLifecycleError> {
-    preflight_historical_autonomous_lane_recovery_inner(state, kura, input, true, None)
-}
-
-/// Validate a durable record for startup planning and bounded hydration without
-/// consulting the prunable canonical block body or mutable current catalog.
-/// The retained finality context authenticates the shared roster; independent
-/// lane authority and its ordered PoPs were State-validated before the
-/// no-clobber record seal and are rechecked structurally and cryptographically
-/// here. Kura separately requires the exact active incarnation and sidecars.
-pub(crate) fn validate_historical_autonomous_lane_recovery_record(
-    state: &State,
-    kura: &Kura,
-    record: &HistoricalAutonomousLaneRecoveryRecordV1,
-) -> Result<(), V2ReservationLifecycleError> {
-    let expected = preflight_historical_autonomous_lane_recovery_inner(
-        state,
-        kura,
-        &record.installation_input(),
-        false,
-        Some(record),
-    )?;
-    if &expected != record {
-        return Err(invalid_historical_autonomous_recovery(
-            &record.installation_input(),
-            "durable recovery record differs from the current State-aligned historical PoPs",
-        ));
-    }
-    Ok(())
-}
-
-/// Persist one State-preflighted runner batch through Kura's single bounded
-/// inventory/preflight pass and scan-free per-record durable writes.
-pub(crate) fn persist_preflighted_historical_autonomous_lane_recoveries(
-    kura: &Kura,
-    records: &[HistoricalAutonomousLaneRecoveryRecordV1],
-) -> Result<Vec<HistoricalAutonomousLaneRecoveryInstallOutcome>, V2ReservationLifecycleError> {
-    Ok(kura
-        .persist_historical_autonomous_lane_recovery_records(records)?
-        .into_iter()
-        .map(|outcome| match outcome {
-            HistoricalAutonomousLaneRecoveryPersistOutcome::Installed => {
-                HistoricalAutonomousLaneRecoveryInstallOutcome::Installed
-            }
-            HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled => {
-                HistoricalAutonomousLaneRecoveryInstallOutcome::AlreadyInstalled
-            }
-        })
-        .collect())
-}
-
-/// Revalidate one complete installed runner batch with exactly one bounded
-/// inventory scan, one recovery-ID index, and direct immutable dependency
-/// checks for every requested record.
-pub(crate) fn validate_installed_historical_autonomous_lane_recoveries(
-    kura: &Kura,
-    expected: &[HistoricalAutonomousLaneRecoveryRecordV1],
-) -> Result<(), V2ReservationLifecycleError> {
-    if expected.is_empty() {
-        return Ok(());
-    }
-    let inventory = HistoricalAutonomousRecoveryInventory::read(kura)?;
-    let mut requested = BTreeMap::<Hash, &HistoricalAutonomousLaneRecoveryRecordV1>::new();
-    for record in expected {
-        if requested
-            .insert(record.recovery_id, record)
-            .is_some_and(|existing| existing != record)
-        {
-            return Err(invalid_historical_autonomous_recovery(
-                &record.installation_input(),
-                "runner batch aliases one recovery ID to different canonical records",
-            ));
-        }
-    }
-    for record in requested.into_values() {
-        let Some(installed) = inventory.exact_record(record)? else {
-            return Err(
-                V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
-                    recovery_id: record.recovery_id,
-                    lane_id: record.payload.origin_proposal.descriptor.lane_id,
-                },
-            );
-        };
-        kura.validate_historical_autonomous_lane_recovery_record_dependencies(installed)?;
-    }
-    Ok(())
-}
+include!("v2_apply/historical_autonomous_recovery.rs");
 
 include!("v2_apply/reconciliation_authority.rs");
 include!("v2_apply/committed_carrier_cleanup.rs");
@@ -1578,7 +1037,7 @@ pub(crate) fn plan_lane_reservation_ownership(
                 actions: Vec::new(),
                 direct_release: Vec::new(),
                 deferred_terminal_recovery,
-                chain_hash: Hash::prehashed(*active_context.network_id.as_bytes()),
+                network_id: active_context.network_id,
                 recovered: 0,
             },
         ));
@@ -1595,7 +1054,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             state_height,
         });
     }
-    let chain_hash = Hash::prehashed(*active_context.network_id.as_bytes());
+    let network_id = active_context.network_id;
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
 
@@ -1634,7 +1093,7 @@ pub(crate) fn plan_lane_reservation_ownership(
                 retirement_hash: barrier.retirement_hash,
             }
         })?;
-        if barrier.chain_id_hash != chain_hash {
+        if barrier.network_id != network_id {
             return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
                 retirement_hash: barrier.retirement_hash,
             });
@@ -1857,7 +1316,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             let applications = authenticated_autonomous_carrier_application_projections(
                 &carrier_reference,
                 &carrier_entry,
-                chain_hash,
+                network_id,
             )
             .map_err(|detail| {
                 V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail }
@@ -2077,7 +1536,7 @@ pub(crate) fn plan_lane_reservation_ownership(
         .collect::<Vec<_>>();
     let evidence = kura.classify_autonomous_lane_reservation_groups(
         &evidence_inputs,
-        chain_hash,
+        network_id,
         &evidence_epochs,
     )?;
     debug_assert_eq!(evidence.len(), evidence_inputs.len());
@@ -2152,7 +1611,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             kura,
             active_context,
             state_height,
-            chain_hash,
+            network_id,
             epoch,
             &input.group,
             expected_payload,
@@ -2480,7 +1939,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             actions,
             direct_release,
             deferred_terminal_recovery,
-            chain_hash,
+            network_id,
             recovered: unique_recovered.len(),
         },
     ))
@@ -2503,7 +1962,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         actions,
         direct_release,
         deferred_terminal_recovery,
-        chain_hash,
+        network_id,
         recovered,
     } = plan;
     // Recovery durability is checked before acquiring any Queue ownership
@@ -2595,7 +2054,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         state,
         queue,
         kura,
-        chain_hash,
+        network_id,
         authorized_commit_groups,
     )?;
     summary.finalized_committed = summary
@@ -2640,7 +2099,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
                     kura,
                     queue,
                     &retirement,
-                    chain_hash,
+                    network_id,
                     epoch,
                 )?;
                 if resumed {
@@ -2671,7 +2130,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
             state,
             queue,
             kura,
-            chain_hash,
+            network_id,
             deferred_terminal_recovery,
         )
         .map_err(|detail| {
@@ -3340,14 +2799,14 @@ impl PostCarrierEvidenceRepairAuthorization {
 pub(crate) fn post_carrier_evidence_repair_authorizations(
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,
-    expected_chain_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     carrier_block_height: u64,
     carrier_block_hash: HashOf<BlockHeader>,
 ) -> Result<Vec<PostCarrierEvidenceRepairAuthorization>, String> {
     if entry.execution_batch.is_none() {
         return Ok(Vec::new());
     }
-    authenticated_autonomous_carrier_application_projections(reference, entry, expected_chain_hash)?
+    authenticated_autonomous_carrier_application_projections(reference, entry, expected_network_id)?
         .into_iter()
         .map(|application| {
             PostCarrierEvidenceRepairAuthorization::from_authenticated(
@@ -3445,7 +2904,7 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
 fn authenticated_autonomous_carrier_application_projections(
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,
-    expected_chain_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
 ) -> Result<Vec<AuthenticatedCarrierApplicationProjection>, String> {
     if !reference.matches_entry(entry) {
         return Err(
@@ -3466,7 +2925,7 @@ fn authenticated_autonomous_carrier_application_projections(
     for lane in &execution_batch.lanes {
         let authenticated_bundle = Kura::decode_autonomous_lane_merge_bundle(
             &lane.source_bundle,
-            expected_chain_hash,
+            expected_network_id,
             lane.autonomous_epoch,
         )
         .map_err(str::to_owned)?;
@@ -3491,8 +2950,8 @@ fn authenticated_autonomous_carrier_application_projections(
             || payload.origin_proposal != lane.origin_proposal
             || authenticated_bundle.certified.prepare_qc != lane.prepare_qc
             || authenticated_bundle.certified.commit_qc != lane.commit_qc
-            || payload.chain_id_hash != expected_chain_hash
-            || payload.chain_id_hash != lane.autonomous_chain_id_hash
+            || payload.network_id != expected_network_id
+            || payload.network_id != lane.autonomous_network_id
             || payload.epoch != lane.autonomous_epoch
             || payload.payload_hash != lane.autonomous_payload_hash
             || payload.entrypoint_hashes != lane.entrypoint_hashes
@@ -3803,7 +3262,7 @@ pub(crate) struct V2ApplyService {
         Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
     reputation_finalized_archive:
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
-    chain_id: ChainId,
+    network_id: NetworkId,
     block_cadence: Duration,
     genesis_account: AccountId,
     events_sender: EventsSender,
@@ -4076,19 +3535,19 @@ impl V2ApplyService {
         reputation_finalized_archive: Option<
             Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
         >,
-        chain_id: ChainId,
         block_cadence: Duration,
         genesis_account: AccountId,
         events_sender: EventsSender,
         validator_set_pops: Vec<Vec<u8>>,
     ) -> Self {
+        let network_id = state.network_id;
         Self {
             state,
             queue,
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
-            chain_id,
+            network_id,
             block_cadence,
             genesis_account,
             events_sender,
@@ -4227,7 +3686,7 @@ impl V2ApplyService {
             let applications = authenticated_autonomous_carrier_application_projections(
                 reference,
                 &entry,
-                Hash::new(self.chain_id.as_str().as_bytes()),
+                self.network_id,
             )
             .map_err(V2ApplyError::Validation)?;
             checked_carrier_applications.bind_execution_batch(reference, applications.len())?;
@@ -4353,7 +3812,7 @@ impl V2ApplyService {
             self.queue.as_ref(),
             self.kura.as_ref(),
             committed_block.as_ref(),
-            Hash::new(self.chain_id.as_str().as_bytes()),
+            self.network_id,
         )
         .map_err(|error| {
             V2ApplyError::committed_recovery_required("merge reservation finalization", &error)
@@ -4456,7 +3915,7 @@ impl V2ApplyService {
         let repair_authorizations = post_carrier_evidence_repair_authorizations(
             reference,
             &entry,
-            Hash::new(self.chain_id.as_str().as_bytes()),
+            self.network_id,
             committed_block.header().height().get(),
             committed_block.hash(),
         )
@@ -4571,7 +4030,6 @@ impl V2ApplyService {
         let result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
             body.clone(),
             &topology,
-            &self.chain_id,
             &self.genesis_account,
             &TimeSource::new_system(),
             self.block_cadence,
@@ -4591,11 +4049,11 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-                valid.as_ref(),
-            )
-            .map_err(V2ApplyError::ExecutionCommitment)?;
+        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            valid.as_ref(),
+            state_block.staged_merge_entry(),
+        )
+        .map_err(V2ApplyError::ExecutionCommitment)?;
         let lane_finality_manifest =
             crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
                 valid.as_ref(),
@@ -4703,7 +4161,6 @@ impl V2ApplyService {
             ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 body,
                 &topology,
-                &self.chain_id,
                 &self.genesis_account,
                 &TimeSource::new_system(),
                 self.block_cadence,
@@ -4723,11 +4180,11 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-                valid_block.as_ref(),
-            )
-            .map_err(V2ApplyError::ExecutionCommitment)?;
+        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            valid_block.as_ref(),
+            state_block.staged_merge_entry(),
+        )
+        .map_err(V2ApplyError::ExecutionCommitment)?;
         let lane_finality_manifest =
             crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
                 valid_block.as_ref(),
@@ -4799,6 +4256,7 @@ impl V2ApplyService {
                 self.kura
                     .prepublish_native_amx_participant_application_evidence(
                         committed_block.as_ref(),
+                        state_block.staged_merge_entry(),
                     )
                     .map_err(|error| {
                         V2ApplyError::committed_recovery_required(
@@ -4810,8 +4268,9 @@ impl V2ApplyService {
         } else {
             None
         };
-        let native_amx_frontiers = State::native_amx_participant_frontier_markers(
+        let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
             committed_block.as_ref(),
+            state_block.staged_merge_entry(),
         )
         .map_err(|error| {
             V2ApplyError::committed_recovery_required(

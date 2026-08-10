@@ -31,7 +31,7 @@ routing, and rollback drills.
    `nexus.enabled = true` baked in) and `defaults/nexus/genesis.json` match the
    approved hashes; `kagami genesis bootstrap --profile nexus` reports the same
    digest recorded in the tracker.
-3. The lane catalog matches the approved three-lane layout; `irohad --sora
+3. The lane catalog matches the approved three-lane layout; `iroha3d --sora
    --config defaults/nexus/config.toml` should emit the Nexus router banner.
 4. Multi-lane CI is green: `ci/check_nexus_multilane_pipeline.sh` (runs
    `integration_tests/tests/nexus/multilane_pipeline.rs` via

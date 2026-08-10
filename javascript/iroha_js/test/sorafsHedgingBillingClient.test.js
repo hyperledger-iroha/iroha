@@ -4,12 +4,13 @@ import { test } from "node:test";
 
 import {
   canonicalRequestSignatureMessage,
+  NetworkId,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
   validateNoritoFrame,
   verifyEd25519,
 } from "../src/index.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 
 const BASE_URL = "https://torii.example";
 const CHECKPOINT = "11".repeat(32);
@@ -17,6 +18,8 @@ const STATEMENT_ID = "22".repeat(32);
 const AFTER_STATEMENT_ID = "33".repeat(32);
 const AFTER_PROJECTION = "44".repeat(32);
 const PRIVATE_KEY = Buffer.alloc(32, 29);
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
 const PRIVATE_KEY_OBJECT = crypto.createPrivateKey({
   key: Buffer.concat([
     Buffer.from("302e020100300506032b657004220420", "hex"),
@@ -87,6 +90,7 @@ function assertCanonicalSignature(
   assert.equal(call.init.headers["Accept-Encoding"], "identity");
   const url = new URL(call.url);
   const message = canonicalRequestSignatureMessage({
+    networkId: NETWORK_ID,
     method,
     path: url.pathname,
     query: url.search.slice(1),
@@ -123,6 +127,7 @@ test("SoraFS hedging and billing reads sign exact routes once and bound response
   ];
   const calls = [];
   const client = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     maxRetries: 9,
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -285,6 +290,7 @@ test("SoraFS billing acknowledgement encoder matches the shared Rust schema and 
 test("SoraFS hedging and billing reads reject aliases before requesting", async () => {
   let requests = 0;
   const client = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async () => {
       requests += 1;
       return jsonResponse({});
@@ -348,6 +354,7 @@ test("SoraFS hedging and billing reads reject aliases before requesting", async 
 
 test("SoraFS hedging and billing reads reject transformed, oversized, and ambiguous bodies", async () => {
   const oversized = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async () =>
       jsonResponse({}, { contentLength: 1024 * 1024 + 1 }),
   });
@@ -357,6 +364,7 @@ test("SoraFS hedging and billing reads reject transformed, oversized, and ambigu
   );
 
   const transformed = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async () =>
       jsonResponse({}, { contentEncoding: "gzip" }),
   });
@@ -366,6 +374,7 @@ test("SoraFS hedging and billing reads reject transformed, oversized, and ambigu
   );
 
   const ambiguousNorito = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async () =>
       byteResponse(Uint8Array.of(1), {
         contentType: "application/x-norito; version=1",
@@ -384,6 +393,7 @@ test("SoraFS hedging and billing reads reject transformed, oversized, and ambigu
 test("SoraFS hedging and billing canonical requests are never retried", async () => {
   let requests = 0;
   const client = new ToriiClient(BASE_URL, {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     maxRetries: 9,
     fetchImpl: async () => {
       requests += 1;

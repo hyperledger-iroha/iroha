@@ -122,7 +122,6 @@ pub(super) fn replay_blocks_from_kura_range(
         let (valid, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
             signed.clone(),
             &validation_topology,
-            &state.chain_id,
             &genesis_account,
             &time_source,
             state,
@@ -265,7 +264,6 @@ fn commit_replay_validated_block_with_options(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
     block: SignedBlock,
-    chain_id: &ChainId,
     genesis_account: &AccountId,
     skip_block_signatures: bool,
     store_wsv_checkpoint: bool,
@@ -276,7 +274,6 @@ fn commit_replay_validated_block_with_options(
         ValidBlock::validate_keep_voting_block_for_replay(
             block,
             topology,
-            chain_id,
             genesis_account,
             &time_source,
             state,
@@ -288,7 +285,6 @@ fn commit_replay_validated_block_with_options(
         ValidBlock::validate_keep_voting_block(
             block,
             topology,
-            chain_id,
             genesis_account,
             &time_source,
             state,
@@ -337,7 +333,6 @@ fn commit_replay_validated_block_with_signature_mode(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
     block: SignedBlock,
-    chain_id: &ChainId,
     genesis_account: &AccountId,
     skip_block_signatures: bool,
 ) -> SignedBlock {
@@ -345,7 +340,6 @@ fn commit_replay_validated_block_with_signature_mode(
         state,
         topology,
         block,
-        chain_id,
         genesis_account,
         skip_block_signatures,
         true,
@@ -356,14 +350,12 @@ fn commit_replay_validated_block(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
     block: SignedBlock,
-    chain_id: &ChainId,
     genesis_account: &AccountId,
 ) -> SignedBlock {
     commit_replay_validated_block_with_signature_mode(
         state,
         topology,
         block,
-        chain_id,
         genesis_account,
         false,
     )
@@ -776,25 +768,14 @@ fn replay_from_height_catches_up_state_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&materialize_state);
-    let genesis_block = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        genesis_block,
-        &chain_id,
-        &genesis_id,
-    );
-    let signed_block2 = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        signed_block2,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_block =
+        commit_replay_validated_block(&materialize_state, &topology, genesis_block, &genesis_id);
+    let signed_block2 =
+        commit_replay_validated_block(&materialize_state, &topology, signed_block2, &genesis_id);
     let signed_block3 = commit_replay_validated_block_with_options(
         &materialize_state,
         &topology,
         signed_block3,
-        &chain_id,
         &genesis_id,
         false,
         false,
@@ -980,18 +961,12 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&materialize_state);
-    let genesis_signed = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        genesis_signed,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_signed =
+        commit_replay_validated_block(&materialize_state, &topology, genesis_signed, &genesis_id);
     let signed_block = commit_replay_validated_block(
         &materialize_state,
         &validation_topology,
         (*block_arc).clone(),
-        &chain_id,
         &genesis_id,
     );
     kura.store_block(Arc::new(genesis_signed))
@@ -1056,8 +1031,7 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
 
@@ -1112,7 +1086,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         &state,
         &crate::sumeragi::network_topology::Topology::new(roster.clone()),
         genesis_signed,
-        &chain_id,
         &genesis_id,
         false,
         true,
@@ -1163,7 +1136,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         &state,
         &signature_topology,
         signed_block,
-        &chain_id,
         &genesis_id,
         false,
         true,
@@ -1323,13 +1295,8 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
     configure_replay_fixture_parameters(&state);
-    let genesis_block = commit_replay_validated_block(
-        &state,
-        &fallback_topology,
-        genesis_block,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_block =
+        commit_replay_validated_block(&state, &fallback_topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
 
@@ -1377,7 +1344,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         &state,
         &expected_topology,
         signed_block2,
-        &chain_id,
         &genesis_id,
         true,
     );
@@ -1485,13 +1451,8 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         None,
         None,
     );
-    let genesis_block = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        genesis_block,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_block =
+        commit_replay_validated_block(&materialize_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
 
@@ -1616,13 +1577,8 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         None,
         None,
     );
-    let genesis_block = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        genesis_block,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_block =
+        commit_replay_validated_block(&materialize_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
 
@@ -1641,13 +1597,8 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         .chain(0, Some(&genesis_block))
         .sign(leader.private_key())
         .unpack(|_| {});
-    let signed_block2 = commit_replay_validated_block(
-        &materialize_state,
-        &topology,
-        block2.into(),
-        &chain_id,
-        &genesis_id,
-    );
+    let signed_block2 =
+        commit_replay_validated_block(&materialize_state, &topology, block2.into(), &genesis_id);
     kura.store_block(Arc::new(signed_block2.clone()))
         .expect("store block2");
     let correct_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&materialize_state);
@@ -1773,13 +1724,8 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         None,
         Some(proof_policies(1)),
     );
-    let genesis_block = commit_replay_validated_block(
-        &original_state,
-        &topology,
-        genesis_block,
-        &chain_id,
-        &genesis_id,
-    );
+    let genesis_block =
+        commit_replay_validated_block(&original_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
 
@@ -1840,7 +1786,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         &original_state,
         &topology,
         legacy_block,
-        &chain_id,
         &genesis_id,
         true,
     );
@@ -1890,7 +1835,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         &original_state,
         &topology,
         legacy_block3,
-        &chain_id,
         &genesis_id,
         true,
     );

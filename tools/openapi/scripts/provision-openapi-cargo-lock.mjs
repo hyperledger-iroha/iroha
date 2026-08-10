@@ -13,10 +13,10 @@
  *     pin --source=/absolute/canonical/Cargo.lock \
  *     --output=/absolute/external/staging/openapi-cargo-lock-v1.txt
  *
- * An exact existing root lock is reused. Otherwise an operator source is
- * preferred; without one, Cargo generates a candidate only at an isolated
- * temporary `--lockfile-path`. Every candidate must match the tracked V1 pin
- * before an absent-target atomic installation.
+ * An exact existing root lock is reused. Otherwise an explicit operator
+ * source is required. The provisioner never starts Cargo or generates lock
+ * bytes; it only installs a stable, existing source that matches the tracked
+ * V1 pin.
  */
 import {spawn} from 'node:child_process';
 import {createHash, randomBytes} from 'node:crypto';
@@ -24,13 +24,10 @@ import {constants as fsConstants, readFileSync} from 'node:fs';
 import {
   link,
   lstat,
-  mkdtemp,
   open,
   realpath,
-  rm,
   unlink,
 } from 'node:fs/promises';
-import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {TextDecoder} from 'node:util';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -65,6 +62,23 @@ const sourceBoundPin = parseOpenApiCargoLockPin(
 export const OPENAPI_CARGO_LOCK_EXPECTED_BYTES = sourceBoundPin.bytes;
 export const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX =
   sourceBoundPin.sha256Hex;
+
+/**
+ * Remove ambient Git routing/configuration before repository-policy reads.
+ */
+export function isolateGitRepositoryEnvironment(environment = process.env) {
+  if (environment === null || typeof environment !== 'object') {
+    throw new TypeError('Git environment must be an object');
+  }
+  const isolated = {...environment};
+  for (const name of Object.keys(isolated)) {
+    if (name.startsWith('GIT_')) {
+      delete isolated[name];
+    }
+  }
+  isolated.GIT_OPTIONAL_LOCKS = '0';
+  return isolated;
+}
 
 /**
  * Parse the canonical command-line surface.
@@ -520,46 +534,13 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
 }
 
 /**
- * Generate a candidate using Cargo's unstable external lockfile path.
- */
-export async function generateOpenApiCargoLockCandidate({
-  repoRoot,
-  candidatePath,
-  cargoExecutable = 'cargo',
-}) {
-  if (typeof cargoExecutable !== 'string' || cargoExecutable.length === 0) {
-    throw new TypeError('cargoExecutable must be a nonempty string');
-  }
-  const arguments_ = [
-    '-Z',
-    'unstable-options',
-    'generate-lockfile',
-    '--manifest-path',
-    path.join(repoRoot, 'Cargo.toml'),
-    '--lockfile-path',
-    candidatePath,
-  ];
-  await spawnChecked(cargoExecutable, arguments_, {
-    cwd: repoRoot,
-    env: {
-      ...isolateGitRepositoryEnvironment(),
-      RUSTC_BOOTSTRAP: '1',
-    },
-  });
-}
-
-/**
  * Provision or reuse the exact ignored root lock.
  */
 export async function provisionOpenApiCargoLock({
   repoRoot = defaultRepoRoot,
   sourcePath,
-  generateCandidate = generateOpenApiCargoLockCandidate,
   beforeInstall,
 } = {}) {
-  if (typeof generateCandidate !== 'function') {
-    throw new TypeError('generateCandidate must be a function');
-  }
   if (beforeInstall !== undefined && typeof beforeInstall !== 'function') {
     throw new TypeError('beforeInstall must be a function');
   }
@@ -582,64 +563,38 @@ export async function provisionOpenApiCargoLock({
     return provisionSummary('reused', 'existing', pin);
   }
 
-  let isolatedDirectory;
-  let candidatePath;
-  let sourceKind;
-  try {
-    if (sourcePath !== undefined) {
-      candidatePath = await requireCanonicalSourcePath(sourcePath);
-      sourceKind = 'operator';
-    } else {
-      const canonicalTempRoot = await realpath(tmpdir());
-      isolatedDirectory = await mkdtemp(
-        path.join(canonicalTempRoot, 'iroha-openapi-cargo-lock-'),
-      );
-      if (isWithin(root, isolatedDirectory)) {
-        throw new Error(
-          'generated OpenAPI Cargo.lock directory must be outside the repository',
-        );
-      }
-      candidatePath = path.join(
-        isolatedDirectory,
-        OPENAPI_CARGO_LOCK_PATH,
-      );
-      await generateCandidate({
-        repoRoot: root,
-        candidatePath,
-      });
-      await assertTargetAbsent(targetPath);
-      sourceKind = 'generated';
-    }
-
-    const candidate = await readOpenApiCargoLockStable(candidatePath, {
-      label: `${sourceKind} OpenAPI Cargo.lock candidate`,
-    });
-    validateOpenApiCargoLockBytes(candidate.bytes, pin);
-    if (beforeInstall) {
-      await beforeInstall({
-        candidatePath,
-        targetPath,
-        sourceKind,
-      });
-    }
-    await assertOpenApiCargoLockSnapshotStable(candidate);
-    await assertTargetAbsent(targetPath);
-    await installAbsentAtomic(targetPath, candidate.bytes);
-
-    const installed = await readOpenApiCargoLockStable(targetPath, {
-      label: 'installed ignored root OpenAPI Cargo.lock',
-    });
-    validateOpenApiCargoLockBytes(installed.bytes, pin);
-    await validateOpenApiCargoLockGitPolicy(root);
-    await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
-    await assertOpenApiCargoLockSnapshotStable(candidate);
-    await assertOpenApiCargoLockSnapshotStable(installed);
-    return provisionSummary('installed', sourceKind, pin);
-  } finally {
-    if (isolatedDirectory) {
-      await rm(isolatedDirectory, {recursive: true, force: true});
-    }
+  if (sourcePath === undefined) {
+    throw new Error(
+      'absent OpenAPI Cargo.lock requires an explicit existing --source; provisioning never runs Cargo or generates lock bytes',
+    );
   }
+
+  const candidatePath = await requireCanonicalSourcePath(sourcePath);
+  const sourceKind = 'operator';
+  const candidate = await readOpenApiCargoLockStable(candidatePath, {
+    label: `${sourceKind} OpenAPI Cargo.lock candidate`,
+  });
+  validateOpenApiCargoLockBytes(candidate.bytes, pin);
+  if (beforeInstall) {
+    await beforeInstall({
+      candidatePath,
+      targetPath,
+      sourceKind,
+    });
+  }
+  await assertOpenApiCargoLockSnapshotStable(candidate);
+  await assertTargetAbsent(targetPath);
+  await installAbsentAtomic(targetPath, candidate.bytes);
+
+  const installed = await readOpenApiCargoLockStable(targetPath, {
+    label: 'installed ignored root OpenAPI Cargo.lock',
+  });
+  validateOpenApiCargoLockBytes(installed.bytes, pin);
+  await validateOpenApiCargoLockGitPolicy(root);
+  await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
+  await assertOpenApiCargoLockSnapshotStable(candidate);
+  await assertOpenApiCargoLockSnapshotStable(installed);
+  return provisionSummary('installed', sourceKind, pin);
 }
 
 /**
@@ -1127,34 +1082,6 @@ async function gitBytes(repoRoot, arguments_, {allowedExitCodes = [0]} = {}) {
         return;
       }
       resolvePromise(Buffer.concat(stdout));
-    });
-  });
-}
-
-async function spawnChecked(executable, arguments_, options) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(executable, arguments_, {
-      ...options,
-      stdio: 'inherit',
-    });
-    child.once('error', (error) => {
-      rejectPromise(
-        new Error(
-          `failed to execute ${executable}: ${error?.message ?? error}`,
-          {cause: error},
-        ),
-      );
-    });
-    child.once('close', (code, signal) => {
-      if (code !== 0) {
-        rejectPromise(
-          new Error(
-            `${executable} OpenAPI Cargo.lock generation failed with status ${String(code)}${signal ? ` and signal ${signal}` : ''}`,
-          ),
-        );
-        return;
-      }
-      resolvePromise();
     });
   });
 }

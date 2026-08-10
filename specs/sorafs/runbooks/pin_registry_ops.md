@@ -1,15 +1,13 @@
 # SoraFS Pin Registry Operations
 
 This runbook documents how to monitor and triage the SoraFS pin registry and its replication
-service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported
-via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second
-interval in the background, so dashboards remain current even when no operators are polling
-the `/v1/sorafs/pin/*` endpoints. These sampled gauges are operational signals,
-not the consensus quota or settlement authority. Exact live manifest count and
-content-byte charges come from `PinManifestPageV1.charged_usage`, a
-consensus-maintained O(1) summary returned at a finalized height/hash. Import the curated dashboard
-(`specs/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps
-directly to the sections below.
+service-level agreements (SLAs). Torii publishes only the consensus-maintained global pin
+accounting summary as periodic inventory telemetry. It does not scan registry collections to
+reconstruct lifecycle, alias, replication-order, or SLA aggregates. Exact retained-record and
+live-content-byte charges come from the same O(1) summary exposed by
+`PinManifestPageV1.charged_usage` at a finalized height/hash. Import the curated dashboard
+(`specs/grafana_sorafs_pin_registry.json`) for the two supported global gauges; use bounded,
+finalized registry queries and GovernanceLog DAG records for detailed triage.
 
 > Public and in-depth documentation is maintained in the sibling
 > `iroha-docs` repository and published at <https://docs.iroha.tech/>.
@@ -18,15 +16,11 @@ directly to the sections below.
 
 | Metric | Labels | Description |
 | ------ | ------ | ----------- |
-| `torii_sorafs_registry_manifests_total` | `status` (`pending` \| `approved` \| `retired`) | On-chain manifest inventory by lifecycle state. |
-| `torii_sorafs_registry_aliases_total` | — | Count of active manifest aliases recorded in the registry. |
-| `torii_sorafs_registry_orders_total` | `status` (`pending` \| `completed` \| `expired`) | Replication order backlog segmented by status. |
-| `torii_sorafs_replication_backlog_total` | — | Convenience gauge mirroring `pending` orders. |
-| `torii_sorafs_replication_sla_total` | `outcome` (`met` \| `missed` \| `pending`) | SLA accounting: `met` counts completed orders within deadline, `missed` aggregates late completions + expirations, `pending` mirrors outstanding orders. |
-| `torii_sorafs_replication_completion_latency_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Aggregated completion latency (epochs between issuance and completion). |
-| `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Pending-order slack windows (deadline minus issued epoch). |
+| `torii_sorafs_pin_retained_manifests` | — | Consensus-maintained count of retained pin lifecycle records, including retired records retained in state. |
+| `torii_sorafs_pin_live_content_bytes` | — | Consensus-maintained content bytes represented by live pins. |
 
-All gauges reset on every snapshot pull, so dashboards should sample at `1m` cadence or faster.
+Both gauges are read in O(1) from finalized consensus accounting. They are not substitutes for
+status-specific registry queries.
 
 ## Authoritative pin accounting and readback
 
@@ -40,9 +34,11 @@ All gauges reset on every snapshot pull, so dashboards should sample at `1m` cad
   `expected_finalized_block_hash_hex`. A stale anchor returns HTTP 409. Offset
   pagination is not part of the first-release pin-list contract.
 - Read `charged_usage.manifest_count` and `charged_usage.content_bytes` for the
-  authoritative live charge at that anchor. This is maintained transactionally
-  with global/per-account admission, manual retirement, and consensus-time
-  expiry; do not sum a full page set or scrape Prometheus to reconstruct it.
+  authoritative charge at that anchor. `manifest_count` includes retired
+  lifecycle records that remain in consensus state; `content_bytes` includes
+  live pins. Core maintains both transactionally with global/per-account
+  admission, manual retirement, and consensus-time expiry; do not sum a full
+  page set or scrape Prometheus to reconstruct them.
 - Use `GET /v1/sorafs/pin/{digest_hex}` for one exact
   `PinManifestFinalizedRecordV1`. Alias proofs, metadata, council-envelope
   commitment, and fee-payment detail are deliberately absent from list rows;
@@ -51,90 +47,28 @@ All gauges reset on every snapshot pull, so dashboards should sample at `1m` cad
 
 ## Grafana dashboard
 
-The dashboard JSON ships with seven panels that cover operator workflows. The queries are listed
-below for quick reference if you prefer to build bespoke charts.
+The dashboard JSON ships with two panels:
 
-1. **Manifest lifecycle** – `torii_sorafs_registry_manifests_total` (grouped by `status`).
-2. **Alias catalogue trend** – `torii_sorafs_registry_aliases_total`.
-3. **Order queue by status** – `torii_sorafs_registry_orders_total` (grouped by `status`).
-4. **Backlog vs expired orders** – combines `torii_sorafs_replication_backlog_total` and
-   `torii_sorafs_registry_orders_total{status="expired"}` to surface saturation.
-5. **SLA success ratio** –
-   ```promql
-   sum(torii_sorafs_replication_sla_total{outcome="met"})
-   /
-   clamp_min(
-     sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}),
-     1
-   )
-   ```
-6. **Latency vs deadline slack** – overlay
-   `torii_sorafs_replication_completion_latency_epochs{stat="p95"}` and
-   `torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`. Use Grafana transformations to
-   add `min_over_time` views when you need the absolute slack floor, for example:
-   ```promql
-   min_over_time(torii_sorafs_replication_deadline_slack_epochs{stat="avg"}[15m])
-   ```
-7. **Missed orders (1h rate)** –
-   ```promql
-   sum(increase(torii_sorafs_replication_sla_total{outcome="missed"}[1h]))
-   ```
+1. **Retained pin lifecycle records** – `torii_sorafs_pin_retained_manifests`.
+2. **Live pinned content bytes** – `torii_sorafs_pin_live_content_bytes`.
 
-## Alert thresholds
-
-| Condition | Threshold | Action |
-|-----------|-----------|--------|
-| SLA success < 0.95 for 15 min | `sum(torii_sorafs_replication_sla_total{outcome=\"met\"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~\"met|missed\"}), 1) < 0.95` | Page SRE; start replication backlog triage. |
-| Pending backlog above 10 | `torii_sorafs_replication_backlog_total > 10` for 10 min | Check provider availability and Torii capacity scheduler. |
-| Expired orders > 0 | `increase(torii_sorafs_registry_orders_total{status=\"expired\"}[5m]) > 0` | Inspect governance manifests to confirm provider churn. |
-| Completion p95 > deadline slack avg | `torii_sorafs_replication_completion_latency_epochs{stat=\"p95\"} > torii_sorafs_replication_deadline_slack_epochs{stat=\"avg\"}` | Verify providers are committing before deadlines; consider issuing reassignments. |
-
-### Example Prometheus rules
-
-```yaml
-groups:
-  - name: sorafs-pin-registry
-    rules:
-      - alert: SorafsReplicationSlaDrop
-        expr: sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-          clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) < 0.95
-        for: 15m
-        labels:
-          severity: page
-        annotations:
-          summary: "SoraFS replication SLA below target"
-          description: "SLA success ratio stayed under 95% for 15 minutes."
-
-      - alert: SorafsReplicationBacklogGrowing
-        expr: torii_sorafs_replication_backlog_total > 10
-        for: 10m
-        labels:
-          severity: page
-        annotations:
-          summary: "SoraFS replication backlog above threshold"
-          description: "Pending replication orders exceeded the configured backlog budget."
-
-      - alert: SorafsReplicationExpiredOrders
-        expr: increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0
-        for: 0m
-        labels:
-          severity: ticket
-        annotations:
-          summary: "SoraFS replication orders expired"
-          description: "At least one replication order expired in the last five minutes."
-```
+Do not derive alerts about lifecycle status, alias counts, replication backlog, expiry, or SLA
+latency from these totals. Export the bounded finalized registry pages at a fixed height/hash,
+derive the operational report outside request handling, and retain the query anchor with the
+report. Add consensus-maintained counters before introducing any always-on Prometheus alert that
+requires those dimensions.
 
 ## Triage workflow
 
 1. **Identify cause**
-   - If SLA misses spike while backlog remains low, focus on provider performance (PoR failures, late completions).
-   - If backlog grows with stable misses, inspect admission (`/v1/sorafs/pin/*`) to confirm manifests awaiting council approval.
+   - Export replication orders at one finalized height/hash and separate pending, completed, and expired records.
+   - Correlate late or expired orders with PoR failures and provider availability.
 2. **Validate provider status**
    - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
    - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
 3. **Reassign replication**
-   - Issue new orders via `sorafs_manifest_builder capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
-   - Notify governance if aliases lack active manifest bindings (`torii_sorafs_registry_aliases_total` drops unexpectedly).
+   - Issue new orders via `sorafs_manifest_builder capacity replication-order` when the finalized export shows fewer than 5 epochs of deadline slack (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
+   - Notify governance if the finalized alias query shows bindings without an active manifest.
 4. **Document outcome**
    - Record incident notes in the SoraFS operations log with timestamps and affected manifest digests.
    - Update this runbook if new failure modes or dashboards are introduced.

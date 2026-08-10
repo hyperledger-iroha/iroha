@@ -23,7 +23,7 @@ use iroha::{
     client::{Client, TxConfirmationStatus},
     crypto::Hash,
     data_model::{
-        ChainId, HasMetadata, Level,
+        HasMetadata, Level, NetworkId,
         block::{
             CertifiedMergeLedgerReference, SignedBlock,
             consensus::{
@@ -64,8 +64,7 @@ use iroha_core::{
     kura::Kura,
     lane_consensus::{validate_lane_block_proposal, validate_lane_block_qc_aggregate},
     merge::{
-        MergeLedgerCandidate, merge_network_id_digest, merge_execution_batch_commitments_match,
-        merge_qc_message_digest,
+        MergeLedgerCandidate, merge_execution_batch_commitments_match, merge_qc_message_digest,
     },
     merge_sidecar::decode_certified_merge_sidecar,
     queue::{LaneQueueReservationKeyV2, RoutingPlan},
@@ -4533,7 +4532,7 @@ fn read_peer_merge_ledger_entries(peer: &NetworkPeer) -> Result<Vec<MergeLedgerE
 }
 
 fn validate_lane_drain_certificate_evidence(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     lane_id: LaneId,
     certificate: &LaneDrainCertificateV1,
 ) -> Result<()> {
@@ -4547,8 +4546,8 @@ fn validate_lane_drain_certificate_evidence(
     );
     ensure!(intent.version == 1, "unsupported drain intent version");
     ensure!(
-        intent.chain_id_digest == merge_network_id_digest(chain_id),
-        "drain intent chain binding mismatch"
+        intent.network_id == *network_id,
+        "drain intent network binding mismatch"
     );
     ensure!(intent.lane_id == lane_id, "drain intent names another lane");
     ensure!(
@@ -4753,7 +4752,7 @@ fn lane_drain_entry_for_incarnation(
 }
 
 fn validate_lane_drain_merge_entry(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     lane_id: LaneId,
     intent_log: LaneDrainIntentLogEvidence,
     entry: &MergeLedgerEntry,
@@ -4767,8 +4766,8 @@ fn validate_lane_drain_merge_entry(
         entry.execution_batch.is_none() && entry.lane_snapshots.is_empty(),
         "lane drain carrier mixed its certificate with execution or snapshots"
     );
-    validate_lane_drain_certificate_evidence(chain_id, lane_id, certificate)?;
-    validate_merge_qc_evidence(chain_id, entry)?;
+    validate_lane_drain_certificate_evidence(network_id, lane_id, certificate)?;
+    validate_merge_qc_evidence(network_id, entry)?;
     ensure!(
         certificate.body.intent.close_global_height == intent_log.close_global_height
             && certificate.body.intent.initial_frontier.lane_block_height
@@ -4831,7 +4830,7 @@ fn wait_for_drain_certificate_on_running_peers(
                     && entries.iter().all(|entry| entry.as_ref() == Some(expected))
                 {
                     validate_lane_drain_merge_entry(
-                        &network.chain_id(),
+                        &network.network_id(),
                         lane_id,
                         intent_log,
                         expected,
@@ -4919,7 +4918,7 @@ fn wait_for_drain_retirement_on_running_peers(
                     && entries.iter().all(|entry| entry.as_ref() == Some(expected))
                 {
                     validate_lane_drain_merge_entry(
-                        &network.chain_id(),
+                        &network.network_id(),
                         lane_id,
                         intent_log,
                         expected,
@@ -5599,13 +5598,13 @@ fn wait_for_certified_elastic_lane_incarnation(
 }
 
 fn validate_autonomous_merge_execution(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     entry: &MergeLedgerEntry,
     lane_id: LaneId,
     lane_incarnation: Hash,
     target_entrypoint: HashOf<TransactionEntrypoint>,
 ) -> Result<()> {
-    validate_merge_qc_evidence(chain_id, entry)?;
+    validate_merge_qc_evidence(network_id, entry)?;
     let batch = entry
         .execution_batch
         .as_ref()
@@ -5808,7 +5807,7 @@ fn wait_for_autonomous_merge_on_peers(
                     && entries.iter().all(|entry| entry.as_ref() == Some(expected))
                 {
                     validate_autonomous_merge_execution(
-                        &network.chain_id(),
+                        &network.network_id(),
                         expected,
                         lane_id,
                         lane_incarnation,
@@ -6029,12 +6028,12 @@ fn query_merge_carrier(
     Ok((carrier, blocks))
 }
 
-fn validate_merge_qc_evidence(chain_id: &ChainId, entry: &MergeLedgerEntry) -> Result<()> {
+fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) -> Result<()> {
     let qc = &entry.merge_qc;
     ensure!(qc.epoch_id == entry.epoch_id, "merge QC epoch mismatch");
     ensure!(
-        qc.chain_id_digest == merge_network_id_digest(chain_id),
-        "merge QC chain binding mismatch"
+        qc.network_id == *network_id,
+        "merge QC network binding mismatch"
     );
     ensure!(
         qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1,
@@ -6822,7 +6821,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         result
     })?;
 
-    validate_merge_qc_evidence(&network.chain_id(), &target_entry)?;
+    validate_merge_qc_evidence(&network.network_id(), &target_entry)?;
     let batch = target_entry
         .execution_batch
         .as_ref()
@@ -6908,7 +6907,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         .ok_or_else(|| eyre!("certified merge QC has an empty signature"))?;
     *forged_merge_signature_byte ^= 0x01;
     ensure!(
-        validate_merge_qc_evidence(&network.chain_id(), &forged_merge_entry).is_err(),
+        validate_merge_qc_evidence(&network.network_id(), &forged_merge_entry).is_err(),
         "forged merge QC aggregate was accepted"
     );
 

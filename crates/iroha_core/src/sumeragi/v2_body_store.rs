@@ -1523,7 +1523,7 @@ mod tests {
                 7,
                 receipt.round().height,
                 parent_hash,
-                Hash::new(b"body-store validation chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

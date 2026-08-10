@@ -558,9 +558,10 @@ pub struct StoredManifest {
 /// index by its canonical digest. It deliberately exposes neither the manifest identifier nor any
 /// filesystem path. The storage backend retains the manifest lifecycle read lock for the complete
 /// callback that receives this value, preventing eviction until the callback returns. Completed
-/// Musubi attestations must use
-/// [`AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle`], which owns all three fresh-reader
-/// passes and never accepts verifier evidence retained outside this lease.
+/// Musubi attestations must enter through
+/// [`crate::NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`], which checks the
+/// process-local store-instance authority before this lease owns all three fresh-reader passes and
+/// never accepts verifier evidence retained outside the lease.
 pub struct AdmittedPayloadReadLeaseV1<'manifest> {
     manifest: &'manifest StoredManifest,
     schedulers: StorageSchedulersRuntime,
@@ -753,77 +754,7 @@ struct ManifestRuntimeProofs {
     pdp_tree_memory_bytes: u64,
 }
 
-/// Components required to construct a [`StoredManifest`] without hitting the storage backend.
-#[derive(Debug)]
-pub struct StoredManifestParts {
-    /// Canonical identifier derived from the manifest digest (hex string).
-    pub manifest_id: String,
-    /// Canonical manifest CID bytes.
-    pub manifest_cid: Vec<u8>,
-    /// BLAKE3-256 digest over the canonical Norito manifest encoding.
-    pub manifest_digest: [u8; 32],
-    /// BLAKE3-256 digest over the payload bytes.
-    pub payload_digest: [u8; 32],
-    /// Total payload size represented by the manifest.
-    pub content_length: u64,
-    /// Negotiated chunk profile handle (`namespace.name@semver`).
-    pub chunk_profile_handle: String,
-    /// Optional stripe layout (row/column parity) recorded for the manifest.
-    pub stripe_layout: Option<DaStripeLayout>,
-    /// UNIX timestamp (seconds) when the manifest was persisted.
-    pub stored_at_unix_secs: u64,
-    /// Unix retention epoch for garbage collection (0 if not retained).
-    pub retention_epoch: u64,
-    /// Retention source record. Synthetic in-memory test manifests may omit it;
-    /// persisted V1 manifests must provide it.
-    pub retention_source: Option<RetentionSourceV1>,
-    /// Monotonic access counter recorded for LRU eviction ordering.
-    pub last_access: u64,
-    /// File descriptors describing how the original dataset maps to payload offsets.
-    pub files: Vec<StoredFileRecord>,
-    /// Records describing each stored chunk file.
-    pub chunk_files: Vec<ChunkFileRecord>,
-    /// Proof-of-retrievability Merkle tree snapshot.
-    pub por_tree: StoredPorTree,
-    /// Filesystem path where the manifest resides.
-    pub manifest_path: PathBuf,
-}
-
 impl StoredManifest {
-    /// Construct a manifest summary from its component parts.
-    ///
-    /// This is primarily intended for tests and offline validation harnesses
-    /// that need to stand up synthetic manifest metadata without persisting it
-    /// through the storage backend.
-    #[must_use]
-    pub fn from_parts(parts: StoredManifestParts) -> Self {
-        Self {
-            manifest_id: parts.manifest_id,
-            manifest_cid: parts.manifest_cid,
-            manifest_digest: parts.manifest_digest,
-            payload_digest: parts.payload_digest,
-            content_length: parts.content_length,
-            chunk_profile_handle: parts.chunk_profile_handle,
-            stripe_layout: parts.stripe_layout,
-            stored_at_unix_secs: parts.stored_at_unix_secs,
-            retention_epoch: parts.retention_epoch,
-            retention_source: parts.retention_source,
-            last_access: parts.last_access,
-            files: parts.files,
-            chunk_files: parts.chunk_files,
-            por_tree: parts.por_tree.into_arc(),
-            por_commitment: None,
-            por_commitment_digest: None,
-            pdp_commitment: None,
-            pdp_commitment_digest: None,
-            pdp_tree: None,
-            pdp_tree_memory_bytes: 0,
-            manifest_path: parts.manifest_path,
-            io_lock: Arc::new(RwLock::new(())),
-            retirement_pending: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
     fn try_clone_runtime(&self) -> Result<Self, StorageError> {
         let mut files = Vec::new();
         files.try_reserve_exact(self.files.len()).map_err(|_| {
@@ -1362,35 +1293,6 @@ impl ChunkSlice {
     #[must_use]
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
-    }
-}
-
-/// Compatibility wrapper used by [`StoredManifestParts`] for synthetic manifests.
-///
-/// Production persistence never serializes this value; only a bounded PoR commitment summary is
-/// written to disk, and the full tree is rebuilt from verified chunks on startup.
-#[derive(Debug, Clone)]
-pub struct StoredPorTree {
-    tree: Arc<PorMerkleTree>,
-}
-
-impl StoredPorTree {
-    /// Clone the wrapped runtime tree.
-    #[must_use]
-    pub fn to_merkle_tree(&self) -> PorMerkleTree {
-        (*self.tree).clone()
-    }
-
-    fn into_arc(self) -> Arc<PorMerkleTree> {
-        self.tree
-    }
-}
-
-impl From<&PorMerkleTree> for StoredPorTree {
-    fn from(tree: &PorMerkleTree) -> Self {
-        Self {
-            tree: Arc::new(tree.clone()),
-        }
     }
 }
 

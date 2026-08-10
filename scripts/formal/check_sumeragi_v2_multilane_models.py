@@ -34,6 +34,7 @@ from sumeragi_v2_multilane_autonomous_terminal_contract import (
     KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
     validate_autonomous_terminal_recovery_contract,
 )
+import sumeragi_v2_multilane_native_merge_manifest_contract as native_merge_manifest, sumeragi_v2_multilane_passive_recovery_contract as passive_recovery_contract
 from sumeragi_v2_multilane_cli import build_parser, report_validation
 from sumeragi_v2_multilane_reviewed_rust_source import (
     REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
@@ -51,15 +52,9 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 FORMAL_RELATIVE = Path("formal/sumeragi_v2")
 BINDINGS_FILENAME = "multilane_source_bindings.json"
 PROOF_COVERAGE_RELATIVE = FORMAL_RELATIVE / "proof_coverage.json"
-CLOSURE_LEDGER_RELATIVE = Path(
-    "specs/sumeragi_v2_multilane_closure_ledger.md"
-)
-APALACHE_RUNNER_RELATIVE = Path(
-    "scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
-)
-APALACHE_RUNNER_TEST_RELATIVE = Path(
-    "scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py"
-)
+CLOSURE_LEDGER_RELATIVE = Path("specs/sumeragi_v2_multilane_closure_ledger.md")
+APALACHE_RUNNER_RELATIVE = Path("scripts/formal/run_sumeragi_v2_multilane_apalache.sh")
+APALACHE_RUNNER_TEST_RELATIVE = Path("scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py")
 APALACHE_INSTALLER_RELATIVE = Path("scripts/formal/install_apalache.sh")
 TLC_RUNNER_RELATIVE = Path("scripts/formal/run_sumeragi_v2_tlc.sh")
 TLC_MUTATION_RUNNER_RELATIVE = Path(
@@ -207,30 +202,6 @@ def _replace_exact_tokens(
 
     return tuple(replacements.get(token, token) for token in tokens)
 
-
-_AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS = {
-    "canonical_carrier_source_outcome_set_locked(entry, true)": (
-        "pending_canonical_bytes,\n                entry,\n                true,"
-    ),
-    "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)": (
-        "pending_canonical_bytes,\n                &canonical_entry,\n                true,"
-    ),
-    "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)": (
-        "pending_canonical_bytes,\n                &canonical_entry,\n                false,"
-    ),
-}
-AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = tuple(
-    (
-        relative,
-        kind,
-        symbol,
-        _replace_exact_tokens(tokens, _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS),
-    )
-    for relative, kind, symbol, tokens in AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS
-)
-autonomous_terminal_contract.AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = (
-    AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS
-)
 
 _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS = {
     "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(": (
@@ -507,27 +478,6 @@ _PRODUCTION_TOKEN_REBINDINGS = {
         "service_next_native_participant_recovery_request",
     ): "service_historical_recovery_tick",
     (
-        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
-        "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending",
-        "canonical_carrier_source_outcome_set_locked(entry, true)",
-    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
-        "canonical_carrier_source_outcome_set_locked(entry, true)"
-    ],
-    (
-        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
-        "reconstruct_autonomous_lifecycle_canonical_carrier_source_outcomes_for_group",
-        "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)",
-    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
-        "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)"
-    ],
-    (
-        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
-        "pending_autonomous_lifecycle_terminal_outcome_inventory",
-        "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)",
-    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
-        "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)"
-    ],
-    (
         "crates/iroha_core/src/queue.rs",
         "release_lane_reservations_in_order_inner",
         "let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;",
@@ -645,7 +595,7 @@ NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS = (
     "multilane_native_source_claim_round_height_drift_bug.cfg",
     "multilane_native_source_claim_round_view_drift_bug.cfg",
     "multilane_native_source_claim_epoch_drift_bug.cfg",
-    "multilane_native_source_claim_chain_id_hash_drift_bug.cfg",
+    "multilane_native_source_claim_network_id_drift_bug.cfg",
     "multilane_native_source_claim_authority_context_height_drift_bug.cfg",
     "multilane_native_source_claim_coordinator_lane_id_drift_bug.cfg",
     "multilane_native_source_claim_coordinator_dataspace_id_drift_bug.cfg",
@@ -978,6 +928,7 @@ NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS = (
             "rows.push(row)",
         ),
     ),
+    native_merge_manifest.NATIVE_APPLICATION_MANIFEST_BINDING,
 )
 NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_MATCH_RELATIONS = (
     (
@@ -1013,6 +964,7 @@ NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_MATCH_RELATIONS = (
             'leg: {reason}", ))); } }'
         ),
     ),
+    native_merge_manifest.NATIVE_APPLICATION_MANIFEST_CLASSIFIER_MATCH_RELATION,
 )
 NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_ORDERED_SOURCE_CHECKS = (
     (
@@ -1041,8 +993,12 @@ NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_ORDERED_SOURCE_CHECKS = (
             "rows.push(row)",
         ),
     ),
+    native_merge_manifest.NATIVE_APPLICATION_MANIFEST_CLASSIFIER_ORDERED_SOURCE_CHECK,
 )
 NATIVE_PREPUBLICATION_BINDINGS = (
+    *native_merge_manifest.NATIVE_MERGE_SOURCE_BINDINGS,
+    native_merge_manifest.NATIVE_APPLICATION_MANIFEST_BINDING,
+    *native_merge_manifest.NATIVE_MERGE_MANIFEST_CALLER_BINDINGS,
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
@@ -1061,10 +1017,12 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         "fn",
         "prepublish_native_amx_participant_application_evidence",
         (
+            "staged_merge_entry: Option<&MergeLedgerEntry>",
             "prune_lock.lock",
             "ensure_prune_recovery_not_required",
             "native_amx_participant_application_evidence_for_block_under_publication_guard",
-            "block, false",
+            "false,",
+            "NativeAmxMergeAssociation::Live(staged_merge_entry)",
             "persist_native_amx_participant_application_evidence_under_publication_guard",
             "NativeAmxParticipantApplicationPublicationMode::PreWsv",
         ),
@@ -1348,12 +1306,13 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         "method",
         "V2ApplyService::validate_and_apply",
         (
-            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry",
+            "state_block.staged_merge_entry()",
             "execution_commitment_from_validated_block",
             "store_block",
             "store_v2_finality_artifact",
             "prepublish_native_amx_participant_application_evidence",
-            "State::native_amx_participant_frontier_markers",
+            "State::native_amx_participant_frontier_markers_and_merge_entry",
             "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
             "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
@@ -1393,7 +1352,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         (
             ".store_v2_finality_artifact(artifact)",
             ".prepublish_native_amx_participant_application_evidence(",
-            "State::native_amx_participant_frontier_markers(",
+            "State::native_amx_participant_frontier_markers_and_merge_entry(",
             "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)",
             ".pending_autoscale_retirement_binding()",
@@ -1629,7 +1588,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         (
             "version",
             "route",
-            "chain_id_digest",
+            "network_id_digest",
             "entrypoint_hash",
             "binding_hash",
             "member_identity",
@@ -1642,12 +1601,12 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         (
             "Self::validate_queue_plan_pending_obligation_route(&route)?",
             "obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
-            "obligation.chain_id_digest",
+            "obligation.network_id_digest",
             "obligation.entrypoint_hash",
             "obligation.binding_hash",
             ".routes.binary_search(&route).is_err()",
             "Self::queue_plan_pending_route_member_identity_from_claim(",
-            "obligation.chain_id_digest",
+            "obligation.network_id_digest",
             "obligation.entrypoint_hash.clone()",
             "obligation.binding_hash",
             "route",
@@ -1660,12 +1619,12 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         (
             "entrypoint_hash: HashOf<TransactionEntrypoint>",
             "Self::validate_queue_plan_pending_obligation_route(&route)?",
-            "chain_id_digest.as_ref().iter().all(|byte| *byte == 0)",
+            "network_id_digest.as_ref().iter().all(|byte| *byte == 0)",
             "entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)",
             "binding_hash.as_ref().iter().all(|byte| *byte == 0)",
             "norito::to_bytes(&(",
             "QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
-            "chain_id_digest",
+            "network_id_digest",
             "entrypoint_hash",
             "binding_hash",
             "route",
@@ -1680,7 +1639,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         (
             "version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
             "route",
-            "chain_id_digest: obligation.chain_id_digest",
+            "network_id_digest: obligation.network_id_digest",
             "entrypoint_hash: obligation.entrypoint_hash.clone()",
             "binding_hash: obligation.binding_hash",
             "queue_plan_pending_route_member_identity(obligation, route)?",
@@ -1705,7 +1664,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "queue_plan_pending_route_member_marker_payload",
         (
             "marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
-            "marker.chain_id_digest",
+            "marker.network_id_digest",
             "marker.entrypoint_hash",
             "marker.binding_hash",
             "marker.member_identity",
@@ -2961,6 +2920,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
 
     workflow_install_block = """      - name: Install pinned formal tools
         run: |
+          set -euo pipefail
           bash scripts/formal/install_sumeragi_v2_tlapm.sh
           bash scripts/formal/install_sumeragi_v2_tla2tools.sh
           bash scripts/formal/install_apalache.sh 0.52.2
@@ -2975,7 +2935,6 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
                     f"{workflow}: pinned formal install block must contain the "
                     "Apalache 0.52.2 installer exactly once"
                 )
-
     readme = root / README_RELATIVE
     if _regular_file(readme, "Sumeragi v2 formal README", errors):
         readme_source = readme.read_text(encoding="utf-8")
@@ -3023,6 +2982,8 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
             "scripts/formal/"
             "sumeragi_v2_multilane_autonomous_terminal_contract.py"
         ),
+        *native_merge_manifest.NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES,
+        *passive_recovery_contract.PASSIVE_RECOVERY_SOURCE_RELATIVES,
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path(
             "scripts/formal/"
@@ -3661,22 +3622,13 @@ def _validate_native_participant_application_classifier_contract(
                     f"{symbol} is missing source-bound token {token!r}"
                 )
 
-    classifier_match_re = re.compile(
-        r"match\s+crate::native_amx::"
-        r"native_amx_participant_application_role\s*"
-        r"\(\s*receipt\s*,\s*leg\s*\)"
-    )
-    role_tokens = (
-        "NativeAmxParticipantApplicationRole::Coordinator",
-        "NativeAmxParticipantApplicationRole::SeparateParticipant",
-    )
     for relative, kind, symbol, expected_match in (
         NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_MATCH_RELATIONS
     ):
         item = binding_items.get((relative, kind, symbol))
         if item is None:
             continue
-        matches = list(classifier_match_re.finditer(item))
+        matches = list(native_merge_manifest.NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_MATCH_RE.finditer(item))
         if len(matches) != 1:
             errors.append(
                 f"{root / relative}: shared participant classifier consumer "
@@ -3694,7 +3646,7 @@ def _validate_native_participant_application_classifier_contract(
                 f"relation drifted in {symbol}"
             )
             continue
-        for role_token in role_tokens:
+        for role_token in native_merge_manifest.NATIVE_PARTICIPANT_APPLICATION_ROLE_TOKENS:
             if item.count(role_token) != 1 or match_item.count(role_token) != 1:
                 errors.append(
                     f"{root / relative}: shared participant classifier role "
@@ -3925,6 +3877,7 @@ def _validate_native_prepublication_contract(
                     f"is missing source-bound token {token!r}"
                 )
 
+    native_merge_manifest.validate_native_merge_manifest_relations(root, binding_items, errors, _rust_binding_item)
     for relative, kind, symbol, tokens in (
         NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS
     ):
@@ -5223,10 +5176,7 @@ def _models_with_current_component_tokens(models: Any) -> Any:
     if not isinstance(models, list):
         return models
     current = copy.deepcopy(models)
-    replacements = {
-        **_AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS,
-        **_QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS,
-    }
+    replacements = _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS
     for model in current:
         if not isinstance(model, dict):
             continue
@@ -5308,6 +5258,7 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         root, models, errors
     )
     _validate_native_prepublication_contract(root, models, errors)
+    passive_recovery_contract.validate_passive_recovery_contract(root, models, errors, _rust_binding_item)
     _validate_native_exact_object_prune_contract(root, models, errors)
     _validate_queue_plan_pending_membership_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(

@@ -63,7 +63,7 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
     are mounted as dedicated Compose secrets; their bytes never appear in
     Compose YAML or environment variables. Byte-exact public policy assets,
     including binary Norito inputs, are interned by digest, stored as base64
-    Compose configs, and decoded into `/config/runtime` before `irohad` starts.
+    Compose configs, and decoded into `/config/runtime` before `iroha3d` starts.
   - The source peer configs, bundle directory, source manifest, genesis private
     signing key, and client credentials are never mounted. Prepared mode also
     fails closed when a requested transport, CIDR filter, or helper-service

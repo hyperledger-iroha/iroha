@@ -11,6 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(label)),
+    )
+}
+
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -489,7 +495,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
     authorization_operation_id: [u8; 32],
     outer_authority: &KeyPair,
 ) -> TransactionEntrypoint {
-    let chain_id = ChainId::from("kura-offline-operation-index");
+    let network_id = test_network_id(b"kura-offline-operation-index-network");
     let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
     let definition = AssetDefinitionId::derive_from_components(
         domain_id,
@@ -504,7 +510,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
         asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
         amount,
         current_note: KagemushaSpendableNoteDescriptorV2 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: definition.clone(),
             note_commitment: [0x31; 32],
             spend_nullifier: [0x32; 32],
@@ -557,7 +563,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
     };
     let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
     let transaction = TransactionBuilder::new(
-        test_network_id(b"kura-offline-operation-index"),
+        network_id,
         outer_authority_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -653,7 +659,7 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
         prepare_qc,
         commit_qc,
         signer_proofs: Vec::new(),
-        autonomous_chain_id_hash: Hash::new(b"kura-index-refresh-chain"),
+        autonomous_network_id: test_network_id(b"kura-index-refresh-genesis"),
         autonomous_epoch: 0,
         autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
         entrypoint_hashes,

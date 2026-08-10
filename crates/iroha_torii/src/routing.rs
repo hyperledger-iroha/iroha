@@ -3657,6 +3657,18 @@ pub struct AppApiTransactionDraftDto {
 }
 
 #[cfg(feature = "app_api")]
+fn new_app_api_transaction_builder_from_state(
+    state: &CoreState,
+    authority: AccountId,
+) -> TransactionBuilder {
+    TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+}
+
+#[cfg(feature = "app_api")]
 fn app_api_transaction_draft(builder: &TransactionBuilder) -> AppApiTransactionDraftDto {
     use base64::Engine as _;
 
@@ -3816,6 +3828,24 @@ mod app_api_transaction_signing_tests {
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed transaction should verify");
+    }
+
+    #[test]
+    fn app_api_transaction_builder_binds_the_exact_core_state_network() {
+        let app = crate::mk_app_state_for_tests();
+        let key_pair = checked_app_api_fixture_keypair(
+            b"iroha:torii:routing:test:app-api-core-state-network".to_vec(),
+            "derive Torii app-api CoreState network fixture key",
+        );
+        let builder = new_app_api_transaction_builder_from_state(
+            app.state.as_ref(),
+            AccountId::new(key_pair.public_key().clone()),
+        );
+
+        assert_eq!(
+            builder.payload().network_id(),
+            Some(app.state.network_id_ref())
+        );
     }
 
     #[test]
@@ -5883,13 +5913,14 @@ async fn execute_verified_query_with_opts_inner(
 #[allow(dead_code)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
-    /// Required client-provided session id (base64url, no padding; 32 bytes after decode).
-    ///
-    /// Note: The server no longer generates a fallback `sid`. Clients must
-    /// compute a session identifier (e.g.,
-    /// `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_pk || nonce16)`) and
-    /// pass it here.
-    pub sid: Option<String>,
+    /// Client-provided session id (canonical base64url without padding).
+    pub sid: String,
+    /// Exact target deployment identity derived from genesis.
+    pub network_id: iroha_data_model::NetworkId,
+    /// X25519 application public key (canonical base64url without padding).
+    pub app_pk: String,
+    /// Fresh 16-byte session nonce (canonical base64url without padding).
+    pub nonce: String,
     /// Optional explicit node host for the deeplink (hostname:port).
     pub node: Option<String>,
 }
@@ -5900,6 +5931,12 @@ pub struct ConnectSessionRequest {
 pub struct ConnectSessionResponse {
     /// Session id (base64url, no padding).
     pub sid: String,
+    /// Exact deployment identity bound into `sid` and both deep links.
+    pub network_id: iroha_data_model::NetworkId,
+    /// X25519 application public key bound into `sid`.
+    pub app_pk: String,
+    /// Fresh 16-byte nonce bound into `sid`.
+    pub nonce: String,
     /// Deep link URI for wallets (includes token).
     pub wallet_uri: String,
     /// Optional convenience URI for app (includes token); usually app already holds the token.
@@ -5918,21 +5955,20 @@ pub struct ConnectSessionResponse {
 /// POST /v1/connect/session — create or validate a session and return a deeplink URI.
 #[allow(dead_code)]
 pub async fn handle_connect_session(
-    chain_id: std::sync::Arc<iroha_data_model::ChainId>,
+    network_id: iroha_data_model::NetworkId,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
     let mut rng = rand::rngs::OsRng;
-    handle_connect_session_with_rng(chain_id, req, &mut rng).await
+    handle_connect_session_with_rng(network_id, req, &mut rng).await
 }
 
 #[cfg(feature = "connect")]
 async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
-    chain_id: std::sync::Arc<iroha_data_model::ChainId>,
+    network_id: iroha_data_model::NetworkId,
     req: ConnectSessionRequest,
     rng: &mut R,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-    // Require client-provided `sid` (base64url, no padding).
     let malformed = || {
         crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -5940,21 +5976,32 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
             ),
         ))
     };
-    let sid_bytes: [u8; 32] = match req.sid.as_deref() {
-        Some(s) => {
-            let v = B64.decode(s).map_err(|_| malformed())?;
-            if v.len() != 32 {
-                return Err(malformed());
-            }
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&v);
-            out
-        }
-        None => {
-            // Reject missing sid: client must supply one.
+    if req.network_id != network_id {
+        return Err(malformed());
+    }
+    let decode_canonical = |value: &str, len: usize| -> Result<Vec<u8>, crate::Error> {
+        let bytes = B64.decode(value).map_err(|_| malformed())?;
+        if bytes.len() != len || B64.encode(&bytes) != value {
             return Err(malformed());
         }
+        Ok(bytes)
     };
+    let sid_bytes: [u8; 32] = decode_canonical(&req.sid, 32)?
+        .try_into()
+        .map_err(|_| malformed())?;
+    let app_pk: [u8; 32] = decode_canonical(&req.app_pk, 32)?
+        .try_into()
+        .map_err(|_| malformed())?;
+    let nonce: [u8; 16] = decode_canonical(&req.nonce, 16)?
+        .try_into()
+        .map_err(|_| malformed())?;
+    if app_pk.iter().all(|byte| *byte == 0) || nonce.iter().all(|byte| *byte == 0) {
+        return Err(malformed());
+    }
+    if iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce) != sid_bytes
+    {
+        return Err(malformed());
+    }
     // Generate one-time tokens (32 bytes each)
     let mut t_app = [0u8; 32];
     let mut t_wallet = [0u8; 32];
@@ -5969,25 +6016,34 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let token_management = B64.encode(t_management);
     let token_relay = B64.encode(t_relay);
     let sid_b64 = B64.encode(sid_bytes);
+    let app_pk_b64 = B64.encode(app_pk);
+    let nonce_b64 = B64.encode(nonce);
     let node = req.node.unwrap_or_default();
     let wallet_uri = format!(
-        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=wallet&token={}&relay={}",
+        "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
-        chain_id.to_string(),
+        urlencoding::encode(&network_id.to_string()),
+        app_pk_b64,
+        nonce_b64,
         urlencoding::encode(&node),
         token_wallet,
         token_relay
     );
     let app_uri = format!(
-        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=app&token={}&relay={}",
+        "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=app&token={}&relay={}",
         sid_b64,
-        chain_id.to_string(),
+        urlencoding::encode(&network_id.to_string()),
+        app_pk_b64,
+        nonce_b64,
         urlencoding::encode(&node),
         token_app,
         token_relay
     );
     Ok(JsonBody(ConnectSessionResponse {
         sid: sid_b64,
+        network_id,
+        app_pk: app_pk_b64,
+        nonce: nonce_b64,
         wallet_uri,
         app_uri,
         token_app,
@@ -6025,6 +6081,8 @@ pub struct ConnectWsQuery {
 #[cfg(all(test, feature = "connect"))]
 mod connect_session_tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
@@ -6061,16 +6119,31 @@ mod connect_session_tests {
 
     impl TryCryptoRng for FailingConnectSessionRng {}
 
+    fn network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
+
+    fn valid_request(network_id: NetworkId) -> ConnectSessionRequest {
+        let app_pk = [0x33; 32];
+        let nonce = [0x44; 16];
+        let sid = iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
+        ConnectSessionRequest {
+            sid: B64.encode(sid),
+            network_id,
+            app_pk: B64.encode(app_pk),
+            nonce: B64.encode(nonce),
+            node: None,
+        }
+    }
+
     #[tokio::test]
     async fn connect_session_requires_client_sid() {
-        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
-            std::sync::Arc::new("testnet".parse().unwrap());
-        // Missing sid should be rejected
-        let req = ConnectSessionRequest {
-            sid: None,
-            node: None,
-        };
-        let err = handle_connect_session(chain_id.clone(), NoritoJson(req))
+        let network_id = network_id(b"connect-session-genesis");
+        let mut req = valid_request(network_id);
+        req.sid.clear();
+        let err = handle_connect_session(network_id, NoritoJson(req))
             .await
             .err();
         assert!(err.is_some(), "expected error when sid is missing");
@@ -6078,18 +6151,18 @@ mod connect_session_tests {
 
     #[tokio::test]
     async fn connect_session_accepts_valid_sid_b64() {
-        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
-            std::sync::Arc::new("testnet".parse().unwrap());
-        let sid_bytes = [7u8; 32];
-        let sid_str = B64.encode(sid_bytes);
-        let req = ConnectSessionRequest {
-            sid: Some(sid_str.clone()),
-            node: Some(String::new()),
-        };
-        let resp = handle_connect_session(chain_id.clone(), NoritoJson(req))
+        let network_id = network_id(b"connect-session-genesis");
+        let req = valid_request(network_id);
+        let sid_str = req.sid.clone();
+        let app_pk = req.app_pk.clone();
+        let nonce = req.nonce.clone();
+        let resp = handle_connect_session(network_id, NoritoJson(req))
             .await
             .expect("ok");
         assert_eq!(resp.0.sid, sid_str);
+        assert_eq!(resp.0.network_id, network_id);
+        assert_eq!(resp.0.app_pk, app_pk);
+        assert_eq!(resp.0.nonce, nonce);
         assert!(
             resp.0.token_app.len() > 0
                 && resp.0.token_wallet.len() > 0
@@ -6100,35 +6173,55 @@ mod connect_session_tests {
         assert!(resp.0.app_uri.contains(&sid_str));
         assert!(resp.0.wallet_uri.contains("&relay="));
         assert!(resp.0.app_uri.contains("&relay="));
+        assert!(resp.0.wallet_uri.contains("network_id="));
+        assert!(!resp.0.wallet_uri.contains("chain_id="));
     }
 
     #[tokio::test]
     async fn connect_session_rejects_hex_sid() {
-        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
-            std::sync::Arc::new("testnet".parse().unwrap());
-        let sid_hex = hex::encode([9u8; 32]);
-        let req = ConnectSessionRequest {
-            sid: Some(sid_hex),
-            node: None,
-        };
-        let err = handle_connect_session(chain_id.clone(), NoritoJson(req))
+        let network_id = network_id(b"connect-session-genesis");
+        let mut req = valid_request(network_id);
+        req.sid = hex::encode([9u8; 32]);
+        let err = handle_connect_session(network_id, NoritoJson(req))
             .await
             .err();
         assert!(err.is_some(), "expected error when sid is hex");
     }
 
     #[tokio::test]
+    async fn connect_session_rejects_same_label_different_genesis_before_rng() {
+        let expected = network_id(b"same-display-label-genesis-a");
+        let supplied = network_id(b"same-display-label-genesis-b");
+        let req = valid_request(supplied);
+        let err = handle_connect_session_with_rng(expected, req, &mut FailingConnectSessionRng)
+            .await
+            .err()
+            .expect("wrong exact network must fail before token generation");
+        assert!(matches!(
+            err,
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_session_rejects_sid_network_substitution() {
+        let expected = network_id(b"connect-session-genesis-a");
+        let other = network_id(b"connect-session-genesis-b");
+        let mut req = valid_request(expected);
+        req.sid = valid_request(other).sid;
+        let err = handle_connect_session(expected, NoritoJson(req))
+            .await
+            .err();
+        assert!(err.is_some(), "SID from another network must be rejected");
+    }
+
+    #[tokio::test]
     async fn connect_session_reports_token_rng_failure() {
-        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
-            std::sync::Arc::new("testnet".parse().unwrap());
-        let sid_str = B64.encode([7u8; 32]);
-        let req = ConnectSessionRequest {
-            sid: Some(sid_str),
-            node: Some(String::new()),
-        };
+        let network_id = network_id(b"connect-session-genesis");
+        let req = valid_request(network_id);
 
         let err =
-            match handle_connect_session_with_rng(chain_id, req, &mut FailingConnectSessionRng)
+            match handle_connect_session_with_rng(network_id, req, &mut FailingConnectSessionRng)
                 .await
             {
                 Ok(_) => panic!("Connect session token RNG failure must be reported"),
@@ -13695,7 +13788,6 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
 }
 
 fn handle_transaction_inner_sync(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -13729,24 +13821,22 @@ fn handle_transaction_inner_sync(
 
 #[iroha_futures::telemetry_future]
 async fn handle_transaction_inner(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
     telemetry: &MaybeTelemetry,
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
-    handle_transaction_inner_sync(chain_id, queue, state, tx, telemetry, routing_plan)
+    handle_transaction_inner_sync(queue, state, tx, telemetry, routing_plan)
 }
 
 pub async fn handle_transaction(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
 ) -> Result<()> {
     let telemetry = MaybeTelemetry::disabled();
-    handle_transaction_inner(chain_id, queue, state, tx, &telemetry, None)
+    handle_transaction_inner(queue, state, tx, &telemetry, None)
         .await
         .map(|_| ())
 }
@@ -13779,22 +13869,18 @@ fn observe_route_stage_latency(
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 /// Handle a transaction and record direct Torii admission metrics when telemetry is enabled.
 pub async fn handle_transaction_with_metrics(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
     telemetry: MaybeTelemetry,
     endpoint: &'static str,
 ) -> Result<RoutingDecision> {
-    handle_transaction_with_metrics_and_routing_plan(
-        chain_id, queue, state, tx, telemetry, None, endpoint,
-    )
-    .await
+    handle_transaction_with_metrics_and_routing_plan(queue, state, tx, telemetry, None, endpoint)
+        .await
 }
 
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 async fn handle_transaction_with_metrics_and_routing_plan(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -13805,8 +13891,7 @@ async fn handle_transaction_with_metrics_and_routing_plan(
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
 
-    let result =
-        handle_transaction_inner(chain_id, queue, state, tx, &telemetry, routing_plan).await;
+    let result = handle_transaction_inner(queue, state, tx, &telemetry, routing_plan).await;
 
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
@@ -13832,7 +13917,6 @@ async fn handle_transaction_with_metrics_and_routing_plan(
 
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 fn handle_transaction_with_metrics_and_routing_plan_sync(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -13843,8 +13927,7 @@ fn handle_transaction_with_metrics_and_routing_plan_sync(
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
 
-    let result =
-        handle_transaction_inner_sync(chain_id, queue, state, tx, &telemetry, routing_plan);
+    let result = handle_transaction_inner_sync(queue, state, tx, &telemetry, routing_plan);
 
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
@@ -13867,6 +13950,8 @@ fn handle_transaction_with_metrics_and_routing_plan_sync(
 
     result
 }
+
+include!("routing/transaction_admission_domain_source_tests.rs");
 
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_latency_tests {
@@ -17911,7 +17996,6 @@ async fn submit_asset_transfer_request(
                     .ok_or(error)?
                 } else {
                     match handle_transaction_with_metrics(
-                        chain_id,
                         Arc::clone(&queue),
                         Arc::clone(&state),
                         transaction,
@@ -18725,7 +18809,6 @@ mod asset_transfer_request_tests {
 /// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 async fn submit_contract_call_request(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -18860,7 +18943,7 @@ async fn submit_contract_call_request(
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
-        handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
+        handle_transaction_with_metrics(queue, state, tx, telemetry, endpoint).await?;
         return Ok(ContractCallResponseDto {
             ok: true,
             submitted: true,
@@ -19468,22 +19551,14 @@ pub async fn handle_post_asset_transfer(
 /// POST /v1/contracts/call — submit a public contract call transaction and
 /// return the queued execution receipt metadata.
 pub async fn handle_post_contract_call(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<ContractCallDto>,
 ) -> Result<impl IntoResponse> {
-    let response = submit_contract_call_request(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        req,
-        "/v1/contracts/call",
-        None,
-    )
-    .await?;
+    let response =
+        submit_contract_call_request(queue, state, telemetry, req, "/v1/contracts/call", None)
+            .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -19794,7 +19869,6 @@ pub(crate) async fn handle_post_bridge_proof_submit(
                     ))
                 })?;
                 handle_transaction_with_metrics_and_routing_plan_sync(
-                    chain_id,
                     queue,
                     state,
                     transaction,
@@ -20052,7 +20126,6 @@ pub(crate) async fn handle_post_bridge_message_submit(
                     ))
                 })?;
                 handle_transaction_with_metrics_and_routing_plan_sync(
-                    chain_id,
                     queue,
                     state,
                     transaction,
@@ -23946,14 +24019,18 @@ mod multisig_contract_call_tests {
     fn contract_runtime_permission_target_is_exactly_bound_to_instance_and_selector() {
         let authority = sample_account_id();
         let first = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             iroha_data_model::nexus::DataSpaceId::new(10),
         )
         .expect("first contract address");
         let second = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             2,
             iroha_data_model::nexus::DataSpaceId::new(10),
@@ -23992,7 +24069,9 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &multisig,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -24031,7 +24110,9 @@ mod multisig_contract_call_tests {
     fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &multisig,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -24109,7 +24190,9 @@ mod multisig_contract_call_tests {
     fn multisig_contract_call_intent_requires_exact_canonical_envelope() {
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &multisig,
             7,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -25239,7 +25322,9 @@ seiyaku ZkIvmPayloadNormalizeTest {
         assert_eq!(normalized, payload);
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -25888,7 +25973,9 @@ mod multisig_selector_tests {
         deploy_nonce: u64,
     ) -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             authority,
             deploy_nonce,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -26471,7 +26558,6 @@ mod multisig_selector_tests {
         );
 
         let response = handle_post_contract_call(
-            Arc::new("contract-call-address-target".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -26515,7 +26601,6 @@ mod multisig_selector_tests {
         let authority =
             checked_multisig_selector_account_id(0x6a, "derive missing-target authority key");
         let result = handle_post_contract_call(
-            Arc::new("contract-call-missing-target".parse().expect("chain id")),
             build_queue(),
             build_state(World::default()),
             MaybeTelemetry::disabled(),
@@ -26554,7 +26639,6 @@ mod multisig_selector_tests {
             "derive missing-contract-alias authority key",
         );
         let result = handle_post_contract_call(
-            Arc::new("contract-call-missing-alias".parse().expect("chain id")),
             build_queue(),
             build_state(World::default()),
             MaybeTelemetry::disabled(),
@@ -26607,7 +26691,6 @@ mod multisig_selector_tests {
             checked_multisig_selector_account_id(0x6b, "derive multisig outsider signer key");
 
         let err = handle_post_contract_call_multisig_propose(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -27679,7 +27762,6 @@ mod multisig_selector_tests {
         ) = multisig_test_world();
         let state = build_state(world);
         let response = handle_post_contract_call_multisig_approve(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -27724,7 +27806,6 @@ mod multisig_selector_tests {
         ) = multisig_test_world();
         let state = build_state(world);
         let response = handle_post_multisig_cancel(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -27800,7 +27881,6 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
         let response = handle_post_multisig_cancel(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -27852,7 +27932,6 @@ mod multisig_selector_tests {
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
         let response = handle_post_contract_call_multisig_propose(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -27924,7 +28003,6 @@ seiyaku BytesPayloadNormalizeTest {
             "alias_literal": "0x62616e6b696e674063656e7472616c62616e6b"
         }));
         let response = handle_post_contract_call_multisig_propose(
-            Arc::new("multisig-selector-test".parse().expect("chain id")),
             build_queue(),
             Arc::clone(&state),
             MaybeTelemetry::disabled(),
@@ -28001,7 +28079,6 @@ seiyaku BytesPayloadNormalizeTest {
             dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
 
         let response = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -28049,7 +28126,6 @@ seiyaku BytesPayloadNormalizeTest {
             dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
 
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28073,7 +28149,6 @@ seiyaku BytesPayloadNormalizeTest {
         assert!(expect_conversion(err).contains("public_key_hex is required"));
 
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28097,7 +28172,6 @@ seiyaku BytesPayloadNormalizeTest {
         assert!(expect_conversion(err).contains("signature_b64 is required"));
 
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28141,7 +28215,6 @@ seiyaku BytesPayloadNormalizeTest {
             dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
 
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28170,7 +28243,6 @@ seiyaku BytesPayloadNormalizeTest {
             ("noncanonical", NONCANONICAL_PUBLIC_KEY),
         ] {
             let err = handle_post_multisig_propose(
-                Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
                 build_queue(),
                 state.clone(),
                 MaybeTelemetry::disabled(),
@@ -28207,7 +28279,6 @@ seiyaku BytesPayloadNormalizeTest {
                 .1,
         );
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28236,7 +28307,6 @@ seiyaku BytesPayloadNormalizeTest {
             .expect("fixture signer public key must be well-formed");
         let signer_public_key_hex = hex::encode(signer_public_key);
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state.clone(),
             MaybeTelemetry::disabled(),
@@ -28261,7 +28331,6 @@ seiyaku BytesPayloadNormalizeTest {
 
         let forged_signature_b64 = base64::engine::general_purpose::STANDARD.encode([0_u8; 64]);
         let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -28291,11 +28360,6 @@ seiyaku BytesPayloadNormalizeTest {
 
         let (mut world, multisig_account_id, signer_account_id, _alias_literal, signer_keypair) =
             quorum_one_multisig_world();
-        let chain_id: Arc<ChainId> = Arc::new(
-            "multisig-generic-immediate-route-test"
-                .parse()
-                .expect("chain id"),
-        );
         let creation_time_ms = current_time_millis();
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
@@ -28365,7 +28429,6 @@ seiyaku BytesPayloadNormalizeTest {
             .encode(signed.signature().payload().payload());
 
         let response = handle_post_multisig_propose(
-            Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             MaybeTelemetry::disabled(),
@@ -28434,11 +28497,6 @@ seiyaku BytesPayloadNormalizeTest {
             signer_keypair.public_key(),
             "fixture signer identity must match its deterministic key",
         );
-        let chain_id: Arc<ChainId> = Arc::new(
-            "multisig-generic-proposal-only-test"
-                .parse()
-                .expect("chain id"),
-        );
         let creation_time_ms = current_time_millis();
         let instructions = vec![dm::InstructionBox::from(dm::Log::new(
             dm::Level::INFO,
@@ -28482,7 +28540,6 @@ seiyaku BytesPayloadNormalizeTest {
             .encode(signed.signature().payload().payload());
 
         let response = handle_post_multisig_propose(
-            chain_id,
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -28522,7 +28579,9 @@ seiyaku BytesPayloadNormalizeTest {
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &signer_account_id,
             7,
             paynet_dataspace_id,
@@ -28764,7 +28823,6 @@ seiyaku BytesPayloadNormalizeTest {
         let state = build_state(world);
 
         let response = handle_post_multisig_approve(
-            Arc::new("multisig-generic-approve-test".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -28803,7 +28861,6 @@ seiyaku BytesPayloadNormalizeTest {
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_call_multisig_propose(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -28975,7 +29032,6 @@ pub async fn handle_post_contract_call_multisig_propose(
             None
         };
         handle_transaction_with_metrics_and_routing_plan(
-            chain_id,
             queue,
             Arc::clone(&state),
             tx,
@@ -29041,7 +29097,6 @@ pub async fn handle_post_contract_call_multisig_propose(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_call_multisig_approve(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -29124,7 +29179,6 @@ pub async fn handle_post_contract_call_multisig_approve(
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
-            chain_id,
             queue,
             state,
             tx,
@@ -29169,7 +29223,6 @@ pub async fn handle_post_contract_call_multisig_approve(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_cancel(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -29296,7 +29349,6 @@ pub async fn handle_post_multisig_cancel(
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
-            chain_id,
             queue,
             Arc::clone(&state),
             tx,
@@ -29363,7 +29415,6 @@ pub async fn handle_post_multisig_cancel(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_propose(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -29504,7 +29555,6 @@ pub async fn handle_post_multisig_propose(
             None
         };
         handle_transaction_with_metrics_and_routing_plan(
-            chain_id,
             queue,
             Arc::clone(&state),
             tx,
@@ -29569,7 +29619,6 @@ pub async fn handle_post_multisig_propose(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approve(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -29651,15 +29700,8 @@ pub async fn handle_post_multisig_approve(
             ))
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            ENDPOINT_MULTISIG_APPROVE,
-        )
-        .await?;
+        handle_transaction_with_metrics(queue, state, tx, telemetry, ENDPOINT_MULTISIG_APPROVE)
+            .await?;
         MultisigContractCallResponseDto {
             ok: true,
             resolved_multisig_account_id: multisig_account_id.clone(),
@@ -30082,7 +30124,6 @@ fn recovery_guardian_authorized(
 
 #[cfg(feature = "app_api")]
 async fn execute_account_recovery_mutation(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -30120,15 +30161,7 @@ async fn execute_account_recovery_mutation(
                 ))
             })?;
             let tx_hash_hex = hex::encode(transaction.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                transaction,
-                telemetry,
-                endpoint,
-            )
-            .await?;
+            handle_transaction_with_metrics(queue, state, transaction, telemetry, endpoint).await?;
             (true, Some(tx_hash_hex), None, None)
         } else {
             let draft = app_api_transaction_draft(&builder);
@@ -30158,7 +30191,6 @@ async fn execute_account_recovery_mutation(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_policy_set(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -30183,7 +30215,6 @@ pub async fn handle_post_account_recovery_policy_set(
     }
     let instruction = iroha_data_model::isi::SetAccountRecoveryPolicy { account, policy };
     execute_account_recovery_mutation(
-        chain_id,
         queue,
         state,
         telemetry,
@@ -30200,7 +30231,6 @@ pub async fn handle_post_account_recovery_policy_set(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_propose(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -30218,7 +30248,6 @@ pub async fn handle_post_account_recovery_propose(
         new_controller: request.new_controller,
     };
     execute_account_recovery_mutation(
-        chain_id,
         queue,
         state,
         telemetry,
@@ -30235,7 +30264,6 @@ pub async fn handle_post_account_recovery_propose(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_approve(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -30247,7 +30275,6 @@ pub async fn handle_post_account_recovery_approve(
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
     let instruction = iroha_data_model::isi::ApproveAccountRecovery { alias };
     execute_account_recovery_mutation(
-        chain_id,
         queue,
         state,
         telemetry,
@@ -30264,7 +30291,6 @@ pub async fn handle_post_account_recovery_approve(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_finalize(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -30276,7 +30302,6 @@ pub async fn handle_post_account_recovery_finalize(
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
     let instruction = iroha_data_model::isi::FinalizeAccountRecovery { alias };
     execute_account_recovery_mutation(
-        chain_id,
         queue,
         state,
         telemetry,
@@ -31641,7 +31666,6 @@ mod vk_record_input_tests {
 /// POST /v1/zk/vk/register — prepare `RegisterVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_register(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ZkVkRegisterDto>,
@@ -31670,12 +31694,8 @@ pub async fn handle_post_vk_register(
         record: vk_record,
     };
     let builder = quote_app_api_transaction_builder(
-        dm::TransactionBuilder::new(
-            *state.network_id_ref(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+        new_app_api_transaction_builder_from_state(state.as_ref(), req.authority.clone())
+            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
         queue.as_ref(),
         state.as_ref(),
         "/v1/zk/vk/register",
@@ -31686,7 +31706,6 @@ pub async fn handle_post_vk_register(
 /// POST /v1/zk/vk/update — prepare `UpdateVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_update(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ZkVkUpdateDto>,
@@ -31715,12 +31734,8 @@ pub async fn handle_post_vk_update(
         record: vk_record,
     };
     let builder = quote_app_api_transaction_builder(
-        dm::TransactionBuilder::new(
-            *state.network_id_ref(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+        new_app_api_transaction_builder_from_state(state.as_ref(), req.authority.clone())
+            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
         queue.as_ref(),
         state.as_ref(),
         "/v1/zk/vk/update",
@@ -34227,7 +34242,6 @@ pub struct RecordPorVerdictResponseDto {
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_alias_set(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<SetContractAliasDto>,
@@ -34257,12 +34271,8 @@ pub async fn handle_post_contract_alias_set(
         None => dm::InstructionBox::from(SetContractAlias::clear(contract_address.clone())),
     };
     let builder = quote_app_api_transaction_builder(
-        dm::TransactionBuilder::new(
-            *state.network_id_ref(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(std::iter::once(instruction)),
+        new_app_api_transaction_builder_from_state(state.as_ref(), authority)
+            .with_instructions(std::iter::once(instruction)),
         queue.as_ref(),
         state.as_ref(),
         "/v1/contracts/aliases",
@@ -34283,7 +34293,6 @@ pub async fn handle_post_contract_alias_set(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_register_manifest(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -34297,7 +34306,6 @@ pub async fn handle_post_sorafs_register_manifest(
     let tx_hash_hex = hex::encode(transaction.hash().as_ref());
 
     handle_transaction_with_metrics(
-        chain_id,
         queue,
         state,
         transaction,
@@ -34483,7 +34491,6 @@ fn validate_sorafs_capacity_telemetry_transaction<'a>(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_register_capacity_declaration(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -34507,7 +34514,6 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     };
 
     handle_transaction_with_metrics(
-        chain_id,
         queue,
         state,
         transaction,
@@ -34528,7 +34534,6 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_record_capacity_telemetry(
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -34551,7 +34556,6 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
     };
 
     handle_transaction_with_metrics(
-        chain_id,
         queue,
         state,
         transaction,
@@ -35576,7 +35580,6 @@ mod sorafs_pin_tests {
     fn handler_context<F>(
         configure_state: F,
     ) -> (
-        Arc<iroha_data_model::ChainId>,
         Arc<iroha_core::queue::Queue>,
         Arc<iroha_core::state::State>,
         MaybeTelemetry,
@@ -35596,15 +35599,13 @@ mod sorafs_pin_tests {
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<iroha_data_model::ChainId> =
-            Arc::new("chain".parse().expect("parse chain id"));
 
         #[cfg(feature = "telemetry")]
         let telemetry = MaybeTelemetry::for_tests();
         #[cfg(not(feature = "telemetry"))]
         let telemetry = MaybeTelemetry::disabled();
 
-        (chain_id, queue, state, telemetry)
+        (queue, state, telemetry)
     }
 
     fn conversion_message(err: Error) -> String {
@@ -35714,20 +35715,14 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let (queue, state, telemetry) = handler_context(|_| {});
         let transaction = transaction_from_manifest(*state.network_id_ref(), &manifest);
         let expected_tx_hash = hex::encode(transaction.hash().as_ref());
 
-        let resp = handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            transaction,
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
+        let resp = handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+            .await
+            .expect("handler ok")
+            .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
@@ -35763,7 +35758,7 @@ mod sorafs_pin_tests {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
         };
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let (queue, state, telemetry) = handler_context(|_| {});
         let transaction = transaction_from_instructions(
             *state.network_id_ref(),
             [dm::InstructionBox::from(
@@ -35775,14 +35770,8 @@ mod sorafs_pin_tests {
             )],
         );
 
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            transaction,
-        )
-        .await
+        let err = match handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+            .await
         {
             Ok(_) => panic!("legacy manifest layout must fail closed"),
             Err(err) => err,
@@ -35796,7 +35785,7 @@ mod sorafs_pin_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_empty_manifest_payload_before_decode() {
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let (queue, state, telemetry) = handler_context(|_| {});
         let transaction = transaction_from_instructions(
             *state.network_id_ref(),
             [dm::InstructionBox::from(
@@ -35804,14 +35793,8 @@ mod sorafs_pin_tests {
             )],
         );
 
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            transaction,
-        )
-        .await
+        let err = match handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+            .await
         {
             Ok(_) => panic!("empty manifest payload must fail before decode"),
             Err(err) => err,
@@ -35830,19 +35813,13 @@ mod sorafs_pin_tests {
     {
         let mut manifest = default_manifest();
         manifest.governance.council_signatures.clear();
-        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+        let (queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
         let transaction = transaction_from_manifest(*state.network_id_ref(), &manifest);
 
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            transaction,
-        )
-        .await
+        let err = match handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+            .await
         {
             Ok(_) => panic!("manifest payload without council signatures must fail"),
             Err(err) => err,
@@ -36014,7 +35991,6 @@ mod sorafs_pin_tests {
         use crate::mk_app_state_for_tests;
 
         let app = mk_app_state_for_tests();
-        let chain_id = Arc::clone(&app.chain_id);
         let queue = Arc::clone(&app.queue);
         let state = Arc::clone(&app.state);
         let manifest = default_manifest();
@@ -36041,16 +36017,10 @@ mod sorafs_pin_tests {
         #[cfg(not(feature = "telemetry"))]
         let telemetry = app.telemetry.clone();
 
-        let resp = handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            transaction,
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
+        let resp = handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+            .await
+            .expect("handler ok")
+            .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
@@ -36373,7 +36343,6 @@ mod sorafs_capacity_tests {
     fn test_state_components() -> (
         Arc<CoreState>,
         Arc<iroha_core::queue::Queue>,
-        Arc<ChainId>,
         MaybeTelemetry,
     ) {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -36386,12 +36355,11 @@ mod sorafs_capacity_tests {
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<ChainId> = Arc::new("chain".parse().unwrap());
         #[cfg(feature = "telemetry")]
         let telemetry = MaybeTelemetry::for_tests();
         #[cfg(not(feature = "telemetry"))]
         let telemetry = MaybeTelemetry::disabled();
-        (state, queue, chain_id, telemetry)
+        (state, queue, telemetry)
     }
 
     fn seed_capacity_declaration(node: &sorafs_node::NodeHandle) {
@@ -36430,7 +36398,7 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     async fn transaction_signature_limit_rejects_and_records_metrics() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components();
 
         #[cfg(feature = "telemetry")]
         let before = telemetry.metrics().await.torii_signature_limit_total.get();
@@ -36460,7 +36428,6 @@ mod sorafs_capacity_tests {
         .sign_multisig(signers.iter().map(iroha_crypto::KeyPair::private_key));
 
         let result = handle_transaction_with_metrics(
-            Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             tx,
@@ -36493,7 +36460,7 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_declaration_handler_queues_caller_signed_transaction() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components();
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
         let transaction = signed_capacity_declaration_transaction(
             *state.network_id_ref(),
@@ -36504,7 +36471,6 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
 
         let resp = handle_post_sorafs_register_capacity_declaration(
-            Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             telemetry,
@@ -36730,7 +36696,7 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_telemetry_handler_queues_caller_signed_record() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components();
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
@@ -36741,7 +36707,6 @@ mod sorafs_capacity_tests {
         );
 
         let resp = handle_post_sorafs_record_capacity_telemetry(
-            chain_id,
             queue,
             state,
             telemetry,
@@ -36771,7 +36736,7 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     async fn capacity_mutation_replay_is_rejected_by_the_transaction_queue() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components();
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
@@ -36781,7 +36746,6 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
 
         handle_post_sorafs_record_capacity_telemetry(
-            Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             telemetry.clone(),
@@ -36795,7 +36759,6 @@ mod sorafs_capacity_tests {
             .expect("the signed transaction remains structurally valid");
         assert!(
             handle_post_sorafs_record_capacity_telemetry(
-                chain_id,
                 queue,
                 state,
                 telemetry,
@@ -36876,7 +36839,7 @@ mod sorafs_capacity_tests {
             }
         }
 
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
+        let (_state, _queue, telemetry) = test_state_components();
         let (node, _dir) = sorafs_node_with_temp_storage();
         let por_coordinator = Arc::new(sorafs::PorCoordinator::new());
         seed_capacity_declaration(&node);
@@ -50174,32 +50137,23 @@ mod transaction_ingress_overload_tests {
             },
             events,
         ));
-        let chain_id: Arc<ChainId> = Arc::new("overload-chain".parse().expect("valid chain id"));
         let first_key_pair =
             checked_transaction_ingress_keypair(0x9A, "derive first ingress fixture signer key");
         let first = signed_log_transaction(*state.network_id_ref(), &first_key_pair, "first");
-        handle_transaction(
-            Arc::clone(&chain_id),
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            first,
-        )
-        .await
-        .expect("first transaction should enter queue");
+        handle_transaction(Arc::clone(&queue), Arc::clone(&state), first)
+            .await
+            .expect("first transaction should enter queue");
 
         queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
 
         let second_key_pair =
             checked_transaction_ingress_keypair(0x9B, "derive second ingress fixture signer key");
         let second = signed_log_transaction(*state.network_id_ref(), &second_key_pair, "second");
-        handle_transaction(
-            Arc::clone(&chain_id),
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            second,
-        )
-        .await
-        .expect("latency-saturated queue should accept fresh ingress until capacity is exhausted");
+        handle_transaction(Arc::clone(&queue), Arc::clone(&state), second)
+            .await
+            .expect(
+                "latency-saturated queue should accept fresh ingress until capacity is exhausted",
+            );
 
         let pressure = queue.pressure_snapshot();
         assert!(
@@ -50333,7 +50287,9 @@ mod validation_fee_torii_ingress_tests {
 
     fn payout_contract_address(user: &AccountId) -> ContractAddress {
         ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             user,
             42,
             DataSpaceId::UNIVERSAL,
@@ -50344,7 +50300,9 @@ mod validation_fee_torii_ingress_tests {
     fn pool_contract_address() -> ContractAddress {
         let (deployer, _) = account(4, "derive validation-fee pool deployer");
         ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             43,
             DataSpaceId::UNIVERSAL,
@@ -50629,7 +50587,7 @@ mod validation_fee_torii_ingress_tests {
         ))
     }
 
-    fn commit_empty_genesis_like_block(state: &Arc<State>) -> [u8; 32] {
+    fn commit_empty_genesis_like_block(state: &Arc<State>) {
         let block_signer = fixture_key_pair(
             240,
             Algorithm::BlsNormal,
@@ -50643,10 +50601,8 @@ mod validation_fee_torii_ingress_tests {
         let valid_block =
             ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
         let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-        let genesis_hash = committed_block.as_ref().hash();
         let _events = state_block.apply_without_execution(&committed_block, Vec::new());
         state_block.commit().expect("commit initial block hash");
-        *genesis_hash.as_ref()
     }
 
     fn validation_fee_policy(
@@ -50654,7 +50610,6 @@ mod validation_fee_torii_ingress_tests {
         user: &AccountId,
         fee_asset: AssetDefinitionId,
         treasury: AccountId,
-        genesis_hash: [u8; 32],
     ) -> ValidationFeePolicyV1 {
         let payout_binding = payout_binding(user, &fee_asset);
         assert_eq!(
@@ -50663,8 +50618,7 @@ mod validation_fee_torii_ingress_tests {
         );
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            chain_id: state.chain_id.clone(),
-            genesis_hash,
+            network_id: *state.network_id_ref(),
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: fee_asset,
@@ -51170,10 +51124,8 @@ mod validation_fee_torii_ingress_tests {
     #[tokio::test]
     async fn torii_raw_fee_asset_transfer_reaches_validator_fee_admission() {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-        let chain_id = Arc::new(state.chain_id.clone());
-        let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy =
-            validation_fee_policy(&state, &user, fee_asset.clone(), treasury, genesis_hash);
+        commit_empty_genesis_like_block(&state);
+        let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury);
         install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
         let missing_fee_queue = queue();
@@ -51187,7 +51139,6 @@ mod validation_fee_torii_ingress_tests {
             false,
         );
         handle_transaction(
-            Arc::clone(&chain_id),
             Arc::clone(&missing_fee_queue),
             Arc::clone(&state),
             missing_fee_tx,
@@ -51218,7 +51169,6 @@ mod validation_fee_torii_ingress_tests {
             true,
         );
         handle_transaction(
-            Arc::clone(&chain_id),
             Arc::clone(&exact_fee_queue),
             Arc::clone(&state),
             exact_fee_tx,
@@ -51236,15 +51186,8 @@ mod validation_fee_torii_ingress_tests {
     #[tokio::test]
     async fn torii_native_multisig_signed_fee_coordinate_resolves_nested_context() {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-        let chain_id = Arc::new(state.chain_id.clone());
-        let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy = validation_fee_policy(
-            &state,
-            &user,
-            fee_asset.clone(),
-            treasury.clone(),
-            genesis_hash,
-        );
+        commit_empty_genesis_like_block(&state);
+        let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury.clone());
         install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
         let (multisig, _) = account(4, "derive validation-fee multisig account");
 
@@ -51288,7 +51231,6 @@ mod validation_fee_torii_ingress_tests {
 
         let exact_queue = queue();
         handle_transaction(
-            Arc::clone(&chain_id),
             Arc::clone(&exact_queue),
             Arc::clone(&state),
             signed(vec![proposal().into()], 1),
@@ -51307,7 +51249,6 @@ mod validation_fee_torii_ingress_tests {
 
         let wrong_queue = queue();
         handle_transaction(
-            Arc::clone(&chain_id),
             Arc::clone(&wrong_queue),
             Arc::clone(&state),
             signed(vec![proposal().into()], 0),
@@ -51330,7 +51271,6 @@ mod validation_fee_torii_ingress_tests {
             "xor".parse().expect("asset name"),
         );
         handle_transaction(
-            chain_id,
             Arc::clone(&ambiguous_queue),
             Arc::clone(&state),
             signed(
@@ -51367,9 +51307,8 @@ mod validation_fee_torii_ingress_tests {
         ValidationFeePolicyV1,
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
-        let genesis_hash = commit_empty_genesis_like_block(&app.state);
-        let policy =
-            validation_fee_policy(&app.state, &user, fee_asset.clone(), treasury, genesis_hash);
+        commit_empty_genesis_like_block(&app.state);
+        let policy = validation_fee_policy(&app.state, &user, fee_asset.clone(), treasury);
         install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
@@ -51549,7 +51488,6 @@ mod lane_admission_metrics_tests {
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<ChainId> = Arc::new("metrics_chain".parse().expect("valid chain id"));
         let telemetry = MaybeTelemetry::for_tests();
 
         let key_pair = checked_routing_fixture_keypair(
@@ -51568,7 +51506,6 @@ mod lane_admission_metrics_tests {
         .sign(key_pair.private_key());
 
         handle_transaction_with_metrics(
-            Arc::clone(&chain_id),
             queue,
             state,
             tx,
@@ -51825,8 +51762,6 @@ mod hot_path_load_profile_tests {
             ..Default::default()
         };
         let tx_queue = Arc::new(Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<ChainId> =
-            Arc::new("torii_load_profile_chain".parse().expect("valid chain id"));
         let tx_key_pair = checked_routing_fixture_keypair(
             0x9E,
             iroha_crypto::Algorithm::Ed25519,
@@ -51844,7 +51779,6 @@ mod hot_path_load_profile_tests {
             .with_instructions([InstructionBox::from(instruction)])
             .sign(tx_key_pair.private_key());
             let decision = handle_transaction_with_metrics(
-                Arc::clone(&chain_id),
                 Arc::clone(&tx_queue),
                 Arc::clone(&tx_state),
                 tx,
@@ -51872,7 +51806,6 @@ mod hot_path_load_profile_tests {
         for tx in transactions {
             let start = Instant::now();
             let decision = handle_transaction_with_metrics(
-                Arc::clone(&chain_id),
                 Arc::clone(&tx_queue),
                 Arc::clone(&tx_state),
                 tx,
@@ -58937,8 +58870,8 @@ pub struct AccountOnboardingPlanBodyDto {
     pub request: AccountOnboardingPlanRequestDto,
     /// Configured Torii authority and transaction payer.
     pub authority: AccountId,
-    /// Chain to which the receipt is bound.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network to which the receipt is bound.
+    pub network_id: NetworkId,
     /// Committed state anchor used by planning.
     pub anchor: iroha_data_model::alias_setup::AliasPlanAnchorV1,
     /// Canonical account-alias resource and its live-state disposition.
@@ -59425,7 +59358,9 @@ fn faucet_claim_scanner_includes_instruction_items_from_mixed_batch() {
     let transfer: InstructionBox =
         Transfer::asset_quantity(source_asset_id.clone(), amount.clone(), BOB_ID.clone()).into();
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         1,
         DataSpaceId::UNIVERSAL,
@@ -60327,7 +60262,7 @@ fn build_account_onboarding_plan(
         version: AccountOnboardingPlanBodyDto::VERSION,
         request: normalized.request,
         authority: signer.authority.clone(),
-        chain_id: app.chain_id.as_ref().clone(),
+        network_id: *app.state.network_id_ref(),
         anchor,
         resource: AliasPlanResourceV1 {
             intent: normalized.intent,
@@ -60389,11 +60324,11 @@ pub async fn handle_v1_accounts_onboard_apply(
     if receipt.body.version != AccountOnboardingPlanBodyDto::VERSION
         || receipt.body.request.version != AccountOnboardingPlanRequestDto::VERSION
         || receipt.body.authority != signer.authority
-        || receipt.body.chain_id != *app.chain_id
+        || receipt.body.network_id != *app.state.network_id_ref()
     {
         return Err(Error::AppConflict {
             code: "alias.onboarding.receipt_context_mismatch",
-            message: "onboarding receipt does not match the active chain, signer, or layout"
+            message: "onboarding receipt does not match the active network, signer, or layout"
                 .to_owned(),
         });
     }
@@ -60560,7 +60495,6 @@ pub async fn handle_v1_accounts_onboard_apply(
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         tx,
@@ -60722,7 +60656,6 @@ pub async fn handle_v1_accounts_faucet(
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         tx,
@@ -62020,14 +61953,12 @@ pub async fn handle_v1_space_directory_manifests(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_publish(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestPublishDto>,
 ) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{
-        isi::space_directory::PublishSpaceDirectoryManifest,
-        prelude::{InstructionBox, TransactionBuilder},
+        isi::space_directory::PublishSpaceDirectoryManifest, prelude::InstructionBox,
     };
 
     let SpaceDirectoryManifestPublishDto {
@@ -62046,12 +61977,8 @@ pub async fn handle_post_space_directory_manifest_publish(
 
     let isi = PublishSpaceDirectoryManifest { manifest };
     let builder = quote_app_api_transaction_builder(
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            authority.into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(isi)]),
+        new_app_api_transaction_builder_from_state(state.as_ref(), authority)
+            .with_instructions([InstructionBox::from(isi)]),
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH,
@@ -62065,14 +61992,12 @@ pub async fn handle_post_space_directory_manifest_publish(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_revoke(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestRevokeDto>,
 ) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{
-        isi::space_directory::RevokeSpaceDirectoryManifest,
-        prelude::{InstructionBox, TransactionBuilder},
+        isi::space_directory::RevokeSpaceDirectoryManifest, prelude::InstructionBox,
     };
 
     let SpaceDirectoryManifestRevokeDto {
@@ -62091,12 +62016,8 @@ pub async fn handle_post_space_directory_manifest_revoke(
         reason,
     };
     let builder = quote_app_api_transaction_builder(
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            authority.into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(isi)]),
+        new_app_api_transaction_builder_from_state(state.as_ref(), authority)
+            .with_instructions([InstructionBox::from(isi)]),
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE,
@@ -70132,7 +70053,6 @@ fn build_usage_trigger(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_plan(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<SubscriptionPlanCreateDto>,
@@ -70165,12 +70085,8 @@ pub async fn handle_post_v1_subscription_plan(
     ];
 
     let builder = quote_app_api_transaction_builder(
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
+        new_app_api_transaction_builder_from_state(state.as_ref(), authority.clone())
+            .with_instructions(instructions),
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SUBSCRIPTION_PLANS_LIST,
@@ -70970,7 +70886,6 @@ pub async fn handle_post_v1_subscription_charge_now(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_usage(
-    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -70992,12 +70907,8 @@ pub async fn handle_post_v1_subscription_usage(
     };
     let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
     let builder = quote_app_api_transaction_builder(
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(instruction)]),
+        new_app_api_transaction_builder_from_state(state.as_ref(), authority.clone())
+            .with_instructions([InstructionBox::from(instruction)]),
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
@@ -71026,13 +70937,10 @@ mod subscription_api_tests {
 
     include!("routing/subscription_api_unit_tests.rs");
 
-    fn test_queue_components() -> (Arc<Queue>, Arc<ChainId>, MaybeTelemetry) {
+    fn test_queue() -> Arc<Queue> {
         let events: EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = QueueConfig::default();
-        let queue = Arc::new(Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<ChainId> = Arc::new("subscriptions-test".parse().unwrap());
-        let telemetry = MaybeTelemetry::disabled();
-        (queue, chain_id, telemetry)
+        Arc::new(Queue::from_config(queue_cfg, events))
     }
 
     fn sample_plan(provider: AccountId) -> SubscriptionPlan {

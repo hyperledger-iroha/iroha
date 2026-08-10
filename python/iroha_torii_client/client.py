@@ -1,33 +1,4 @@
-"""Torii client helpers for configuration, contracts, subscriptions, attachments, and prover reports.
-
-The API mirrors the app-facing endpoints exposed by Torii:
-
-* `/v1/subscriptions` and `/v1/subscriptions/plans` for subscription
-  management and billing triggers.
-* `/v1/configuration` for configuration snapshots and updates.
-* `/v1/contracts/*` for contract deploy/call helpers and governance bindings.
-* `/v1/zk/attachments` for uploading, listing, fetching, and deleting
-  proof attachments stored on the node.
-* `/v1/zk/prover/reports` for querying background prover results.
-* `/v1/offline/*` for universal offline capability discovery and idempotent
-  asynchronous top-up and redemption operations using direct structured JSON.
-* `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
-  config, and connected peers).
-* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-4 consensus
-  and canonical lane evidence.
-
-Example
--------
->>> client = ToriiClient("http://localhost:8080")
->>> meta = client.upload_attachment(b"{}", content_type="application/json")
->>> meta["id"]
-'ab01cdf...'
->>> client.delete_attachment(meta["id"])
-
-The helper keeps dependencies minimal (``requests`` plus ``blake3`` for exact
-asset-definition address validation) so it can be reused from tests or scripts
-without pulling the full CLI.
-"""
+"""Low-level Torii client for authenticated app APIs and authoritative evidence."""
 
 from __future__ import annotations
 
@@ -64,6 +35,7 @@ import requests
 from blake3 import blake3
 
 from . import identifier_receipts as _identifier_receipts
+from .attachment_client import authenticated_attachment_request
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
     SUMERAGI_EVIDENCE_KIND_FILTERS,
@@ -100,8 +72,9 @@ from .client_status_models import (
     SumeragiQcSnapshot,
     SumeragiV2EquivocationEvidenceRecord,
     _KAIGI_HEALTH_STATUSES,
+    parse_sumeragi_json_object,
 )
-
+from .governance_ballot_client import create_governance_ballot_client_mixin
 from .native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -110,6 +83,47 @@ from .native_amx import (
     validate_bls_normal_validator_set,
 )
 from .norito_frame import validate_norito_frame
+from .offline_models import (
+    KagemushaArtifactBindingV4Json,
+    OfflineAssetScale,
+    OfflineAuthorizationJson,
+    OfflineBranchClaimJson,
+    OfflineBranchPathJson,
+    OfflineLanePrivacyMerkleVariantJson,
+    OfflineLanePrivacyMerkleWitnessJson,
+    OfflineLanePrivacyProofJson,
+    OfflineLanePrivacyWitnessJson,
+    OfflineMerkleProofJson,
+    OfflinePeerSplitTransitionJson,
+    OfflinePeerSplitTransitionVariantJson,
+    OfflineProofAttachmentJson,
+    OfflineProofBackend,
+    OfflineProofBoxJson,
+    OfflineRecursiveSpendBundleJson,
+    OfflineRecursiveSpendProofJson,
+    OfflineRecursiveSpendStatementJson,
+    OfflineRecursiveSpendTransitionJson,
+    OfflineRedeemChangeJson,
+    OfflineRedemptionChangeTransitionJson,
+    OfflineRedemptionChangeTransitionVariantJson,
+    OfflineRedemptionIntentJson,
+    OfflineScaledAmountJson,
+    OfflineSpendBranchJson,
+    OfflineSpendableNoteJson,
+    OfflineTopUpAnchorReferenceJson,
+    OfflineTopUpShieldEvidenceJson,
+    OfflineUnshieldPublicInputsJson,
+    OfflineVerifiedFoldBundleJson,
+    OfflineVerifiedFoldRecordBundleJson,
+    OfflineVerifiedFoldStepJson,
+    OfflineVerifiedFoldVerifierRecordJson,
+    OfflineVerifierKeyIdJson,
+    OfflineVerifierStatus,
+    OfflineVerifyingKeyJson,
+    OfflineVerifyingKeyRecordJson,
+)
+from .runtime_governance_auth import RuntimeGovernanceAuthMixin
+from .status_metrics import compute_status_metric_values as _compute_status_metric_values
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
@@ -152,7 +166,6 @@ _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
 _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
-
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
@@ -934,7 +947,7 @@ __all__ = [
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
     "canonical_request_message",
-    "canonical_request_signature_message",
+    "canonical_network_request_signature_message",
     "build_canonical_request_headers",
     "encode_identifier_resolution_receipt_payload",
     "encode_identifier_resolution_receipt_attestation",
@@ -1218,7 +1231,8 @@ def canonical_request_message(
     return rendered.encode("utf-8")
 
 
-def canonical_request_signature_message(
+def canonical_network_request_signature_message(
+    network_id: str,
     method: str,
     path: str,
     body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
@@ -1226,21 +1240,53 @@ def canonical_request_signature_message(
     timestamp_ms: int,
     nonce: str,
 ) -> bytes:
-    """Build canonical request bytes plus freshness metadata for signing."""
+    """Build canonical freshness bytes bound to one exact genesis hash."""
 
-    checked_nonce = _require_exact_non_empty_string(nonce, "nonce")
-    base = canonical_request_message(method, path, body)
-    return b"\n".join((base, str(int(timestamp_ms)).encode("ascii"), checked_nonce.encode("utf-8")))
+    literal = _offline_hash_literal(network_id, "network_id")
+    checked_timestamp = _require_u64(timestamp_ms, "timestamp_ms")
+    checked_nonce = _require_canonical_nonce(nonce, "nonce")
+    network_bytes = bytes.fromhex(literal[5:69])
+    return b"".join(
+        (
+            b"iroha.app.request.network.v1\0",
+            network_bytes,
+            canonical_request_message(method, path, body),
+            b"\n",
+            str(checked_timestamp).encode("ascii"),
+            b"\n",
+            checked_nonce.encode("utf-8"),
+        )
+    )
 
 
 @dataclass(frozen=True)
 class ToriiCanonicalRequestAuth:
     """Signer configuration for app-facing Torii endpoints."""
 
+    network_id: str
     account_id: str
     signer: Callable[[bytes], Union[bytes, bytearray, memoryview]]
     timestamp_ms: Optional[int] = None
     nonce: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        _offline_hash_literal(self.network_id, "ToriiCanonicalRequestAuth.network_id")
+        _require_exact_non_empty_string(
+            self.account_id,
+            "ToriiCanonicalRequestAuth.account_id",
+        )
+        if not callable(self.signer):
+            raise TypeError("ToriiCanonicalRequestAuth.signer must be callable")
+        if self.timestamp_ms is not None:
+            _require_u64(
+                self.timestamp_ms,
+                "ToriiCanonicalRequestAuth.timestamp_ms",
+            )
+        if self.nonce is not None:
+            _require_canonical_nonce(
+                self.nonce,
+                "ToriiCanonicalRequestAuth.nonce",
+            )
 
 
 def build_canonical_request_headers(
@@ -1250,21 +1296,26 @@ def build_canonical_request_headers(
     method: str,
     path: str,
     body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+    network_id: str,
     timestamp_ms: Optional[int] = None,
     nonce: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Build canonical `X-Iroha-*` headers for a request body."""
+    """Build exact-network canonical `X-Iroha-*` headers for a request body."""
 
     account = _require_exact_non_empty_string(account_id, "account_id")
     if not callable(signer):
         raise TypeError("signer must be callable")
-    effective_timestamp = int(timestamp_ms if timestamp_ms is not None else time.time() * 1000)
+    effective_timestamp = _require_u64(
+        timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
+        "timestamp_ms",
+    )
     effective_nonce = (
-        _require_exact_non_empty_string(nonce, "nonce")
+        _require_canonical_nonce(nonce, "nonce")
         if nonce is not None
         else secrets.token_hex(16)
     )
-    message = canonical_request_signature_message(
+    message = canonical_network_request_signature_message(
+        network_id,
         method,
         path,
         body,
@@ -1291,6 +1342,24 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     if stripped != value:
         raise ValueError(f"{context} must not contain surrounding whitespace")
     return value
+
+
+def _require_u64(value: Any, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an unsigned 64-bit integer")
+    if value < 0 or value > (1 << 64) - 1:
+        raise ValueError(f"{context} must be an unsigned 64-bit integer")
+    return value
+
+
+def _require_canonical_nonce(value: Any, context: str) -> str:
+    nonce = _require_exact_non_empty_string(value, context)
+    encoded = nonce.encode("utf-8")
+    if len(encoded) > 256:
+        raise ValueError(f"{context} must contain at most 256 ASCII bytes")
+    if not nonce.isascii() or any(byte in b" \t\n\r\v\f" for byte in encoded):
+        raise ValueError(f"{context} must contain no ASCII whitespace")
+    return nonce
 
 
 @dataclass(frozen=True)
@@ -1922,387 +1991,6 @@ class RuntimeUpgradeTxResponse:
 
     ok: bool
     tx_instructions: List[TransactionInstruction]
-
-
-OfflineAssetScale = Literal[
-    0,
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8,
-    9,
-    10,
-    11,
-    12,
-    13,
-    14,
-    15,
-    16,
-    17,
-    18,
-    19,
-    20,
-    21,
-    22,
-    23,
-    24,
-    25,
-    26,
-    27,
-    28,
-]
-
-
-class OfflineScaledAmountJson(TypedDict):
-    """Direct JSON shape of one positive, scale-bound Offline amount."""
-
-    atomic_units: int
-    scale: OfflineAssetScale
-
-
-class OfflineSpendableNoteJson(TypedDict):
-    """Direct JSON shape of one scale-, chain-, and asset-bound note."""
-
-    chain_id: str
-    asset: str
-    note_commitment: List[int]
-    spend_nullifier: List[int]
-    amount: OfflineScaledAmountJson
-
-
-class _OfflineAuthorizationJsonOptional(TypedDict, total=False):
-    app_attest_evidence_sha256: Optional[List[int]]
-    app_attest_evidence: Optional[List[int]]
-
-
-class OfflineAuthorizationJson(_OfflineAuthorizationJsonOptional):
-    """Self-contained device authorization embedded in an Offline command."""
-
-    authority: str
-    device_id: str
-    operation_id: List[int]
-    issued_at_ms: int
-    expires_at_ms: int
-    nonce: List[int]
-    payload_digest: List[int]
-    signature: str
-
-
-class OfflineVerifierKeyIdJson(TypedDict):
-    """Registry identity of one proof verifier."""
-
-    backend: str
-    name: str
-
-
-class OfflineProofBoxJson(TypedDict):
-    """Opaque proof bytes with their backend identity."""
-
-    backend: str
-    bytes: List[int]
-
-
-class OfflineVerifyingKeyJson(TypedDict):
-    """Opaque verifier bytes with their backend identity."""
-
-    backend: str
-    bytes: List[int]
-
-
-OfflineProofBackend = Literal[
-    "halo2/ipa",
-    "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    "stark/fri",
-    "stark/fri/sha256-goldilocks",
-    "stark/fri/poseidon2-goldilocks",
-    "stark/fri/sha256_goldilocks.v1",
-]
-OfflineVerifierStatus = Literal["Proposed", "Active", "Withdrawn"]
-
-
-class _OfflineVerifyingKeyRecordJsonOptional(TypedDict, total=False):
-    owner_manifest_id: Optional[str]
-    gas_schedule_id: Optional[str]
-    metadata_uri_cid: Optional[str]
-    vk_bytes_cid: Optional[str]
-    activation_height: Optional[int]
-    withdraw_height: Optional[int]
-    key: Optional[OfflineVerifyingKeyJson]
-
-
-class OfflineVerifyingKeyRecordJson(_OfflineVerifyingKeyRecordJsonOptional):
-    """Governance-managed verifier record submitted with Offline proofs."""
-
-    version: int
-    circuit_id: str
-    namespace: str
-    backend: OfflineProofBackend
-    curve: str
-    public_inputs_schema_hash: List[int]
-    commitment: List[int]
-    vk_len: int
-    max_proof_bytes: int
-    status: OfflineVerifierStatus
-
-
-class OfflineMerkleProofJson(TypedDict):
-    """Merkle authentication path carried by a lane-privacy witness."""
-
-    leaf_index: int
-    audit_path: List[str]
-
-
-class OfflineLanePrivacyMerkleWitnessJson(TypedDict):
-    """Typed Merkle lane-privacy witness."""
-
-    leaf: List[int]
-    proof: OfflineMerkleProofJson
-
-
-class OfflineLanePrivacyMerkleVariantJson(TypedDict):
-    """Merkle variant of a lane-privacy witness."""
-
-    kind: Literal["merkle"]
-    payload: OfflineLanePrivacyMerkleWitnessJson
-
-
-OfflineLanePrivacyWitnessJson = OfflineLanePrivacyMerkleVariantJson
-
-
-class OfflineLanePrivacyProofJson(TypedDict):
-    """Lane commitment identity and its typed privacy witness."""
-
-    commitment_id: List[int]
-    witness: OfflineLanePrivacyWitnessJson
-
-
-class _OfflineProofAttachmentJsonOptional(TypedDict, total=False):
-    vk_commitment: Optional[List[int]]
-    envelope_hash: Optional[List[int]]
-    lane_privacy: Optional[OfflineLanePrivacyProofJson]
-
-
-class OfflineProofAttachmentJson(_OfflineProofAttachmentJsonOptional):
-    """Typed proof attachment used by Offline commands."""
-
-    backend: str
-    proof: OfflineProofBoxJson
-    vk_ref: OfflineVerifierKeyIdJson
-
-
-class OfflineTopUpShieldEvidenceJson(TypedDict):
-    """Public-to-confidential insertion proof for one online top-up."""
-
-    initial_root: List[int]
-    finalized_root: List[int]
-    leaf_index: int
-    proof: OfflineProofAttachmentJson
-
-
-class OfflineVerifiedFoldStepJson(TypedDict):
-    """One checked confidential-transfer proof step."""
-
-    root_before: List[int]
-    input_nullifiers: List[List[int]]
-    output_commitments: List[List[int]]
-    root_after: List[int]
-    attachment: OfflineProofAttachmentJson
-    verifier_key: OfflineVerifyingKeyJson
-
-
-class OfflineVerifiedFoldBundleJson(TypedDict):
-    """Chain- and asset-bound ordered transfer proof steps."""
-
-    chain_id: str
-    asset: str
-    steps: List[OfflineVerifiedFoldStepJson]
-
-
-class OfflineVerifiedFoldVerifierRecordJson(TypedDict):
-    """Registry record selected by one checked fold step."""
-
-    id: OfflineVerifierKeyIdJson
-    record: OfflineVerifyingKeyRecordJson
-
-
-class OfflineVerifiedFoldRecordBundleJson(TypedDict):
-    """Checked one-hop proof bundle in direct Norito JSON form."""
-
-    bundle: OfflineVerifiedFoldBundleJson
-    verifier_records: List[OfflineVerifiedFoldVerifierRecordJson]
-
-
-class OfflineTopUpAnchorReferenceJson(TypedDict):
-    """Compact chain-resolvable identity of one finalized top-up."""
-
-    topup_operation_id: List[int]
-    anchor_digest: List[int]
-
-
-class OfflineBranchPathJson(TypedDict):
-    """Canonical branch coordinate inside one top-up lineage."""
-
-    lineage_root: List[int]
-    depth: int
-    path_bits: List[int]
-
-
-class OfflineBranchClaimJson(TypedDict):
-    """Replay-safe conflict claim for one spendable lineage leaf."""
-
-    path: OfflineBranchPathJson
-    transition_tags: str
-
-
-class _OfflineTaggedUnitJsonOptional(TypedDict, total=False):
-    value: None
-
-
-class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
-    """Recipient or sender-change output role."""
-
-    branch: Literal["recipient", "change"]
-
-
-class KagemushaArtifactBindingV4Json(TypedDict):
-    """Identity of the one authenticated Kagemusha ABI-21/V4 release."""
-
-    version: Literal[4]
-    generation: str
-    manifest_sha256: List[int]
-
-
-class OfflinePeerSplitTransitionJson(TypedDict):
-    """Proof-bound peer-split transition payload."""
-
-    binding_digest: List[int]
-    branch: OfflineSpendBranchJson
-    recipient_request_digest: List[int]
-    operation_id: List[int]
-    parent_max_proof_step_count: int
-    parent_max_peer_hop_count: int
-
-
-class OfflineRedemptionChangeTransitionJson(TypedDict):
-    """Proof-bound partial-redemption change transition payload."""
-
-    binding_digest: List[int]
-    parent_bundle_digest: List[int]
-    operation_id: List[int]
-    parent_proof_step_count: int
-    parent_peer_hop_count: int
-
-
-class OfflinePeerSplitTransitionVariantJson(TypedDict):
-    """Tagged peer-split transition."""
-
-    transition: Literal["peer_split"]
-    value: OfflinePeerSplitTransitionJson
-
-
-class OfflineRedemptionChangeTransitionVariantJson(TypedDict):
-    """Tagged partial-redemption change transition."""
-
-    transition: Literal["redemption_change"]
-    value: OfflineRedemptionChangeTransitionJson
-
-
-OfflineRecursiveSpendTransitionJson = Union[
-    OfflinePeerSplitTransitionVariantJson,
-    OfflineRedemptionChangeTransitionVariantJson,
-]
-
-
-class _OfflineRecursiveSpendStatementJsonOptional(TypedDict, total=False):
-    transition: Optional[OfflineRecursiveSpendTransitionJson]
-
-
-class OfflineRecursiveSpendStatementJson(_OfflineRecursiveSpendStatementJsonOptional):
-    """Exact public statement bound by one recursive spend proof."""
-
-    chain_id: str
-    asset: str
-    asset_scale: OfflineAssetScale
-    final_root: List[int]
-    next_zero_leaf_index: int
-    topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
-    proof_step_count: int
-    peer_hop_count: int
-    current_note: OfflineSpendableNoteJson
-    branch_claims: List[OfflineBranchClaimJson]
-    artifact_binding: KagemushaArtifactBindingV4Json
-    verifier_key_id: OfflineVerifierKeyIdJson
-
-
-class OfflineRecursiveSpendProofJson(TypedDict):
-    """Recursive proof and its exact verifier/public-statement bindings."""
-
-    verifier_key_id: OfflineVerifierKeyIdJson
-    public_statement_digest: List[int]
-    proof: OfflineProofBoxJson
-
-
-class OfflineRecursiveSpendBundleJson(TypedDict):
-    """Scale-carrying recursive state submitted for redemption."""
-
-    statement: OfflineRecursiveSpendStatementJson
-    recursive_proof: OfflineRecursiveSpendProofJson
-
-
-class OfflineUnshieldPublicInputsJson(TypedDict):
-    """Canonical unshield public words bound by a redemption transition."""
-
-    input_commitment_0: List[int]
-    input_commitment_1: List[int]
-    nullifier_0: List[int]
-    nullifier_1: List[int]
-    change_output_commitment: List[int]
-    root: List[int]
-    public_amount: List[int]
-    asset_tag: List[int]
-    chain_tag: List[int]
-
-
-class _OfflineRedemptionIntentJsonOptional(TypedDict, total=False):
-    change_output: Optional[OfflineSpendableNoteJson]
-    change_artifact_binding: Optional[KagemushaArtifactBindingV4Json]
-
-
-class OfflineRedemptionIntentJson(_OfflineRedemptionIntentJsonOptional):
-    """Canonical public redemption intent covered by the authorization."""
-
-    chain_id: str
-    asset: str
-    input_note: OfflineSpendableNoteJson
-    parent_branch_claims: List[OfflineBranchClaimJson]
-    parent_topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
-    parent_proof_step_count: int
-    parent_peer_hop_count: int
-    parent_bundle_digest: List[int]
-    input_root: List[int]
-    recipient: str
-    public_amount: OfflineScaledAmountJson
-    unshield_public_inputs: OfflineUnshieldPublicInputsJson
-    unshield_public_inputs_digest: List[int]
-    operation_id: List[int]
-
-
-class OfflineRedeemChangeJson(TypedDict):
-    """Proof-bound change branch retained after partial redemption."""
-
-    output: OfflineSpendableNoteJson
-    branch_claims: List[OfflineBranchClaimJson]
-    bundle: OfflineRecursiveSpendBundleJson
 
 
 @dataclass(frozen=True)
@@ -3496,7 +3184,7 @@ class OfflineScaledAmount:
 class OfflineSpendableNote:
     """Typed note descriptor embedded in a finalized top-up anchor."""
 
-    chain_id: str
+    network_id: str
     asset: str
     note_commitment: Tuple[int, ...]
     spend_nullifier: Tuple[int, ...]
@@ -3525,7 +3213,7 @@ class OfflineTopUpAnchor:
     """Closed, cross-checked finalized receipt returned by an applied top-up."""
 
     version: Literal[4]
-    chain_id: str
+    network_id: str
     payer: str
     asset: str
     asset_scale: OfflineAssetScale
@@ -3694,7 +3382,7 @@ class OfflineTopUpFinalityHeightContext:
     """Bounded projection of the immutable finality height context."""
 
     context_id: OfflineTopUpFinalityHeightContextId
-    chain_id: str
+    network_id: str
     protocol_version: Literal[4]
     height: int
     epoch: int
@@ -4088,8 +3776,8 @@ def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
     if spend_nullifier == note_commitment:
         raise RuntimeError(f"{context}.spend_nullifier must differ from note_commitment")
     return OfflineSpendableNote(
-        chain_id=_offline_exact_string(
-            _offline_required(record, "chain_id", context), f"{context}.chain_id"
+        network_id=_offline_hash_literal(
+            _offline_required(record, "network_id", context), f"{context}.network_id"
         ),
         asset=_offline_exact_string(
             _offline_required(record, "asset", context), f"{context}.asset"
@@ -4715,7 +4403,7 @@ def _offline_top_up_finality_height_context(
         context,
         required=(
             "context_id",
-            "chain_id",
+            "network_id",
             "protocol_version",
             "height",
             "epoch",
@@ -4735,11 +4423,9 @@ def _offline_top_up_finality_height_context(
     context_id = _offline_top_up_finality_height_context_id(
         _offline_required(record, "context_id", context), f"{context}.context_id"
     )
-    chain_id = _offline_exact_string(
-        _offline_required(record, "chain_id", context), f"{context}.chain_id"
+    network_id = _offline_hash_literal(
+        _offline_required(record, "network_id", context), f"{context}.network_id"
     )
-    if len(chain_id.encode("utf-8")) > 128:
-        raise RuntimeError(f"{context}.chain_id must contain at most 128 UTF-8 bytes")
     protocol_version = _offline_unsigned(
         _offline_required(record, "protocol_version", context),
         f"{context}.protocol_version",
@@ -4822,7 +4508,7 @@ def _offline_top_up_finality_height_context(
         )
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
-        chain_id=chain_id,
+        network_id=network_id,
         protocol_version=4,
         height=height,
         epoch=epoch,
@@ -4910,7 +4596,7 @@ def _offline_top_up_anchor(
         context,
         required=(
             "version",
-            "chain_id",
+            "network_id",
             "payer",
             "asset",
             "asset_scale",
@@ -4969,11 +4655,11 @@ def _offline_top_up_anchor(
     current_note = _offline_spendable_note(
         _offline_required(record, "current_note", context), f"{context}.current_note"
     )
-    chain_id = _offline_exact_string(
-        _offline_required(record, "chain_id", context), f"{context}.chain_id"
+    network_id = _offline_hash_literal(
+        _offline_required(record, "network_id", context), f"{context}.network_id"
     )
-    if current_note.chain_id != chain_id:
-        raise RuntimeError(f"{context}.current_note.chain_id must equal chain_id")
+    if current_note.network_id != network_id:
+        raise RuntimeError(f"{context}.current_note.network_id must equal network_id")
     if current_note.amount != amount:
         raise RuntimeError(f"{context}.current_note.amount must equal amount")
     asset = _offline_exact_string(
@@ -5042,7 +4728,7 @@ def _offline_top_up_anchor(
 
     return OfflineTopUpAnchor(
         version=4,
-        chain_id=chain_id,
+        network_id=network_id,
         payer=_offline_exact_string(
             _offline_required(record, "payer", context), f"{context}.payer"
         ),
@@ -8712,7 +8398,7 @@ class _SumeragiV2StatusParser:
             {
                 "round",
                 "epoch",
-                "chain_id_hash",
+                "network_id",
                 "source_id",
                 "tx_entrypoint_hash",
                 "plan_digest",
@@ -8832,8 +8518,8 @@ class _SumeragiV2StatusParser:
         return {
             "round": round_value,
             "epoch": cls._unsigned(record.get("epoch"), f"{context}.epoch"),
-            "chain_id_hash": cls._hash(
-                record.get("chain_id_hash"), f"{context}.chain_id_hash"
+            "network_id": cls._hash(
+                record.get("network_id"), f"{context}.network_id"
             ),
             "source_id": source_id,
             "tx_entrypoint_hash": entrypoint_hash,
@@ -9391,7 +9077,7 @@ class _SumeragiV2StatusParser:
             {
                 "version",
                 "source_id",
-                "chain_id_hash",
+                "network_id",
                 "plan_digest",
                 "lane_id",
                 "dataspace_id",
@@ -9409,8 +9095,8 @@ class _SumeragiV2StatusParser:
         if version != 2:
             raise RuntimeError(f"{context}.version must equal 2")
         source_id = cls._byte32(record.get("source_id"), f"{context}.source_id")
-        chain_id_hash = cls._hash(
-            record.get("chain_id_hash"), f"{context}.chain_id_hash"
+        network_id = cls._hash(
+            record.get("network_id"), f"{context}.network_id"
         )
         plan_digest = cls._hash(
             record.get("plan_digest"), f"{context}.plan_digest"
@@ -9466,7 +9152,7 @@ class _SumeragiV2StatusParser:
                 body["round"] != first_body["round"]
                 or body["epoch"] != first_body["epoch"]
                 or body["round"]["height"] != authority_height
-                or body["chain_id_hash"] != chain_id_hash
+                or body["network_id"] != network_id
                 or body["source_id"] != source_id
                 or body["tx_entrypoint_hash"] != entrypoint_hash
                 or body["plan_digest"] != plan_digest
@@ -9503,7 +9189,7 @@ class _SumeragiV2StatusParser:
         return {
             "version": version,
             "source_id": source_id,
-            "chain_id_hash": chain_id_hash,
+            "network_id": network_id,
             "plan_digest": plan_digest,
             "lane_id": lane_id,
             "dataspace_id": dataspace_id,
@@ -10649,7 +10335,16 @@ class _SumeragiDiagnosticsParser:
         ]
 
 
-class ToriiClient:
+_ToriiClientGovernanceBallotMixin = create_governance_ballot_client_mixin(
+    canonical_auth_type=ToriiCanonicalRequestAuth,
+    ballot_submit_result_type=BallotSubmitResult,
+    offline_hash_literal=_offline_hash_literal,
+    canonical_quantity=_canonical_quantity,
+    build_canonical_request_headers=build_canonical_request_headers,
+)
+
+
+class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""
 
     def __init__(self, base_url: str, session: Optional[requests.Session] = None) -> None:
@@ -10660,36 +10355,49 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Attachments
     # ------------------------------------------------------------------
-    def upload_attachment(self, data: bytes, *, content_type: str) -> Mapping[str, Any]:
+    def upload_attachment(
+        self, data: bytes, *, content_type: str, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> Mapping[str, Any]:
         """Upload an attachment via ``POST /v1/zk/attachments`` and return metadata."""
 
-        response = self._request(
-            "POST",
-            "/v1/zk/attachments",
+        response = authenticated_attachment_request(
+            self, "POST", "/v1/zk/attachments", canonical_auth,
             data=data,
             headers={"Content-Type": content_type},
         )
         self._expect_status(response, {201})
         return response.json()
 
-    def list_attachments(self) -> List[Mapping[str, Any]]:
+    def list_attachments(
+        self, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> List[Mapping[str, Any]]:
         """Return metadata for all stored attachments."""
 
-        response = self._request("GET", "/v1/zk/attachments")
+        response = authenticated_attachment_request(
+            self, "GET", "/v1/zk/attachments", canonical_auth,
+        )
         self._expect_status(response, {200})
         return response.json()
 
-    def get_attachment(self, attachment_id: str) -> Tuple[bytes, Optional[str]]:
+    def get_attachment(
+        self, attachment_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> Tuple[bytes, Optional[str]]:
         """Fetch raw attachment bytes and the optional content type."""
 
-        response = self._request("GET", f"/v1/zk/attachments/{attachment_id}")
+        normalized_id = _require_exact_non_empty_string(attachment_id, "attachment_id")
+        path = f"/v1/zk/attachments/{quote(normalized_id, safe='')}"
+        response = authenticated_attachment_request(self, "GET", path, canonical_auth)
         self._expect_status(response, {200})
         return response.content, response.headers.get("Content-Type")
 
-    def delete_attachment(self, attachment_id: str) -> None:
+    def delete_attachment(
+        self, attachment_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> None:
         """Delete an attachment by id."""
 
-        response = self._request("DELETE", f"/v1/zk/attachments/{attachment_id}")
+        normalized_id = _require_exact_non_empty_string(attachment_id, "attachment_id")
+        path = f"/v1/zk/attachments/{quote(normalized_id, safe='')}"
+        response = authenticated_attachment_request(self, "DELETE", path, canonical_auth)
         self._expect_status(response, {204})
 
     # ------------------------------------------------------------------
@@ -11142,15 +10850,6 @@ class ToriiClient:
         mapping = self._ensure_mapping(payload, "network time status response")
         return NetworkTimeStatus.from_payload(mapping)
 
-    def get_node_capabilities(self) -> NodeCapabilities:
-        """Fetch the node capability advert (`GET /v1/node/capabilities`)."""
-
-        payload = self._get_json_object(
-            "/v1/node/capabilities",
-            context="node capabilities",
-        )
-        return self._parse_node_capabilities(payload, context="node capabilities")
-
     def get_sccp_capabilities(self) -> SccpCapabilities:
         """Fetch exact SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
 
@@ -11338,6 +11037,7 @@ class ToriiClient:
         context: str,
         params: Optional[Mapping[str, str]] = None,
         maximum_body_bytes: int,
+        parser: Callable[[bytes, str], Mapping[str, Any]] = parse_sccp_json_object,
     ) -> Mapping[str, Any]:
         response = self._request(
             "GET",
@@ -11357,7 +11057,7 @@ class ToriiClient:
             response.close()
             raise TypeError(f"{context} response must use application/json content type")
         body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
-        return parse_sccp_json_object(body, context)
+        return parser(body, context)
 
     def _get_sccp_typed_object(
         self,
@@ -11435,15 +11135,6 @@ class ToriiClient:
         )
         return parse_sccp_bridge_submit_response_json(body, expectations)
 
-    def get_runtime_abi_active(self) -> RuntimeAbiActive:
-        """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
-
-        payload = self._get_json_object(
-            "/v1/runtime/abi/active",
-            context="runtime abi active response",
-        )
-        return self._parse_runtime_abi_active(payload, context="runtime abi active response")
-
     def get_runtime_abi_hash(self) -> RuntimeAbiHash:
         """Fetch the canonical ABI hash (`GET /v1/runtime/abi/hash`)."""
 
@@ -11452,15 +11143,6 @@ class ToriiClient:
             context="runtime abi hash response",
         )
         return self._parse_runtime_abi_hash(payload, context="runtime abi hash response")
-
-    def get_runtime_metrics(self) -> RuntimeMetricsSnapshot:
-        """Fetch runtime upgrade metrics (`GET /v1/runtime/metrics`)."""
-
-        payload = self._get_json_object(
-            "/v1/runtime/metrics",
-            context="runtime metrics response",
-        )
-        return self._parse_runtime_metrics(payload, context="runtime metrics response")
 
     def list_runtime_upgrades(self) -> List[RuntimeUpgradeListItem]:
         """List runtime upgrade records (`GET /v1/runtime/upgrades`)."""
@@ -11584,7 +11266,7 @@ class ToriiClient:
     ) -> VpnQuote:
         """Create a VPN quote carrying the native `OpenVpnLeaseEscrow` instruction."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn quote")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn quote")
         payload = self._normalize_vpn_quote_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -11606,7 +11288,7 @@ class ToriiClient:
     ) -> VpnSession:
         """Open a VPN session from a paid quote and matching metering key."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn session")
         payload = self._normalize_vpn_session_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -11628,7 +11310,7 @@ class ToriiClient:
     ) -> Optional[VpnSession]:
         """Fetch an active VPN session, returning `None` when absent."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn session")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -11656,7 +11338,7 @@ class ToriiClient:
     ) -> Optional[VpnReceipt]:
         """Disconnect a VPN session, returning the canonical lease receipt when present."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipt")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -11684,7 +11366,7 @@ class ToriiClient:
     ) -> VpnReceipt:
         """Submit a relay receipt and receive the native `SettleVpnLease` instruction."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipt")
         payload = self._normalize_vpn_receipt_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -11705,7 +11387,7 @@ class ToriiClient:
     ) -> VpnReceiptListResponse:
         """List recent disconnected or settled VPN lease receipts for the signed account."""
 
-        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipts")
+        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipts")
         response = self._vpn_json_request(
             "GET",
             "/v1/vpn/receipts",
@@ -11730,9 +11412,15 @@ class ToriiClient:
     def create_connect_session(self, payload: Mapping[str, Any]) -> ConnectSessionInfo:
         """Create a Connect session (`POST /v1/connect/session`)."""
 
+        request = dict(payload)
+        if "chain_id" in request:
+            raise ValueError("chain_id is retired; provide exact network_id")
+        missing = {"sid", "network_id", "app_pk", "nonce"}.difference(request)
+        if missing:
+            raise ValueError(f"Connect session request missing required fields: {sorted(missing)}")
         body = self._post_json(
             "/v1/connect/session",
-            dict(payload),
+            request,
             context="connect session",
         )
         return self._parse_connect_session(body, context="connect session")
@@ -12592,22 +12280,22 @@ class ToriiClient:
         the general status route is operational telemetry, while this route is
         the fail-closed reducer projection.
         """
-
-        payload = self._get_json_object(
+        payload = self._get_sccp_json_object(
             "/v1/sumeragi/status",
             context="sumeragi status",
+            maximum_body_bytes=1 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
         )
         return _SumeragiV2StatusParser.parse(payload)
-
     def get_sumeragi_diagnostics(self) -> SumeragiDiagnosticsStatus:
         """Fetch and validate bounded operator and lane diagnostics."""
-
-        payload = self._get_json_object(
+        payload = self._get_sccp_json_object(
             "/v1/sumeragi/diagnostics",
             context="sumeragi diagnostics",
+            maximum_body_bytes=16 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
         )
         return _SumeragiDiagnosticsParser.parse(payload)
-
     # ------------------------------------------------------------------
     # Kaigi relay helpers
     # ------------------------------------------------------------------
@@ -12788,7 +12476,7 @@ class ToriiClient:
             unsigned_payload.get("authority"),
             "quote_fees.unsigned_payload.authority",
         )
-        canonical_auth = self._require_vpn_canonical_auth(
+        canonical_auth = self._require_canonical_auth(
             canonical_auth,
             "quote_fees",
         )
@@ -12872,7 +12560,7 @@ class ToriiClient:
             "POST",
             "/v1/fee-sponsor-programs/by-id",
             body_payload={"program_id": literal},
-            canonical_auth=self._require_vpn_canonical_auth(
+            canonical_auth=self._require_canonical_auth(
                 canonical_auth,
                 "get_fee_sponsor_program",
             ),
@@ -13073,6 +12761,8 @@ class ToriiClient:
     def get_governance_contract(
         self,
         contract_address: str,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> GovernanceContractResponse:
         """Fetch one governed contract binding via ``GET /v1/gov/contracts/{contract_address}``."""
 
@@ -13080,8 +12770,10 @@ class ToriiClient:
             contract_address,
             "governance contract contract_address",
         )
-        payload = self._get_json_object(
+        payload = self._account_json_request(
+            "GET",
             f"/v1/gov/contracts/{quote(normalized_address, safe='')}",
+            canonical_auth=canonical_auth,
             context="governance contract response",
         )
         return self._parse_governance_contract_response(
@@ -13089,30 +12781,38 @@ class ToriiClient:
             context="governance contract response",
         )
 
-    def get_governance_proposal(self, proposal_id: str) -> GovernanceProposalStatus:
+    def get_governance_proposal(
+        self, proposal_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceProposalStatus:
         """Fetch proposal metadata via ``GET /v1/gov/proposals/{id}``."""
 
         proposal_id = self._require_governance_proposal_id_v1(
             proposal_id,
             context="governance proposal proposal_id",
         )
-        payload = self._get_json_object(
+        payload = self._account_json_request(
+            "GET",
             f"/v1/gov/proposals/{quote(proposal_id, safe='')}",
+            canonical_auth=canonical_auth,
             context="governance proposal",
         )
         found = bool(payload.get("found"))
         proposal = self._optional_mapping(payload.get("proposal"), context="governance proposal body")
         return GovernanceProposalStatus(found=found, proposal=proposal)
 
-    def get_governance_locks(self, referendum_id: str) -> GovernanceLocksOverview:
+    def get_governance_locks(
+        self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceLocksOverview:
         """Return lock escrow information for a referendum."""
 
         referendum_id = self._require_governance_selector_v1(
             referendum_id,
             context="governance locks referendum_id",
         )
-        payload = self._get_json_object(
+        payload = self._account_json_request(
+            "GET",
             f"/v1/gov/locks/{quote(referendum_id, safe='')}",
+            canonical_auth=canonical_auth,
             context="governance locks",
         )
         rid = str(payload.get("referendum_id") or referendum_id)
@@ -13135,30 +12835,38 @@ class ToriiClient:
                 )
         return GovernanceLocksOverview(found=found, referendum_id=rid, locks=locks)
 
-    def get_governance_referendum(self, referendum_id: str) -> GovernanceReferendumStatus:
+    def get_governance_referendum(
+        self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceReferendumStatus:
         """Fetch referendum status via ``GET /v1/gov/referenda/{id}``."""
 
         referendum_id = self._require_governance_selector_v1(
             referendum_id,
             context="governance referendum referendum_id",
         )
-        payload = self._get_json_object(
+        payload = self._account_json_request(
+            "GET",
             f"/v1/gov/referenda/{quote(referendum_id, safe='')}",
+            canonical_auth=canonical_auth,
             context="governance referendum",
         )
         found = bool(payload.get("found"))
         referendum = self._optional_mapping(payload.get("referendum"), context="referendum payload")
         return GovernanceReferendumStatus(found=found, referendum=referendum)
 
-    def get_governance_tally(self, referendum_id: str) -> GovernanceTallySummary:
+    def get_governance_tally(
+        self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceTallySummary:
         """Return the quadratic tally summary for a referendum."""
 
         referendum_id = self._require_governance_selector_v1(
             referendum_id,
             context="governance tally referendum_id",
         )
-        payload = self._get_json_object(
+        payload = self._account_json_request(
+            "GET",
             f"/v1/gov/tally/{quote(referendum_id, safe='')}",
+            canonical_auth=canonical_auth,
             context="governance tally",
         )
         rid = str(payload.get("referendum_id") or referendum_id)
@@ -13172,10 +12880,14 @@ class ToriiClient:
             abstain=abstain,
         )
 
-    def get_governance_unlock_stats(self) -> GovernanceUnlockStats:
+    def get_governance_unlock_stats(
+        self, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceUnlockStats:
         """Return aggregate unlock metrics (operator view)."""
 
-        payload = self._get_json_object("/v1/gov/unlocks/stats", context="unlock stats")
+        payload = self._account_json_request(
+            "GET", "/v1/gov/unlocks/stats", canonical_auth=canonical_auth, context="unlock stats"
+        )
         return GovernanceUnlockStats(
             height_current=self._coerce_int(payload.get("height_current"), "unlock.height_current"),
             expired_locks_now=self._coerce_int(payload.get("expired_locks_now"), "unlock.expired_locks_now"),
@@ -13186,10 +12898,14 @@ class ToriiClient:
             last_sweep_height=self._coerce_int(payload.get("last_sweep_height"), "unlock.last_sweep_height"),
         )
 
-    def get_council_current(self) -> CouncilCurrentStatus:
+    def get_council_current(
+        self, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> CouncilCurrentStatus:
         """Return the latest council roster."""
 
-        payload = self._get_json_object("/v1/gov/council/current", context="council current")
+        payload = self._account_json_request(
+            "GET", "/v1/gov/council/current", canonical_auth=canonical_auth, context="council current"
+        )
         epoch = self._coerce_int(payload.get("epoch"), "council_current.epoch")
         members_value = payload.get("members", [])
         members = self._parse_council_members(members_value)
@@ -13198,6 +12914,7 @@ class ToriiClient:
     def propose_contract_deploy(
         self,
         *,
+        canonical_auth: ToriiCanonicalRequestAuth,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         abi_version: str,
@@ -13230,9 +12947,11 @@ class ToriiClient:
             payload["mode"] = mode
         if limits is not None:
             payload["limits"] = dict(limits)
-        body = self._post_json(
+        body = self._account_json_request(
+            "POST",
             "/v1/gov/proposals/deploy-contract",
-            payload,
+            body_payload=payload,
+            canonical_auth=canonical_auth,
             context="deploy-contract proposal",
         )
         ok = bool(body.get("ok"))
@@ -13277,6 +12996,7 @@ class ToriiClient:
     def enact_proposal(
         self,
         *,
+        canonical_auth: ToriiCanonicalRequestAuth,
         proposal_id: str,
         preimage_hash: Optional[str] = None,
         window: Optional[Tuple[int, int]] = None,
@@ -13292,131 +13012,16 @@ class ToriiClient:
             payload["preimage_hash"] = preimage_hash
         if window is not None:
             payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        body = self._post_json(
+        body = self._account_json_request(
+            "POST",
             "/v1/gov/enact",
-            payload,
+            body_payload=payload,
+            canonical_auth=canonical_auth,
             context="governance enact",
             expected_status=(200, 202, 204),
         )
         return GovernanceInstructionDraft(
             ok=bool(body.get("ok")),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
-
-    def submit_plain_ballot(
-        self,
-        *,
-        authority: str,
-        chain_id: str,
-        referendum_id: str,
-        owner: str,
-        amount: str,
-        duration_blocks: int,
-        direction: str,
-        public: Optional[Mapping[str, Any]] = None,
-    ) -> BallotSubmitResult:
-        """Submit a quadratic ballot via ``POST /v1/gov/ballots/plain``."""
-
-        referendum_id = self._require_governance_selector_v1(
-            referendum_id,
-            context="plain ballot referendum_id",
-        )
-        payload: Dict[str, Any] = {
-            "authority": authority,
-            "chain_id": chain_id,
-            "referendum_id": referendum_id,
-            "owner": owner,
-            "amount": _canonical_quantity(amount, "plain ballot amount"),
-            "duration_blocks": int(duration_blocks),
-            "direction": direction,
-        }
-        if public is not None:
-            payload["public"] = public
-        body = self._post_json(
-            "/v1/gov/ballots/plain",
-            payload,
-            context="plain ballot",
-        )
-        return BallotSubmitResult(
-            ok=bool(body.get("ok")),
-            accepted=bool(body.get("accepted")),
-            reason=body.get("reason"),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
-
-    def submit_zk_ballot_v1(
-        self,
-        *,
-        authority: str,
-        chain_id: str,
-        election_id: str,
-        backend: str,
-        envelope_b64: str,
-        root_hint: Optional[str] = None,
-        owner: Optional[str] = None,
-        amount: Optional[str] = None,
-        duration_blocks: Optional[int] = None,
-        direction: Optional[str] = None,
-        nullifier: Optional[str] = None,
-    ) -> BallotSubmitResult:
-        """Submit a BallotProof-style payload via ``POST /v1/gov/ballots/zk-v1``.
-
-        Optional hints mirror BallotProof fields: root_hint, owner, amount,
-        duration_blocks, direction, and nullifier.
-        """
-
-        election_id = self._require_governance_selector_v1(
-            election_id,
-            context="zk ballot v1 election_id",
-        )
-        payload: Dict[str, Any] = {
-            "authority": authority,
-            "chain_id": chain_id,
-            "election_id": election_id,
-            "backend": backend,
-            "envelope_b64": envelope_b64,
-        }
-        self._ensure_governance_lock_hints_complete(
-            owner,
-            amount,
-            duration_blocks,
-            context="zk ballot v1",
-        )
-        self._ensure_governance_owner_canonical(owner, context="zk ballot v1")
-        if root_hint is not None:
-            payload["root_hint"] = root_hint
-        if owner is not None:
-            payload["owner"] = owner
-        if amount is not None:
-            payload["amount"] = _canonical_quantity(
-                amount,
-                "zk ballot v1 amount",
-            )
-        if duration_blocks is not None:
-            payload["duration_blocks"] = duration_blocks
-        if direction:
-            payload["direction"] = direction
-        if nullifier is not None:
-            payload["nullifier"] = nullifier
-        self._normalize_governance_public_hex_hint(
-            payload,
-            "root_hint",
-            context="zk ballot v1",
-        )
-        self._normalize_governance_public_hex_hint(
-            payload,
-            "nullifier",
-            context="zk ballot v1",
-        )
-        body = self._post_json(
-            "/v1/gov/ballots/zk-v1",
-            payload,
-            context="zk ballot v1",
-        )
-        return BallotSubmitResult(
-            ok=bool(body.get("ok")),
-            accepted=bool(body.get("accepted")),
-            reason=body.get("reason"),
             tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
         )
 
@@ -13437,11 +13042,15 @@ class ToriiClient:
             applied=self._coerce_int(body.get("applied"), "protected.applied"),
         )
 
-    def get_protected_namespaces(self) -> ProtectedNamespacesStatus:
+    def get_protected_namespaces(
+        self, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> ProtectedNamespacesStatus:
         """Fetch the current protected namespace setting."""
 
-        body = self._get_json_object(
+        body = self._account_json_request(
+            "GET",
             "/v1/gov/protected-namespaces",
+            canonical_auth=canonical_auth,
             context="protected namespaces",
         )
         raw_namespaces = body.get("namespaces", [])
@@ -13569,12 +13178,14 @@ class ToriiClient:
     # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _require_vpn_canonical_auth(
+    def _require_canonical_auth(
         canonical_auth: Optional[ToriiCanonicalRequestAuth],
         context: str,
     ) -> ToriiCanonicalRequestAuth:
         if canonical_auth is None:
             raise ValueError(f"{context}.canonical_auth is required")
+        if not isinstance(canonical_auth, ToriiCanonicalRequestAuth):
+            raise TypeError(f"{context}.canonical_auth must be ToriiCanonicalRequestAuth")
         return canonical_auth
 
     def _vpn_json_request(
@@ -13591,7 +13202,7 @@ class ToriiClient:
         if urlsplit(self._base_url).scheme.lower() != "https":
             raise RuntimeError("Sora VPN requests require an HTTPS Torii base URL")
         data = self._encode_json_body(body_payload) if body_payload is not None else None
-        final_headers = self._vpn_request_headers(
+        final_headers = self._canonical_request_headers(
             method,
             path,
             data or b"",
@@ -13617,7 +13228,7 @@ class ToriiClient:
         return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
     @staticmethod
-    def _vpn_request_headers(
+    def _canonical_request_headers(
         method: str,
         path: str,
         body: bytes,
@@ -13634,6 +13245,7 @@ class ToriiClient:
         if canonical_auth is not None:
             final_headers.update(
                 build_canonical_request_headers(
+                    network_id=canonical_auth.network_id,
                     account_id=canonical_auth.account_id,
                     signer=canonical_auth.signer,
                     method=method,
@@ -14181,8 +13793,10 @@ class ToriiClient:
         headers: Optional[MutableMapping[str, str]] = None,
         data: Optional[bytes] = None,
         stream: bool = False,
+        allow_retry: bool = True,
         allow_redirects: bool = True,
     ) -> requests.Response:
+        del allow_retry  # This transport never retries; keep the one-shot contract explicit.
         url = f"{self._base_url}{path}"
         response = self._session.request(
             method,
@@ -17020,6 +16634,11 @@ class ToriiClient:
     def _parse_connect_session(payload: Mapping[str, Any], *, context: str) -> ConnectSessionInfo:
         record = ToriiClient._ensure_mapping(payload, context)
         sid = ToriiClient._require_string(record.get("sid"), f"{context}.sid")
+        network_id = ToriiClient._require_string(
+            record.get("network_id"), f"{context}.network_id"
+        )
+        app_pk = ToriiClient._require_string(record.get("app_pk"), f"{context}.app_pk")
+        nonce = ToriiClient._require_string(record.get("nonce"), f"{context}.nonce")
         wallet_uri = ToriiClient._require_string(record.get("wallet_uri"), f"{context}.wallet_uri")
         app_uri = ToriiClient._require_string(record.get("app_uri"), f"{context}.app_uri")
         token_app = ToriiClient._require_string(record.get("token_app"), f"{context}.token_app")
@@ -17031,6 +16650,9 @@ class ToriiClient:
         token_relay = ToriiClient._require_string(record.get("token_relay"), f"{context}.token_relay")
         known = {
             "sid",
+            "network_id",
+            "app_pk",
+            "nonce",
             "wallet_uri",
             "app_uri",
             "token_app",
@@ -17041,6 +16663,9 @@ class ToriiClient:
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectSessionInfo(
             sid=sid,
+            network_id=network_id,
+            app_pk=app_pk,
+            nonce=nonce,
             wallet_uri=wallet_uri,
             app_uri=app_uri,
             token_app=token_app,
@@ -18987,45 +18612,7 @@ def _compute_status_metrics(
     previous: Optional[StatusPayload],
     current: StatusPayload,
 ) -> StatusMetrics:
-    queue_delta = 0 if previous is None else current.queue_size - previous.queue_size
-    da_delta = (
-        0
-        if previous is None
-        else max(0, current.da_reschedule_total - previous.da_reschedule_total)
-    )
-    approved_delta = (
-        0 if previous is None else max(0, current.txs_approved - previous.txs_approved)
-    )
-    rejected_delta = (
-        0 if previous is None else max(0, current.txs_rejected - previous.txs_rejected)
-    )
-    view_delta = (
-        0 if previous is None else max(0, current.view_changes - previous.view_changes)
-    )
-    has_activity = any(
-        value
-        for value in (
-            queue_delta,
-            da_delta,
-            approved_delta,
-            rejected_delta,
-            view_delta,
-        )
-    )
-    return StatusMetrics(
-        commit_latency_ms=current.commit_time_ms,
-        queue_size=current.queue_size,
-        queue_queued=current.queue_queued,
-        queue_inflight=current.queue_inflight,
-        queue_delta=queue_delta,
-        time_since_last_block_ms=current.time_since_last_block_ms,
-        time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
-        da_reschedule_delta=da_delta,
-        tx_approved_delta=approved_delta,
-        tx_rejected_delta=rejected_delta,
-        view_change_delta=view_delta,
-        has_activity=bool(has_activity),
-    )
+    return StatusMetrics(**_compute_status_metric_values(previous, current))
 
 
 def _monotonic_millis() -> float:

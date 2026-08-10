@@ -22,7 +22,7 @@ readonly MUTATION_MODEL="SumeragiV2TypedRolloverHandoffMutation.tla"
 readonly LIVENESS_MUTATION_MODEL="SumeragiV2TypedRolloverHandoffLivenessMutation.tla"
 readonly REPEATED_HANDOFF_MUTATION_MODEL="SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"
 readonly REPEATED_HANDOFF_MUTATION_CONFIG="typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 usage() {
@@ -64,7 +64,7 @@ case "$(uname -s)-$(uname -m)" in
     exit 1
     ;;
 esac
-readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

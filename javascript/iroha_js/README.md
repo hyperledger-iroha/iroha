@@ -116,7 +116,7 @@ verified native artifact directory.
 ## Native SoraFS Reference Validation
 
 The repository SoraFS qualification runner pins
-`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-21 host
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-22 host
 artifact. Plain source-checkout builds remain `debug` unless the profile is
 selected explicitly.
 
@@ -277,6 +277,7 @@ const signature = await wallet.signEd25519(payloadHash);
 
 const finalized = finalizeBrowserSignedTransaction(
   {
+    networkId,
     payloadBytes,
     payloadHashHex,
     authority,
@@ -290,8 +291,11 @@ const finalized = finalizeBrowserSignedTransaction(
 console.log(finalized.hashHex, finalized.signedTransaction);
 ```
 
-Finalization fails closed when the payload, asserted prehash, authority,
-signing key, signature, metadata limits, or canonical Norito framing disagree.
+Finalization fails closed when the payload's exact `NetworkId`, asserted
+prehash, authority, signing key, signature, metadata limits, or canonical
+Norito framing disagree. The expected `networkId` is a nominal `NetworkId`
+object supplied by the application; a string, byte array, human chain label,
+foreign NetworkId, or genesis-domain payload is never normalized or accepted.
 Ed25519 verification uses the same strict, uncofactored equation as the Rust
 node and rejects ZIP-215/mixed-torsion aliases. Metadata arrays must be dense
 plain arrays containing data elements only; metadata numbers must be safe
@@ -313,6 +317,8 @@ use the guided quote flow instead of inventing charge maxima:
 
 ```js
 import {
+  LocalSigningContext,
+  NetworkId,
   ToriiClient,
   buildTransferAssetInstruction,
   quoteAndSignTransaction,
@@ -522,11 +528,11 @@ semantic-verifier selector: V1 workspace builds target Rust `std`, and browser
 WebAssembly artifacts are not a supported release output. The authenticated
 compiler service supplies canonical Rust output, and committed ledger admission
 remains authoritative for semantic validation.
-Browser deployment requires both identities explicitly: exact `networkId`
-binds every ordinary deployment transaction, while canonical `chainId` is used
-only by `deriveContractAddress(...)` and address derivation inside
-`deploySmartContractBrowser(...)`. Neither substitutes for the other. The full
-ChainId is length-framed into the address digest; `chainDiscriminant`
+Browser deployment requires exact `networkId` explicitly. Its canonical raw
+32-byte genesis identity binds every ordinary deployment transaction and is
+committed directly by `deriveContractAddress(...)`, including address
+derivation inside `deploySmartContractBrowser(...)`. Human-readable `chainId`
+is not accepted as a contract-address security domain. `chainDiscriminant`
 remains required only for strict I105 authority decoding. Every canonical V1
 contract address uses the fixed lowercase `irohac` Bech32m prefix.
 The first release accepts only `provenance: null`; signed provenance remains
@@ -927,6 +933,8 @@ when you want the JSON form before Norito encoding.
 
 ```js
 import {
+  LocalSigningContext,
+  NetworkId,
   ToriiClient,
   NoritoRpcClient,
   SUPPORTED_CRYPTO_ALGORITHMS,
@@ -990,14 +998,20 @@ console.log(verify(message, pqSignature, pqKeys.publicKey, { algorithm: pqKeys.a
 const confidential = deriveConfidentialKeyset(Buffer.alloc(32, 0x42));
 console.log(confidential.nkHex); // cb7149cc...
 
-const torii = new ToriiClient("http://localhost:8080");
+const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
+const canonicalAuth = { accountId: authority, privateKey };
+const torii = new ToriiClient("https://localhost:8080", {
+  localSigningContext: new LocalSigningContext(networkId),
+});
 const meta = await torii.uploadAttachment(Buffer.from("{}"), {
   contentType: "application/json",
+  canonicalAuth,
 });
 console.log(meta.id);
 console.log(meta.contentType, meta.size, meta.createdMs);
-// Attachment helpers validate both the payload type and contentType locally so
-// malformed inputs fail fast before hitting Torii.
+// Every attachment upload/list/get/delete call requires canonicalAuth. The
+// immutable LocalSigningContext binds its one-shot signature to this exact
+// genesis-derived NetworkId; redirects and retries are rejected.
 
 When you pass `authToken` or `apiToken` credentials, prefer an `https://` Torii base URL; the
 client will reject insecure schemes unless you opt into `allowInsecure: true` for local/dev use.
@@ -1084,7 +1098,7 @@ try {
 }
 
 // Submit while re-signing with a fresh private key (mutating buffer supported)
-await submitSignedTransaction(torii, encoded, { privateKey });
+await submitSignedTransaction(torii, encoded, { networkId, privateKey });
 
 // Inspect the deterministic pipeline recovery sidecar for a given block height.
 const recovery = await torii.getPipelineRecoveryTyped(42);
@@ -1706,6 +1720,7 @@ now mirrors the Python helper coverage:
 ```js
 const torii = new ToriiClient("http://localhost:8080", {
   config: { torii: { apiTokens: ["bridge-token"] } },
+  localSigningContext: new LocalSigningContext(networkId),
 });
 
 const resolved = await torii.resolveAlias("GB82 WEST 1234 5698 7654 32");
@@ -1730,9 +1745,10 @@ bridge runtime is disabled, matching Torii’s semantics. Pass `canonicalAuth`
 when an alias namespace requires Torii request signatures. Its `accountId`
 credential must be an exact canonical ASCII on-chain account alias
 (`name@dataspace` or `name@domain.dataspace`). I105 remains the canonical form
-for ordinary account fields, paths, and response models, but is intentionally
-rejected as an HTTP authentication header credential; values are never trimmed,
-case-folded, percent-decoded, base64-decoded, or sent through a raw socket.
+for ordinary account fields, paths, and response models. Every signature also
+requires the immutable genesis-derived `NetworkId` in the client's
+`LocalSigningContext`; labels never substitute for it. Values are never
+trimmed, case-folded, percent-decoded, or base64-decoded.
 
 Browser wallets that keep private keys sealed can sign the same request through
 an async signer callback:
@@ -1742,6 +1758,7 @@ import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
 
 const request = await buildCanonicalJsonRequest({
   accountId: "operator-1@mibank.paynet",
+  networkId,
   baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
   body: { alias: "tidal-river-4160@mibank.paynet" },
@@ -1759,7 +1776,7 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
+Sumeragi consensus status is the authoritative protocol-v4 reducer snapshot.
 Use the typed helper for operator or automation decisions: it rejects unsupported
 protocol versions, non-canonical frozen quorums, out-of-range leaders,
 inconsistent CommitQCs, and malformed reducer liveness state.
@@ -1838,6 +1855,14 @@ for (const application of typed.native_amx_participant_applications) {
 Use `getSumeragiStatus()` only when you explicitly need that unmodified JSON
 projection; it performs HTTP handling but deliberately leaves validation to the
 caller.
+
+`ToriiBrowserClient` ships the same separate typed methods. Browser builds use
+the shared bounded lossless parser rather than routing through the Node client:
+
+```js
+const status = await browserTorii.getSumeragiStatusTyped();
+const diagnostics = await browserTorii.getSumeragiDiagnosticsTyped();
+```
 
 ## Advanced Sumeragi Telemetry
 
@@ -2077,6 +2102,8 @@ console.log(
 );
 
 const ingestResult = await torii.submitDaBlob({
+  networkId,
+  owner: operatorId,
   payload: fs.readFileSync("./artifacts/nexus_sidecar.car"),
   codec: "nexus_lane_sidecar",
   laneId: 7,
@@ -2098,6 +2125,14 @@ if (ingestResult.receipt) {
   );
   console.log(`quoted base rent ${ingestResult.receipt.rent_quote?.base_rent ?? "unavailable"} XOR`);
 }
+
+DA ingest always emits a signed first-release request, including `noSubmit`
+artifact preparation. The canonical digest binds the exact genesis-derived
+`NetworkId`, owner controller bytes, lane/epoch/sequence nonce, canonical
+payload hash and byte length, and the complete request-content commitment.
+Consensus re-verifies these witnesses against the committed account controller
+and charges per-owner count and bytes; display chain labels and metadata cannot
+select the security domain or quota identity.
 
 DA rent-quote values use the same exact unit-free XOR contract: `base_rent`,
 `protocol_reserve`, `provider_reward`, `pdp_bonus`, `potr_bonus`, and
@@ -2872,8 +2907,9 @@ entrypoint and requires caller-trusted identities for both the deployed code
 body and complete artifact. Before derivation it verifies Torii's simulation
 hash, the ledger/Core code hash (BLAKE2b-256 of the artifact after its 17-byte
 IVM header, with the final digest byte ORed with `1`), and SHA-256 of every
-artifact byte. It then calls `/v1/zk/ivm/derive`, requires the derived bytecode to
-equal the fetched artifact, submits that exact payload to `/v1/zk/ivm/prove`,
+artifact byte. It then account-signs `/v1/zk/ivm/derive` with the immutable exact
+NetworkId context, requires the derived bytecode to equal the fetched artifact,
+submits that exact payload to `/v1/zk/ivm/prove`,
 and binds the returned proof attachment and verifying-key reference to the
 requested key before signing. The resulting user signature covers the complete
 `IvmProved` executable, including every transfer in its overlay.
@@ -2881,7 +2917,8 @@ Invalid polling options are rejected before any request. If proof polling later
 times out, aborts, or fails, the convenience path best-effort cancels the remote
 job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId,
 { canonicalAuth })` is also available for explicit lifecycle control. Proof-job POST, GET, and
-DELETE calls require `canonicalAuth`; Torii binds the signed account to the job
+derive, proof-job POST, GET, and DELETE calls require `canonicalAuth`; Torii
+binds the signed account to the compute request and job
 owner, applies per-owner count and byte quotas, and conceals foreign job IDs as
 missing. Each operation is signed independently with a fresh nonce and is never
 redirected or retried after dispatch:
@@ -2891,6 +2928,7 @@ const canonicalAuth = {
   accountId: AUTHORITY_ACCOUNT_ID,
   privateKey: AUTHORITY_PRIVATE_KEY,
 };
+const derived = await torii.deriveIvmProved(proofRequest, { canonicalAuth });
 const created = await torii.startIvmProve(proofRequest, { canonicalAuth });
 const job = await torii.getIvmProveJob(created.job_id, { canonicalAuth });
 await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
@@ -2898,7 +2936,7 @@ await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
 
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
-to an immutable chain/genesis/policy-chain binding and a durable checkpoint.
+to an immutable exact `NetworkId`/policy-chain binding and a durable checkpoint.
 The ABI 22 native bridge verifies the Norito proof and returns an immutable
 projection; JavaScript never substitutes application-supplied signatures or
 keysets for that trusted boundary. Persist every promoted checkpoint before
@@ -2908,8 +2946,7 @@ when in-memory promotion is sufficient.
 ```js
 const binding = {
   schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
-  chainId: "production-chain",
-  genesisHash: TRUSTED_GENESIS_HASH,
+  networkId: NetworkId.parse(TRUSTED_NETWORK_ID),
   policyChainGenesisHash: TRUSTED_POLICY_CHAIN_GENESIS_HASH,
   checkpoint: await loadDurableValidationFeeCheckpoint(),
 };
@@ -3705,9 +3742,9 @@ file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
 - `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
-- `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
-- `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional Connect/governance protocol chain label override (`00000000-0000-0000-0000-000000000000` by default); ordinary transactions never consume it.
-- `IROHA_TORII_INTEGRATION_NETWORK_ID` — optional canonical checksummed 32-byte `NetworkId` literal used by ordinary mutation transactions.
+- `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) drafted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority` and exact `NetworkId`, so the env var only needs vote-specific fields.
+- `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional Connect-only human-readable chain label; governance and ordinary transaction security domains never consume it.
+- `IROHA_TORII_INTEGRATION_NETWORK_ID` — canonical checksummed genesis-derived `NetworkId` used by governance drafts and ordinary mutation transactions.
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
 - `IROHA_TORII_INTEGRATION_MUTATE` — set to `1` to enable mutation tests (registering disposable domains via the builder helpers). The docker harness described below enables this flag automatically.
 - `IROHA_TORII_INTEGRATION_STREAM_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the event-stream coverage that waits for a `Pipeline.Block` SSE and asserts the typed payload mirrors Torii’s stream schema. Leave unset when SSE endpoints are disabled or proxied away.
@@ -4136,6 +4173,7 @@ if (!tallyResult.found) {
 
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
+const governanceCanonicalAuth = { accountId: authority, privateKey };
 const deployDraft = await torii.governanceProposeDeployContract({
   contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "11".repeat(32),
@@ -4152,24 +4190,24 @@ console.log("proposal instructions", deployDraft.tx_instructions.length);
 
 const ballot = await torii.governanceSubmitPlainBallot({
   authority,
-  chainId: "00000000-0000-0000-0000-000000000000",
+  networkId,
   referendumId: "ref-plain",
   owner: authority,
   amount: "5000",
   durationBlocks: 7200,
   direction: "Aye",
-}, { signal: writeController.signal });
+}, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
 if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
 const parliamentBallot = await torii.governanceSubmitParliamentBallot({
   authority,
-  chainId: "00000000-0000-0000-0000-000000000000",
+  networkId,
   proposalId: "11".repeat(32),
   body: "policy-jury",
   decision: "approve",
-}, { signal: writeController.signal });
+}, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
 if (!parliamentBallot.accepted) {
   console.warn("Parliament ballot rejected:", parliamentBallot.reason);
 }
@@ -4177,7 +4215,7 @@ if (!parliamentBallot.accepted) {
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallotV1({
   authority,
-  chainId: "00000000-0000-0000-0000-000000000000",
+  networkId,
   electionId: "ref-zk",
   backend: "halo2/ipa",
   envelope: Buffer.from(ballotEnvelopeBytes),
@@ -4185,7 +4223,7 @@ await torii.governanceSubmitZkBallotV1({
   amount: "5000",
   durationBlocks: 7_200,
   direction: "Aye",
-}, { signal: writeController.signal });
+}, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
 
 // governanceSubmitZkBallotProofV1 accepts the BallotProof DTO described in
 // specs/governance_api.md.
@@ -4197,7 +4235,9 @@ await torii.governanceSubmitZkBallotV1({
 // exact camelCase names; snake_case and envelope aliases are rejected before an
 // HTTP request is attempted. Private-key fields are likewise rejected at any
 // nesting depth; sign the returned transaction draft in the caller's wallet or
-// key store. Plain-ballot durations are sent as canonical u64 decimal strings,
+// key store. Ballot drafts require exact-network canonical account
+// authentication, bind that account to `authority`, and never follow redirects
+// or retry their nonce-bearing body. Plain-ballot durations are sent as canonical u64 decimal strings,
 // including "0". Parliament decisions use only the exact lowercase labels
 // "approve", "reject", and "abstain". Finalize requires referendumId and
 // proposalId to be the same exact 64-character lowercase proposal fingerprint;

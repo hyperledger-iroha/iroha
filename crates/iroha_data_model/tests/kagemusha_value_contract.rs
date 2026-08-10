@@ -1,10 +1,11 @@
 //! Exact-value and branch-safety tests for the first-release Kagemusha lifecycle.
 
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
+    block::BlockHeader,
     domain::DomainId,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV4,
@@ -60,15 +61,21 @@ fn recipient() -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
 
+fn network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"kagemusha-value-contract-genesis",
+    )))
+}
+
 fn note(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset: &AssetDefinitionId,
     atomic_units: u128,
     commitment_byte: u8,
     nullifier_byte: u8,
 ) -> KagemushaSpendableNoteDescriptorV2 {
     KagemushaSpendableNoteDescriptorV2 {
-        chain_id: chain_id.clone(),
+        network_id: *network_id,
         asset: asset.clone(),
         note_commitment: [commitment_byte; 32],
         spend_nullifier: [nullifier_byte; 32],
@@ -92,15 +99,15 @@ fn artifact_binding_v4() -> KagemushaRecursiveSpendArtifactBindingV4 {
 }
 
 fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
-    let chain_id = ChainId::from("kagemusha-value-contract");
+    let network_id = network_id();
     let asset = asset();
     let anchor = anchor_ref();
     KagemushaRecursiveSpendSplitIntentV4 {
-        chain_id: chain_id.clone(),
+        network_id,
         asset: asset.clone(),
         inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
             bundle_digest: [0x21; 32],
-            input_note: note(&chain_id, &asset, TOTAL, 0x22, 0x23),
+            input_note: note(&network_id, &asset, TOTAL, 0x22, 0x23),
             branch_claims: vec![
                 KagemushaRecursiveSpendBranchClaimV2::root(anchor.anchor_digest)
                     .expect("root claim"),
@@ -113,8 +120,8 @@ fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
         asset_scale: SCALE,
         output_artifact_binding: artifact_binding_v4(),
         transfer_amount: KagemushaScaledAmountV2::new(TRANSFER, SCALE).expect("transfer amount"),
-        recipient_output: note(&chain_id, &asset, TRANSFER, 0x31, 0x32),
-        change_output: Some(note(&chain_id, &asset, CHANGE, 0x33, 0x34)),
+        recipient_output: note(&network_id, &asset, TRANSFER, 0x31, 0x32),
+        change_output: Some(note(&network_id, &asset, CHANGE, 0x33, 0x34)),
         recipient_request_digest: [0x35; 32],
         operation_id: [0x36; 32],
     }
@@ -124,14 +131,14 @@ fn redemption_intent_v4(
     public_atomic_units: u128,
     change_atomic_units: Option<u128>,
 ) -> KagemushaRecursiveSpendRedemptionIntentV4 {
-    let chain_id = ChainId::from("kagemusha-value-contract");
+    let network_id = network_id();
     let asset = asset();
-    let input_note = note(&chain_id, &asset, TOTAL, 0x41, 0x42);
+    let input_note = note(&network_id, &asset, TOTAL, 0x41, 0x42);
     let input_root = [0x43; 32];
     let public_amount =
         KagemushaScaledAmountV2::new(public_atomic_units, SCALE).expect("public amount");
     let change_output =
-        change_atomic_units.map(|amount| note(&chain_id, &asset, amount, 0x44, 0x45));
+        change_atomic_units.map(|amount| note(&network_id, &asset, amount, 0x44, 0x45));
     let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
         input_commitment_0: input_note.note_commitment,
         input_commitment_1: [0; 32],
@@ -143,13 +150,13 @@ fn redemption_intent_v4(
         root: input_root,
         public_amount: kagemusha_confidential_amount_encoding_v2(public_atomic_units),
         asset_tag: [0x46; 32],
-        chain_tag: [0x47; 32],
+        network_tag: [0x47; 32],
     };
     let unshield_public_inputs_digest = unshield_public_inputs
         .digest()
         .expect("unshield public-input digest");
     KagemushaRecursiveSpendRedemptionIntentV4 {
-        chain_id,
+        network_id,
         asset,
         input_note,
         parent_branch_claims: vec![

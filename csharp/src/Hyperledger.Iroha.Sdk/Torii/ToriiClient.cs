@@ -734,7 +734,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanRequest request,
         string onboardingToken,
         string expectedAuthority,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
@@ -751,7 +751,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingReceiptVerifier.RequirePinned(
             receipt,
             expectedAuthority,
-            expectedChainId,
+            expectedNetworkId,
             canonicalBodyEncoder);
         RequireMatchingAccountOnboardingRequest(
             normalizedRequest,
@@ -764,14 +764,14 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanReceipt receipt,
         string onboardingToken,
         string expectedAuthority,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
         ToriiAccountOnboardingReceiptVerifier.RequirePinned(
             receipt,
             expectedAuthority,
-            expectedChainId,
+            expectedNetworkId,
             canonicalBodyEncoder);
         var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         var response = await PostAccountOnboardingAsync<ToriiAccountOnboardingApplyRequest, ToriiAccountOnboardingResponse>(
@@ -1956,13 +1956,11 @@ public sealed partial class ToriiClient : IDisposable
         var exactPath = RequireExactRequestPath(path, nameof(path));
         var exactQuery = NormalizeOptionalExactQuery(query, nameof(query));
         var exactAccept = NormalizeOptionalAcceptHeaderValue(accept, nameof(accept));
-
         var requestUri = BuildRequestUri(exactPath, exactQuery);
         var request = new HttpRequestMessage(method, requestUri)
         {
             Content = content,
         };
-
         var bearerToken = NormalizeOptionalBearerToken(Options.BearerToken, nameof(ToriiClientOptions.BearerToken));
         if (bearerToken is not null)
         {
@@ -1980,6 +1978,8 @@ public sealed partial class ToriiClient : IDisposable
         {
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
+                Options.LocalSigningContext?.NetworkId
+                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
                 Options.CanonicalRequestCredentials.AccountId,
                 Options.CanonicalRequestCredentials.PrivateKeySeed,
                 exactMethod,

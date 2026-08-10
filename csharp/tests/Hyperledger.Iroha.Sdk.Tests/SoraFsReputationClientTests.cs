@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.SoraFs;
@@ -23,6 +24,9 @@ public sealed class SoraFsReputationClientTests
     private static readonly string RawMetricsHashHex = new('b', 64);
     private static readonly byte[] PrivateKeySeed =
         Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
+    private static readonly NetworkId ExactNetworkId = NetworkId.Parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+    private static readonly ToriiLocalSigningContext LocalSigningContext = new(ExactNetworkId);
 
     [Fact]
     public async Task AuthenticatedReadsUseExactOneShotEmptyGetsAndFreshCanonicalSignatures()
@@ -92,6 +96,7 @@ public sealed class SoraFsReputationClientTests
     [Theory]
     [InlineData(HttpStatusCode.Found)]
     [InlineData(HttpStatusCode.TemporaryRedirect)]
+    [InlineData(HttpStatusCode.PermanentRedirect)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     public async Task ReputationReadsNeverFollowRedirectOrRetry(HttpStatusCode status)
     {
@@ -115,6 +120,20 @@ public sealed class SoraFsReputationClientTests
     }
 
     [Fact]
+    public async Task ReputationNetworkFailureIsNotRetried()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new HttpRequestException("ambiguous one-shot transport failure"));
+        using var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GetSoraFsReputationLatestAsync(
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task ReputationReadFailsClosedForUnverifiedInjectedHttpClient()
     {
         using var handler = new RecordingHandler(_ =>
@@ -125,6 +144,7 @@ public sealed class SoraFsReputationClientTests
             httpClient,
             new ToriiClientOptions
             {
+                LocalSigningContext = LocalSigningContext,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
@@ -593,6 +613,7 @@ public sealed class SoraFsReputationClientTests
             httpClient,
             new ToriiClientOptions
             {
+                LocalSigningContext = LocalSigningContext,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
@@ -692,14 +713,30 @@ public sealed class SoraFsReputationClientTests
             Assert.Single(request.Headers["X-Iroha-Timestamp-Ms"]),
             NumberStyles.None,
             CultureInfo.InvariantCulture);
-        var bodyHash = Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant();
-        var canonicalQuery = CanonicalRequest.BuildCanonicalQueryString(request.Query);
-        var message = Encoding.UTF8.GetBytes(
-            $"GET\n{request.AbsolutePath}\n{canonicalQuery}\n{bodyHash}\n{timestamp}\n{nonce}");
+        var message = CanonicalRequest.BuildSignatureMessageForExactPath(
+            ExactNetworkId,
+            "GET",
+            request.AbsolutePath,
+            request.Query,
+            ReadOnlySpan<byte>.Empty,
+            exactTimestamp: timestamp,
+            exactNonce: nonce);
         var signature = Convert.FromBase64String(
             Assert.Single(request.Headers["X-Iroha-Signature"]));
         Assert.True(Ed25519Signer.Verify(
             message,
+            signature,
+            Ed25519Signer.GetPublicKey(PrivateKeySeed)));
+        var foreignMessage = CanonicalRequest.BuildSignatureMessageForExactPath(
+            NetworkId.Parse("hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22"),
+            "GET",
+            request.AbsolutePath,
+            request.Query,
+            ReadOnlySpan<byte>.Empty,
+            exactTimestamp: timestamp,
+            exactNonce: nonce);
+        Assert.False(Ed25519Signer.Verify(
+            foreignMessage,
             signature,
             Ed25519Signer.GetPublicKey(PrivateKeySeed)));
     }

@@ -36,6 +36,34 @@ Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
 
+## Tenant-scoped ZK attachments
+
+Every attachment upload, list, fetch, and delete is account-authenticated. The
+client signs the exact genesis-derived NetworkId, method, percent-encoded path,
+query, and body and disables redirects and retries for the one-shot request:
+
+```python
+import os
+
+from iroha_torii_client import ToriiCanonicalRequestAuth, ToriiClient
+
+client = ToriiClient("https://torii.example")
+auth = ToriiCanonicalRequestAuth(
+    network_id=os.environ["IROHA_NETWORK_ID"],
+    account_id=authority,
+    signer=wallet.sign,
+)
+meta = client.upload_attachment(
+    b"{}", content_type="application/json", canonical_auth=auth
+)
+items = client.list_attachments(canonical_auth=auth)
+payload, content_type = client.get_attachment(meta["id"], canonical_auth=auth)
+client.delete_attachment(meta["id"], canonical_auth=auth)
+```
+
+Use a fresh nonce per call (the default). A human chain label, foreign genesis
+hash, unsigned call, redirect replay, or missing canonical auth is rejected.
+
 ## Fee quotes and sponsor programs
 
 Transaction signing is quote-first. Build one complete unsigned payload with a
@@ -43,9 +71,15 @@ required typed `fee_payment`, then account-sign the quote request with the same
 authority:
 
 ```python
+import os
+
 from iroha_torii_client import ToriiCanonicalRequestAuth
 
-auth = ToriiCanonicalRequestAuth(account_id=authority, signer=wallet.sign)
+auth = ToriiCanonicalRequestAuth(
+    network_id=os.environ["IROHA_NETWORK_ID"],
+    account_id=authority,
+    signer=wallet.sign,
+)
 program = client.get_fee_sponsor_program(
     f"{sponsor_account}/wallet_payments",
     canonical_auth=auth,
@@ -59,3 +93,6 @@ payer, program/revision, and gas bound, replace only that field, then sign and
 submit the unchanged payload. The client does not infer a sponsor, reserve a
 quote, or fall back to the authority. Legacy transaction metadata keys
 `fee_sponsor`, `gas_asset_id`, and `gas_limit` are rejected.
+`IROHA_NETWORK_ID` must be the canonical checksummed hash literal generated
+from the deployment genesis; a display chain label is never accepted as a
+signing domain.

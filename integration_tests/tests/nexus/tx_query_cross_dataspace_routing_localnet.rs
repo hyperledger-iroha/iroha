@@ -47,7 +47,7 @@ use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message, signature_header_value,
+    canonical_network_request_signature_message, signature_header_value,
 };
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
@@ -763,8 +763,14 @@ async fn torii_json_get_as_account(
         .try_into()
         .unwrap_or(u64::MAX);
     let nonce = format!("nexus-app-api-{timestamp_ms}-{}", Hash::new(url.as_str()));
-    let message =
-        canonical_request_signature_message(&Method::GET, &uri, &[], timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &Method::GET,
+        &uri,
+        &[],
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(client.key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()

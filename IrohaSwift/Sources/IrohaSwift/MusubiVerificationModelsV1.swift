@@ -239,8 +239,7 @@ public struct MusubiProviderIngestFinalizedAnchorV1: Codable, Hashable, Sendable
 
 /// Exact parsed-bundle and finalized-replication completion binding.
 public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Sendable {
-    public let chainID: String
-    public let genesisBlockHash: [UInt8]
+    public let networkId: NetworkId
     public let providerID: MusubiDigest32V1
     public let completedBy: String
     public let completionAuthority: MusubiProviderIngestCompletionAuthorityV1
@@ -256,8 +255,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
     public let sourceTreeDigest: MusubiDigest32V1
 
     public init(
-        chainID: String,
-        genesisBlockHash: [UInt8],
+        networkId: NetworkId,
         providerID: MusubiDigest32V1,
         completedBy: String,
         completionAuthority: MusubiProviderIngestCompletionAuthorityV1,
@@ -272,14 +270,11 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
         verificationLockDigest: MusubiDigest32V1,
         sourceTreeDigest: MusubiDigest32V1
     ) throws {
-        try musubiRequireChainIDV1(chainID, field: "Musubi provider chain ID")
         let completedByPayload = try CanonicalNorito.encodeCompactAccountId(completedBy)
         let providerOwnerPayload = try CanonicalNorito.encodeCompactAccountId(
             completionAuthority.providerOwner
         )
-        guard genesisBlockHash.count == 32,
-              genesisBlockHash.contains(where: { $0 != 0 }),
-              completedByPayload == providerOwnerPayload,
+        guard completedByPayload == providerOwnerPayload,
               assignmentRevision > 0, completionEpoch > 0,
               [
                   providerID, replicationOrder, archiveID, bundleDigest,
@@ -290,8 +285,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
                 "Musubi provider bundle verification binding is invalid."
             )
         }
-        self.chainID = chainID
-        self.genesisBlockHash = genesisBlockHash
+        self.networkId = networkId
         self.providerID = providerID
         self.completedBy = completedBy
         self.completionAuthority = completionAuthority
@@ -311,7 +305,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
         try musubiRequireExactKeys(
             decoder,
             [
-                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "network_id", "provider_id", "completed_by",
                 "completion_authority", "replication_order", "assignment_revision",
                 "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
                 "descriptor_digest", "semantic_release_manifest_digest",
@@ -320,8 +314,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
-            chainID: container.decode(String.self, forKey: .chainID),
-            genesisBlockHash: container.decode([UInt8].self, forKey: .genesisBlockHash),
+            networkId: container.decode(NetworkId.self, forKey: .networkId),
             providerID: MusubiDigest32V1(
                 bytes: musubiProviderIDBytesV1(
                     container.decode(MusubiProviderIDJSONV1.self, forKey: .providerID).value
@@ -365,8 +358,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(chainID, forKey: .chainID)
-        try container.encode(genesisBlockHash, forKey: .genesisBlockHash)
+        try container.encode(networkId, forKey: .networkId)
         try container.encode(
             MusubiProviderIDJSONV1(Data(providerID.bytes).hexEncodedString().uppercased()),
             forKey: .providerID
@@ -389,8 +381,7 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
     }
 
     private enum CodingKeys: String, CodingKey {
-        case chainID = "chain_id"
-        case genesisBlockHash = "genesis_block_hash"
+        case networkId = "network_id"
         case providerID = "provider_id"
         case completedBy = "completed_by"
         case completionAuthority = "completion_authority"

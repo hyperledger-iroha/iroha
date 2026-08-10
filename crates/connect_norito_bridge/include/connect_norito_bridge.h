@@ -178,10 +178,8 @@ int32_t connect_norito_validation_fee_current_policy_proof_request_v1(
 int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     const uint8_t* proof_norito,
     unsigned long proof_norito_len,
-    const uint8_t* chain_id,
-    unsigned long chain_id_len,
-    const uint8_t* bound_genesis_hash,
-    unsigned long bound_genesis_hash_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
     const uint8_t* policy_chain_genesis_hash,
     unsigned long policy_chain_genesis_hash_len,
     uint64_t trusted_checkpoint_height,
@@ -488,11 +486,12 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
-// Build a reusable Torii lineage query from the receiver tuple. All selector
-// components are canonical UTF-8 text; no payment request is required.
+// Build a reusable Torii lineage query from the receiver tuple. `network_id`
+// is the canonical 74-byte checksummed NetworkId literal; the remaining
+// selector components are canonical UTF-8 text. No payment request is required.
 int32_t connect_norito_kagemusha_recipient_lineage_query_create_v2(
-    const uint8_t* chain_id_ptr,
-    unsigned long chain_id_len,
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
     uint16_t chain_discriminant,
     const uint8_t* recipient_ptr,
     unsigned long recipient_len,
@@ -1291,6 +1290,62 @@ int32_t connect_norito_blake3_hash(
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
+// ---------------- Confidential-note derivation ----------------
+// All digests are canonical 32-byte Pasta scalar encodings. Every derivation
+// is owned by iroha_core's complete V3 Poseidon permutation; SDK-local
+// substitutes are not part of the first-release contract. Caller-owned output
+// buffers must be exactly 32 bytes. Zero is success; failures use the common
+// bridge codes (-1 null pointer, -2 UTF-8, -11 output length, -15 invalid
+// confidential derivation).
+uint32_t connect_norito_confidential_note_derivation_revision_v3(void);
+int32_t connect_norito_confidential_default_diversifier_v3(
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_diversifier_derive_v3(
+    const uint8_t* seed_ptr, unsigned long seed_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_owner_tag_derive_v3(
+    const uint8_t* spend_key_ptr, unsigned long spend_key_len,
+    const uint8_t* diversifier_ptr, unsigned long diversifier_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_asset_tag_derive_v3(
+    const uint8_t* asset_ptr, unsigned long asset_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_network_tag_derive_v3(
+    const uint8_t* network_id_ptr, unsigned long network_id_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_note_commitment_derive_v3(
+    const uint8_t* asset_ptr, unsigned long asset_len,
+    const uint8_t* amount_ptr, unsigned long amount_len,
+    const uint8_t* rho_ptr, unsigned long rho_len,
+    const uint8_t* owner_tag_ptr, unsigned long owner_tag_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+int32_t connect_norito_confidential_nullifier_derive_v3(
+    const uint8_t* network_id_ptr, unsigned long network_id_len,
+    const uint8_t* asset_ptr, unsigned long asset_len,
+    const uint8_t* spend_key_ptr, unsigned long spend_key_len,
+    const uint8_t* rho_ptr, unsigned long rho_len,
+    uint8_t* out_digest_ptr, unsigned long out_digest_len);
+// Merkle-path output is root[32] || siblings[16][32] || directions[16].
+int32_t connect_norito_confidential_merkle_path_derive_v3(
+    const uint8_t* commitments_ptr, unsigned long commitments_len,
+    uint64_t leaf_index,
+    uint8_t* out_path_ptr, unsigned long out_path_len);
+int32_t connect_norito_confidential_merkle_path_verify_v3(
+    const uint8_t* commitment_ptr, unsigned long commitment_len,
+    uint64_t leaf_index,
+    const uint8_t* siblings_ptr, unsigned long siblings_len,
+    const uint8_t* directions_ptr, unsigned long directions_len,
+    const uint8_t* root_ptr, unsigned long root_len);
+// Advance output is final_root[32] || next_zero_root[32] ||
+// next_zero_siblings[16][32] || next_zero_directions[16].
+int32_t connect_norito_confidential_merkle_path_advance_v3(
+    uint64_t leaf_index,
+    const uint8_t* siblings_ptr, unsigned long siblings_len,
+    const uint8_t* directions_ptr, unsigned long directions_len,
+    const uint8_t* root_ptr, unsigned long root_len,
+    const uint8_t* commitment_ptr, unsigned long commitment_len,
+    uint8_t* out_ptr, unsigned long out_len);
+
 int32_t connect_norito_encode_envelope_control_reject(
     uint64_t seq, uint16_t code,
     const uint8_t* code_id, unsigned long code_id_len,
@@ -1358,7 +1413,7 @@ int32_t connect_norito_decode_control_open_permissions_json(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
-int32_t connect_norito_decode_control_open_chain_id(
+int32_t connect_norito_decode_control_open_network_id(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
@@ -1377,7 +1432,7 @@ int32_t connect_norito_encode_control_open_ext(
     uint64_t seq,
     const uint8_t* app_pk, unsigned long app_pk_len,
     const uint8_t* app_meta_json, unsigned long app_meta_len,
-    const char* chain_id,
+    const uint8_t* network_id, unsigned long network_id_len,
     const uint8_t* permissions_json, unsigned long permissions_len,
     uint8_t** out_ptr, unsigned long* out_len);
 

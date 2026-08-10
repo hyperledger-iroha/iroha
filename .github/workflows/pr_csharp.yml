@@ -130,6 +130,10 @@ jobs:
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
       LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
+      IrohaNativePackageRoot: ${{ runner.temp }}/csharp-native-package
+      IrohaNativePackagePython: python3
+      CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-native-package
+      CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: linux-x64
     defaults:
       run:
         working-directory: csharp
@@ -173,19 +177,16 @@ jobs:
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack
-        run: >-
-          dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj
-          -c Release
-          --no-build
-          --output "$RUNNER_TEMP/csharp-packages"
-          -p:IrohaNativePackageRoot="$RUNNER_TEMP/csharp-native-package"
-          -p:IrohaNativePackagePython=python3
+        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+
+      - name: Package consumer smoke
+        run: ../ci/check_csharp_sdk_package_consumer.sh
 
       - name: Verify exact native inventory in packed NuGet
         working-directory: ${{ github.workspace }}
         run: |
           shopt -s nullglob
-          candidates=("$RUNNER_TEMP"/csharp-packages/Hyperledger.Iroha.Sdk.*.nupkg)
+          candidates=(csharp/artifacts/packages/Hyperledger.Iroha.Sdk.*.nupkg)
           primary=()
           for candidate in "${candidates[@]}"; do
             [[ "$candidate" == *.symbols.nupkg ]] || primary+=("$candidate")
@@ -199,18 +200,11 @@ jobs:
             --stage-root "$RUNNER_TEMP/csharp-native-package" \
             --source-root "$GITHUB_WORKSPACE"
 
-      - name: Package consumer smoke
-        env:
-          CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_DIR: ${{ runner.temp }}/csharp-packages
-          CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-native-package
-          CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: linux-x64
-        run: ../ci/check_csharp_sdk_package_consumer.sh
-
       - name: Stage package and provenance for native-host smokes
         run: |
           bundle="$RUNNER_TEMP/csharp-package-bundle"
           mkdir -p "$bundle/packages"
-          cp "$RUNNER_TEMP"/csharp-packages/*.nupkg "$bundle/packages/"
+          cp artifacts/packages/*.nupkg "$bundle/packages/"
           cp -R "$RUNNER_TEMP/csharp-native-package" "$bundle/native-package"
 
       - name: Upload five-RID C# SDK package

@@ -11,9 +11,9 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly, council_quorum_threshold},
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     block::BlockHeader,
     governance::types::{
@@ -36,6 +36,12 @@ fn seeded_keypair(seed: u8) -> KeyPair {
         .expect("seeded governance keypair should be valid")
 }
 
+fn test_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        label,
+    )))
+}
+
 fn mk_account(seed: u8) -> AccountId {
     let keypair = seeded_keypair(seed);
     let (public_key, _) = keypair.into_parts();
@@ -47,11 +53,12 @@ fn canonical_abi_hash_bytes() -> [u8; 32] {
 }
 
 fn proposal_contract_address(
+    network_id: &NetworkId,
     authority: &AccountId,
     deploy_nonce: u64,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        network_id,
         authority,
         deploy_nonce,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -112,12 +119,12 @@ fn seed_sortition_term_from_candidates(
     candidates: &[(AccountId, u128)],
     beacon: [u8; 32],
 ) -> (
-    ChainId,
+    NetworkId,
     [u8; 32],
     ParliamentTerm,
     iroha_data_model::governance::types::ParliamentBodies,
 ) {
-    let chain: ChainId = "sora-adversarial-test-chain".into();
+    let network_id = test_network_id(b"sora-adversarial-test-chain");
     let epoch = 0_u64;
     let gov_cfg = iroha_config::parameters::actual::Governance::default();
     let committee = gov_cfg.parliament_committee_size;
@@ -126,7 +133,7 @@ fn seed_sortition_term_from_candidates(
         .unwrap_or(committee)
         .max(committee);
     let draw = draw::run_citizen_draw(
-        &chain,
+        &network_id,
         epoch,
         &beacon,
         candidates.iter().map(|(id, bond)| (id, *bond)),
@@ -140,8 +147,8 @@ fn seed_sortition_term_from_candidates(
         candidate_count: u32::try_from(candidates.len()).expect("candidate count should fit u32"),
         derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
     };
-    let bodies = draw::derive_parliament_bodies(&gov_cfg, &chain, epoch, &beacon, &term);
-    (chain, beacon, term, bodies)
+    let bodies = draw::derive_parliament_bodies(&gov_cfg, &network_id, epoch, &beacon, &term);
+    (network_id, beacon, term, bodies)
 }
 
 fn seed_sortition_term_with_beacon(
@@ -149,7 +156,7 @@ fn seed_sortition_term_with_beacon(
     honest_accounts: &[AccountId],
     beacon: [u8; 32],
 ) -> (
-    ChainId,
+    NetworkId,
     [u8; 32],
     ParliamentTerm,
     iroha_data_model::governance::types::ParliamentBodies,
@@ -172,7 +179,7 @@ fn seed_sortition_term(
     attacker_accounts: &[AccountId],
     honest_accounts: &[AccountId],
 ) -> (
-    ChainId,
+    NetworkId,
     [u8; 32],
     ParliamentTerm,
     iroha_data_model::governance::types::ParliamentBodies,
@@ -289,7 +296,7 @@ fn seed_captured_parliament(
     stx.world.council_mut().insert(0, council.clone());
     let bodies = iroha_core::governance::draw::derive_parliament_bodies(
         &stx.gov,
-        &ChainId::from("sora-adversarial-test-chain"),
+        &stx.network_id,
         0,
         &[0x7b; 32],
         &council,
@@ -481,6 +488,7 @@ fn attacker_control_seat_count_is_monotonic_with_identity_set_growth() {
 #[test]
 fn duplicate_approvals_do_not_count_twice_for_quorum() {
     let mut state = seeded_state();
+    let network_id = *state.network_id_ref();
     let attacker_a = mk_account(1);
     let attacker_b = mk_account(2);
     let honest = mk_account(3);
@@ -489,7 +497,7 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            contract_address: proposal_contract_address(&attacker_a, 0),
+            contract_address: proposal_contract_address(&network_id, &attacker_a, 0),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),
@@ -621,6 +629,7 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
 #[test]
 fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
     let mut state = seeded_state();
+    let network_id = *state.network_id_ref();
     let attacker_a = mk_account(31);
     let attacker_b = mk_account(32);
     let honest_a = mk_account(33);
@@ -631,7 +640,7 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            contract_address: proposal_contract_address(&honest_a, 1),
+            contract_address: proposal_contract_address(&network_id, &honest_a, 1),
             code_hash_hex: ContractCodeHash::from_hex_str(&"33".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),

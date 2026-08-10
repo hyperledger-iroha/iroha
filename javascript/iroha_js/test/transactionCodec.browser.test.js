@@ -46,6 +46,7 @@ const SOURCE_ASSET = `${ASSET_DEFINITION}#${AUTHORITY}`;
 const NETWORK_ID = NetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
+const FOREIGN_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0x55));
 const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "schema.version",
   "source.fixture",
@@ -428,6 +429,7 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
     Buffer.concat([field(archive), payload.subarray(domain.next)]);
   const validate = (payloadBytes) =>
     validateBrowserTransferSignable({
+      networkId: NETWORK_ID,
       payloadBytes,
       authority: AUTHORITY,
       signingPublicKey: PUBLIC_KEY,
@@ -449,6 +451,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   const payload = buildBrowserTransferPayload(input);
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -463,6 +466,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   const nativeBinding = getNativeBinding();
   assert.equal(typeof nativeBinding.finalizeSignedTransaction, "function");
   const native = nativeBinding.finalizeSignedTransaction({
+    networkId: NETWORK_ID.toBytes(),
     payloadBytes: payload,
     payloadHashHex: hashHex,
     signature,
@@ -694,6 +698,7 @@ test("browser snapshots Proxy data descriptors without invoking get traps", () =
 
   const { hashHex, signature } = signPayload(expectedPayload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: expectedPayload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -936,6 +941,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const nonCanonicalHash = browserTransactionPayloadHashHex(nonCanonicalPayload);
   const nonCanonicalSignature = signPayload(nonCanonicalPayload).signature;
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: nonCanonicalPayload,
     payloadHashHex: nonCanonicalHash,
     authority: AUTHORITY,
@@ -959,6 +965,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const canonicalSignature = signPayload(canonicalPayload).signature;
   const canonicalSigned = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: canonicalPayload,
       payloadHashHex: browserTransactionPayloadHashHex(canonicalPayload),
       authority: AUTHORITY,
@@ -996,7 +1003,12 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const baseline = finalizeBrowserSignedTransaction(
-    { payloadBytes: payload, payloadHashHex: hashHex, authority: AUTHORITY },
+    {
+      networkId: NETWORK_ID,
+      payloadBytes: payload,
+      payloadHashHex: hashHex,
+      authority: AUTHORITY,
+    },
     signature,
     PUBLIC_KEY,
   ).signedTransaction;
@@ -1048,7 +1060,12 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const expected = finalizeBrowserSignedTransaction(
-    { payloadBytes: payload, payloadHashHex: hashHex, authority: AUTHORITY },
+    {
+      networkId: NETWORK_ID,
+      payloadBytes: payload,
+      payloadHashHex: hashHex,
+      authority: AUTHORITY,
+    },
     signature,
     PUBLIC_KEY,
   );
@@ -1068,6 +1085,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   const reentrantFinalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: reentrantPayload,
       payloadHashHex: hashHex,
       authority: AUTHORITY,
@@ -1092,6 +1110,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: sharedPayloadView,
       payloadHashHex: hashHex,
       authority: AUTHORITY,
@@ -1116,7 +1135,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { payloadBytes: payload, authority: AUTHORITY },
+      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       new ArrayBuffer(65),
       PUBLIC_KEY,
     ),
@@ -1124,7 +1143,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { payloadBytes: payload, authority: AUTHORITY },
+      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       signature,
       new ArrayBuffer(33),
     ),
@@ -1146,6 +1165,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
     "reviewer PoC must exercise noble's cofactored acceptance",
   );
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex,
     authority: AUTHORITY,
@@ -1157,6 +1177,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
   );
   assert.throws(() =>
     getNativeBinding().finalizeSignedTransaction({
+      networkId: NETWORK_ID.toBytes(),
       payloadBytes: payload,
       payloadHashHex,
       signature,
@@ -1170,6 +1191,7 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -1178,6 +1200,15 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   };
   const otherKey = Buffer.from(DESTINATION_PUBLIC_KEY);
 
+  expectCodecError(
+    () =>
+      finalizeBrowserSignedTransaction(
+        { ...signable, networkId: FOREIGN_NETWORK_ID },
+        signature,
+        PUBLIC_KEY,
+      ),
+    "network_id_mismatch",
+  );
   expectCodecError(
     () =>
       finalizeBrowserSignedTransaction(
@@ -1305,6 +1336,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   const { hashHex, signature } = signPayload(payload);
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: payload,
       payloadHashHex: hashHex,
       authority: AUTHORITY,

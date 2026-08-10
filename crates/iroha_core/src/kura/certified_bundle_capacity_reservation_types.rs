@@ -10,7 +10,7 @@ struct CertifiedBundleCapacityIdentity {
     lane_block_view: u64,
     lane_block_descriptor_hash: Hash,
     proposal_hash: Hash,
-    autonomous_chain_id_hash: Hash,
+    autonomous_network_id: iroha_data_model::NetworkId,
     autonomous_epoch: u64,
 }
 

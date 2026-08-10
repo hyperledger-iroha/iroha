@@ -445,7 +445,8 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "latest_height != identity.0",
         "execution_entries_for_bounded_identities(&historical_execution_identities)",
-        "ensure_post_wsv_lane_artifact_budget_reservation_locked",
+        "authenticated_carriers.push((entry_hash, carrier))",
+        "ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked",
     ),
     "autonomous_predecessor_role_dispatch": (
         "session.prepare_qc.payload_availability_qc.is_some()",
@@ -466,12 +467,12 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     "autonomous_predecessor_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "previous.lane_incarnation == descriptor.lane_incarnation",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)",
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "receipt.proposal == *proposal",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)",
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)",
     ),
     "certified_merge_stage_consumer": (
         "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
@@ -491,7 +492,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "self.ensure_certified_bundle_capacity_reservation_under_prune_guard",
         "self.write_certified_lane_block_artifact_with_authority_under_prune_guard",
         "self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?",
-        "descriptor.lane_block_height, *chain_id_hash, *epoch, None, true",
+        "descriptor.lane_block_height, *network_id, *epoch, None, true",
     ),
     "certified_bundle_exact_pair_capacity_projection": (
         "self.certified_bundle_pair_has_exact_append_recovery_locked",

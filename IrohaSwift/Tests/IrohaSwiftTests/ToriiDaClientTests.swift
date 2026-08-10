@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -61,14 +62,22 @@ final class ToriiDaClientTests: XCTestCase {
             NoritoNativeBridge.shared.isAvailable,
             "NoritoBridge is required to derive DA payload digest"
         )
+        let privateKeyBytes = Data(repeating: 0x32, count: 32)
+        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
+        let owner = try AccountAddress.fromAccount(
+            publicKey: privateKey.publicKey.rawRepresentation
+        ).toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let submission = ToriiDaBlobSubmission(
+            networkId: TestNetworkIds.canonical,
+            owner: owner,
             payload: Data([0x01, 0x02]),
             laneId: 7,
             epoch: 1,
             sequence: 0,
             blobClass: .taikaiSegment,
             codec: "custom.binary",
-            clientBlobId: Data(repeating: 0x22, count: 32)
+            clientBlobId: Data(repeating: 0x22, count: 32),
+            privateKey: privateKeyBytes
         )
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let result = try await ToriiClient(baseURL: URL(string: "https://example.com")!)
@@ -80,6 +89,8 @@ final class ToriiDaClientTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: requestURL.path))
         let data = try Data(contentsOf: requestURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["network_id"] as? String, TestNetworkIds.canonical.literal)
+        XCTAssertEqual(json?["owner"] as? String, owner)
         XCTAssertEqual(json?["lane_id"] as? Int, 7)
     }
 

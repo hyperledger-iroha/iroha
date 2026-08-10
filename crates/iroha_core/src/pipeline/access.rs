@@ -2967,7 +2967,7 @@ mod tests {
     fn lifecycle_calls_write_the_instance_marker_scheduler_key() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &test_network_id(),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -3010,7 +3010,7 @@ mod tests {
     fn mixed_executable_batch_forces_a_global_scheduler_barrier() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &test_network_id(),
             &authority,
             92,
             DataSpaceId::UNIVERSAL,

@@ -29,6 +29,7 @@ EXPECTED = {
 }
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 
 # These constants mirror the first-release release-mode contract in
 # configs/soranexus/taira/validate_privacy_bootstrap.py.  The installed
@@ -53,7 +54,7 @@ CONFIG_PUBLIC_BASE_SHA256 = (
     "a235a552578f612033c2d335d4d2d4ba3afa9cb38fb73b4e6d95cd7ad14eeceb"
 )
 GENESIS_PUBLIC_BASE_SHA256 = (
-    "5977dcd2599c585a891331069e3a09904767a37cc3e4c136bb04528919629ee4"
+    "ff00af54a8e2c28e8cc324301ca240ecc26f683c33ed57c51ffe406bc5148bed"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
@@ -89,6 +90,34 @@ class SnapshotError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise SnapshotError(message)
+
+
+def _crc16_ccitt_false(payload: bytes) -> int:
+    checksum = 0xFFFF
+    for byte in payload:
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ 0x1021) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return checksum
+
+
+def _canonical_network_id(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    match = NETWORK_ID_RE.fullmatch(value)
+    if match is None:
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    identity = bytes.fromhex(match.group(1))
+    prefix = value[:69]
+    if identity[-1] & 1 == 0 or _crc16_ccitt_false(prefix.encode("ascii")) != int(
+        match.group(2), 16
+    ):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    return value
 
 
 def _file_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -246,6 +275,7 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
             "bootle_lantern_issuer",
             "chain_discriminant",
             "chain_id",
+            "network_id",
             "genesis_authority",
             "governance_rollout",
             "governance_permission",
@@ -262,6 +292,7 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
         or plan["governance_permission"] != "CanEnactGovernance"
     ):
         _fail("privacy bootstrap plan identity differs from canonical Taira V1")
+    _canonical_network_id(plan["network_id"], "privacy bootstrap plan network_id")
     _exact_integer(plan["schema_version"], 1, "privacy plan schema version")
     _exact_integer(
         plan["chain_discriminant"],
@@ -381,7 +412,7 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
         or provider["handle"] != PROVIDER_HANDLE
     ):
         _fail("Bootle/Lantern provider identity differs from canonical V1")
-    _exact_integer(provider["slot_wire_id"], 54, "runtime provider slot")
+    _exact_integer(provider["slot_wire_id"], 56, "runtime provider slot")
     _exact_integer(provider["revision"], 1, "runtime provider revision")
     _fixed_sha256(
         provider["qualification_policy_digest_hex"],
@@ -432,6 +463,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
             "authorization_lifetime_blocks",
             "broker_contract_digest_hex",
             "chain_id",
+            "network_id",
             "issuer_id_hex",
             "issuer_parameter_digest_hex",
             "issuer_parameter_id_hex",
@@ -456,6 +488,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
         broker["schema"]
         != "iroha.taira.privacy.bootle-lantern-broker-public.v1"
         or broker["chain_id"] != CHAIN_ID
+        or broker["network_id"] != plan["network_id"]
         or broker["runtime_provider_handle"] != PROVIDER_HANDLE
         or broker["issuer_id_hex"] != ISSUER_ID
         or broker["policy_id_hex"] != POLICY_ID
@@ -470,6 +503,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
         or hashlib.sha256(payload).hexdigest() != bootle["public_export_sha256"]
     ):
         _fail("broker public export differs from the checked release plan")
+    _canonical_network_id(broker["network_id"], "broker public export network_id")
     _exact_integer(
         broker["runtime_provider_revision"], 1, "broker runtime provider revision"
     )

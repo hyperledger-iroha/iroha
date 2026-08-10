@@ -413,7 +413,7 @@ jobs:
           target_root="$RUNNER_TEMP/taira-macos-target"; mkdir -m 0700 "$target_root"
           clean=(env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF")
           for name in CARGO_HOME RUSTUP_HOME; do if [[ -n "${!name:-}" ]]; then clean+=("$name=${!name}"); fi; done
-          "${clean[@]}" cargo build --locked --release -p irohad --bin irohad --features embedded-soracloud-runtime,zk-stark
+          "${clean[@]}" cargo build --locked --release -p irohad --bin iroha3d --features embedded-soracloud-runtime,zk-stark
           network_messages="$RUNNER_TEMP/taira-network-driver.jsonl"
           jindo_messages="$RUNNER_TEMP/taira-jindo-driver.jsonl"
           action_messages="$RUNNER_TEMP/taira-action-driver.jsonl"
@@ -472,7 +472,7 @@ jobs:
           PY
           )"
           stage="$RUNNER_TEMP/taira-macos-build-handoff"; mkdir -m 0700 "$stage" "$stage/bin" "$stage/drivers" "$stage/privacy"
-          install -m 0500 "$target_root/release/irohad" "$stage/bin/irohad"
+          install -m 0500 "$target_root/release/iroha3d" "$stage/bin/iroha3d"
           install -m 0500 "$network_driver" "$stage/drivers/network-functional"
           install -m 0500 "$jindo_driver" "$stage/drivers/iroha-core-tests"
           install -m 0500 "$action_driver" "$stage/drivers/privacy-exact12-action-driver"
@@ -573,7 +573,7 @@ jobs:
             --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
             --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
             --output-dir "$privacy"
-          reset="$runtime_identity_root/qualification-reset-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; binary_sha="$(shasum -a 256 "$mac_stage/bin/irohad" | awk '{print $1}')"
+          reset="$runtime_identity_root/qualification-reset-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; binary_sha="$(shasum -a 256 "$mac_stage/bin/iroha3d" | awk '{print $1}')"
           test ! -e "$reset"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- \
             --source-bundle "$QUALIFICATION_SOURCE_RESET_BUNDLE_PATH" \
@@ -591,7 +591,7 @@ jobs:
           generation="$(printf 'iroha.taira.qualification.v2\0%s\0%s\0' "$handoff_digest" "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" | shasum -a 256 | awk '{print $1}')"
           stage="$AUTHORITY_STAGING_ROOT/qualification-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; test ! -e "$stage"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" capture-four-peer -- \
-            --reset-bundle "$reset" --validator-binary "$mac_stage/bin/irohad" --supervisor "$supervisor" \
+            --reset-bundle "$reset" --validator-binary "$mac_stage/bin/iroha3d" --supervisor "$supervisor" \
             --privacy-action-driver "$mac_stage/drivers/privacy-exact12-action-driver" \
             --privacy-network-driver "$mac_stage/drivers/network-functional" \
             --privacy-jindo-driver "$mac_stage/drivers/iroha-core-tests" \
@@ -794,6 +794,11 @@ jobs:
           candidate_archive="${candidate_archives[0]}"
           boi_output="$TAIRA_BOI_QUALIFICATION_STAGING_ROOT/boi-qualified-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           test ! -e "$boi_output"
+          # The installed controller currently fails closed here until the
+          # root-provisioned iroha.taira.boi-native-isolation-broker.v1,
+          # iroha.taira.boi-authenticated-run-nonce.v1, and
+          # iroha.taira.complete-source-identity-attestation.v1 contracts exist.
+          # No workflow value or pass marker may bypass them.
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" assemble-boi -- \
             --artifact-handoff-root "$boi_stage" \
             --candidate-archive "$candidate_archive" --candidate-authority-dir "$candidate_stage/authority" \
@@ -901,12 +906,16 @@ jobs:
           [[ "$TAIRA_MACOS_RESET_STAGING_ROOT" == /* ]]
           test "$(cd "$TAIRA_MACOS_RESET_STAGING_ROOT" && pwd -P)" = "$TAIRA_MACOS_RESET_STAGING_ROOT"
           reset="$TAIRA_MACOS_RESET_STAGING_ROOT/taira-${source_commit}-${dpn_commit}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          test ! -e "$reset"; binary_sha="$(shasum -a 256 "$mac_stage/bin/irohad" | awk '{print $1}')"
+          test ! -e "$reset"; binary_sha="$(shasum -a 256 "$mac_stage/bin/iroha3d" | awk '{print $1}')"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" --source-bundle-sha256 "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256" --privacy-release-dir "$privacy/release" --genesis-external-signer "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH" --trusted-genesis-external-signer-sha256 "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256" --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" --irohad-sha256 "$binary_sha" --source-commit "$source_commit" --dpn-validator-release-commit "$dpn_commit" --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" --output-bundle "$reset"
           production_manifest_sha="$(shasum -a 256 "$reset/reset-manifest.json" | awk '{print $1}')"
           supervisor="$TAIRA_CONTROLLER_ROOT/scripts/taira_peer_supervisor.py"
           candidate_archive="$(find "$candidate_stage/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"; receipt_id="$(tr -d '\n' <"$candidate_stage/receipt-id")"
-          args=(--bundle "$reset" --binary "$mac_stage/bin/irohad" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --boi-qualified-handoff-root "$boi_stage" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --trusted-boi-qualification-public-key "$TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH" --trusted-boi-qualification-signing-fingerprint "$TAIRA_TRUSTED_BOI_QUALIFICATION_SIGNING_FINGERPRINT" --expected-boi-qualification-host-id "$EXPECTED_BOI_QUALIFICATION_HOST_ID" --expected-boi-qualification-installation-id "$EXPECTED_BOI_QUALIFICATION_INSTALLATION_ID" --expected-boi-qualification-controller-digest "$EXPECTED_BOI_QUALIFICATION_CONTROLLER_DIGEST" --expected-workflow-run-id "$GITHUB_RUN_ID" --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 900)
+          # Both invocations intentionally fail before attestation/path reads
+          # until iroha.taira.deploy-authenticated-run-nonce.v1 and
+          # iroha.taira.complete-source-identity-attestation.v1 are installed.
+          # Workflow IDs and caller-echoed source fields cannot bypass either.
+          args=(--bundle "$reset" --binary "$mac_stage/bin/iroha3d" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --boi-qualified-handoff-root "$boi_stage" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --trusted-boi-qualification-public-key "$TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH" --trusted-boi-qualification-signing-fingerprint "$TAIRA_TRUSTED_BOI_QUALIFICATION_SIGNING_FINGERPRINT" --expected-boi-qualification-host-id "$EXPECTED_BOI_QUALIFICATION_HOST_ID" --expected-boi-qualification-installation-id "$EXPECTED_BOI_QUALIFICATION_INSTALLATION_ID" --expected-boi-qualification-controller-digest "$EXPECTED_BOI_QUALIFICATION_CONTROLLER_DIGEST" --expected-workflow-run-id "$GITHUB_RUN_ID" --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 900)
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" >"$RUNNER_TEMP/deploy-preflight.json"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" --apply >"$RUNNER_TEMP/deploy-applied.json"
           /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" <<'PY'

@@ -492,6 +492,8 @@ impl SubmitArgs {
         };
         let params = build_da_params(&self)?;
         let request = da::build_da_request(
+            context.config().network_id,
+            context.config().account.clone(),
             payload_bytes,
             &params,
             metadata,
@@ -1858,6 +1860,7 @@ mod tests {
     use iroha_crypto::Algorithm;
     use iroha_data_model::da::{
         commitment::DaProofPolicyBundle,
+        ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
         manifest::{ChunkCommitment, ChunkRole},
         pin_intent::{DaPinIntent, DaPinIntentBundle},
         types::{
@@ -2447,12 +2450,38 @@ mod tests {
 
     #[test]
     fn load_json_payload_decodes_pin_intent_proof() {
+        let lane_id = LaneId::new(1);
+        let key_pair = fixture_key_pair(0xE9);
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::prehashed([0xEA; 32]),
+            )),
+            owner: AccountId::new(key_pair.public_key().clone()),
+            lane_id,
+            epoch: 2,
+            sequence: 3,
+            payload_hash: BlobDigest::new([0xEB; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xEC; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: iroha_crypto::Signature::try_new(
+                key_pair.private_key(),
+                &authorization.signing_digest(),
+            )
+            .expect("sign deterministic CLI DA proof authorization"),
+        });
         let intent = DaPinIntent::new(
-            LaneId::new(1),
+            lane_id,
             2,
             3,
             StorageTicketId::new([0x44; 32]),
             ManifestDigest::new([0x55; 32]),
+            authorization,
         );
         let proof = DaPinIntentProof {
             intent,

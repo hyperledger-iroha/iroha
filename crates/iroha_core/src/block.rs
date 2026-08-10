@@ -810,7 +810,7 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &crate::queue::RoutingPlan,
     expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     dataspace_catalog: &DataSpaceCatalog,
     authority: &impl NativeAmxAuthorityContext,
     expected_v2_context: Option<ExpectedNativeAmxV2Context>,
@@ -825,7 +825,7 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
         entrypoint_hash,
         plan,
         expected_source_id,
-        expected_chain_id_hash,
+        expected_network_id,
         &validation_authority,
         expected_v2_context,
     )
@@ -905,7 +905,7 @@ fn validate_historical_native_amx_receipt_against_plan(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &crate::queue::RoutingPlan,
     expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     merge_active_lanes: Option<&[MergeLaneBinding]>,
     expected_v2_context: Option<ExpectedNativeAmxV2Context>,
 ) -> Result<(), String> {
@@ -916,7 +916,7 @@ fn validate_historical_native_amx_receipt_against_plan(
         entrypoint_hash,
         plan,
         expected_source_id,
-        expected_chain_id_hash,
+        expected_network_id,
         &validation_authority,
         expected_v2_context,
     )
@@ -1012,13 +1012,13 @@ fn validate_historical_native_amx_certified_coordinator_authority(
 /// authoritative lifecycle and committee context.
 pub(crate) fn validate_historical_native_amx_source_bundle(
     source_bundle: &[u8],
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
     source_authority: HistoricalNativeAmxSourceAuthority<'_>,
 ) -> Result<crate::kura::AutonomousLaneMergeBundleV1, String> {
     let bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
         source_bundle,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )
     .map_err(str::to_owned)?;
@@ -1050,7 +1050,7 @@ pub(crate) fn validate_historical_native_amx_source_bundle(
             entrypoint.hash(),
             routing_plan,
             source_id,
-            expected_chain_id_hash,
+            expected_network_id,
             merge_active_lanes,
             Some(expected_v2_context),
         )?;
@@ -1064,7 +1064,7 @@ fn validate_native_amx_receipt_against_plan_with_authority(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &crate::queue::RoutingPlan,
     expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     validation_authority: &NativeAmxValidationAuthority<'_>,
     expected_v2_context: Option<ExpectedNativeAmxV2Context>,
 ) -> Result<(), String> {
@@ -1080,8 +1080,8 @@ fn validate_native_amx_receipt_against_plan_with_authority(
     if receipt.source_id != expected_source_id {
         return Err("native AMX receipt source transaction mismatch".to_owned());
     }
-    if receipt.chain_id_hash != expected_chain_id_hash {
-        return Err("native AMX receipt chain identity mismatch".to_owned());
+    if receipt.network_id != expected_network_id {
+        return Err("native AMX receipt network identity mismatch".to_owned());
     }
     let coordinator = plan.coordinator_route();
     if receipt.lane_id != coordinator.lane_id || receipt.dataspace_id != coordinator.dataspace_id {
@@ -1284,7 +1284,7 @@ fn validate_native_amx_receipt_against_plan_with_authority(
             &leg.prepare_qc,
             NativeAmxPhase::Prepare,
             entrypoint_hash,
-            expected_chain_id_hash,
+            expected_network_id,
             validation_authority,
             Some(expected_v2_context),
             authoritative_validators.as_deref(),
@@ -1295,7 +1295,7 @@ fn validate_native_amx_receipt_against_plan_with_authority(
             &leg.commit_qc,
             NativeAmxPhase::Commit,
             entrypoint_hash,
-            expected_chain_id_hash,
+            expected_network_id,
             validation_authority,
             Some(expected_v2_context),
             authoritative_validators.as_deref(),
@@ -1349,7 +1349,7 @@ fn validate_native_amx_attestation_qc(
     qc: &NativeAmxAttestationQcV2,
     expected_phase: NativeAmxPhase,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     validation_authority: &NativeAmxValidationAuthority<'_>,
     expected_v2_context: Option<ExpectedNativeAmxV2Context>,
     authoritative_validator_set: Option<&[PeerId]>,
@@ -1373,8 +1373,8 @@ fn validate_native_amx_attestation_qc(
             "native AMX attestation exceeds or violates a protocol resource cap".to_owned(),
         );
     }
-    if body.chain_id_hash != expected_chain_id_hash || body.chain_id_hash != receipt.chain_id_hash {
-        return Err("native AMX attestation chain identity mismatch".to_owned());
+    if body.network_id != expected_network_id || body.network_id != receipt.network_id {
+        return Err("native AMX attestation network identity mismatch".to_owned());
     }
     if body.source_id != receipt.source_id {
         return Err("native AMX attestation source transaction mismatch".to_owned());
@@ -6869,7 +6869,6 @@ pub(crate) mod valid {
         pub fn validate(
             mut block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
@@ -6877,7 +6876,6 @@ pub(crate) mod valid {
             if let Err(error) = Self::validate_static(
                 &block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 state_block,
                 false,
@@ -6921,7 +6919,6 @@ pub(crate) mod valid {
         pub fn validate_with_events<F: Fn(PipelineEventBox)>(
             mut block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
@@ -6930,7 +6927,6 @@ pub(crate) mod valid {
             if let Err(error) = Self::validate_static(
                 &block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 state_block,
                 false,
@@ -7014,7 +7010,6 @@ pub(crate) mod valid {
         pub fn validate_keep_voting_block<'state>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7024,7 +7019,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7047,7 +7041,6 @@ pub(crate) mod valid {
         pub fn validate_signed_genesis_keep_voting_block<'state>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7057,7 +7050,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7078,7 +7070,6 @@ pub(crate) mod valid {
         pub(crate) fn validate_keep_voting_block_for_replay<'state>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7089,7 +7080,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7124,7 +7114,6 @@ pub(crate) mod valid {
         pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             block_cadence: Duration,
@@ -7135,7 +7124,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7168,7 +7156,6 @@ pub(crate) mod valid {
         >(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7179,7 +7166,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7391,7 +7377,6 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_inner<'state>(
             mut block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7436,7 +7421,6 @@ pub(crate) mod valid {
                 match Self::validate_static_state_dependent(
                     &block,
                     topology,
-                    expected_chain_id,
                     genesis_account,
                     &view,
                     soft_fork,
@@ -7696,7 +7680,6 @@ pub(crate) mod valid {
         pub fn validate_keep_voting_block_with_events<'state, F: FnMut(PipelineEventBox)>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7707,7 +7690,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7731,7 +7713,6 @@ pub(crate) mod valid {
         >(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -7743,7 +7724,6 @@ pub(crate) mod valid {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -7800,7 +7780,6 @@ pub(crate) mod valid {
         fn validate_static_state_dependent(
             block: &SignedBlock,
             topology: &Topology,
-            chain_id: &ChainId,
             genesis_account: &AccountId,
             state: &impl StateReadOnly,
             soft_fork: bool,
@@ -7891,7 +7870,6 @@ pub(crate) mod valid {
             Self::validate_execution_context_with_state(
                 block,
                 topology,
-                chain_id,
                 state,
                 validation_profile.clone(),
             )?;
@@ -8092,6 +8070,22 @@ pub(crate) mod valid {
                 state.nexus(),
                 block.header().height().get(),
                 |account| world.accounts().get(account).is_some(),
+            )?;
+            crate::da::validate_pin_intent_authorizations(
+                bundle,
+                *state.network_id(),
+                |account| {
+                    world
+                        .accounts()
+                        .get(account)
+                        .map(|_| account.controller().clone())
+                },
+            )?;
+            crate::da::quota::prepare_ingest_quota_writes(
+                world.smart_contract_state(),
+                bundle,
+                block.header().height().get(),
+                &state.nexus().da,
             )?;
             for intent in &bundle.intents {
                 if world
@@ -8613,7 +8607,7 @@ pub(crate) mod valid {
                     "certified merge QC is bound to a different carrier height, parent, or view",
                 ));
             }
-            if qc.chain_id_digest != crate::merge::merge_network_id_digest(network_id) {
+            if qc.network_id != *network_id {
                 return Err(Self::execution_context_error(
                     "certified merge reference is bound to another network",
                 ));
@@ -9430,7 +9424,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state: &impl StateReadOnly,
             payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-            expected_chain_id_hash: Hash,
+            expected_network_id: iroha_data_model::NetworkId,
             expected_epoch: u64,
         ) -> Result<bool, BlockValidationError> {
             let descriptor = &payload.origin_proposal.descriptor;
@@ -9448,7 +9442,7 @@ pub(crate) mod valid {
             if let Some(artifact) = state.kura().read_autonomous_lane_block_artifact(
                 descriptor.lane_id,
                 lane_block_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
             ) {
                 let mut persisted = artifact.executable_payload;
@@ -9603,7 +9597,6 @@ pub(crate) mod valid {
         fn validate_execution_context_autonomous_lane_payloads(
             block: &SignedBlock,
             topology: &Topology,
-            chain_id: &ChainId,
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
             validation_profile: ConsensusValidationProfile,
@@ -9627,7 +9620,7 @@ pub(crate) mod valid {
                     v2_context.height
                 )));
             }
-            let expected_chain_id_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+            let expected_network_id = *state.network_id();
             let base_mode_tag = match v2_context.consensus_mode {
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
                     iroha_data_model::block::consensus_v2::PERMISSIONED_TAG
@@ -9707,7 +9700,7 @@ pub(crate) mod valid {
             for (index, envelope) in envelopes.iter().enumerate() {
                 let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                     envelope,
-                    expected_chain_id_hash,
+                    expected_network_id,
                     v2_context.epoch,
                 )
                 .map_err(|error| {
@@ -9813,7 +9806,7 @@ pub(crate) mod valid {
                     block,
                     state,
                     &payload,
-                    expected_chain_id_hash,
+                    expected_network_id,
                     v2_context.epoch,
                 )?;
                 if !exact_current_slot
@@ -9837,7 +9830,7 @@ pub(crate) mod valid {
                 }
                 let (reservation_owner_hash, proposal_identity_hash) =
                     crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-                        expected_chain_id_hash,
+                        expected_network_id,
                         v2_context.context_id,
                         v2_context.epoch,
                         proposal,
@@ -9925,7 +9918,6 @@ pub(crate) mod valid {
         fn validate_execution_context_with_state(
             block: &SignedBlock,
             topology: &Topology,
-            chain_id: &ChainId,
             state: &impl StateReadOnly,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
@@ -9962,7 +9954,6 @@ pub(crate) mod valid {
             Self::validate_execution_context_autonomous_lane_payloads(
                 block,
                 topology,
-                chain_id,
                 state,
                 bundle,
                 validation_profile.clone(),
@@ -10078,8 +10069,7 @@ pub(crate) mod valid {
                         };
                         let mut expected_source_id = [0u8; iroha_crypto::Hash::LENGTH];
                         expected_source_id.copy_from_slice(source_tx.hash().as_ref());
-                        let expected_chain_id_hash =
-                            Hash::new(chain_id.clone().into_inner().as_bytes());
+                        let expected_network_id = *state.network_id();
                         let entrypoint_untyped = Hash::from(context.entrypoint_hash);
                         let ownership_key = (
                             context.lane_id,
@@ -10112,7 +10102,7 @@ pub(crate) mod valid {
                             context.entrypoint_hash,
                             &plan,
                             expected_source_id,
-                            expected_chain_id_hash,
+                            expected_network_id,
                             &nexus.dataspace_catalog,
                             state,
                             expected_native_amx_context,
@@ -11042,7 +11032,6 @@ pub(crate) mod valid {
         fn validate_static(
             block: &SignedBlock,
             topology: &Topology,
-            chain_id: &ChainId,
             genesis_account: &AccountId,
             state: &StateBlock<'_>,
             soft_fork: bool,
@@ -11051,7 +11040,6 @@ pub(crate) mod valid {
             let static_data = Self::validate_static_state_dependent(
                 block,
                 topology,
-                chain_id,
                 genesis_account,
                 state,
                 soft_fork,
@@ -16089,7 +16077,6 @@ pub(crate) mod valid {
         pub fn commit_keep_voting_block<'state, F: Fn(PipelineEventBox)>(
             block: SignedBlock,
             topology: &Topology,
-            expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
@@ -16110,7 +16097,6 @@ pub(crate) mod valid {
             let result = Self::validate_keep_voting_block(
                 block,
                 topology,
-                expected_chain_id,
                 genesis_account,
                 time_source,
                 state,
@@ -16488,6 +16474,52 @@ pub(crate) mod valid {
                 .expect("checked core block DA acknowledgement signature fixture")
         }
 
+        fn test_da_network_id() -> iroha_data_model::NetworkId {
+            iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32])),
+            )
+        }
+
+        fn test_da_owner_keypair() -> KeyPair {
+            checked_seeded_keypair(&[0xDB; 32], Algorithm::Ed25519)
+        }
+
+        fn insert_test_da_owner(world: &mut World) {
+            world.accounts.insert(
+                iroha_data_model::account::AccountId::new(
+                    test_da_owner_keypair().public_key().clone(),
+                ),
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+        }
+
+        fn test_da_pin_intent(
+            lane_id: LaneId,
+            epoch: u64,
+            sequence: u64,
+            storage_ticket: StorageTicketId,
+            manifest_hash: ManifestDigest,
+        ) -> DaPinIntent {
+            let owner_keypair = test_da_owner_keypair();
+            DaPinIntent::new(
+                lane_id,
+                epoch,
+                sequence,
+                storage_ticket,
+                manifest_hash,
+                crate::da::signed_test_ingest_authorization(
+                    test_da_network_id(),
+                    &owner_keypair,
+                    lane_id,
+                    epoch,
+                    sequence,
+                    1,
+                ),
+            )
+        }
+
         fn axt_post_snapshot(sub_nonce: u64) -> AxtPolicySnapshot {
             let entries = vec![AxtPolicyBinding {
                 dsid: DataSpaceId::new(7),
@@ -16586,7 +16618,11 @@ pub(crate) mod valid {
                     carrier_parent_hash: HashOf::from_untyped_unchecked(Hash::new(
                         b"block-settlement-parent",
                     )),
-                    chain_id_digest: Hash::new(b"block-settlement-chain"),
+                    network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                            Hash::new(b"block-settlement-genesis"),
+                        ),
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validator_set),
                     validator_set,
@@ -16746,7 +16782,7 @@ pub(crate) mod valid {
                     epoch_id: 1,
                     carrier_height: block.header().height().get(),
                     carrier_parent_hash: parent_hash,
-                    chain_id_digest: crate::merge::merge_network_id_digest(&network_id),
+                    network_id,
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash,
                     validator_set: validators,
@@ -16936,10 +16972,10 @@ pub(crate) mod valid {
             );
             let accepted =
                 AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-            let chain_id_hash = Hash::new(state.chain_id.clone().into_inner().as_bytes());
+            let network_id = state.network_id;
             let (reservation_owner_hash, proposal_identity_hash) =
                 crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-                    chain_id_hash,
+                    network_id,
                     context_id,
                     epoch,
                     &proposal,
@@ -16966,7 +17002,7 @@ pub(crate) mod valid {
             };
             let payload =
                 crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-                    chain_id_hash,
+                    network_id,
                     epoch,
                     proposal,
                     vec![entrypoint.clone()],
@@ -16978,17 +17014,13 @@ pub(crate) mod valid {
                 )
                 .expect("construct valid autonomous anchor payload");
             let envelope = if lane_block_view == 0 {
-                crate::lane_consensus::autonomous_lane_payload_envelope(
-                    &payload,
-                    chain_id_hash,
-                    epoch,
-                )
-                .expect("encode valid autonomous anchor envelope")
+                crate::lane_consensus::autonomous_lane_payload_envelope(&payload, network_id, epoch)
+                    .expect("encode valid autonomous anchor envelope")
             } else {
                 let descriptor = &payload.origin_proposal.descriptor;
                 AutonomousLanePayloadEnvelopeV1 {
                     version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-                    chain_id_hash,
+                    network_id,
                     epoch,
                     lane_id: descriptor.lane_id,
                     dataspace_id: descriptor.dataspace_id,
@@ -17032,7 +17064,6 @@ pub(crate) mod valid {
             ValidBlock::validate_execution_context_autonomous_lane_payloads(
                 block,
                 &fixture.topology,
-                &fixture.state.chain_id,
                 &view,
                 bundle,
                 fixture.profile.clone(),
@@ -17046,7 +17077,6 @@ pub(crate) mod valid {
             ValidBlock::validate_execution_context_with_state(
                 &fixture.block,
                 &fixture.topology,
-                &fixture.state.chain_id,
                 &view,
                 fixture.profile.clone(),
             )
@@ -17065,7 +17095,7 @@ pub(crate) mod valid {
             };
             let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                 &fixture.bundle.autonomous_lane_payloads[0],
-                Hash::new(fixture.state.chain_id.clone().into_inner().as_bytes()),
+                fixture.state.network_id,
                 context.epoch,
             )
             .expect("fixture autonomous payload decodes");
@@ -17091,7 +17121,6 @@ pub(crate) mod valid {
             ValidBlock::validate_execution_context_autonomous_lane_payloads(
                 &fixture.block,
                 &fixture.topology,
-                &fixture.state.chain_id,
                 &view,
                 &fixture.bundle,
                 profile,
@@ -17107,17 +17136,17 @@ pub(crate) mod valid {
                 .v2_context()
                 .expect("fixture v2 context")
                 .epoch;
-            let chain_id_hash = Hash::new(fixture.state.chain_id.clone().into_inner().as_bytes());
+            let network_id = fixture.state.network_id;
             let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                 &fixture.bundle.autonomous_lane_payloads[0],
-                chain_id_hash,
+                network_id,
                 epoch,
             )
             .expect("fixture autonomous payload decodes");
             fixture
                 .state
                 .kura()
-                .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                .persist_lane_executable_payload(&payload, network_id, epoch)
                 .expect("persist exact autonomous slot before retry");
 
             validate_autonomous_anchor_fixture(&fixture, &fixture.block, &fixture.bundle)
@@ -17131,7 +17160,6 @@ pub(crate) mod valid {
             let error = ValidBlock::validate_execution_context_autonomous_lane_payloads(
                 &fixture.block,
                 &fixture.topology,
-                &fixture.state.chain_id,
                 &view,
                 &fixture.bundle,
                 ConsensusValidationProfile::Replay,
@@ -17460,7 +17488,7 @@ pub(crate) mod valid {
         }
 
         fn static_test_lane_incarnation(
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             catalog: &LaneCatalog,
             lane_id: LaneId,
         ) -> Hash {
@@ -17472,7 +17500,7 @@ pub(crate) mod valid {
                 .expect("test lane exists in catalog");
             let catalog_hash =
                 iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(catalog);
-            let preimage = (chain_id.clone(), catalog_hash, lane.id, lane.clone()).encode();
+            let preimage = (*network_id, catalog_hash, lane.id, lane.clone()).encode();
             Hash::new_from_chunks(&[DOMAIN, preimage.as_slice()])
         }
 
@@ -20041,7 +20069,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -20652,7 +20679,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -20745,7 +20771,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -20860,7 +20885,6 @@ pub(crate) mod valid {
                 match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -20947,7 +20971,6 @@ pub(crate) mod valid {
                 match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -21001,7 +21024,6 @@ pub(crate) mod valid {
             ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21041,7 +21063,6 @@ pub(crate) mod valid {
             ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21087,7 +21108,6 @@ pub(crate) mod valid {
             let error = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21149,7 +21169,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &second,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21233,7 +21252,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_execution_context_with_state(
                 &exact_predecessor,
                 &topology,
-                &state.chain_id,
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
@@ -21256,7 +21274,6 @@ pub(crate) mod valid {
             ValidBlock::validate_execution_context_with_state(
                 &exact_predecessor,
                 &topology,
-                &state.chain_id,
                 &view,
                 v2_profile.clone(),
             )
@@ -21276,7 +21293,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_execution_context_with_state(
                 &wrong_raw_predecessor,
                 &topology,
-                &state.chain_id,
                 &view,
                 v2_profile,
             )
@@ -21309,7 +21325,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_execution_context_with_state(
                 &wrong_predecessor,
                 &topology,
-                &state.chain_id,
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
@@ -21326,7 +21341,6 @@ pub(crate) mod valid {
             ValidBlock::validate_execution_context_with_state(
                 &exact_predecessor,
                 &topology,
-                &state.chain_id,
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
@@ -21349,7 +21363,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_execution_context_with_state(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
@@ -21398,7 +21411,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21500,7 +21512,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21580,11 +21591,10 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_execution_context_with_state(
                 &signed,
                 &topology,
-                &ChainId::from("cbdc16"),
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
-            .expect_err("chain identity must never weaken current lane replay validation");
+            .expect_err("network identity must never weaken current lane replay validation");
             assert!(
                 matches!(
                     err,
@@ -21626,7 +21636,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21694,7 +21703,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21752,7 +21760,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21802,7 +21809,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -21892,7 +21898,7 @@ pub(crate) mod valid {
                 paynet_lane,
                 paynet_dataspace,
                 static_test_lane_incarnation(
-                    &state.chain_id,
+                    state.network_id_ref(),
                     &state.nexus_snapshot().lane_catalog,
                     paynet_lane,
                 ),
@@ -21919,7 +21925,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22087,7 +22092,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22197,7 +22201,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22321,7 +22324,6 @@ pub(crate) mod valid {
             ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22400,7 +22402,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22522,7 +22523,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22595,7 +22595,6 @@ pub(crate) mod valid {
             ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22723,7 +22722,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22859,7 +22857,6 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
-                &state.chain_id,
                 &ALICE_ID,
                 &view,
                 false,
@@ -22928,7 +22925,6 @@ pub(crate) mod valid {
                 match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &view,
                     false,
@@ -23069,7 +23065,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23163,7 +23158,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23226,7 +23220,7 @@ pub(crate) mod valid {
             }
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let intent = DaPinIntent::new(
+            let intent = test_da_pin_intent(
                 stale_lane,
                 1,
                 1,
@@ -23246,7 +23240,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23313,7 +23306,7 @@ pub(crate) mod valid {
             }
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let intent = DaPinIntent::new(
+            let intent = test_da_pin_intent(
                 future_created_lane,
                 1,
                 1,
@@ -23337,7 +23330,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23407,7 +23399,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23477,7 +23468,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23548,7 +23538,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23588,7 +23577,7 @@ pub(crate) mod valid {
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
 
-            let intent = DaPinIntent::new(
+            let intent = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 1,
@@ -23629,7 +23618,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23666,19 +23654,26 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            insert_test_da_owner(&mut world);
+            let state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                query,
+                iroha_data_model::ChainId::from("da-duplicate-ticket-test"),
+                test_da_network_id(),
+            );
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
 
-            let first = DaPinIntent::new(
+            let first = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 1,
                 StorageTicketId::new([0xAA; 32]),
                 ManifestDigest::new([0xB1; 32]),
             );
-            let duplicate_ticket = DaPinIntent::new(
+            let duplicate_ticket = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 2,
@@ -23699,7 +23694,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23727,6 +23721,88 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_keep_voting_block_enforces_consensus_da_ingest_quota() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            insert_test_da_owner(&mut world);
+            let state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                query,
+                iroha_data_model::ChainId::from("da-consensus-quota-test"),
+                test_da_network_id(),
+            );
+            state.nexus.write().da.ingest_quota_max_count_per_account =
+                std::num::NonZeroU64::new(1).expect("non-zero quota fixture");
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let bundle = DaPinIntentBundle::new(vec![
+                test_da_pin_intent(
+                    LaneId::new(0),
+                    1,
+                    1,
+                    StorageTicketId::new([0xC1; 32]),
+                    ManifestDigest::new([0xD1; 32]),
+                ),
+                test_da_pin_intent(
+                    LaneId::new(0),
+                    1,
+                    2,
+                    StorageTicketId::new([0xC2; 32]),
+                    ManifestDigest::new([0xD2; 32]),
+                ),
+            ]);
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(bundle))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected consensus DA ingest quota rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaPinIntentBundle(
+                    DaPinIntentValidationError::QuotaExceeded {
+                        count: 2,
+                        max_count: 1,
+                        ..
+                    }
+                )
+            ));
+        }
+
+        #[test]
         fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -23742,7 +23818,16 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let committed_intent = DaPinIntent::new(
+            let da_owner = iroha_data_model::account::AccountId::new(
+                test_da_owner_keypair().public_key().clone(),
+            );
+            world.accounts.insert(
+                da_owner.clone(),
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+            let committed_intent = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 1,
@@ -23772,7 +23857,13 @@ pub(crate) mod valid {
                 ),
                 committed_intent.storage_ticket,
             );
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                query,
+                iroha_data_model::ChainId::from("da-replay-test"),
+                test_da_network_id(),
+            );
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
 
@@ -23792,7 +23883,6 @@ pub(crate) mod valid {
                 let result = ValidBlock::validate_keep_voting_block(
                     signed,
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &time_source,
                     &state,
@@ -23806,7 +23896,7 @@ pub(crate) mod valid {
                 err
             };
 
-            let duplicate_ticket = DaPinIntent::new(
+            let duplicate_ticket = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 2,
@@ -23828,7 +23918,7 @@ pub(crate) mod valid {
                 "unexpected committed ticket reuse error: {err:?}"
             );
 
-            let duplicate_manifest = DaPinIntent::new(
+            let duplicate_manifest = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 3,
@@ -23872,7 +23962,7 @@ pub(crate) mod valid {
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
 
-            let intent = DaPinIntent::new(
+            let intent = test_da_pin_intent(
                 LaneId::new(0),
                 1,
                 1,
@@ -23894,7 +23984,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -23993,7 +24082,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -24075,7 +24163,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -24165,7 +24252,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -24228,7 +24314,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -24487,7 +24572,6 @@ pub(crate) mod valid {
                 let validate_result = ValidBlock::validate(
                     candidate_block.clone(),
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &time_source,
                     &mut state_block,
@@ -24510,7 +24594,6 @@ pub(crate) mod valid {
                 let validate_result = ValidBlock::validate_with_events(
                     candidate_block.clone(),
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &time_source,
                     &mut state_block,
@@ -24551,7 +24634,6 @@ pub(crate) mod valid {
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate_block.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 v2_cadence,
@@ -24572,7 +24654,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 candidate_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -24649,7 +24730,6 @@ pub(crate) mod valid {
             let legacy = ValidBlock::validate_keep_voting_block(
                 candidate.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &local_time,
                 &state,
@@ -24666,7 +24746,6 @@ pub(crate) mod valid {
             let v2 = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &local_time,
                 Duration::from_millis(999_998),
@@ -24687,7 +24766,6 @@ pub(crate) mod valid {
             let rejected = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 noncanonical.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &local_time,
                 Duration::from_millis(999_998),
@@ -24830,7 +24908,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                     candidate,
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &TimeSource::new_system(),
                     Duration::from_millis(10),
@@ -24926,7 +25003,6 @@ pub(crate) mod valid {
                 ValidBlock::validate(
                     signed_block.clone(),
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &validation_time_source,
                     &mut state_block,
@@ -24941,7 +25017,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_with_events(
                     signed_block.clone(),
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &validation_time_source,
                     &mut state_block,
@@ -24959,7 +25034,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_keep_voting_block(
                     signed_block.clone(),
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &validation_time_source,
                     &state,
@@ -24975,7 +25049,6 @@ pub(crate) mod valid {
             ValidBlock::validate_keep_voting_block_with_events(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &validation_time_source,
                 &state,
@@ -25038,7 +25111,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -25122,7 +25194,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -25210,7 +25281,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &time_source,
                 &state,
@@ -25273,7 +25343,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &validation_time_source,
                 &state,
@@ -25330,7 +25399,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 &state,
@@ -25392,7 +25460,6 @@ pub(crate) mod valid {
             ValidBlock::validate_keep_voting_block(
                 valid_signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
@@ -25440,7 +25507,6 @@ pub(crate) mod valid {
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 invalid_signed_block.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &TimeSource::new_system(),
                 v2_cadence,
@@ -25465,7 +25531,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block(
                 invalid_signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
@@ -25570,7 +25635,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_keep_voting_block_with_events_and_timing(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 &state,
@@ -25642,7 +25706,6 @@ pub(crate) mod valid {
             let full_result = ValidBlock::validate_keep_voting_block(
                 signed_block.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 &state,
@@ -25669,7 +25732,6 @@ pub(crate) mod valid {
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 signed_block.clone(),
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 v2_cadence,
@@ -25692,7 +25754,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
                     signed_block,
                     &topology,
-                    &state.chain_id.clone(),
                     &ALICE_ID,
                     &block_time_source,
                     &state,
@@ -25747,7 +25808,6 @@ pub(crate) mod valid {
                 ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
                     invalid_block.into(),
                     &topology,
-                    &state.chain_id,
                     &ALICE_ID,
                     &block_time_source,
                     &state,
@@ -25814,7 +25874,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 &mut state_block,
@@ -25873,7 +25932,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_with_events(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &block_time_source,
                 &mut state_block,
@@ -25954,7 +26012,6 @@ pub(crate) mod valid {
             let (valid_block, _) = ValidBlock::validate_keep_voting_block(
                 signed_block,
                 &topology,
-                &state.chain_id.clone(),
                 &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
@@ -26263,7 +26320,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 block,
                 &topology,
-                &chain_id,
                 &genesis_account,
                 &TimeSource::new_system(),
                 &state,
@@ -26451,7 +26507,6 @@ pub(crate) mod valid {
             let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis_block,
                 &topology,
-                &chain_id,
                 &genesis_account,
                 &time_source,
                 &state,
@@ -26533,7 +26588,6 @@ pub(crate) mod valid {
         let result = ValidBlock::commit_keep_voting_block(
             unverified_block.into(),
             &topology,
-            &chain_id,
             &genesis_account,
             &time_source,
             &state,
@@ -30267,7 +30321,11 @@ mod tests {
                 view: 0,
             },
             epoch: 0,
-            chain_id_hash: Hash::new(b"native-amx-test-chain"),
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new(b"native-amx-test-genesis"),
+            )),
             source_id,
             tx_entrypoint_hash,
             plan_digest,
@@ -30440,7 +30498,11 @@ mod tests {
         NativeAmxReceipt {
             version: 2,
             source_id,
-            chain_id_hash: Hash::new(b"native-amx-test-chain"),
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new(b"native-amx-test-genesis"),
+            )),
             plan_digest: routing_plan.digest(),
             lane_id: coordinator.lane_id,
             dataspace_id: coordinator.dataspace_id,
@@ -30458,7 +30520,7 @@ mod tests {
         source_bundle: Vec<u8>,
         active_lanes: Vec<MergeLaneBinding>,
         authority: NativeAmxTestAuthority,
-        chain_id_hash: Hash,
+        network_id: iroha_data_model::NetworkId,
         epoch: u64,
     }
 
@@ -30535,10 +30597,14 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("fixture retains its producer key");
-        let chain_id_hash = Hash::new(b"native-amx-test-chain");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"native-amx-test-genesis"),
+        ));
         let epoch = 0;
         let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
+            network_id,
             epoch,
             coordinator_proposal.clone(),
             vec![entrypoint],
@@ -30569,7 +30635,7 @@ mod tests {
         let availability_body = crate::lane_consensus::lane_payload_availability_body(
             &payload,
             &coordinator_proposal,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("fixture availability body");
@@ -30669,7 +30735,7 @@ mod tests {
             source_bundle,
             active_lanes,
             authority,
-            chain_id_hash,
+            network_id,
             epoch,
         }
     }
@@ -31282,7 +31348,7 @@ mod tests {
         let fixture = historical_native_amx_source_bundle_fixture();
         let decoded = validate_historical_native_amx_source_bundle(
             &fixture.source_bundle,
-            fixture.chain_id_hash,
+            fixture.network_id,
             fixture.epoch,
             HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(&fixture.active_lanes),
         )
@@ -31290,7 +31356,7 @@ mod tests {
         assert_eq!(decoded, fixture.bundle);
         validate_historical_native_amx_source_bundle(
             &fixture.source_bundle,
-            fixture.chain_id_hash,
+            fixture.network_id,
             fixture.epoch,
             HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(&fixture.authority),
         )
@@ -31305,7 +31371,7 @@ mod tests {
         assert!(
             validate_historical_native_amx_source_bundle(
                 &fixture.source_bundle,
-                fixture.chain_id_hash,
+                fixture.network_id,
                 fixture.epoch,
                 HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(
                     &foreign_coordinator_authority,
@@ -31326,7 +31392,7 @@ mod tests {
         assert!(
             validate_historical_native_amx_source_bundle(
                 &forged_producer_bytes,
-                fixture.chain_id_hash,
+                fixture.network_id,
                 fixture.epoch,
                 HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(&fixture.active_lanes),
             )
@@ -31345,7 +31411,7 @@ mod tests {
         assert!(
             validate_historical_native_amx_source_bundle(
                 &forged_lane_qc_bytes,
-                fixture.chain_id_hash,
+                fixture.network_id,
                 fixture.epoch,
                 HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(&fixture.active_lanes),
             )
@@ -31369,7 +31435,7 @@ mod tests {
         assert!(
             validate_historical_native_amx_source_bundle(
                 &forged_receipt_bytes,
-                fixture.chain_id_hash,
+                fixture.network_id,
                 fixture.epoch,
                 HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(&fixture.active_lanes),
             )
@@ -32009,7 +32075,7 @@ mod tests {
         );
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -32095,7 +32161,9 @@ seiyaku GuardedOverlay {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -32239,7 +32307,9 @@ seiyaku DynamicAccessCounter {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice,
             0,
             DataSpaceId::UNIVERSAL,
@@ -32409,7 +32479,9 @@ seiyaku DynamicTarget {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice,
             0,
             DataSpaceId::UNIVERSAL,
@@ -33930,7 +34002,9 @@ seiyaku MeteredFailure {
             .expect("compile metered failure contract");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &payer_id,
             95,
             DataSpaceId::UNIVERSAL,

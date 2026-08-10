@@ -125,15 +125,6 @@ fn insert_musubi_v1_schemas(schemas: &mut Map) {
     schemas.insert("MusubiPositiveU64V1".to_owned(), positive_u64.clone());
     schemas.insert("MusubiAccountIdV1".to_owned(), account.clone());
     schemas.insert(
-        "MusubiChainIdV1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 1,
-            "maxLength": (iroha_data_model::id::MAX_CHAIN_ID_BYTES),
-            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$"
-        }),
-    );
-    schemas.insert(
         "MusubiNamespaceV1".to_owned(),
         musubi_string_newtype(MUSUBI_MAX_NAMESPACE_BYTES_V1, None),
     );
@@ -715,8 +706,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
         "MusubiSeedIngressReceiptBindingV1".to_owned(),
         musubi_closed_object(
             &[
-                "chain_id",
-                "genesis_block_hash",
+                "network_id",
                 "publisher",
                 "ingress_broker",
                 "seed_provider",
@@ -727,8 +717,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                 "nonce",
             ],
             vec![
-                ("chain_id", schema_ref("MusubiChainIdV1")),
-                ("genesis_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("network_id", schema_ref("NetworkId")),
                 ("publisher", schema_ref("MusubiAccountIdV1")),
                 ("ingress_broker", schema_ref("MusubiAccountIdV1")),
                 ("seed_provider", schema_ref("MusubiProviderIdV1")),
@@ -873,8 +862,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
         "MusubiProviderBundleVerificationBindingV1".to_owned(),
         musubi_closed_object(
             &[
-                "chain_id",
-                "genesis_block_hash",
+                "network_id",
                 "provider_id",
                 "completed_by",
                 "completion_authority",
@@ -890,8 +878,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                 "source_tree_digest",
             ],
             vec![
-                ("chain_id", schema_ref("MusubiChainIdV1")),
-                ("genesis_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("network_id", schema_ref("NetworkId")),
                 ("provider_id", schema_ref("MusubiProviderIdV1")),
                 ("completed_by", schema_ref("MusubiAccountIdV1")),
                 (
@@ -1224,15 +1211,13 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
         "MusubiExactReleaseSnapshotV1".to_owned(),
         musubi_closed_object(
             &[
-                "chain_id",
-                "genesis_hash",
+                "network_id",
                 "snapshot",
                 "home_release",
                 "universal_release",
             ],
             vec![
-                ("chain_id", schema_ref("MusubiChainIdV1")),
-                ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("network_id", schema_ref("NetworkId")),
                 ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
                 ("home_release", schema_ref("MusubiReleaseRecordV1")),
                 (
@@ -2103,18 +2088,10 @@ fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
         (
             "MusubiResolverIndexPageV1",
             musubi_closed_object(
-                &[
-                    "query",
-                    "chain_id",
-                    "genesis_hash",
-                    "items",
-                    "next_cursor",
-                    "snapshot",
-                ],
+                &["query", "network_id", "items", "next_cursor", "snapshot"],
                 vec![
                     ("query", schema_ref("MusubiResolverIndexQueryV1")),
-                    ("chain_id", schema_ref("MusubiChainIdV1")),
-                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("network_id", schema_ref("NetworkId")),
                     (
                         "items",
                         musubi_array(
@@ -2148,17 +2125,9 @@ fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
         (
             "MusubiArchiveLocationPageV1",
             musubi_closed_object(
-                &[
-                    "chain_id",
-                    "genesis_hash",
-                    "archive",
-                    "items",
-                    "next_cursor",
-                    "snapshot",
-                ],
+                &["network_id", "archive", "items", "next_cursor", "snapshot"],
                 vec![
-                    ("chain_id", schema_ref("MusubiChainIdV1")),
-                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("network_id", schema_ref("NetworkId")),
                     ("archive", schema_ref("MusubiArchiveRecordV1")),
                     (
                         "items",
@@ -2179,16 +2148,9 @@ fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
         (
             "MusubiArchiveRetentionPageV1",
             musubi_closed_object(
-                &[
-                    "chain_id",
-                    "genesis_hash",
-                    "items",
-                    "snapshot",
-                    "finalized_time_ms",
-                ],
+                &["network_id", "items", "snapshot", "finalized_time_ms"],
                 vec![
-                    ("chain_id", schema_ref("MusubiChainIdV1")),
-                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("network_id", schema_ref("NetworkId")),
                     (
                         "items",
                         musubi_array(
@@ -2214,8 +2176,7 @@ fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
             musubi_closed_object(
                 &[
                     "query",
-                    "chain_id",
-                    "genesis_hash",
+                    "network_id",
                     "namespace_binding",
                     "items",
                     "next_cursor",
@@ -2223,8 +2184,7 @@ fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
                 ],
                 vec![
                     ("query", schema_ref("MusubiOrderedPrefixQueryV1")),
-                    ("chain_id", schema_ref("MusubiChainIdV1")),
-                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("network_id", schema_ref("NetworkId")),
                     ("namespace_binding", schema_ref("MusubiNamespaceBindingV1")),
                     (
                         "items",

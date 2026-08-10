@@ -23,6 +23,17 @@ SOURCE_SHA = "4" * 64
 DPN_COMMIT = "5" * 40
 
 
+@pytest.fixture(autouse=True)
+def _exercise_structural_checks_behind_native_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
+
+
 def _evidence_root(tmp_path: Path) -> Path:
     root = tmp_path / "evidence"
     for index, relative in enumerate(authority.EVIDENCE_PATHS.values(), start=1):

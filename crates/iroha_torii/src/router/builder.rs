@@ -421,6 +421,9 @@ pub(crate) enum HandlerAuthentication {
     OperatorCredentialExchange,
     /// Authentication performed as part of a protocol-native handshake.
     ProtocolHandshake,
+    /// A bounded protocol gateway dispatches only through the mounted router,
+    /// preserving the exact selected route's sealed authentication boundary.
+    NestedRouteAuthentication,
 }
 
 impl HandlerAuthentication {
@@ -431,6 +434,7 @@ impl HandlerAuthentication {
             Self::ManifestConditionalContent => AuthenticationPolicy::ManifestConditionalContent,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,
             Self::ProtocolHandshake => AuthenticationPolicy::ProtocolHandshake,
+            Self::NestedRouteAuthentication => AuthenticationPolicy::NestedRouteAuthentication,
         }
     }
 }
@@ -511,6 +515,28 @@ where
 }
 
 impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
+    /// Install the exact-account SoraCloud command boundary before extraction.
+    ///
+    /// Every SoraCloud `POST` is mounted through this method. The middleware
+    /// authenticates the exact bounded body, applies per-account rate and
+    /// in-flight admission, and only then permits the typed handler extractor
+    /// to run.
+    #[must_use]
+    pub(crate) fn authenticated_soracloud_command(
+        self,
+        app_state: SharedAppState,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let layer = axum::middleware::from_fn_with_state(
+            app_state,
+            crate::enforce_soracloud_signed_mutation_request,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
+            inner: self.inner.layer(layer),
+        }
+    }
+
     /// Install canonical account authentication over the exact bounded body.
     ///
     /// The middleware buffers at most `max_body_bytes`, verifies the canonical
@@ -537,6 +563,37 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 
+    /// Admit, bound, and authenticate an expensive proof body before handler work.
+    ///
+    /// Physical body admission is outermost, canonical exact-network account
+    /// authentication follows over the retained bytes, and only then may a
+    /// handler inspect media types or decode the request.
+    #[must_use]
+    pub(crate) fn authenticated_canonical_account_proof_body(
+        self,
+        app_state: SharedAppState,
+        max_body_bytes: usize,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let auth = axum::middleware::from_fn_with_state(
+            crate::CanonicalAccountBodyAuthState {
+                app: app_state.clone(),
+                max_body_bytes,
+            },
+            crate::enforce_canonical_account_body_authentication,
+        );
+        let admission =
+            axum::middleware::from_fn_with_state(app_state, crate::proof_body_admission_middleware);
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
+            inner: self
+                .inner
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(auth)
+                .layer(admission),
+        }
+    }
+
     /// Apply the concrete route-specific Torii API-token middleware.
     ///
     /// This guard is unconditional: it requires exactly one configured token
@@ -550,6 +607,33 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         CatalogMethodRouter {
             method: self.method,
             authentication: SealedAuthentication(AuthenticationPolicy::RequiredApiToken),
+            inner: self.inner.layer(layer),
+        }
+    }
+
+    /// Apply the configured SoraNet collector credential before body decoding.
+    ///
+    /// The guard fails closed unless the source belongs to an allowed network
+    /// namespace and, when configured, presents an exact dedicated token. It
+    /// also consumes the route-specific rate budget before the Norito
+    /// extractor can inspect attacker-controlled bytes.
+    #[must_use]
+    pub(crate) fn authenticated_soranet_privacy_collector(
+        self,
+        app_state: SharedAppState,
+        endpoint: &'static str,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let state = crate::soranet_privacy_ingress::SoranetPrivacyCollectorAuthState {
+            app: app_state,
+            endpoint,
+        };
+        let layer = axum::middleware::from_fn_with_state(
+            state,
+            crate::soranet_privacy_ingress::enforce_soranet_privacy_collector_authentication,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::SoranetCollectorCredential),
             inner: self.inner.layer(layer),
         }
     }
@@ -1286,6 +1370,53 @@ mod tests {
         assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn soracloud_command_witness_authenticates_before_the_handler() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let app = crate::mk_app_state_for_tests();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[ACCOUNT_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid SoraCloud command catalog");
+        builder.route(
+            &ACCOUNT_AUTHENTICATED,
+            catalog_post(move || {
+                let handler_calls = Arc::clone(&handler_calls);
+                async move {
+                    handler_calls.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            })
+            .authenticated_soracloud_command(app.clone()),
+        );
+        let (router, _) = builder
+            .finish()
+            .expect("sealed SoraCloud authentication must match the catalog");
+
+        let response = router
+            .with_state(app)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(ACCOUNT_AUTHENTICATED.path())
+                    .body(Body::from(br#"{"operation":"unsigned"}"#.to_vec()))
+                    .expect("unsigned SoraCloud request"),
+            )
+            .await
+            .expect("unsigned SoraCloud response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn canonical_signed_body_requires_the_sealed_handler_witness() {
         let mut builder = RouterBuilder::new(
@@ -1401,6 +1532,26 @@ mod tests {
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
     }
 
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn proof_body_authentication_mounts_the_exact_catalog_witness() {
+        let app = crate::mk_app_state_for_tests();
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[ACCOUNT_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid account-authenticated catalog");
+        builder.route(
+            &ACCOUNT_AUTHENTICATED,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_canonical_account_proof_body(app, 1024),
+        );
+        builder
+            .finish()
+            .expect("proof-body authentication must satisfy the exact catalog policy");
+    }
+
     #[test]
     fn wrong_handler_authentication_witness_is_rejected() {
         let mut builder =
@@ -1459,6 +1610,7 @@ mod tests {
                 .authenticated_operator(app.clone()),
         );
         let (router, _) = builder.finish().expect("operator route must mount");
+        let network_id = *app.state.network_id_ref();
         let router = router.with_state(app);
 
         let unsigned = router
@@ -1474,9 +1626,14 @@ mod tests {
         assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
 
         let uri = OPERATOR.path().parse::<crate::Uri>().expect("operator URI");
-        let signed_headers =
-            operator_signatures::signed_request_headers(&signer, &crate::Method::GET, &uri, &[])
-                .expect("operator request signature");
+        let signed_headers = operator_signatures::signed_request_headers(
+            &signer,
+            &network_id,
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("operator request signature");
         let signed_request = || {
             let mut request = Request::builder()
                 .uri(uri.clone())

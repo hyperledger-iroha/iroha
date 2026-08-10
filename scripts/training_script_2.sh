@@ -205,11 +205,11 @@ TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
 export CARGO_TARGET_DIR="${TARGET_DIR}"
 
 if [[ "$DO_BUILD" == true ]]; then
-  echo "Building kagami/irohad/iroha ($PROFILE)..."
+  echo "Building kagami/iroha3d/iroha ($PROFILE)..."
   if [[ "$PROFILE" == "release" ]]; then
-    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --release --bin kagami --bin irohad --bin iroha)
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --release --bin kagami --bin iroha3d --bin iroha)
   else
-    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --bin kagami --bin irohad --bin iroha)
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --bin kagami --bin iroha3d --bin iroha)
   fi
 fi
 
@@ -225,7 +225,7 @@ else
   KAGAMI_BIN=""
 fi
 
-IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
+IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/iroha3d"}"
 IROHA_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
 PEER_STATUS_NAMES=()
 PEER_STATUS_URLS=()

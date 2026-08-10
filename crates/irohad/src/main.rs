@@ -1,3 +1,5 @@
+//! Iroha node executable, startup wiring, and command-line interface.
+
 /// Feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
@@ -1223,7 +1225,7 @@ pub struct StartupArgs {
 /// Complete command-line arguments for the Iroha server.
 #[derive(Parser, Debug)]
 #[command(
-    name = "irohad",
+    name = "iroha3d",
     version = env!("CARGO_PKG_VERSION"),
     author
 )]
@@ -1378,6 +1380,11 @@ pub struct Iroha {
     sorafs_provider_ingest_finalized_query: Option<
         Arc<sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1>,
     >,
+    /// Inert take-once tenure joining the exact prepared signed capture reader
+    /// to the embedded SoraFS storage/outbox incarnation.
+    #[allow(dead_code)]
+    sorafs_provider_ingest_completed_musubi_capture:
+        Option<sorafs_node::ProviderIngestCompletedMusubiCaptureCoordinatorV1>,
 }
 
 include!("main/runtime_deps.rs");
@@ -6173,7 +6180,7 @@ mod network_relay_tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"irohad-lane-drain-chain"),
+                network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
@@ -6443,7 +6450,7 @@ mod network_relay_tests {
         let producer = origin_proposal.descriptor.validator_set[0].clone();
         LaneExecutablePayloadV1 {
             version: 2,
-            chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
+            network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
             epoch: 3,
             origin_proposal,
             entrypoint_hashes: Vec::new(),
@@ -6462,7 +6469,7 @@ mod network_relay_tests {
         let descriptor = &proposal.descriptor;
         LaneBlockNewViewBodyV1 {
             version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-new-view-chain"),
+            network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
             epoch: 3,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -9445,7 +9452,6 @@ impl Iroha {
                 let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
                     genesis_block.0.clone(),
                     &topology,
-                    &config.common.chain,
                     &genesis_account,
                     &time_source,
                     &state,
@@ -9769,6 +9775,7 @@ impl Iroha {
 
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
+            expected_network_id,
             config.common.trusted_peers.value().clone(),
             configured_validator_dial_roster,
             config.common.key_pair.clone(),
@@ -9805,7 +9812,7 @@ impl Iroha {
             }
         };
 
-        let prepared_sorafs_provider_ingest_archive = if let Some(provider_ingest_config) =
+        let mut prepared_sorafs_provider_ingest_archive = if let Some(provider_ingest_config) =
             config.torii.sorafs_storage.provider_ingest_runtime.as_ref()
         {
             let provider_id = config
@@ -9820,7 +9827,7 @@ impl Iroha {
             let prepared =
                     sorafs_provider_ingest_finalized_query::prepare_provider_ingest_finalized_archive_v1(
                         &provider_ingest_config.finalized_archive,
-                        &config.common.chain,
+                        NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         provider_id,
                         &config.kura.store_dir.resolve_relative_path(),
                         &state,
@@ -9935,7 +9942,7 @@ impl Iroha {
             let prepared =
                     sorafs_reputation_finalized_query::prepare_reputation_finalized_archive_v1(
                         reputation_config,
-                        &config.common.chain,
+                        &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         &state,
                         &kura,
                         &v2_replay_plan,
@@ -10079,7 +10086,6 @@ impl Iroha {
             .unwrap_or_else(|| self_peer_id.clone());
 
         let (tx_gossiper, child) = TransactionGossiper::from_config(
-            config.common.chain.clone(),
             config.transaction_gossiper,
             &config.network,
             self_peer_id,
@@ -10310,6 +10316,30 @@ impl Iroha {
                 "failed to initialise embedded SoraFS runtime: {err}"
             ))
         })?;
+        let sorafs_provider_ingest_completed_musubi_capture = match (
+            prepared_sorafs_provider_ingest_archive.as_mut(),
+            sorafs_provider_ingest_config.as_ref(),
+        ) {
+            (Some(prepared), Some(provider_ingest_config)) => Some(
+                sorafs_provider_ingest_runtime::compose_inert_completed_musubi_capture_coordinator_v1(
+                    &sorafs_node,
+                    prepared,
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
+                    provider_ingest_config.max_page_rows,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to reserve the inert completed-Musubi capture coordinator: {error:#}"
+                    ))
+                })?,
+            ),
+            (None, None) => None,
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "provider-ingest archive and runtime configuration diverged before inert completed-Musubi capture composition",
+                ));
+            }
+        };
         if let Some((view, providers)) = sorafs_governance_dag_service_launch {
             let runner = sorafs_node::prepare_governance_dag_service_from_view(view, providers)
                 .await
@@ -10354,8 +10384,7 @@ impl Iroha {
             let (handle, child) = sorafs_provider_ingest_runtime::start(
                 provider_ingest_config,
                 sorafs_provider_ingest_runtime::ProviderIngestRuntimeStartArgsV1::new(
-                    config.common.chain.clone(),
-                    *config.genesis.expected_hash.as_ref(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     Arc::clone(&state),
                     Arc::clone(&queue),
                     sorafs_node.clone(),
@@ -10407,7 +10436,7 @@ impl Iroha {
             let query_qualification =
                 sorafs_reputation_runtime::finalized_query_qualification_v1(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                 )
                 .map_err(|error| {
@@ -10462,7 +10491,7 @@ impl Iroha {
             let (handle, child) = if reputation_archive_active {
                 sorafs_reputation_runtime::start(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                     dependencies,
                     supervisor.shutdown_signal(),
@@ -10476,7 +10505,7 @@ impl Iroha {
                     });
                 sorafs_reputation_runtime::start_deferred(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                     dependencies,
                     activation_probe,
@@ -10492,7 +10521,7 @@ impl Iroha {
             if let Some(scanner_config) = sorafs_reserve_transparency_config.as_ref() {
                 let child = sorafs_reserve_transparency_runtime::start(
                     scanner_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     query_qualification,
                     finalized_query,
                     Arc::clone(&state),
@@ -10559,7 +10588,7 @@ impl Iroha {
         });
         let sorafs_stream_token_admission_capture =
             sorafs_stream_token_gateway_runtime::prepare_capture(
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 &config.torii.sorafs_storage.stream_tokens,
                 config
                     .torii
@@ -10631,7 +10660,7 @@ impl Iroha {
                 })?;
             let (handle, child) = sorafs_hedging_billing_runtime::start(
                 hedging_billing_config,
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 service_policy,
                 &feed_policy,
                 dependencies,
@@ -10823,8 +10852,7 @@ impl Iroha {
         };
         let musubi_publication_context =
             musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
-                config.common.chain.clone(),
-                *config.genesis.expected_hash.as_ref(),
+                NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 Arc::clone(&state),
                 Arc::clone(&queue),
                 sorafs_node.clone(),
@@ -11118,6 +11146,7 @@ impl Iroha {
                 sorafs_hedging_billing_runtime,
                 sorafs_provider_ingest_runtime,
                 sorafs_provider_ingest_finalized_query,
+                sorafs_provider_ingest_completed_musubi_capture,
             },
             async move {
                 supervisor.start().await?;
@@ -11984,13 +12013,13 @@ impl core::fmt::Display for ConfigError {
             Self::SoraProfileRequired => {
                 write!(
                     f,
-                    "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
+                    "Sora Nexus features require `iroha3d --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
             #[cfg(not(feature = "embedded-soracloud-runtime"))]
             Self::SoracloudRuntimeFeatureRequired => write!(
                 f,
-                "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+            "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
             ),
             Self::SorafsStorageComplianceRequired => write!(
                 f,
@@ -13306,15 +13335,15 @@ metadata = {}
     #[test]
     fn build_line_env_override_takes_precedence() {
         assert_eq!(
-            resolve_build_line_from_env(Some("iroha2".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("iroha2".to_owned()), "iroha3d"),
             BuildLine::Iroha2
         );
         assert_eq!(
-            resolve_build_line_from_env(Some("iroha3".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("iroha3".to_owned()), "iroha3d"),
             BuildLine::Iroha3
         );
         assert_eq!(
-            resolve_build_line_from_env(Some("unknown".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("unknown".to_owned()), "iroha3d"),
             BuildLine::Iroha3
         );
     }
@@ -13556,7 +13585,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--sora",
             "--config",
             config_file
@@ -13612,7 +13641,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--sora",
             "--config",
             config_file
@@ -13644,7 +13673,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--config",
             config_file
                 .path()
@@ -13673,7 +13702,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--config",
             config_file
                 .path()
@@ -14372,7 +14401,7 @@ where
     if let Some(binary) = iter.next() {
         filtered.push(binary);
     } else {
-        filtered.push(OsString::from("irohad"));
+        filtered.push(OsString::from("iroha3d"));
     }
     filtered.extend(iter.filter_map(|arg| {
         let display = arg.to_string_lossy();
@@ -15769,7 +15798,6 @@ fn validate_genesis_execution_offline(
     let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         genesis.0.clone(),
         &topology,
-        &config.common.chain,
         genesis_authority,
         &TimeSource::new_system(),
         &state,
@@ -17315,7 +17343,7 @@ mod tests {
             .expect("SoraFS node construction");
         let publication_context = startup_source
             .find(
-                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(config.common.chain.clone(),*config.genesis.expected_hash.as_ref(),Arc::clone(&state),Arc::clone(&queue),sorafs_node.clone())",
+                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node.clone())",
             )
             .expect("private publication context construction");
         let torii_runtime_deps = startup_source
@@ -19728,7 +19756,7 @@ mod tests {
         #[test]
         fn whitespace_only_arguments_are_ignored() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from(" "),
                 OsString::from("--trace-config"),
             ]);
@@ -19739,7 +19767,7 @@ mod tests {
         #[test]
         fn surrounding_whitespace_is_trimmed() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from("   --trace-config  "),
             ]);
 
@@ -19749,7 +19777,7 @@ mod tests {
         #[test]
         fn meaningful_arguments_are_preserved() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from("--config"),
                 OsString::from("config.toml"),
             ]);
@@ -19950,7 +19978,6 @@ mod tests {
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 provisional.0,
                 &topology,
-                &config.common.chain,
                 &authority,
                 &TimeSource::new_system(),
                 &state,
@@ -20196,7 +20223,6 @@ mod tests {
             let result = ValidBlock::validate_keep_voting_block(
                 block,
                 &topology,
-                &chain_id,
                 &genesis_account_id,
                 &time_source,
                 &state,
@@ -20274,7 +20300,6 @@ mod tests {
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis.0.clone(),
                 &topology,
-                &chain_id,
                 &authority_id,
                 &TimeSource::new_system(),
                 &state,

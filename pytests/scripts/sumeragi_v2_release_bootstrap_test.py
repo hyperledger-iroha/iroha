@@ -11,7 +11,6 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -19,12 +18,14 @@ import time
 
 import pytest
 
+from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import (
+    runner_tool_manifest as _runner_tool_manifest,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
-RECEIPT_VALIDATOR_SUPPORT = (
-    REPO_ROOT / "scripts" / "sumeragi_v2_localnet_manifest.py"
-)
+RECEIPT_VALIDATOR_SUPPORT = REPO_ROOT / "scripts" / "sumeragi_v2_localnet_manifest.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
 FINGERPRINT = "SHA256:" + "A" * 43
 SCALING_EVIDENCE_ENV = "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
@@ -35,6 +36,10 @@ SCALING_TRUST_ENV = (
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
 )
+RELEASE_CONTROL_ENV = (
+    "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
+)
 DEFAULT_SCALING_DIGESTS = {
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
     "IROHA_RELEASE_SCALING_IROHAD_SHA256": "b" * 64,
@@ -43,14 +48,19 @@ DEFAULT_SCALING_DIGESTS = {
 }
 
 
-def test_scaling_evidence_trust_inputs_are_the_only_new_runner_environment_names() -> None:
+def _load_bootstrap_module() -> object:
     spec = importlib.util.spec_from_file_location(
-        "sumeragi_release_bootstrap_allowlist", BOOTSTRAP
+        "sumeragi_release_bootstrap_test_module", BOOTSTRAP
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def test_release_trust_inputs_are_the_only_new_runner_environment_names() -> None:
+    module = _load_bootstrap_module()
 
     preexisting_allowlist = {
         "CARGO_HOME",
@@ -61,69 +71,118 @@ def test_scaling_evidence_trust_inputs_are_the_only_new_runner_environment_names
         "RUSTUP_TOOLCHAIN",
         "SSL_CERT_FILE",
     }
-    assert module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist == set(
-        SCALING_TRUST_ENV
+    expected_release_environment = set(SCALING_TRUST_ENV) | set(RELEASE_CONTROL_ENV)
+    assert (
+        module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist
+        == expected_release_environment
     )
     assert module._RUNNER_ENV_ALLOWLIST == preexisting_allowlist | set(
-        SCALING_TRUST_ENV
+        expected_release_environment
     )
 
 
-def test_outer_abort_grace_exceeds_nested_tlaps_cleanup_window() -> None:
-    bootstrap_source = BOOTSTRAP.read_text(encoding="utf-8")
-    guard_source = (
-        REPO_ROOT / "scripts" / "formal" / "run_sumeragi_v2_tlapm_guard.py"
-    ).read_text(encoding="utf-8")
-    outer = re.search(
-        r"^_RUNNER_ABORT_TERM_GRACE_SECONDS\s*=\s*(\d+)$",
-        bootstrap_source,
-        re.MULTILINE,
-    )
-    inner = re.search(
-        r"^TERM_GRACE_SECONDS\s*=\s*([0-9.]+)$", guard_source, re.MULTILINE
-    )
-    assert outer is not None and inner is not None
-    # The nested guard has a TERM wait, two child wait/reap windows, and process
-    # snapshot overhead. The outer group must not SIGKILL that guard mid-cleanup.
-    assert int(outer.group(1)) >= 3 * float(inner.group(1)) + 10
-
-
-def test_release_runner_defers_launch_signal_until_process_is_owned(
+def test_release_runner_waits_for_natural_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = importlib.util.spec_from_file_location("sumeragi_release_bootstrap", BOOTSTRAP)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    spawned: list[object] = []
-    aborted: list[object] = []
+    module = _load_bootstrap_module()
+    spawned: list[dict[str, object]] = []
+    completed: list[bool] = []
 
     class FakeProcess:
-        pid = 424242
-
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            spawned.append(self)
-            os.kill(os.getpid(), signal.SIGTERM)
+        def __init__(self, _argv: object, **kwargs: object) -> None:
+            spawned.append(kwargs)
 
         def wait(self) -> int:
-            raise AssertionError("interrupted launch must abort before waiting")
+            completed.append(True)
+            return 23
 
     monkeypatch.setattr(module.subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(module, "_abort", lambda process: aborted.append(process))
+    result = module._run_release_runner(
+        tmp_path / "runner",
+        (),
+        cwd=tmp_path,
+        environment={},
+        stdout_descriptor=1,
+        stderr_descriptor=2,
+    )
 
-    with pytest.raises(module.BootstrapError, match="interrupted by signal SIGTERM"):
-        module._run_release_runner(
-            tmp_path / "runner",
-            (),
+    assert result.returncode == 23
+    assert completed == [True]
+    assert len(spawned) == 1
+    assert "start_new_session" not in spawned[0]
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "maximum_output_bytes", "program", "message"),
+    [
+        (
+            0,
+            1024,
+            "import time; time.sleep(0.05)",
+            "bounded runtime",
+        ),
+        (
+            5,
+            32,
+            "import sys; "
+            "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
+            "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush()",
+            "bounded output limit",
+        ),
+    ],
+)
+def test_bounded_helper_finishes_naturally_before_reporting_latched_violation(
+    tmp_path: Path,
+    timeout_seconds: int,
+    maximum_output_bytes: int,
+    program: str,
+    message: str,
+) -> None:
+    module = _load_bootstrap_module()
+    sentinel = tmp_path / "natural-completion"
+    child = (
+        f"{program}; from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+
+    with pytest.raises(module.BootstrapError, match=message):
+        module._run_bounded(
+            PYTHON,
+            ("-I", "-S", "-c", child),
             cwd=tmp_path,
-            environment={},
-            stdout_descriptor=1,
-            stderr_descriptor=2,
+            environment={"PATH": os.defpath},
+            timeout_seconds=timeout_seconds,
+            maximum_output_bytes=maximum_output_bytes,
         )
 
-    assert len(spawned) == 1
-    assert aborted == spawned
+    assert sentinel.read_text(encoding="utf-8") == "complete"
+
+
+def test_bounded_helper_drains_inherited_pipes_until_descendant_finishes(
+    tmp_path: Path,
+) -> None:
+    module = _load_bootstrap_module()
+    sentinel = tmp_path / "descendant-natural-completion"
+    descendant = (
+        "import time; from pathlib import Path; time.sleep(0.05); "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+    child = (
+        "import subprocess; "
+        f"subprocess.Popen([{str(PYTHON)!r}, '-I', '-S', '-c', {descendant!r}])"
+    )
+
+    with pytest.raises(module.BootstrapError, match="bounded runtime"):
+        module._run_bounded(
+            PYTHON,
+            ("-I", "-S", "-c", child),
+            cwd=tmp_path,
+            environment={"PATH": os.defpath},
+            timeout_seconds=0,
+            maximum_output_bytes=1024,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "complete"
 
 
 def _sha256(path: Path) -> str:
@@ -280,23 +339,6 @@ print(f"Sumeragi v2 aggregate release receipt verified: {args.output.resolve(str
     return source
 
 
-def _runner_tool_manifest() -> bytes:
-    tools = {}
-    for name in ("chmod", "ln", "mv", "sleep"):
-        discovered = shutil.which(name, path=os.defpath)
-        assert discovered is not None
-        path = Path(discovered).resolve(strict=True)
-        tools[name] = {"path": str(path), "sha256": _sha256(path)}
-    return (
-        json.dumps(
-            {"schema_version": 1, "tools": tools},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
-
-
 def _identity_verifier(
     *,
     mutate_path: Path | None = None,
@@ -305,7 +347,6 @@ def _identity_verifier(
     transcript_schema: int = 2,
     bad_evidence_digest: bool = False,
     reject: bool = False,
-    hold_pipe_open: bool = False,
 ) -> str:
     mutation = ""
     if mutate_path is not None:
@@ -317,18 +358,12 @@ def _identity_verifier(
         mutation += "(args.root / 'payload').write_bytes(b'pre-run-source-drift')\n"
     if reject:
         mutation += "raise SystemExit(23)\n"
-    if hold_pipe_open:
-        mutation += (
-            "subprocess.Popen([sys.executable, '-I', '-S', '-c', "
-            "'import time; time.sleep(30)'])\n"
-        )
     return f'''#!/usr/bin/env python3
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 parser = argparse.ArgumentParser()
@@ -601,7 +636,7 @@ assert completion_sha256 == os.environ["SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_C
 release_runner = evidence / "release-runner"
 release_root = release_runner / "source"
 release_directory = release_runner / "output" / "release"
-for directory in (release_runner, release_root, release_runner / "output", release_directory):
+for directory in (release_runner, release_root, release_runner / "target", release_runner / "output", release_directory):
     directory.mkdir(mode=0o700, exist_ok=True)
     directory.chmod(0o700)
 runner = marker["runner"]
@@ -713,8 +748,8 @@ formal_resource_summary = evidence_file(
 )
 
 prebuilt_root = (
-    release_root
-    / "target"
+    release_runner
+    / "output"
     / "sumeragi-v2-release"
     / identity["workspace_source_manifest_sha256"]
     / "programs"
@@ -728,8 +763,8 @@ for directory in (
 ):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 prebuilt_specs = (
-    ("irohad", "release/irohad"),
-    ("irohad_message_control", "message-control/release/irohad"),
+    ("irohad", "release/iroha3d"),
+    ("irohad_message_control", "message-control/release/iroha3d"),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
 )
@@ -746,9 +781,8 @@ for role, relative in prebuilt_specs:
     )
 cargo_version = b"cargo 1.0.0\\n"
 rustc_version = b"rustc 1.0.0\\n"
-version_tools = release_runner / "output" / "version-tools"
-cargo_tool = evidence_file(version_tools, "cargo", cargo_version, 0o500)
-rustc_tool = evidence_file(version_tools, "rustc", rustc_version, 0o500)
+cargo_tool = Path(runner["tools"]["cargo"]["source_path"])
+rustc_tool = Path(runner["tools"]["rustc"]["source_path"])
 prebuilt_manifest_rows = [
     ("schema_version", "2"),
     ("source_manifest_sha256", identity["workspace_source_manifest_sha256"]),
@@ -793,6 +827,8 @@ prebuilt_bundle = {{
     "target_triple": "aarch64-apple-darwin",
     "profile": "release",
     "bundle_dir": str(prebuilt_root),
+    "artifact_root": str(release_runner / "output"),
+    "cargo_target_root": str(release_runner / "target"),
     "version_transcripts": {{
         "cargo": {{
             "argv": [str(cargo_tool), "--version"],
@@ -1585,49 +1621,6 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
     assert stdout == b""
 
 
-def test_bootstrap_interruption_terminates_owned_runner_and_removes_evidence(
-    release_fixture: Fixture,
-) -> None:
-    runner_pid_path = release_fixture.root / "interrupted-runner-pid"
-    child_pid_path = release_fixture.root / "interrupted-child-pid"
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
-        f"""#!/bin/bash
-set -eu
-printf '%s\n' "$$" > {runner_pid_path}
-sleep 60 &
-child=$!
-printf '%s\n' "$child" > {child_pid_path}
-wait "$child"
-""",
-        0o500,
-    )
-    process = subprocess.Popen(
-        release_fixture.arguments(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=False,
-        env={"PATH": os.environ.get("PATH", "")},
-    )
-    _wait_for(runner_pid_path)
-    _wait_for(child_pid_path)
-    runner_pid = int(runner_pid_path.read_text(encoding="utf-8"))
-    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
-    assert runner_pid > 1
-    assert child_pid > 1
-
-    # Signal only the bootstrap PID. Its handler owns cleanup of the private
-    # release-runner session and must not leave either runner or descendant.
-    process.terminate()
-    process.wait(timeout=10)
-    assert process.returncode != 0
-    assert not release_fixture.evidence.exists()
-    for pid in (runner_pid, child_pid):
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
-
-
 @pytest.mark.parametrize(
     "action",
     [
@@ -1714,8 +1707,8 @@ def test_terminal_receipt_requires_every_extended_release_field(
         'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["sha256"] = "0" * 64',
         'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["size_bytes"] += 1',
         'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["mode"] = "0500"',
-        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["owner_uid"] += 1',
-        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["nlink"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["artifact_root"] = str(candidate)',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["cargo_target_root"] = receipt["evidence"]["prebuilt_binary_bundle"]["artifact_root"]',
         'receipt["evidence"]["prebuilt_binary_bundle"]["schema_version"] = 1',
         'receipt["evidence"]["prebuilt_binary_bundle"]["source_manifest_sha256"] = "0" * 64',
         'receipt["evidence"]["prebuilt_binary_bundle"]["cargo_lock_sha256"] = "0" * 64',
@@ -2158,22 +2151,6 @@ def test_source_drift_after_verification_never_launches(release_fixture: Fixture
     )
     result = release_fixture.run()
     _assert_never_launched(release_fixture, result)
-
-
-def test_descendant_holding_helper_pipes_cannot_defeat_timeout(
-    release_fixture: Fixture,
-) -> None:
-    release_fixture.verifier = _write(
-        release_fixture.trust / "pipe-holder.py",
-        _identity_verifier(hold_pipe_open=True),
-        0o500,
-    )
-    arguments = _replace_flag(
-        release_fixture.arguments(), "--command-timeout-seconds", "1"
-    )
-    result = release_fixture.run(arguments)
-    _assert_never_launched(release_fixture, result)
-    assert "bounded runtime" in result.stderr
 
 
 @pytest.mark.parametrize(

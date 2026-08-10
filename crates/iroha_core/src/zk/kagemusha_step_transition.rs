@@ -31,8 +31,7 @@ use super::kagemusha_v2::{
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
     I_ASSET_TAG as O_ASSET_TAG, I_BRANCH_CHANGE as O_BRANCH_CHANGE,
     I_BRANCH_DEPTH as O_BRANCH_DEPTH, I_BRANCH_LINEAGE_ROOT as O_BRANCH_LINEAGE_ROOT,
-    I_BRANCH_PATH_BITS as O_BRANCH_PATH_BITS, I_CHAIN_ID_DIGEST as O_CHAIN_ID_DIGEST,
-    I_CHAIN_TAG as O_CHAIN_TAG, I_CHANGE_AMOUNT_HI as O_CHANGE_AMOUNT_HI,
+    I_BRANCH_PATH_BITS as O_BRANCH_PATH_BITS, I_CHANGE_AMOUNT_HI as O_CHANGE_AMOUNT_HI,
     I_CHANGE_AMOUNT_LO as O_CHANGE_AMOUNT_LO, I_CHANGE_COMMITMENT as O_CHANGE_COMMITMENT,
     I_CHANGE_NULLIFIER as O_CHANGE_NULLIFIER, I_CHANGE_SCALE as O_CHANGE_SCALE,
     I_CURRENT_AMOUNT_HI as O_CURRENT_AMOUNT_HI, I_CURRENT_AMOUNT_LO as O_CURRENT_AMOUNT_LO,
@@ -42,7 +41,8 @@ use super::kagemusha_v2::{
     I_FINAL_ROOT as O_FINAL_ROOT, I_HAS_CHANGE as O_HAS_CHANGE, I_INITIAL_ROOT as O_INITIAL_ROOT,
     I_INPUT_AMOUNT_LO as O_INPUT_AMOUNT_LO, I_INPUT_COMMITMENT as O_INPUT_COMMITMENT,
     I_INPUT_NULLIFIER as O_INPUT_NULLIFIER, I_INPUT_SCALE as O_INPUT_SCALE,
-    I_LAYOUT_VERSION as O_LAYOUT_VERSION, I_OPERATION_ID as O_OPERATION_ID,
+    I_LAYOUT_VERSION as O_LAYOUT_VERSION, I_NETWORK_ID_DIGEST as O_NETWORK_ID_DIGEST,
+    I_NETWORK_TAG as O_NETWORK_TAG, I_OPERATION_ID as O_OPERATION_ID,
     I_PARENT_BRANCH_DEPTH as O_PARENT_BRANCH_DEPTH,
     I_PARENT_BRANCH_LINEAGE_ROOT as O_PARENT_BRANCH_LINEAGE_ROOT,
     I_PARENT_BRANCH_PATH_BITS as O_PARENT_BRANCH_PATH_BITS,
@@ -82,9 +82,10 @@ use super::kagemusha_v2::{
     KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2,
     KagemushaOutputMembershipCircuitV4, KagemushaOutputMembershipOperationV4,
     KagemushaOutputMembershipWitnessV4, S_ARTIFACT_MANIFEST_SHA256, S_ASSET_SCALE, S_ASSET_TAG,
-    S_BRANCH_CLAIM_COUNT, S_BRANCH_CLAIMS, S_CHAIN_TAG, S_CURRENT_AMOUNT, S_CURRENT_COMMITMENT,
-    S_CURRENT_NULLIFIER, S_CURRENT_SCALE, S_FINAL_ROOT, S_NEXT_ZERO_LEAF_INDEX, S_PEER_HOP_COUNT,
-    S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID, S_VERSION,
+    S_BRANCH_CLAIM_COUNT, S_BRANCH_CLAIMS, S_CURRENT_AMOUNT, S_CURRENT_COMMITMENT,
+    S_CURRENT_NULLIFIER, S_CURRENT_SCALE, S_FINAL_ROOT, S_NETWORK_TAG, S_NEXT_ZERO_LEAF_INDEX,
+    S_PEER_HOP_COUNT, S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID,
+    S_VERSION,
 };
 
 /// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
@@ -225,10 +226,10 @@ impl KagemushaStepOperationVectorV4 {
             (O_CURRENT_COMMITMENT, 1, "current commitment"),
             (O_CURRENT_NULLIFIER, 1, "current nullifier"),
             (O_ASSET_TAG, 1, "asset tag"),
-            (O_CHAIN_TAG, 1, "chain tag"),
+            (O_NETWORK_TAG, 1, "network tag"),
             (O_STATEMENT_DIGEST, 4, "statement digest"),
             (O_BRANCH_LINEAGE_ROOT, 4, "branch lineage root"),
-            (O_CHAIN_ID_DIGEST, 4, "chain identity"),
+            (O_NETWORK_ID_DIGEST, 4, "network identity"),
             (O_ASSET_ID_DIGEST, 4, "asset identity"),
             (O_TOPUP_OPERATION_ID, 4, "top-up operation identity"),
             (O_ARTIFACT_MANIFEST_SHA256, 4, "artifact manifest identity"),
@@ -471,8 +472,8 @@ pub struct KagemushaStepTransferPublicV4 {
     pub root: [u8; 32],
     /// Secure-relation asset tag.
     pub asset_tag: [u8; 32],
-    /// Secure-relation chain tag.
-    pub chain_tag: [u8; 32],
+    /// Secure-relation network tag.
+    pub network_tag: [u8; 32],
 }
 
 fn fp_from_bytes(bytes: [u8; 32], label: &str) -> Result<Fp, String> {
@@ -563,10 +564,10 @@ fn fill_statement_fields_v4(
 
     let asset_tag =
         super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
-    let chain_tag =
-        super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
+    let network_tag =
+        super::confidential_v2::derive_confidential_network_tag_v3(&statement.network_id)?;
     put_full_field(&mut fields, O_ASSET_TAG, asset_tag, "V4 asset tag")?;
-    put_full_field(&mut fields, O_CHAIN_TAG, chain_tag, "V4 chain tag")?;
+    put_full_field(&mut fields, O_NETWORK_TAG, network_tag, "V4 network tag")?;
     put_digest(
         &mut fields,
         O_STATEMENT_DIGEST,
@@ -574,8 +575,8 @@ fn fill_statement_fields_v4(
     );
     put_digest(
         &mut fields,
-        O_CHAIN_ID_DIGEST,
-        canonical_binding_digest(&statement.chain_id)?,
+        O_NETWORK_ID_DIGEST,
+        canonical_binding_digest(&statement.network_id)?,
     );
     put_digest(
         &mut fields,
@@ -728,8 +729,8 @@ fn build_init_operation_v4(
     ];
     let expected_asset_tag =
         super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
-    let expected_chain_tag =
-        super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
+    let expected_network_tag =
+        super::confidential_v2::derive_confidential_network_tag_v3(&statement.network_id)?;
     if statement.transition.is_some()
         || statement.proof_step_count != 1
         || statement.peer_hop_count != 0
@@ -752,7 +753,7 @@ fn build_init_operation_v4(
         || topup.asset_scale != encode_u32_scalar(statement.asset_scale)
         || topup.leaf_index != encode_u32_scalar(leaf_index)
         || topup.asset_tag != expected_asset_tag
-        || topup.chain_tag != expected_chain_tag
+        || topup.network_tag != expected_network_tag
         || topup.payer_tag != expected_payer_tag
         || topup.operation_tag != expected_operation_tag
     {
@@ -816,7 +817,7 @@ impl KagemushaStepOperationVectorV4 {
         ];
         if statement.transition.is_some()
             || statement.artifact_binding != request.artifact_binding
-            || statement.chain_id != anchor.chain_id
+            || statement.network_id != anchor.network_id
             || statement.asset != *anchor.asset.definition()
             || statement.asset_scale != anchor.asset_scale
             || statement.current_note != anchor.current_note
@@ -848,8 +849,8 @@ impl KagemushaStepOperationVectorV4 {
         }
         let expected_asset_tag =
             super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
-        let expected_chain_tag =
-            super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
+        let expected_network_tag =
+            super::confidential_v2::derive_confidential_network_tag_v3(&statement.network_id)?;
         let expected_payer_tag =
             super::confidential_v2::derive_kagemusha_topup_payer_tag_v3(&anchor.payer.to_string())?;
         let expected_operation_tag =
@@ -857,7 +858,7 @@ impl KagemushaStepOperationVectorV4 {
                 &anchor.topup_operation_id,
             )?;
         if topup.asset_tag != expected_asset_tag
-            || topup.chain_tag != expected_chain_tag
+            || topup.network_tag != expected_network_tag
             || topup.payer_tag != expected_payer_tag
             || topup.operation_tag != expected_operation_tag
         {
@@ -971,7 +972,7 @@ impl KagemushaStepOperationVectorV4 {
             .max()
             .unwrap_or(0);
         if split.inputs.iter().any(|input| input.input_root != root)
-            || statement.chain_id != split.chain_id
+            || statement.network_id != split.network_id
             || statement.asset != split.asset
             || statement.asset_scale != split.asset_scale
             || statement.artifact_binding != split.output_artifact_binding
@@ -1018,9 +1019,10 @@ impl KagemushaStepOperationVectorV4 {
         }
         let expected_asset_tag =
             super::confidential_v2::derive_confidential_asset_tag_v3(&split.asset.to_string())?;
-        let expected_chain_tag =
-            super::confidential_v2::derive_confidential_chain_tag_v3(split.chain_id.as_str())?;
-        if transfer.asset_tag != expected_asset_tag || transfer.chain_tag != expected_chain_tag {
+        let expected_network_tag =
+            super::confidential_v2::derive_confidential_network_tag_v3(&split.network_id)?;
+        if transfer.asset_tag != expected_asset_tag || transfer.network_tag != expected_network_tag
+        {
             return Err("Kagemusha Step V4 append confidential tags mismatch".to_owned());
         }
 
@@ -1181,7 +1183,7 @@ impl KagemushaStepOperationVectorV4 {
             .change_branch_claims()
             .map_err(|error| error.to_string())?;
         let public = &intent.unshield_public_inputs;
-        if statement.chain_id != intent.chain_id
+        if statement.network_id != intent.network_id
             || statement.asset != intent.asset
             || statement.asset_scale != intent.public_amount.scale
             || statement.artifact_binding != *change_binding
@@ -1278,9 +1280,9 @@ impl KagemushaStepOperationVectorV4 {
         )?;
         put_full_field(
             &mut fields,
-            O_CHAIN_TAG,
-            public.chain_tag,
-            "V4 unshield chain tag",
+            O_NETWORK_TAG,
+            public.network_tag,
+            "V4 unshield network tag",
         )?;
         Ok(Self::from_fields(fields))
     }
@@ -2095,8 +2097,8 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         range,
         one,
         &operation,
-        O_CHAIN_TAG,
-        &result_state[S_CHAIN_TAG..S_CHAIN_TAG + 8],
+        O_NETWORK_TAG,
+        &result_state[S_NETWORK_TAG..S_NETWORK_TAG + 8],
     );
     bind_full_field_to_state_if(
         ctx,
@@ -2134,8 +2136,8 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
             ctx,
             range,
             parent_present[slot],
-            &parent[S_CHAIN_TAG..S_CHAIN_TAG + 8],
-            &result_state[S_CHAIN_TAG..S_CHAIN_TAG + 8],
+            &parent[S_NETWORK_TAG..S_NETWORK_TAG + 8],
+            &result_state[S_NETWORK_TAG..S_NETWORK_TAG + 8],
         );
         assert_slices_equal_if(
             ctx,
@@ -2915,7 +2917,7 @@ mod tests {
 
     fn terminal_init_statement_v4() -> KagemushaRecursiveSpendPublicStatementV4 {
         use iroha_data_model::{
-            ChainId,
+            NetworkId,
             asset::AssetDefinitionId,
             domain::DomainId,
             offline::{
@@ -2925,7 +2927,11 @@ mod tests {
             },
         };
 
-        let chain_id = ChainId::from("kagemusha-v4-terminal-operation-binding");
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"kagemusha-v4-terminal-operation-binding-network"),
+        ));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "rose".parse().expect("asset name"),
@@ -2944,7 +2950,7 @@ mod tests {
             artifact_binding.manifest_sha256,
         );
         KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset.clone(),
             asset_scale: 9,
             final_root: scalar_bytes(Fp::from(12)),
@@ -2953,7 +2959,7 @@ mod tests {
             proof_step_count: 1,
             peer_hop_count: 0,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
+                network_id,
                 asset,
                 note_commitment: scalar_bytes(Fp::from(31)),
                 spend_nullifier: scalar_bytes(Fp::from(32)),
@@ -3060,7 +3066,7 @@ mod tests {
         fields[O_RECORD_OUTPUT_0] = Fp::from(31);
         fields[O_TRANSFER_OUTPUT_0] = Fp::from(31);
         fields[O_ASSET_TAG] = Fp::from(51);
-        fields[O_CHAIN_TAG] = Fp::from(52);
+        fields[O_NETWORK_TAG] = Fp::from(52);
         fields[O_TOPUP_ANCHOR_COUNT] = Fp::ONE;
 
         let operation_id = [0x21; 32];
@@ -3084,7 +3090,7 @@ mod tests {
         let mut result = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
         result[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         result[S_NEXT_ZERO_LEAF_INDEX] = 8;
-        write_full_state(&mut result, S_CHAIN_TAG, Fp::from(52));
+        write_full_state(&mut result, S_NETWORK_TAG, Fp::from(52));
         write_full_state(&mut result, S_ASSET_TAG, Fp::from(51));
         result[S_ASSET_SCALE] = 2;
         write_full_state(&mut result, S_FINAL_ROOT, Fp::from(12));
@@ -3230,7 +3236,7 @@ mod tests {
             vector
         );
         let mut noncanonical = vector;
-        noncanonical.limbs[field_limb_range(O_CHAIN_TAG)]
+        noncanonical.limbs[field_limb_range(O_NETWORK_TAG)]
             .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(noncanonical.to_fields().is_err());
     }

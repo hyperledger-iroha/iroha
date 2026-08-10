@@ -346,7 +346,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--izanami", type=Path, default=Path("target/release/izanami"))
-    parser.add_argument("--irohad", type=Path, default=Path("target/release/irohad"))
+    parser.add_argument("--irohad", type=Path, default=Path("target/release/iroha3d"))
     parser.add_argument("--irohad-features", default="fastpq-gpu")
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(

@@ -989,7 +989,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
         .map(|(peer_index, peer)| {
             let service = format!("iroha-{}-{peer_index}", spec.slug);
             let config_file = peer_config_file_name(peer_index);
-            let command = r#"["irohad", "--sora", "--config", "/config/config.toml"]"#;
+            let command = r#"["iroha3d", "--sora", "--config", "/config/config.toml"]"#;
             let site_bindings_volume = if spec.slug == "iroha3-taira" {
                 "\n      - ./sorafs_sites.json:/config/sorafs_sites.json:ro"
             } else {

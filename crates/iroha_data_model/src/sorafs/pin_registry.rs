@@ -459,9 +459,12 @@ impl PinStatusKindV1 {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PinResourceUsage {
-    /// Number of live manifests charged to the scope.
+    /// Number of retained manifest records charged to the scope.
+    ///
+    /// Retirement does not release this charge because the manifest record,
+    /// lifecycle index, and lineage summary remain in consensus state.
     pub manifest_count: u64,
-    /// Aggregate content bytes represented by those manifests.
+    /// Aggregate content bytes represented by live manifests in the scope.
     pub content_bytes: u64,
 }
 
@@ -481,17 +484,20 @@ impl PinResourceUsage {
         })
     }
 
-    /// Return usage after releasing one manifest, or `None` on arithmetic underflow.
+    /// Return usage after releasing one live manifest's content bytes.
+    ///
+    /// The retained-record count remains charged. `None` reports a missing
+    /// retained-record charge or content-byte underflow.
     #[must_use]
-    pub const fn checked_release(self, content_bytes: u64) -> Option<Self> {
-        let Some(manifest_count) = self.manifest_count.checked_sub(1) else {
+    pub const fn checked_release_content(self, content_bytes: u64) -> Option<Self> {
+        if self.manifest_count == 0 {
             return None;
-        };
+        }
         let Some(content_bytes) = self.content_bytes.checked_sub(content_bytes) else {
             return None;
         };
         Some(Self {
-            manifest_count,
+            manifest_count: self.manifest_count,
             content_bytes,
         })
     }
@@ -505,7 +511,7 @@ impl PinResourceUsage {
 pub struct PinLineageSummaryV1 {
     /// Number of predecessor edges from this manifest to the lineage root.
     pub depth: u32,
-    /// Number of direct successors registered for this manifest.
+    /// Number of retained direct successors registered for this manifest.
     pub direct_successor_count: u32,
 }
 
@@ -535,18 +541,6 @@ impl PinLineageSummaryV1 {
     #[must_use]
     pub const fn checked_add_successor(self) -> Option<Self> {
         let Some(direct_successor_count) = self.direct_successor_count.checked_add(1) else {
-            return None;
-        };
-        Some(Self {
-            depth: self.depth,
-            direct_successor_count,
-        })
-    }
-
-    /// Return the parent summary after releasing one direct successor.
-    #[must_use]
-    pub const fn checked_remove_successor(self) -> Option<Self> {
-        let Some(direct_successor_count) = self.direct_successor_count.checked_sub(1) else {
             return None;
         };
         Some(Self {
@@ -691,7 +685,7 @@ impl From<&PinManifestRecord> for PinManifestSummaryV1 {
 pub struct PinManifestPageV1 {
     /// Finalized state anchor shared by every entry and the next cursor.
     pub finalized_cursor: PinManifestFinalizedCursorV1,
-    /// O(1) consensus-maintained live count and byte totals at the anchor.
+    /// O(1) consensus-maintained retained-record and live-content totals at the anchor.
     pub charged_usage: PinResourceUsage,
     /// Canonical summaries in ascending digest order.
     pub manifests: Vec<PinManifestSummaryV1>,
@@ -1116,13 +1110,14 @@ mod tests {
         assert_eq!(usage.manifest_count, 2);
         assert_eq!(usage.content_bytes, 1_536);
         assert_eq!(
-            usage.checked_release(512),
+            usage.checked_release_content(512),
             Some(PinResourceUsage {
-                manifest_count: 1,
+                manifest_count: 2,
                 content_bytes: 1_024,
             })
         );
-        assert_eq!(PinResourceUsage::default().checked_release(0), None);
+        assert_eq!(PinResourceUsage::default().checked_release_content(0), None);
+        assert_eq!(usage.checked_release_content(1_537), None);
         assert_eq!(
             PinResourceUsage {
                 manifest_count: u64::MAX,
@@ -1150,12 +1145,6 @@ mod tests {
                 .map(|parent| parent.direct_successor_count),
             Some(1)
         );
-        assert_eq!(
-            root.checked_add_successor()
-                .and_then(PinLineageSummaryV1::checked_remove_successor),
-            Some(root)
-        );
-        assert_eq!(root.checked_remove_successor(), None);
         assert_eq!(
             PinLineageSummaryV1 {
                 depth: u32::MAX,

@@ -416,7 +416,7 @@ fn collect_storage_security_bindings(
             )?;
             let gateway_id =
                 iroha_data_model::sorafs::reputation::derive_stream_token_gateway_id_v1(
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     &compliance.gateway_id,
                 )
                 .map_err(|_| {

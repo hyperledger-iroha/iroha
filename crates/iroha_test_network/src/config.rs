@@ -1088,7 +1088,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     }
     install_preexec_lane_manifests(&state, runtime_config)?;
     let core_topology = CoreTopology::new(topology.to_vec());
-    let chain = state.chain_id.clone();
 
     let mut voting_block = None;
     let time_source = TimeSource::new_system();
@@ -1096,7 +1095,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
         block.0.clone(),
         &core_topology,
-        &chain,
         &effective_genesis_account,
         &time_source,
         &state,

@@ -122,8 +122,8 @@ public sealed record class ToriiAccountOnboardingPlanBody
     [JsonPropertyName("authority")]
     public string Authority { get; init; } = string.Empty;
 
-    [JsonPropertyName("chain_id")]
-    public string ChainId { get; init; } = string.Empty;
+    [JsonPropertyName("network_id")]
+    public NetworkId NetworkId { get; init; } = null!;
 
     [JsonPropertyName("anchor")]
     public JsonElement Anchor { get; init; }

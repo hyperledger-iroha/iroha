@@ -76,7 +76,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
     let sweep = &source[start..end];
 
     let anchors = [
-        "if recovery.chain_id_hash() != chain_id_hash",
+        "if recovery.network_id() != network_id",
         "let route_identities = recovery.route_identities();",
         ".any(|identity| !active_routes.contains(identity))",
         "pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(",
@@ -84,7 +84,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "let initial_snapshot = queue",
         "if !initial_snapshot.is_empty() && !initial_queue_quarantine",
         "let active_routes = active_lifecycle_routes(state, context)?",
-        "let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());",
+        "let network_id = context.network_id;",
         "pending_autonomous_lifecycle_terminal_outcome_inventory()",
         "let mut seen_entrypoint_hashes = BTreeSet::new();",
         "!seen_entrypoint_hashes.insert(key.entrypoint_hash.clone())",

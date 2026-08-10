@@ -1,6 +1,6 @@
 # Sora Nexus (mainnet) validator configuration
 # Network prefix: `nexus`
-# Start with: `irohad --sora --config configs/soranexus/nexus/config.toml`
+# Start with: `iroha3d --sora --config configs/soranexus/nexus/config.toml`
 
 chain = "00000000-0000-0000-0000-000000000753"
 chain_discriminant = 753

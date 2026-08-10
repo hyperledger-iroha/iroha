@@ -56,7 +56,7 @@ APPLIED_PHASE_ADMISSION_MUTATION_SHA256 = {
         "88ded7c0489d2296bb9b79c8b46668c3e91cdc18c8822649352f18df46a7c538"
     ),
     APPLIED_PHASE_ADMISSION_MUTATION_RUNNER: (
-        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
+        "381c2beba6ec3130ad1102de87dd09739022a5c36c1ead3bd6589cf45be0f7f9"
     ),
 }
 APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = (
@@ -65,22 +65,22 @@ APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = (
 )
 _APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256 = {
     "preflight_runtime_command_admission": (
-        "48f242c3baa8277604c1f289dd49fa4f68e16064cb3bbdb10655986a6f403248"
+        "a68f6905eae6cad7eb139072bd9def8fde68a67ec8e5ab7c9b001124ebc263b2"
     ),
     "command_admission_preflight": (
-        "a422db92ff534cc9731dccd5bb34d35cba57a41a013bf5e7bb2bf396247de0f9"
+        "398986e713372c50c17f663d5cbf4b7ff12c194a3cf7bcb8850a7292f8dc529a"
     ),
     "serialized_runtime_enqueue": (
-        "187bb6f6b246f9265f4ae623ca27875dbec9c5c9c1dd61d610d6d8f969008a1a"
+        "93cda9fc1a3560ffea3337b05540077c111bf60c4417879cae8dbbfeecad4407"
     ),
     "enqueue_with_lifecycle_owner": (
-        "1199c4024bc64326b625c1c86ce48fc6cdcb15735d1cb44fd3123e18bdb6997e"
+        "2f1bd74df1dd29f195bccd664d8b8a0b96155264cd787f9c924eeb5a9fc5f821"
     ),
     "applied_phase_test": (
         "c44468d94b67f58e5bbd8b97bd2271c030f6f337fdc71dbbd9c9b00d3f17598a"
     ),
     "busy_owner_test": (
-        "dfcfac2a57bb488e63cdd8dd8ed249435319969c8b9a8fd517e6df7472bda23c"
+        "6e279f42322b64360ebc6b67fe1d0a3d19e075d70db995fb708cf3396551b420"
     ),
 }
 
@@ -554,7 +554,8 @@ RuntimeCommandAdmissionPreflight::ReuseDormant { .. }
 }
 preflight @ (RuntimeCommandAdmissionPreflight::Admit
 | RuntimeCommandAdmissionPreflight::ReuseDormant { .. }
-| RuntimeCommandAdmissionPreflight::Coalesce) => Ok(preflight),
+| RuntimeCommandAdmissionPreflight::Coalesce
+| RuntimeCommandAdmissionPreflight::CoalesceOwned { .. }) => Ok(preflight),
 RuntimeCommandAdmissionPreflight::Reject => {
     self.latch_fail_closed(
         "runtime command admission conflicted with frozen reducer authority",
@@ -601,7 +602,8 @@ RuntimeCommandAdmissionPreflight::Reject => {
         """
 let preflight = self.command_admission_preflight(tag, class, &command)?;
 let tagged = match preflight {
-    RuntimeCommandAdmissionPreflight::Coalesce => return Ok(()),
+    RuntimeCommandAdmissionPreflight::Coalesce
+    | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => return Ok(()),
     RuntimeCommandAdmissionPreflight::Admit => {
         TaggedCommand::new(tag, class, command, Instant::now())
     }
@@ -620,7 +622,7 @@ let tagged = match preflight {
     )?,
     RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
 };
-let result = self.ingress.enqueue(tagged);
+let result = self.enqueue_after_clock_reservation(tagged);
 """,
         "preflight must coalesce or restore the exact dormant owner before "
         "physical enqueue and fresh ordinal allocation",
@@ -654,10 +656,10 @@ let result = self.ingress.enqueue(tagged);
         owned_enqueue,
         """
 let preflight = self.command_admission_preflight(tag, class, &command)?;
-if preflight == RuntimeCommandAdmissionPreflight::Coalesce {
+if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
     return Ok(());
 }
-let tagged = match preflight {
+let mut tagged = match preflight {
     RuntimeCommandAdmissionPreflight::Admit => TaggedCommand::with_causal_origin(
 """,
         "owned preflight must coalesce or select exact dormant reuse before "
@@ -864,7 +866,7 @@ def _applied_phase_admission_mutation_source_fidelity_errors(
     else:
         ci_source = ci_path.read_text(encoding="utf-8")
         invocation = (
-            "bash scripts/formal/"
+            "run_formal_script scripts/formal/"
             "run_sumeragi_v2_applied_phase_admission_mutations.sh"
         )
         if ci_source.count(invocation) != 1:
@@ -873,12 +875,12 @@ def _applied_phase_admission_mutation_source_fidelity_errors(
                 "applied-phase admission runner exactly once"
             )
         effect_capacity_offset = ci_source.find(
-            "bash scripts/formal/"
+            "run_formal_script scripts/formal/"
             "run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
         )
         invocation_offset = ci_source.find(invocation)
         aggregate_tlc_offset = ci_source.find(
-            "bash scripts/formal/run_sumeragi_v2_tlc.sh"
+            "run_formal_script scripts/formal/run_sumeragi_v2_tlc.sh"
         )
         if not (
             0 <= effect_capacity_offset

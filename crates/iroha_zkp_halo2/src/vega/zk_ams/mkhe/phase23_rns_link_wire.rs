@@ -1,4 +1,4 @@
-//! Canonical release-shape transport for one complete RNS-Link proof.
+//! Canonical release-shape transport for one unverified RNS-Link envelope.
 //!
 //! This module freezes only the bounded byte-level envelope. It does not prove
 //! or verify any Phase-II/III algebra and cannot mint a receipt or open a
@@ -9,10 +9,13 @@
 //! The sole v1 order is `X, U, E, RE, W, RW`, followed by one 38-record
 //! packing section, one 38-record radix/CRT-carry section, one 38-record
 //! negacyclic-quotient section, and one 38-record Hyrax-to-BGV equality
-//! section. Every point is an exact non-identity T256 encoding, every scalar is
-//! canonical, and every public blinding response is nonzero. Preflight checks
-//! all counts, offsets, lengths, padding metadata, and canonical field/group
-//! encodings without allocating attacker-sized storage.
+//! section. Native geometry fixes `X` at 89 values in one chunk and keeps `U`
+//! replicated over all 1,048,576 relation rows in 16 chunks; the six families
+//! therefore contain 43 records. Every point is an exact non-identity T256
+//! encoding, every scalar is canonical, and every public blinding response is
+//! nonzero. Preflight checks all counts, offsets, lengths, padding metadata,
+//! and canonical field/group encodings without allocating attacker-sized
+//! storage.
 //! The bound decoder gives the header's statement digest one meaning only: the
 //! verifier-derived digest of the complete release RNS challenge set.
 
@@ -29,7 +32,8 @@ use super::{
     ZkAmsMkheErrorV1,
     phase23_rns_link::{
         ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1, ZkAmsPhase23RnsLinkChunkCommitmentV1,
-        ZkAmsPhase23RnsLinkContextV1, ZkAmsPhase23RnsLinkWholeProofBindingV1,
+        ZkAmsPhase23RnsLinkContextV1, ZkAmsPhase23RnsLinkFamilyV1,
+        ZkAmsPhase23RnsLinkWholeProofBindingV1, expected_logical_values_v1,
     },
 };
 
@@ -46,14 +50,14 @@ const WHOLE_PROOF_SLOT_COUNT_V1: usize = 65_536;
 const WHOLE_PROOF_MAX_FAMILY_CHUNKS_V1: usize = 16;
 const WHOLE_PROOF_HYRAX_EQUALITY_RECORDS_V1: usize = WHOLE_PROOF_RNS_LIMB_COUNT_V1;
 const WHOLE_PROOF_MAX_SECTION_RECORDS_V1: usize = WHOLE_PROOF_RNS_LIMB_COUNT_V1;
-const WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1: usize = 188;
+const WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1: usize = 196;
 const WHOLE_PROOF_BLINDING_REJECTION_ATTEMPTS_V1: usize = 128;
 
 const WHOLE_PROOF_HEADER_BYTES_V1: usize = 213;
 const WHOLE_PROOF_SECTION_HEADER_BYTES_V1: usize = 8;
 const WHOLE_PROOF_FAMILY_RECORD_BYTES_V1: usize = 111;
 const WHOLE_PROOF_RELATION_RECORD_BYTES_V1: usize = 101;
-const WHOLE_PROOF_FAMILY_RECORD_COUNT_V1: usize = 35;
+const WHOLE_PROOF_FAMILY_RECORD_COUNT_V1: usize = 43;
 const WHOLE_PROOF_RELATION_RECORD_COUNT_V1: usize = 152;
 const WHOLE_PROOF_EXACT_BYTES_V1: usize = WHOLE_PROOF_HEADER_BYTES_V1
     + WHOLE_PROOF_SECTION_COUNT_V1 * WHOLE_PROOF_SECTION_HEADER_BYTES_V1
@@ -100,10 +104,10 @@ const _: () = {
     assert!(WHOLE_PROOF_RNS_LIMB_COUNT_V1 == 38);
     assert!(WHOLE_PROOF_MAX_FAMILY_CHUNKS_V1 == 16);
     assert!(WHOLE_PROOF_MAX_SECTION_RECORDS_V1 == 38);
-    assert!(WHOLE_PROOF_FAMILY_RECORD_COUNT_V1 == 8 + 1 + 16 + 1 + 8 + 1);
+    assert!(WHOLE_PROOF_FAMILY_RECORD_COUNT_V1 == 1 + 16 + 16 + 1 + 8 + 1);
     assert!(WHOLE_PROOF_RELATION_RECORD_COUNT_V1 == 4 * 38);
-    assert!(WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1 == 1 + 35 + 152);
-    assert!(WHOLE_PROOF_EXACT_BYTES_V1 == 19_530);
+    assert!(WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1 == 1 + 43 + 152);
+    assert!(WHOLE_PROOF_EXACT_BYTES_V1 == 20_418);
     assert!(WHOLE_PROOF_EXACT_BYTES_V1 < 32 * 1024 * 1024);
 };
 
@@ -120,21 +124,18 @@ enum WholeProofFamilyV1 {
 
 impl WholeProofFamilyV1 {
     const fn logical_values(self) -> usize {
-        match self {
-            Self::X | Self::W => 524_288,
-            Self::U => 1,
-            Self::E => 1_048_576,
-            Self::RE => 1_024,
-            Self::RW => 512,
-        }
+        expected_logical_values_v1(match self {
+            Self::X => ZkAmsPhase23RnsLinkFamilyV1::X,
+            Self::U => ZkAmsPhase23RnsLinkFamilyV1::U,
+            Self::E => ZkAmsPhase23RnsLinkFamilyV1::E,
+            Self::RE => ZkAmsPhase23RnsLinkFamilyV1::RE,
+            Self::W => ZkAmsPhase23RnsLinkFamilyV1::W,
+            Self::RW => ZkAmsPhase23RnsLinkFamilyV1::RW,
+        })
     }
 
     const fn chunk_count(self) -> usize {
-        match self {
-            Self::X | Self::W => 8,
-            Self::U | Self::RE | Self::RW => 1,
-            Self::E => 16,
-        }
+        (self.logical_values() + WHOLE_PROOF_SLOT_COUNT_V1 - 1) / WHOLE_PROOF_SLOT_COUNT_V1
     }
 }
 
@@ -174,8 +175,9 @@ impl WholeProofRelationSectionV1 {
             Self::RadixCrtCarry => 3,
             // A, R/E/M-C, quotient form the batched negacyclic equation.
             Self::NegacyclicQuotient => 4,
-            // Six Hyrax openings and six BGV packing openings are batched per
-            // RNS limb in the fixed X/U/E/RE/W/RW order.
+            // Reserve arity metadata for six Hyrax and six BGV inputs per RNS
+            // limb in fixed X/U/E/RE/W/RW order. This structural record does
+            // not yet carry or verify those opening equations.
             Self::HyraxBgvEquality => 12,
         }
     }
@@ -187,6 +189,21 @@ const WHOLE_PROOF_RELATION_ORDER_V1: [WholeProofRelationSectionV1; 4] = [
     WholeProofRelationSectionV1::NegacyclicQuotient,
     WholeProofRelationSectionV1::HyraxBgvEquality,
 ];
+
+const _: () = {
+    assert!(WholeProofFamilyV1::X.logical_values() == 89);
+    assert!(WholeProofFamilyV1::X.chunk_count() == 1);
+    assert!(WholeProofFamilyV1::U.logical_values() == 1_048_576);
+    assert!(WholeProofFamilyV1::U.chunk_count() == 16);
+    assert!(WholeProofFamilyV1::E.logical_values() == 1_048_576);
+    assert!(WholeProofFamilyV1::E.chunk_count() == 16);
+    assert!(WholeProofFamilyV1::RE.logical_values() == 1_024);
+    assert!(WholeProofFamilyV1::RE.chunk_count() == 1);
+    assert!(WholeProofFamilyV1::W.logical_values() == 524_288);
+    assert!(WholeProofFamilyV1::W.chunk_count() == 8);
+    assert!(WholeProofFamilyV1::RW.logical_values() == 512);
+    assert!(WholeProofFamilyV1::RW.chunk_count() == 1);
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WholeProofFamilyRecordV1 {
@@ -370,7 +387,7 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     ///
     /// This recomputes the profile, immutable algorithm manifest, context,
     /// ordered commitment root, complete 38-limb challenge-set digest, and all
-    /// 35 Hyrax chunk commitments through the native relation types. Passing
+    /// 43 Hyrax chunk commitments through the native relation types. Passing
     /// this check only establishes that the envelope is the transport for
     /// those inputs. The returned type remains explicitly unverified because
     /// the packing, carry, quotient, and Hyrax-to-BGV response equations are
@@ -839,8 +856,8 @@ impl ZeroizingWholeProofUniformBytesV1 {
         &mut self.0
     }
 
-    fn take_array(&mut self) -> [u8; 64] {
-        core::mem::replace(&mut self.0, [0; 64])
+    fn bytes(&self) -> &[u8; 64] {
+        &self.0
     }
 }
 
@@ -895,7 +912,7 @@ fn sample_internal_whole_proof_blindings_v1<R: MaskedRelaxedRandomSourceV1>(
                 .fill_bytes(uniform.bytes_mut())
                 .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
             let candidate =
-                ZeroizingT256ScalarCopyV1::new(Scalar::from_uniform_le_bytes(uniform.take_array()));
+                ZeroizingT256ScalarCopyV1::new(Scalar::from_uniform_le_bytes_ref(uniform.bytes()));
             if !candidate.as_ref().is_zero() {
                 blindings.push(candidate.get());
                 accepted = true;
@@ -1161,12 +1178,12 @@ mod tests {
         let wire = proof
             .encode_canonical()
             .expect("canonical whole-proof wire");
-        assert_eq!(wire.len(), 19_530, "unverified structural-envelope bytes");
+        assert_eq!(wire.len(), 20_418, "unverified structural-envelope bytes");
         assert_eq!(wire.len(), WHOLE_PROOF_EXACT_BYTES_V1);
         assert_eq!(wire.len(), ZK_AMS_PHASE23_RNS_LINK_WHOLE_PROOF_MAX_BYTES_V1);
         assert_eq!(WHOLE_PROOF_FAMILY_ORDER_V1.len(), 6);
         assert_eq!(WHOLE_PROOF_RNS_LIMB_COUNT_V1, 38);
-        assert_eq!(WHOLE_PROOF_FAMILY_RECORD_COUNT_V1, 35);
+        assert_eq!(WHOLE_PROOF_FAMILY_RECORD_COUNT_V1, 43);
         assert_eq!(WHOLE_PROOF_RELATION_RECORD_COUNT_V1, 152);
 
         let before_preflight = decode_allocation_count_v1();

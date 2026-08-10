@@ -93,8 +93,7 @@ pub(super) fn run_ivm_private_note_stage_v1(
         ),
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation => {
             let mut cross_context = statement.clone();
-            cross_context.context.chain_id =
-                ChainId::from("taira-private-note-release-cross-context-v1");
+            cross_context.context.network_id = release_network_id_from_genesis_hash([0x4a; 32]);
             redigest_ivm_release_statement_v1(&mut cross_context)?;
 
             let mut cross_intent = statement.clone();
@@ -320,8 +319,7 @@ pub(super) fn run_pq_masp_stage_v1(
         ),
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation => {
             let mut cross_context = statement.clone();
-            cross_context.context.chain_id =
-                ChainId::from("taira-pq-masp-release-cross-context-v1");
+            cross_context.context.network_id = release_network_id_from_genesis_hash([0x51; 32]);
 
             let mut cross_intent = statement.clone();
             let mut intent = *cross_intent.context.transaction_intent_digest.as_bytes();

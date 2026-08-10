@@ -67,13 +67,13 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
             )
         })
         .collect::<Vec<_>>();
-    let chain_id_hash = payloads[0].chain_id_hash;
+    let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("canonical terminal capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal capacity peer");
     let generation = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim canonical terminal capacity generation");
 
     let mut executions = Vec::new();
@@ -497,16 +497,16 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         Hash::new(b"release-terminal-capacity-context"),
     ));
     let payload = canonical_terminal_payload_for_test(&lane, height_context_id, &signer, 0x51);
-    let chain_id_hash = payload.chain_id_hash;
+    let network_id = payload.network_id;
     let epoch = payload.epoch;
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("release capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind release capacity peer");
     let generation = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim release capacity generation");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist release capacity payload");
     let (_, group) = install_live_lifecycle_cursor_for_terminal_test(
         &kura,
@@ -516,12 +516,12 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         &signer,
     );
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
-    kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist release capacity retirement");
     let barrier = retirement
         .queue_release_barrier()
         .expect("derive release capacity barrier");
-    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("durably release exact Queue claims");
 
     let physical = kura
@@ -557,7 +557,7 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     assert!(
         kura.persist_autonomous_lifecycle_release_terminal_outcome_pending(
             &retirement,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .is_err(),
@@ -577,7 +577,7 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let source_authorization = kura
         .persist_autonomous_lifecycle_release_terminal_outcome_pending(
             &retirement,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("release Pending fits its original exact reservation");

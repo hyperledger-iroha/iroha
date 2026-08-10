@@ -137,6 +137,22 @@ MACOS_ACL_INSPECTOR = Path("/bin/ls")
 MACOS_ACL_CLEARER = Path("/bin/chmod")
 MACOS_ACL_COMMAND_TIMEOUT_SECONDS = 5
 MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES = 64 * 1024
+DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT = (
+    "iroha.taira.deploy-authenticated-run-nonce.v1"
+)
+COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
+    "iroha.taira.complete-source-identity-attestation.v1"
+)
+DEPLOY_ISSUANCE_BARRIER = (
+    "missing preprovisioned iroha.taira.deploy-authenticated-run-nonce.v1: "
+    "neither workflow run ID nor attempt may authorize deployment or replay "
+    "consumption; missing preprovisioned "
+    "iroha.taira.complete-source-identity-attestation.v1: a root-owned authority "
+    "record must independently bind source commit, DPN validator release commit, "
+    "the exact canonical Cargo.lock digest, and workspace source-manifest digest "
+    "(or one stronger immutable candidate identity); deployment is disabled for "
+    "both dry-run and apply before identity, admission, or path inspection"
+)
 
 
 class DeploymentError(RuntimeError):
@@ -147,6 +163,12 @@ def fail(message: str) -> NoReturn:
     """Raise one redaction-safe deployment refusal."""
 
     raise DeploymentError(message)
+
+
+def require_deploy_issuance_contracts() -> NoReturn:
+    """Refuse deployment until run and complete-source authority are installed."""
+
+    fail(DEPLOY_ISSUANCE_BARRIER)
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -166,6 +188,22 @@ def require_sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
     return value
+
+
+def require_distinct_signing_fingerprints(
+    release_fingerprint: object,
+    qualification_fingerprint: object,
+) -> tuple[str, str]:
+    """Require separately pinned release and BOI qualification authorities."""
+
+    release = require_sha256(release_fingerprint, "trusted signing fingerprint")
+    qualification = require_sha256(
+        qualification_fingerprint,
+        "trusted BOI qualification signing fingerprint",
+    )
+    if release == qualification:
+        fail("release and BOI qualification signing identities must be distinct")
+    return release, qualification
 
 
 def require_genesis_expected_hash(value: object) -> str:
@@ -3740,7 +3778,7 @@ def apply_reset(
     ensure_root_directory(supervisor_store, 0o755)
     binary_dir = binary_store / sources.binary_sha256
     supervisor_dir = supervisor_store / sources.supervisor_sha256
-    installed_binary = binary_dir / "irohad"
+    installed_binary = binary_dir / "iroha3d"
     installed_supervisor = supervisor_dir / "taira_peer_supervisor.py"
     if binary_dir.exists() and not (
         installed_binary.exists() or installed_binary.is_symlink()
@@ -3760,7 +3798,7 @@ def apply_reset(
     install_immutable(
         sources.supervisor, installed_supervisor, sources.supervisor_sha256
     )
-    require_exact_names(binary_dir, {"irohad"}, "content-addressed binary directory")
+    require_exact_names(binary_dir, {"iroha3d"}, "content-addressed binary directory")
     require_exact_names(
         supervisor_dir,
         {"taira_peer_supervisor.py"},
@@ -4070,8 +4108,12 @@ def validate_arguments(args: argparse.Namespace) -> None:
         args.expected_production_reset_manifest_sha256,
         "expected production reset-manifest SHA-256",
     )
-    args.trusted_signing_fingerprint = require_sha256(
-        args.trusted_signing_fingerprint, "trusted signing fingerprint"
+    (
+        args.trusted_signing_fingerprint,
+        args.trusted_boi_qualification_signing_fingerprint,
+    ) = require_distinct_signing_fingerprints(
+        args.trusted_signing_fingerprint,
+        args.trusted_boi_qualification_signing_fingerprint,
     )
     args.trusted_release_manifest_verifier_sha256 = require_sha256(
         args.trusted_release_manifest_verifier_sha256,
@@ -4113,10 +4155,10 @@ def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     return None if os.geteuid() != 0 else (uid, gid)
 
 
-def execute(
+def _execute_after_provisioned_authority_contracts(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
-    """Run the read-only preflight and optional guarded apply transaction."""
+    """Latent deployment path reached only after installed authority evolves."""
 
     require_sealed_external_tool_identity()
     validate_arguments(args)
@@ -4214,6 +4256,15 @@ def execute(
             }
         )
         return report
+
+
+def execute(
+    args: argparse.Namespace, *, ops: Optional[SystemOps] = None
+) -> dict[str, Any]:
+    """Refuse dry-run and apply before any identity, path, or admission read."""
+
+    del args, ops
+    require_deploy_issuance_contracts()
 
 
 def main(argv: Optional[list[str]] = None) -> int:

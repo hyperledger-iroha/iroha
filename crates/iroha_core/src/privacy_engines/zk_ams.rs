@@ -25,16 +25,15 @@ use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{ChainId, NetworkId},
+    prelude::NetworkId,
     privacy::{
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PRIVACY_MAX_CHAIN_ID_BYTES_V1,
-        PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyZkAmsActionV1,
-        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
-        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
+        PrivacyP256PointV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsIssuerPolicyRecordDigestV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         ZK_AMS_PHC_VERSION_V1,
     },
@@ -175,8 +174,6 @@ const RELATION_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:relation-p
 pub struct ZkAmsPrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
     pub network_id: NetworkId,
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
     /// Exact transaction authority.
     pub authority: AccountId,
     /// Required creation time, resolved once before intent derivation.
@@ -413,9 +410,6 @@ pub struct ZkAmsPrivacyActionGovernanceV1 {
 /// Failure while constructing or validating a canonical ZK-AMS transaction intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ZkAmsPrivacyActionIntentErrorV1 {
-    /// The chain identifier is empty or exceeds the consensus maximum.
-    #[error("ZK-AMS action chain id is outside the first-release byte bound")]
-    InvalidChainId,
     /// Creation time cannot be represented in the transaction wire.
     #[error("ZK-AMS action creation time cannot be represented in milliseconds")]
     CreationTimeOutOfRange,
@@ -610,14 +604,6 @@ impl From<P256EngineError> for ZkAmsErrorV1 {
 fn validate_zk_ams_transaction_context_v1(
     context: &ZkAmsPrivacyActionTransactionContextV1,
 ) -> Result<(), ZkAmsPrivacyActionIntentErrorV1> {
-    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
-    if chain_id_bytes == 0
-        || chain_id_bytes
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(ZkAmsPrivacyActionIntentErrorV1::InvalidChainId);
-    }
     if context.creation_time.as_millis() > u128::from(u64::MAX) {
         return Err(ZkAmsPrivacyActionIntentErrorV1::CreationTimeOutOfRange);
     }
@@ -653,7 +639,7 @@ fn zk_ams_statement_context_v1(
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         action_index: ZK_AMS_PRIVACY_ACTION_INDEX_V1,
         transaction_intent_digest,
         parameter_id: profile.parameter_id,
@@ -912,7 +898,7 @@ fn zk_ams_action_binding_v1<'a>(
     statement_digest: PrivacyStatementDigestV1,
 ) -> TranscriptBindingV1<'a> {
     TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        network_id: statement.context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: statement.context.action_index,
         statement_digest: *statement_digest.as_bytes(),
@@ -2543,7 +2529,7 @@ fn admission_possession_challenge(
     let mut hash = Sha3_512::new();
     append_field(&mut hash, b"domain", ZK_AMS_ADMISSION_POSSESSION_SUITE_V1)?;
     append_field(&mut hash, b"transcript_version", &[TRANSCRIPT_VERSION_V1])?;
-    append_field(&mut hash, b"chain_id", binding.chain_id)?;
+    append_field(&mut hash, b"network_id", binding.network_id)?;
     append_field(&mut hash, b"genesis_hash", &binding.genesis_hash)?;
     append_field(
         &mut hash,
@@ -2632,7 +2618,7 @@ fn validate_statement_binding(
     validate_zk_ams_binding_v1(binding)?;
     let context = &statement.context;
     if context.action_index != ZK_AMS_PRIVACY_ACTION_INDEX_V1
-        || binding.chain_id != context.chain_id.as_str().as_bytes()
+        || binding.network_id != context.network_id.as_bytes()
         || binding.action_index != context.action_index
         || binding.parameter_id != *context.parameter_id.as_bytes()
         || binding.parameter_digest != *context.parameter_digest.as_bytes()
@@ -2820,7 +2806,9 @@ fn validate_issuer_signature(
 
 fn relation_context<'a>(binding: &'a TranscriptBindingV1<'a>) -> ZkAmsProofContextV1<'a> {
     ZkAmsProofContextV1 {
-        chain_id: binding.chain_id,
+        // The protected Halo2 profile retains this internal field name; the
+        // bytes are the exact genesis-derived NetworkId, never a ChainId label.
+        chain_id: binding.network_id,
         genesis_hash: binding.genesis_hash,
         action_index: binding.action_index,
         statement_digest: binding.statement_digest,
@@ -2908,7 +2896,7 @@ impl LsagTranscriptV1 {
         let mut prefix = Sha3_512::new();
         append_field(&mut prefix, b"domain", ZK_AMS_LSAG_SUITE_V1)?;
         append_field(&mut prefix, b"transcript_version", &[TRANSCRIPT_VERSION_V1])?;
-        append_field(&mut prefix, b"chain_id", binding.chain_id)?;
+        append_field(&mut prefix, b"network_id", binding.network_id)?;
         append_field(&mut prefix, b"genesis_hash", &binding.genesis_hash)?;
         append_field(
             &mut prefix,
@@ -3002,7 +2990,6 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
         metadata::Metadata,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
@@ -3180,7 +3167,7 @@ mod tests {
 
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
-            chain_id: b"taira-zk-ams-test",
+            network_id: &[0x11; 32],
             genesis_hash: [0x11; 32],
             action_index: ZK_AMS_PRIVACY_ACTION_INDEX_V1,
             statement_digest: [0x12; 32],
@@ -3196,7 +3183,8 @@ mod tests {
     fn mutate_every_binding_axis() -> Vec<(&'static str, TranscriptBindingV1<'static>)> {
         let mut mutations = Vec::new();
         let mut changed = binding();
-        changed.chain_id = b"foreign-chain";
+        changed.network_id = &[0x12; 32];
+        changed.genesis_hash = [0x12; 32];
         mutations.push(("chain", changed));
         let mut changed = binding();
         changed.genesis_hash[0] ^= 1;
@@ -3861,7 +3849,7 @@ mod tests {
 
     fn typed_context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: ChainId::from("taira-zk-ams-test"),
+            network_id: network_id_from_genesis_hash_bytes([0x11; 32]),
             action_index: ZK_AMS_PRIVACY_ACTION_INDEX_V1,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x21; 32]),
             parameter_id: PrivacyParameterIdV1::new([0x22; 32]),
@@ -3964,7 +3952,6 @@ mod tests {
     ) -> ZkAmsPrivacyActionTransactionContextV1 {
         ZkAmsPrivacyActionTransactionContextV1 {
             network_id: network_id_from_genesis_hash_bytes([0x11; 32]),
-            chain_id: ChainId::from("taira-zk-ams-transaction-intent-v1"),
             authority: account(60),
             creation_time: Duration::from_millis(creation_time_ms),
             time_to_live: Some(Duration::from_secs(60)),
@@ -4373,7 +4360,7 @@ mod tests {
             .digest()
             .expect("typed statement digest");
         TranscriptBindingV1 {
-            chain_id: statement.context.chain_id.as_str().as_bytes(),
+            network_id: statement.context.network_id.as_bytes(),
             genesis_hash: [0x11; 32],
             action_index: statement.context.action_index,
             statement_digest: *statement_digest.as_bytes(),

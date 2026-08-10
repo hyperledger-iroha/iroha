@@ -2335,7 +2335,7 @@ mod tests {
 
     use iroha_core::state::World;
     use iroha_data_model::{
-        ChainId, NetworkId, Registrable, ValidationFail,
+        NetworkId, Registrable, ValidationFail,
         account::{Account, AccountDetails},
         asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens},
         block::{BlockHeader, builder::BlockBuilder},
@@ -3044,13 +3044,13 @@ mod tests {
 
     #[test]
     fn transaction_detail_includes_contract_call_argument_record() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id();
         let contract_address =
-            ContractAddress::derive(&chain, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

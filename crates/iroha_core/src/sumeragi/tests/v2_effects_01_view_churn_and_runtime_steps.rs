@@ -510,11 +510,7 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
         .steps
         .push_back(Ok(RuntimeStep::Advanced(vec![
             AdapterEffect::Broadcast(message.clone()),
-            AdapterEffect::ReportEquivocation {
-                offender: fixture.context.roster[1].validator.clone(),
-                round: fixture.manifest.round,
-                kind: EquivocationKind::Vote,
-            },
+            equivocation(&fixture, 1),
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject: fixture.manifest.subject,
                 certificate: fixture.qc(wire::GlobalPhase::Prepare),

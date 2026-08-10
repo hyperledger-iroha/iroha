@@ -20,7 +20,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "2439194fb0980a35df8183a520839f58d2ecf6e30ae95b6351d7495e49f7cd48"
+        "9be38068b2861daa6040cf38bc5d6bed182369a67ae16c709eee25eba028d7d3"
     ),
 }
 

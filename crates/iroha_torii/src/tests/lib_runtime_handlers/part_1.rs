@@ -1502,6 +1502,58 @@ pub(crate) fn signed_app_headers(
     uri: &axum::http::Uri,
     body: &[u8],
 ) -> HeaderMap {
+    signed_app_headers_for_network(
+        &crate::signed_query_test_network_id(),
+        account,
+        key_pair,
+        method,
+        uri,
+        body,
+    )
+}
+
+pub(crate) fn signed_network_app_headers(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    signed_app_headers_for_network(network_id, account, key_pair, method, uri, body)
+}
+
+pub(crate) fn foreign_network_signed_app_fixture(
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    key_seed: u8,
+    network_marker: u8,
+) -> (SharedAppState, HeaderMap) {
+    let key_pair = checked_torii_test_keypair_from_seed_byte(
+        key_seed,
+        Algorithm::Ed25519,
+        "derive foreign-network Torii auth fixture key",
+    );
+    let account = AccountId::new(key_pair.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let foreign_network =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([network_marker; Hash::LENGTH]),
+        ));
+    let headers =
+        signed_network_app_headers(&foreign_network, &account, &key_pair, method, uri, body);
+    (app, headers)
+}
+
+fn signed_app_headers_for_network(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
     static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
         LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
     let timestamp_ms = std::time::SystemTime::now()
@@ -1510,10 +1562,64 @@ pub(crate) fn signed_app_headers(
         .as_millis() as u64;
     let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
-    let message =
-        crate::canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    let message = crate::canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature =
         checked_torii_test_signature(key_pair, &message, "sign Torii signed-app-header fixture");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::HEADER_ACCOUNT,
+        account.to_string().parse().expect("account header"),
+    );
+    headers.insert(
+        crate::HEADER_SIGNATURE,
+        crate::signature_header_value(&signature)
+            .parse()
+            .expect("signature header"),
+    );
+    headers.insert(
+        crate::HEADER_TIMESTAMP_MS,
+        timestamp_ms.to_string().parse().expect("timestamp header"),
+    );
+    headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
+    headers
+}
+
+pub(crate) fn signed_network_app_headers(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
+        LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_millis() as u64;
+    let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = format!("lib-network-test-{timestamp_ms}-{nonce_seq}");
+    let message = crate::canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
+    let signature = checked_torii_test_signature(
+        key_pair,
+        &message,
+        "sign exact-network Torii request fixture",
+    );
     let mut headers = HeaderMap::new();
     headers.insert(
         crate::HEADER_ACCOUNT,
@@ -1665,11 +1771,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let _ = &push;
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state_inner = iroha_core::state::State::new_with_chain_for_testing(
+    let state_inner = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),
         query_handle.clone(),
         chain_id.clone(),
+        crate::signed_query_test_network_id(),
     );
     {
         let mut topo_block = state_inner.commit_topology.block();
@@ -1793,6 +1900,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
         Vec::new(),
         telemetry::peers::GeoLookupConfig::disabled(),
+        *state.network_id_ref(),
         None,
     );
 
@@ -1821,6 +1929,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         operator_signatures::OperatorSignatures::new(
             iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
             da_receipt_signer.public_key().clone(),
+            *state.network_id_ref(),
             defaults::torii::MAX_CONTENT_LEN.get(),
             telemetry.clone(),
         )
@@ -2121,7 +2230,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
         local_peer_id: None,
         #[cfg(feature = "connect")]
-        connect_bus: crate::connect::Bus::from_config(&connect_cfg),
+        connect_bus: crate::connect::Bus::from_config(
+            &connect_cfg,
+            crate::signed_query_test_network_id(),
+        ),
         #[cfg(feature = "connect")]
         connect_enabled: connect_cfg.enabled,
         #[cfg(feature = "push")]

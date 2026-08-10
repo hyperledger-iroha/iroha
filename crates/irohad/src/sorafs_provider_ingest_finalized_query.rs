@@ -11,10 +11,14 @@
 //! Runtime continuations carry only height, hash, and order identity. The
 //! adapter therefore retains the archive's complete timestamp-, provider-, and
 //! provider-state-root-bound cursor internally and rejects interleaved or
-//! substituted continuations. The separately constructed capture reader is
-//! deliberately stateless: it reconstructs that complete cursor from the
-//! immutable exact archive record on every bounded continuation.
+//! substituted continuations. The separately constructed capture reader
+//! reconstructs complete cursors from immutable archive records. Its lazy
+//! ephemeral signer serializes reads and retains one exact signed response so
+//! cancellation or response loss can retry a generation byte-for-byte without
+//! selecting a later head.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     fmt, io,
     path::{Component, Path, PathBuf},
@@ -35,8 +39,9 @@ use iroha_core::{
     state::{State, StateQueryView, StateReadOnly as _},
     sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
+use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -46,11 +51,16 @@ use iroha_data_model::{
     },
 };
 use sorafs_node::{
-    ProviderIngestCompletedMusubiCaptureLedgerV1, ProviderIngestCompletedMusubiCaptureSourcePageV1,
-    ProviderIngestCompletedMusubiCaptureSourceRowV1, ProviderIngestFinalizedAssignmentPageV1,
+    ProviderIngestCompletedMusubiCaptureRequestV1,
+    ProviderIngestCompletedMusubiCaptureSourcePageV1,
+    ProviderIngestCompletedMusubiCaptureSourceRowV1,
+    ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+    ProviderIngestCompletedMusubiSignedCaptureLedgerV1,
+    ProviderIngestCompletedMusubiSignedCapturePageV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
     ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
     ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    provider_ingest_completed_musubi_capture_transcript_digest_v1,
 };
 
 const LIVE_SELECTION_ATTEMPTS_V1: usize = 4;
@@ -159,12 +169,7 @@ pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     runtime_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
-    // TODO: Relocate capture sealing/scanner ownership beside this daemon-owned
-    // archive (or move authenticated archive verification under `sorafs_node`)
-    // before a supervised child consumes this reader. The raw-page boundary
-    // prevents claim-factory retention but cannot itself prove provenance.
-    #[allow(dead_code)]
-    capture_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
+    signed_capture_reader: Option<ArchivedProviderIngestFinalizedLedgerV1>,
     retention_authority: Option<QualifiedProviderIngestRetentionAuthorityV1>,
 }
 
@@ -191,11 +196,15 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
         &self.runtime_query
     }
 
-    /// Return the independently cursor-fenced archive reader reserved for the
-    /// completed-Musubi capture scanner.
-    #[allow(dead_code)]
-    pub(crate) fn capture_query(&self) -> &Arc<ArchivedProviderIngestFinalizedLedgerV1> {
-        &self.capture_query
+    /// Take the one request-bound signed archive reader reserved for the inert
+    /// completed-Musubi capture coordinator.
+    ///
+    /// No cloneable accessor is exposed: the private daemon composer must move
+    /// this exact reader into the matching `NodeHandle` tenure once.
+    pub(crate) fn take_signed_capture_reader(
+        &mut self,
+    ) -> Option<ArchivedProviderIngestFinalizedLedgerV1> {
+        self.signed_capture_reader.take()
     }
 
     /// Return the authority qualified for explicit archive retention.
@@ -354,7 +363,7 @@ fn classify_pending_replay_completion(
 /// violation.
 pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     config: &SorafsProviderIngestFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: NetworkId,
     provider_id: ProviderId,
     daemon_storage_root: &Path,
     state: &Arc<State>,
@@ -363,9 +372,16 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     retention_authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
 ) -> Result<PreparedProviderIngestFinalizedArchiveV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
+    if network_id != *state.network_id_ref() {
+        return Err(
+            ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary {
+                reason: "configured provider-ingest network identity differs from committed State",
+            },
+        );
+    }
     let (archive, retention_authority) = open_provider_ingest_finalized_archive(
         config,
-        chain_id,
+        &network_id,
         kura.as_ref(),
         daemon_storage_root,
         retention_authority,
@@ -380,7 +396,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     })?;
     let startup_mode = select_archive_startup_mode(
         config,
-        chain_id,
+        &network_id,
         archive.as_ref(),
         kura.as_ref(),
         &boundary,
@@ -390,7 +406,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         authority.revalidate()?;
     }
     let reader_args = ArchivedProviderIngestFinalizedLedgerArgsV1 {
-        chain_id: chain_id.clone(),
+        network_id,
         provider_id,
         archive: Arc::clone(&archive),
         kura: Arc::clone(kura),
@@ -405,21 +421,21 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     let runtime_query = Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new(
         reader_args.clone(),
     ));
-    let capture_query =
-        Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
+    let signed_capture_reader =
+        Some(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
     Ok(PreparedProviderIngestFinalizedArchiveV1 {
         startup_mode,
         archive,
         query,
         runtime_query,
-        capture_query,
+        signed_capture_reader,
         retention_authority,
     })
 }
 
 fn open_provider_ingest_finalized_archive(
     config: &SorafsProviderIngestFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
     daemon_storage_root: &Path,
     authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
@@ -468,7 +484,7 @@ fn open_provider_ingest_finalized_archive(
             let archive = ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
                 root,
                 bounds,
-                chain_id,
+                network_id,
                 kura,
                 &binding,
                 authority.as_ref(),
@@ -557,7 +573,7 @@ fn authenticate_archive_startup_boundary<'state>(
 
 fn select_archive_startup_mode(
     config: &SorafsProviderIngestFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     boundary: &AuthenticatedArchiveStartupBoundaryV1<'_>,
@@ -576,10 +592,10 @@ fn select_archive_startup_mode(
             Ok(ProviderIngestFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture)
         }
         ArchiveStartupBoundaryV1::Qualified => {
-            prepare_qualified_archive_mode(config, chain_id, archive, kura, &boundary.state_view)
+            prepare_qualified_archive_mode(config, network_id, archive, kura, &boundary.state_view)
         }
         ArchiveStartupBoundaryV1::PendingTip { height } => prepare_pending_tip_archive_mode(
-            chain_id,
+            network_id,
             archive,
             kura,
             &boundary.state_view,
@@ -592,7 +608,7 @@ fn select_archive_startup_mode(
 
 fn prepare_qualified_archive_mode(
     config: &SorafsProviderIngestFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     state_view: &StateQueryView<'_>,
@@ -607,7 +623,7 @@ fn prepare_qualified_archive_mode(
             },
         )?;
     let live_qualification = archive
-        .qualify_against_kura_tip(chain_id, kura, config.max_kura_tip_lag_blocks)
+        .qualify_against_kura_tip(network_id, kura, config.max_kura_tip_lag_blocks)
         .map_err(
             |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
                 stage: "configured live-lag qualification",
@@ -621,7 +637,7 @@ fn prepare_qualified_archive_mode(
 }
 
 fn prepare_pending_tip_archive_mode(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     state_view: &StateQueryView<'_>,
@@ -653,11 +669,11 @@ fn prepare_pending_tip_archive_mode(
                     source: Box::new(source),
                 },
             )?;
-        let qualification = qualify_pending_tip_archive(chain_id, archive, kura)?;
+        let qualification = qualify_pending_tip_archive(network_id, archive, kura)?;
         (Some(qualification), true)
     } else {
         (
-            Some(qualify_pending_tip_archive(chain_id, archive, kura)?),
+            Some(qualify_pending_tip_archive(network_id, archive, kura)?),
             false,
         )
     };
@@ -679,7 +695,7 @@ fn prepare_pending_tip_archive_mode(
 }
 
 fn qualify_pending_tip_archive(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
 ) -> Result<
@@ -687,7 +703,7 @@ fn qualify_pending_tip_archive(
     ProviderIngestFinalizedArchiveStartupErrorV1,
 > {
     archive
-        .qualify_against_kura_tip(chain_id, kura, 1)
+        .qualify_against_kura_tip(network_id, kura, 1)
         .map_err(
             |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
                 stage: "pending-tip one-block qualification",
@@ -763,6 +779,58 @@ impl ArchiveActivationGateV1 {
     }
 }
 
+type ArchivedCompletedMusubiCaptureSignerSlotV1 =
+    Arc<Mutex<Option<Arc<ArchivedCompletedMusubiCaptureSignerV1>>>>;
+
+struct ArchivedCompletedMusubiCaptureSignerV1 {
+    key_pair: KeyPair,
+    session_generation: u64,
+    signed_read: Mutex<ArchivedCompletedMusubiSignedReadStateV1>,
+}
+
+#[derive(Default)]
+struct ArchivedCompletedMusubiSignedReadStateV1 {
+    last_request: Option<ProviderIngestCompletedMusubiCaptureRequestV1>,
+    last_response: Option<ProviderIngestCompletedMusubiSignedCapturePageV1>,
+}
+
+impl ArchivedCompletedMusubiCaptureSignerV1 {
+    fn try_new() -> Result<Self, ProviderIngestFinalizedLedgerErrorV1> {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        if algorithm != Algorithm::Ed25519 || public_key.len() != 32 {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let generation_bytes: [u8; 8] = public_key[..8]
+            .try_into()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let session_generation = u64::from_be_bytes(generation_bytes).max(1);
+        Ok(Self {
+            key_pair,
+            session_generation,
+            signed_read: Mutex::new(ArchivedCompletedMusubiSignedReadStateV1::default()),
+        })
+    }
+
+    fn public_key_bytes(&self) -> Result<[u8; 32], ProviderIngestFinalizedLedgerErrorV1> {
+        let (algorithm, public_key) = self
+            .key_pair
+            .public_key()
+            .try_to_bytes()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        if algorithm != Algorithm::Ed25519 {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        public_key
+            .try_into()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)
+    }
+}
+
 /// Archive-only provider assignment reader.
 ///
 /// One adapter permits one sequential scan at a time. The first page
@@ -771,11 +839,12 @@ impl ArchiveActivationGateV1 {
 /// Continuations must match both the public cursor and the full context
 /// retained in `ActiveArchiveScanV1`. The dedicated capture instance instead
 /// reconstructs every continuation from the immutable archive and never
-/// mutates `active`, making exact retries safe after validation failure or task
-/// cancellation.
+/// mutates `active`. Its lazy signed-reader session adds an exact-response
+/// generation cache, making both fresh reads and continuations safe to retry
+/// after validation failure or task cancellation.
 #[derive(Clone)]
 pub struct ArchivedProviderIngestFinalizedLedgerV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     provider_id: ProviderId,
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     kura: Arc<Kura>,
@@ -784,12 +853,15 @@ pub struct ArchivedProviderIngestFinalizedLedgerV1 {
     max_kura_tip_lag_blocks: u64,
     activation_gate: ArchiveActivationGateV1,
     replay_safe_capture: bool,
+    capture_signer: Option<ArchivedCompletedMusubiCaptureSignerSlotV1>,
+    #[cfg(test)]
+    signed_capture_source_reads: Arc<AtomicUsize>,
     active: Arc<Mutex<Option<ActiveArchiveScanV1>>>,
 }
 
 #[derive(Clone)]
 struct ArchivedProviderIngestFinalizedLedgerArgsV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     provider_id: ProviderId,
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     kura: Arc<Kura>,
@@ -803,7 +875,7 @@ impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ArchivedProviderIngestFinalizedLedgerV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("provider_id", &self.provider_id)
             .field("max_page_rows", &self.max_page_rows)
             .field("max_kura_tip_lag_blocks", &self.max_kura_tip_lag_blocks)
@@ -814,19 +886,19 @@ impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
 
 impl ArchivedProviderIngestFinalizedLedgerV1 {
     fn new(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
-        Self::new_with_capture_mode(args, false)
+        Self::new_with_capture_mode(args, None)
     }
 
     fn new_replay_safe_capture(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
-        Self::new_with_capture_mode(args, true)
+        Self::new_with_capture_mode(args, Some(Arc::new(Mutex::new(None))))
     }
 
     fn new_with_capture_mode(
         args: ArchivedProviderIngestFinalizedLedgerArgsV1,
-        replay_safe_capture: bool,
+        capture_signer: Option<ArchivedCompletedMusubiCaptureSignerSlotV1>,
     ) -> Self {
         let ArchivedProviderIngestFinalizedLedgerArgsV1 {
-            chain_id,
+            network_id,
             provider_id,
             archive,
             kura,
@@ -836,7 +908,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             activation_gate,
         } = args;
         Self {
-            chain_id,
+            network_id,
             provider_id,
             archive,
             kura,
@@ -844,14 +916,52 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             max_page_rows,
             max_kura_tip_lag_blocks,
             activation_gate,
-            replay_safe_capture,
+            replay_safe_capture: capture_signer.is_some(),
+            capture_signer,
+            #[cfg(test)]
+            signed_capture_source_reads: Arc::new(AtomicUsize::new(0)),
             active: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Return the exact chain identity frozen into this reader.
-    pub(crate) const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
+    fn completed_musubi_capture_verifier_binding(
+        &self,
+    ) -> Result<
+        ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    > {
+        let signer = self.completed_musubi_capture_signer()?;
+        ProviderIngestCompletedMusubiCaptureVerifierBindingV1::try_from_untrusted_reader_parts(
+            self.network_id,
+            *self.provider_id.as_bytes(),
+            signer.session_generation,
+            signer.public_key_bytes()?,
+        )
+    }
+
+    fn completed_musubi_capture_signer(
+        &self,
+    ) -> Result<Arc<ArchivedCompletedMusubiCaptureSignerV1>, ProviderIngestFinalizedLedgerErrorV1>
+    {
+        let signer_slot = self
+            .capture_signer
+            .as_ref()
+            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let mut signer = signer_slot
+            .lock()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+        if signer.is_none() {
+            *signer = Some(Arc::new(ArchivedCompletedMusubiCaptureSignerV1::try_new()?));
+        }
+        signer
+            .as_ref()
+            .cloned()
+            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
+    }
+
+    /// Return the exact genesis-derived security domain frozen into this reader.
+    pub(crate) const fn network_id(&self) -> NetworkId {
+        self.network_id
     }
 
     /// Return the exact provider index frozen into this reader.
@@ -867,7 +977,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     {
         for _ in 0..LIVE_SELECTION_ATTEMPTS_V1 {
             match self.archive.qualify_against_kura_tip(
-                &self.chain_id,
+                &self.network_id,
                 self.kura.as_ref(),
                 self.max_kura_tip_lag_blocks,
             ) {
@@ -953,7 +1063,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             }
             let qualification =
                 self.archive
-                    .qualify_against_kura_tip(&self.chain_id, self.kura.as_ref(), 0)?;
+                    .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)?;
             if kura_height == 1 && qualification.archive_tip().height == 1 {
                 return Ok(false);
             }
@@ -982,7 +1092,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         }
         let qualification =
             self.archive
-                .qualify_against_kura_tip(&self.chain_id, self.kura.as_ref(), 1)?;
+                .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 1)?;
         validate_pending_archive_tip(
             pending_tip_height,
             state_height,
@@ -1124,7 +1234,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             }
             let key = self
                 .archive
-                .resolve_exact_key(&self.chain_id, height, block_hash)?;
+                .resolve_exact_key(&self.network_id, height, block_hash)?;
             if self.archive.health_generation()? == qualification.generation() {
                 return Ok(key);
             }
@@ -1180,7 +1290,12 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .archive
             .read_provider_page(&key, self.provider_id, cursor.as_ref(), limit)
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        let page = map_archive_page(self.provider_id, &archive_page, claim_factory)?;
+        let page = map_archive_page(
+            self.network_id,
+            self.provider_id,
+            &archive_page,
+            claim_factory,
+        )?;
         *active = archive_page
             .next_cursor
             .map(|cursor| ActiveArchiveScanV1 { key, cursor });
@@ -1221,7 +1336,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
                 let key = self
                     .archive
                     .resolve_exact_key(
-                        &self.chain_id,
+                        &self.network_id,
                         public_cursor.height,
                         public_cursor.block_hash,
                     )
@@ -1240,6 +1355,87 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
         }
         Ok(page)
+    }
+
+    fn read_and_sign_completed_musubi_capture_page(
+        &self,
+        request: ProviderIngestCompletedMusubiCaptureRequestV1,
+    ) -> Result<
+        ProviderIngestCompletedMusubiSignedCapturePageV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    > {
+        let at_finalized_cursor = request.at_finalized_cursor();
+        let after_order_id = request.after_order_id();
+        let limit = usize::from(request.limit());
+        self.read_and_sign_completed_musubi_capture_page_with(request, || {
+            self.read_replay_safe_capture_source_page(at_finalized_cursor, after_order_id, limit)
+        })
+    }
+
+    fn read_and_sign_completed_musubi_capture_page_with<ReadSource>(
+        &self,
+        request: ProviderIngestCompletedMusubiCaptureRequestV1,
+        read_source: ReadSource,
+    ) -> Result<
+        ProviderIngestCompletedMusubiSignedCapturePageV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    >
+    where
+        ReadSource: FnOnce() -> Result<
+            ProviderIngestCompletedMusubiCaptureSourcePageV1,
+            ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    {
+        if !self.replay_safe_capture || usize::from(request.limit()) > self.max_page_rows {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let signer = self.completed_musubi_capture_signer()?;
+        let expected_binding = self.completed_musubi_capture_verifier_binding()?;
+        if request.binding() != &expected_binding {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let mut signed_read = signer
+            .signed_read
+            .lock()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+        if signed_read.last_request.as_ref() == Some(&request) {
+            return signed_read
+                .last_response
+                .as_ref()
+                .cloned()
+                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
+        }
+        let expected_generation = match signed_read.last_request.as_ref() {
+            Some(previous) => previous
+                .generation()
+                .checked_add(1)
+                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?,
+            None => 1,
+        };
+        if request.generation() != expected_generation {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        #[cfg(test)]
+        self.signed_capture_source_reads
+            .fetch_add(1, Ordering::SeqCst);
+        let source_page = read_source()?;
+        let digest =
+            provider_ingest_completed_musubi_capture_transcript_digest_v1(&request, &source_page)?;
+        let signature = IrohaSignature::try_new(signer.key_pair.private_key(), &digest)
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+        let signature: [u8; 64] = signature
+            .payload()
+            .try_into()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let response =
+            ProviderIngestCompletedMusubiSignedCapturePageV1::from_untrusted_reader_parts(
+                request.clone(),
+                source_page,
+                signature,
+            );
+        signed_read.last_request = Some(request);
+        signed_read.last_response = Some(response.clone());
+        Ok(response)
     }
 
     fn read_replay_safe_exact_capture_source_page(
@@ -1272,7 +1468,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .archive
             .read_provider_page(key, self.provider_id, cursor.as_ref(), limit)
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        map_archive_capture_source_page(self.provider_id, &archive_page)
+        map_archive_capture_source_page(self.network_id, self.provider_id, &archive_page)
     }
 
     #[cfg(test)]
@@ -1313,27 +1509,32 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
     }
 }
 
-impl ProviderIngestCompletedMusubiCaptureLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1 {
-    fn read_completed_musubi_capture_page(
+impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
+    for ArchivedProviderIngestFinalizedLedgerV1
+{
+    fn capture_verifier_binding(
         &self,
-        at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
-        after_order_id: Option<[u8; 32]>,
-        limit: usize,
+    ) -> Result<
+        ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    > {
+        self.completed_musubi_capture_verifier_binding()
+    }
+
+    fn read_signed_completed_musubi_capture_page(
+        &self,
+        request: ProviderIngestCompletedMusubiCaptureRequestV1,
     ) -> ProviderIngestFutureV1<
         '_,
         Result<
-            ProviderIngestCompletedMusubiCaptureSourcePageV1,
+            ProviderIngestCompletedMusubiSignedCapturePageV1,
             ProviderIngestFinalizedLedgerErrorV1,
         >,
     > {
         let query = self.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                query.read_replay_safe_capture_source_page(
-                    at_finalized_cursor,
-                    after_order_id,
-                    limit,
-                )
+                query.read_and_sign_completed_musubi_capture_page(request)
             })
             .await
             .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
@@ -1342,6 +1543,7 @@ impl ProviderIngestCompletedMusubiCaptureLedgerV1 for ArchivedProviderIngestFina
 }
 
 fn map_archive_page(
+    expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
     page: &ProviderIngestFinalizedArchivePageV1,
     claim_factory: Option<&ProviderIngestFinalizedClaimFactoryV1>,
@@ -1385,7 +1587,7 @@ fn map_archive_page(
                 claim_factory
                     .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?
                     .seal_musubi_archive(
-                        &page.key.chain_id,
+                        &expected_network_id,
                         finalized_cursor,
                         *row.replication_order.order_id.as_bytes(),
                         &row.pin_manifest,
@@ -1404,7 +1606,7 @@ fn map_archive_page(
                     claim_factory
                         .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?
                         .seal_completed_musubi_archive(
-                            &page.key.chain_id,
+                            &expected_network_id,
                             finalized_cursor,
                             expected_provider_id,
                             &row.replication_order,
@@ -1449,6 +1651,7 @@ fn map_archive_page(
 }
 
 fn map_archive_capture_source_page(
+    expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
     page: &ProviderIngestFinalizedArchivePageV1,
 ) -> Result<ProviderIngestCompletedMusubiCaptureSourcePageV1, ProviderIngestFinalizedLedgerErrorV1>
@@ -1511,7 +1714,7 @@ fn map_archive_capture_source_page(
     }
     Ok(
         ProviderIngestCompletedMusubiCaptureSourcePageV1::from_projected_fields(
-            page.key.chain_id.clone(),
+            expected_network_id,
             *expected_provider_id.as_bytes(),
             finalized_cursor,
             page.key.finalized_at_unix_ms,
@@ -1534,9 +1737,10 @@ mod tests {
         },
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
+        block::{BlockHeader, SignedBlock},
         metadata::Metadata,
         musubi::{
             MusubiArchiveCommitmentV1, MusubiContentDigestV1,
@@ -1548,6 +1752,7 @@ mod tests {
             ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus,
         },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
@@ -1585,6 +1790,12 @@ mod tests {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         ))
+    }
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            [seed; 32],
+        )))
     }
 
     fn account(seed: u8) -> AccountId {
@@ -1732,7 +1943,7 @@ mod tests {
             chunk_count: 1,
         };
         let key = ProviderIngestFinalizedArchiveKeyV1::try_new(
-            ChainId::from("provider-ingest-raw-musubi-claim"),
+            test_network_id(0x79),
             7,
             [0x79; 32],
             7_000,
@@ -1801,7 +2012,6 @@ mod tests {
     fn enabled_retention_fails_before_open_without_injected_authority() {
         let daemon_root = physical_tempdir().expect("daemon root");
         let kura = Kura::blank_kura_for_testing();
-        let chain_id = ChainId::from("provider-ingest-retention-missing");
         let mut config = archive_config();
         config.retention_authority = Some(
             iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchiveRetentionAuthority {
@@ -1814,7 +2024,7 @@ mod tests {
         assert!(matches!(
             open_provider_ingest_finalized_archive(
                 &config,
-                &chain_id,
+                &test_network_id(0x41),
                 kura.as_ref(),
                 daemon_root.path(),
                 None,
@@ -1833,9 +2043,10 @@ mod tests {
         let state = empty_state(&chain_id, &kura);
         let replay_plan =
             iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
-        let prepared = prepare_provider_ingest_finalized_archive_v1(
+        let network_id = *state.network_id_ref();
+        let mut prepared = prepare_provider_ingest_finalized_archive_v1(
             &archive_config(),
-            &chain_id,
+            network_id,
             ProviderId::new([0x51; 32]),
             daemon_root.path(),
             &state,
@@ -1864,21 +2075,36 @@ mod tests {
         );
         assert!(
             !prepared
-                .capture_query()
+                .signed_capture_reader
+                .as_ref()
+                .expect("prepared signed capture reader")
                 .activation_ready()
                 .expect("bootstrap capture activation gate"),
             "capture readiness must not pretend genesis is already captured"
         );
 
         let runtime_query = prepared.runtime_query();
-        let capture_query = prepared.capture_query();
+        let capture_query = prepared
+            .signed_capture_reader
+            .as_ref()
+            .expect("prepared signed capture reader");
         assert!(!runtime_query.replay_safe_capture);
         assert!(capture_query.replay_safe_capture);
+        assert!(
+            capture_query
+                .capture_signer
+                .as_ref()
+                .expect("capture signer slot")
+                .lock()
+                .expect("capture signer slot lock")
+                .is_none(),
+            "ordinary archive preparation must not initialize an ephemeral signer"
+        );
         assert!(
             !Arc::ptr_eq(&runtime_query.active, &capture_query.active),
             "runtime and capture readers must own distinct continuation state"
         );
-        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(chain_id, 1, [0x52; 32], 1_000)
+        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, [0x52; 32], 1_000)
             .expect("test archive key");
         let runtime_scan = ActiveArchiveScanV1 {
             key: key.clone(),
@@ -1908,7 +2134,15 @@ mod tests {
                 .cursor
                 .after_order_id,
             ReplicationOrderId::new([0x54; 32]),
-            "the dedicated stateless capture reader must not mutate the runtime cursor"
+            "the dedicated replay-safe capture reader must not mutate the runtime cursor"
+        );
+        assert!(
+            prepared.take_signed_capture_reader().is_some(),
+            "the exact prepared reader must be movable once"
+        );
+        assert!(
+            prepared.take_signed_capture_reader().is_none(),
+            "the prepared reader must not expose a second raw tenure"
         );
     }
 
@@ -1970,8 +2204,9 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let chain_id = ChainId::from("provider-ingest-page-limit");
         let state = empty_state(&chain_id, &kura);
+        let network_id = *state.network_id_ref();
         let args = ArchivedProviderIngestFinalizedLedgerArgsV1 {
-            chain_id,
+            network_id,
             provider_id: ProviderId::new([0x51; 32]),
             archive,
             kura,
@@ -1998,7 +2233,7 @@ mod tests {
         assert_eq!(
             query.read_replay_safe_exact_capture_source_page(
                 &ProviderIngestFinalizedArchiveKeyV1::try_new(
-                    ChainId::from("provider-ingest-stateful-cross-mode"),
+                    test_network_id(0x58),
                     1,
                     [0x58; 32],
                     1_000,
@@ -2034,10 +2269,12 @@ mod tests {
             .expect("open capture replay archive"),
         );
         let chain_id = ChainId::from("provider-ingest-capture-replay");
+        let kura = Kura::blank_kura_for_testing();
+        let state = empty_state(&chain_id, &kura);
+        let network_id = *state.network_id_ref();
         let provider_id = ProviderId::new([0x56; 32]);
-        let key =
-            ProviderIngestFinalizedArchiveKeyV1::try_new(chain_id.clone(), 7, [0x57; 32], 7_000)
-                .expect("capture replay key");
+        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 7, [0x57; 32], 7_000)
+            .expect("capture replay key");
         archive
             .insert(ProviderIngestFinalizedProjectionV1 {
                 key: key.clone(),
@@ -2052,13 +2289,12 @@ mod tests {
                 }],
             })
             .expect("insert capture replay projection");
-        let kura = Kura::blank_kura_for_testing();
         let query = ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(
             ArchivedProviderIngestFinalizedLedgerArgsV1 {
-                chain_id: chain_id.clone(),
+                network_id,
                 provider_id,
                 archive,
-                state: empty_state(&chain_id, &kura),
+                state,
                 kura,
                 max_page_rows: 2,
                 max_kura_tip_lag_blocks: 0,
@@ -2094,6 +2330,192 @@ mod tests {
         );
     }
 
+    // Keep the stateful cache sequence together so every assertion observes
+    // the exact response retained by the immediately preceding generation.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn signed_capture_reader_caches_exact_generation_across_archive_advance() {
+        let daemon_root = physical_tempdir().expect("daemon root");
+        let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            2 * 1024 * 1024,
+            8,
+            16 * 1024 * 1024,
+            8,
+            8,
+            16,
+            2,
+        )
+        .expect("archive bounds");
+        let archive = Arc::new(
+            ProviderIngestFinalizedArchiveV1::try_open(
+                daemon_root.path().join("signed-capture-cache-archive"),
+                bounds,
+            )
+            .expect("open signed capture archive"),
+        );
+        let chain_id = ChainId::from("provider-ingest-signed-capture-cache");
+        let provider_id = ProviderId::new([0x66; 32]);
+        let genesis_signer = KeyPair::from_seed(vec![0x67; 32], Algorithm::Ed25519);
+        let genesis_transaction = TransactionBuilder::new_genesis(
+            AccountId::new(genesis_signer.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(genesis_signer.private_key());
+        let genesis = SignedBlock::genesis(
+            vec![genesis_transaction],
+            genesis_signer.private_key(),
+            None,
+            None,
+        );
+        let genesis_hash = *genesis.hash().as_ref();
+        let network_id = NetworkId::from_genesis_hash(genesis.hash());
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(Arc::new(genesis))
+            .expect("store signed-capture test genesis");
+        let first_key =
+            ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, genesis_hash, 1_000)
+                .expect("signed capture first key");
+        archive
+            .insert(ProviderIngestFinalizedProjectionV1 {
+                key: first_key.clone(),
+                providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: vec![
+                        replay_safe_archived_order(0x61, provider_id),
+                        replay_safe_archived_order(0x62, provider_id),
+                    ],
+                }],
+            })
+            .expect("insert signed capture projection");
+        let query = ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(
+            ArchivedProviderIngestFinalizedLedgerArgsV1 {
+                network_id,
+                provider_id,
+                archive: Arc::clone(&archive),
+                state: Arc::new(State::new_with_chain_and_network_id_for_testing(
+                    World::default(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                    chain_id.clone(),
+                    network_id,
+                )),
+                kura,
+                max_page_rows: 2,
+                max_kura_tip_lag_blocks: 0,
+                activation_gate: ArchiveActivationGateV1::StrictLive,
+            },
+        );
+        let first_source_page = query
+            .read_replay_safe_exact_capture_source_page(&first_key, Some([0x01; 32]), 1)
+            .expect("first deterministic signed source page");
+        let second_source_page = query
+            .read_replay_safe_exact_capture_source_page(&first_key, Some([0x61; 32]), 1)
+            .expect("second deterministic signed source page");
+        let binding = query
+            .completed_musubi_capture_verifier_binding()
+            .expect("lazy signed capture binding");
+        let request_one =
+            ProviderIngestCompletedMusubiCaptureRequestV1::try_from_untrusted_reader_parts(
+                binding.clone(),
+                Some(ProviderIngestFinalizedCursorV1 {
+                    height: 1,
+                    block_hash: genesis_hash,
+                }),
+                Some([0x01; 32]),
+                1,
+                1,
+            )
+            .expect("generation-one signed request");
+        let first = query
+            .read_and_sign_completed_musubi_capture_page_with(request_one.clone(), || {
+                Ok(first_source_page)
+            })
+            .expect("generation-one signed page");
+        let first_retry = query
+            .read_and_sign_completed_musubi_capture_page_with(request_one.clone(), || {
+                panic!("an exact generation-one retry must not reread its source")
+            })
+            .expect("exact generation-one retry");
+        assert_eq!(first_retry, first);
+        assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 1);
+
+        let different_same_generation =
+            ProviderIngestCompletedMusubiCaptureRequestV1::try_from_untrusted_reader_parts(
+                binding.clone(),
+                request_one.at_finalized_cursor(),
+                Some([0x02; 32]),
+                1,
+                1,
+            )
+            .expect("different generation-one request");
+        assert_eq!(
+            query.read_and_sign_completed_musubi_capture_page_with(
+                different_same_generation,
+                || panic!("a different same-generation request must fail before source read"),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        let skipped =
+            ProviderIngestCompletedMusubiCaptureRequestV1::try_from_untrusted_reader_parts(
+                binding.clone(),
+                request_one.at_finalized_cursor(),
+                Some([0x61; 32]),
+                1,
+                3,
+            )
+            .expect("skipped signed request");
+        assert_eq!(
+            query.read_and_sign_completed_musubi_capture_page_with(skipped, || {
+                panic!("a skipped generation must fail before source read")
+            }),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        let request_two =
+            ProviderIngestCompletedMusubiCaptureRequestV1::try_from_untrusted_reader_parts(
+                binding,
+                request_one.at_finalized_cursor(),
+                Some([0x61; 32]),
+                1,
+                2,
+            )
+            .expect("generation-two signed request");
+        let second = query
+            .read_and_sign_completed_musubi_capture_page_with(request_two.clone(), || {
+                Ok(second_source_page)
+            })
+            .expect("generation-two signed page");
+        assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 2);
+
+        archive
+            .insert(ProviderIngestFinalizedProjectionV1 {
+                key: ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 2, [0x68; 32], 2_000)
+                    .expect("advanced archive key"),
+                providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: vec![replay_safe_archived_order(0x63, provider_id)],
+                }],
+            })
+            .expect("advance immutable archive after signed response");
+        let second_retry = query
+            .read_and_sign_completed_musubi_capture_page_with(request_two, || {
+                panic!("a cached generation-two response must not read the advanced archive")
+            })
+            .expect("cached generation-two response after archive advance");
+        assert_eq!(second_retry, second);
+        assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            query.read_and_sign_completed_musubi_capture_page_with(request_one, || {
+                panic!("a lower generation must fail before source read")
+            }),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "a lower generation must not replay after the cache advances"
+        );
+    }
+
     #[test]
     fn retained_full_cursor_rejects_public_cursor_substitution() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2114,10 +2536,11 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let chain_id = ChainId::from("provider-ingest-cursor-binding");
         let state = empty_state(&chain_id, &kura);
+        let network_id = *state.network_id_ref();
         let provider_id = ProviderId::new([0x51; 32]);
         let query = ArchivedProviderIngestFinalizedLedgerV1::new(
             ArchivedProviderIngestFinalizedLedgerArgsV1 {
-                chain_id: chain_id.clone(),
+                network_id,
                 provider_id,
                 archive,
                 kura,
@@ -2128,7 +2551,7 @@ mod tests {
             },
         );
         let key = ProviderIngestFinalizedArchiveKeyV1::try_new(
-            chain_id,
+            network_id,
             7,
             [0x71; 32],
             1_800_000_000_000,
@@ -2180,7 +2603,7 @@ mod tests {
     fn raw_musubi_binding_requires_runtime_issued_claim_factory() {
         let mut page = archive_page_with_raw_musubi_binding();
         assert_eq!(
-            map_archive_page(page.provider_id, &page, None),
+            map_archive_page(test_network_id(0x91), page.provider_id, &page, None),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "publisher-shaped binding data cannot become a finalized claim"
         );
@@ -2190,14 +2613,14 @@ mod tests {
             .provider_completions
             .push(completion_record(page.provider_id, account(8)));
         assert_eq!(
-            map_archive_page(page.provider_id, &page, None),
+            map_archive_page(test_network_id(0x91), page.provider_id, &page, None),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "a finalized completion plus publisher-shaped binding still cannot forge either opaque claim"
         );
 
         page.rows[0].musubi_archive = None;
         page.rows[0].replication_order.musubi_archive = None;
-        let generic = map_archive_page(page.provider_id, &page, None)
+        let generic = map_archive_page(test_network_id(0x91), page.provider_id, &page, None)
             .expect("generic replication orders need no Musubi claim capability");
         assert!(generic.rows[0].musubi_archive.is_none());
         assert!(generic.rows[0].completed_musubi_archive.is_none());

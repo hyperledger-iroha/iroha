@@ -43,7 +43,6 @@ _AUTH_KEY_BYTES_V1 = 32
 _AUTH_TAG_BYTES_V1 = 32
 _HANDLE_BYTES_V1 = 32
 _DIGEST_BYTES_V1 = 32
-_MAX_CHAIN_ID_BYTES_V1 = 512
 _MAX_SIGNER_BYTES_V1 = 512
 _MAX_PROTOCOL_BYTES_V1 = 96
 _MAX_PATH_BYTES_V1 = 4_096
@@ -131,8 +130,7 @@ class PrivacyWalletWorkerRemoteErrorV1(PrivacyWalletWorkerErrorV1):
 class PrivacyWalletWitnessBindingV1:
     """Public release, roster, network, intent, and replay binding."""
 
-    chain_id: str
-    genesis_digest: bytes
+    network_id: bytes
     signer_wallet_id: str
     protocol_id: str
     compiled_profile_digest: bytes
@@ -141,19 +139,20 @@ class PrivacyWalletWitnessBindingV1:
     signed_release_authority_digest: bytes
 
     def __post_init__(self) -> None:
-        _require_text(self.chain_id, _MAX_CHAIN_ID_BYTES_V1, "chain_id")
         _require_text(self.signer_wallet_id, _MAX_SIGNER_BYTES_V1, "signer_wallet_id")
         _require_text(self.protocol_id, _MAX_PROTOCOL_BYTES_V1, "protocol_id")
         if self.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1:
             raise ValueError("protocol_id is not in the closed generic-11 worker registry")
         for field_name in (
-            "genesis_digest",
+            "network_id",
             "compiled_profile_digest",
             "public_intent_digest",
             "nonce",
             "signed_release_authority_digest",
         ):
             _require_nonzero_bytes(getattr(self, field_name), _DIGEST_BYTES_V1, field_name)
+        if self.network_id[-1] & 1 != 1:
+            raise ValueError("network_id must carry the canonical Iroha hash marker bit")
 
 
 @dataclass(frozen=True)
@@ -189,7 +188,7 @@ class PrivacyWalletSignedActionV1:
 
     protocol_id: str
     operation_schema: str
-    chain_id: str
+    network_id: bytes
     authority: str
     authority_public_key: str
     adaptive_signed_transaction: bytes
@@ -549,7 +548,7 @@ class PrivacyWalletWorkerControllerV1:
                 raise PrivacyWalletWorkerErrorV1("signed action has the wrong result tag")
             protocol_id = cursor.text(_MAX_PROTOCOL_BYTES_V1, "protocol_id")
             operation_schema = cursor.text(_MAX_OPERATION_SCHEMA_BYTES_V1, "operation_schema")
-            chain_id = cursor.text(_MAX_CHAIN_ID_BYTES_V1, "chain_id")
+            network_id = cursor.take(_DIGEST_BYTES_V1)
             authority = cursor.text(_MAX_SIGNER_BYTES_V1, "authority")
             authority_public_key = cursor.text(_MAX_PUBLIC_KEY_BYTES_V1, "authority public key")
             adaptive = cursor.bytes_u32(
@@ -567,7 +566,7 @@ class PrivacyWalletWorkerControllerV1:
             if (
                 protocol_id != binding.protocol_id
                 or operation_schema != expected_schema
-                or chain_id != binding.chain_id
+                or network_id != binding.network_id
             ):
                 raise PrivacyWalletWorkerErrorV1(
                     "signed action identity does not match the request binding"
@@ -585,7 +584,7 @@ class PrivacyWalletWorkerControllerV1:
             return PrivacyWalletSignedActionV1(
                 protocol_id=protocol_id,
                 operation_schema=operation_schema,
-                chain_id=chain_id,
+                network_id=network_id,
                 authority=authority,
                 authority_public_key=authority_public_key,
                 adaptive_signed_transaction=adaptive,
@@ -742,8 +741,7 @@ def _put_text(value: str) -> bytes:
 def _encode_binding(binding: PrivacyWalletWitnessBindingV1) -> bytes:
     return b"".join(
         (
-            _put_text(binding.chain_id),
-            binding.genesis_digest,
+            binding.network_id,
             _put_text(binding.signer_wallet_id),
             _put_text(binding.protocol_id),
             binding.compiled_profile_digest,

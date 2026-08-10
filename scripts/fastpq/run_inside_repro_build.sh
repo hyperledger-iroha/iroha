@@ -14,7 +14,7 @@ source_epoch="$(git log -1 --format=%ct 2>/dev/null || date +%s)"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-${source_epoch}}"
 
 profile="${FASTPQ_PROFILE:-release}"
-bins_csv="${FASTPQ_BINS:-irohad}"
+bins_csv="${FASTPQ_BINS:-iroha3d}"
 features="${FASTPQ_FEATURES:-}"
 output_dir="${FASTPQ_OUTPUT_DIR:-artifacts/fastpq-repro}"
 

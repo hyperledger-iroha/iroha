@@ -28,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 
 pub use self::model::*;
 use crate::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
@@ -603,8 +603,8 @@ pub enum KagemushaValidationError {
     },
     /// Recursive inputs disagree on the asset definition.
     RecursiveSpendAssetMismatch,
-    /// Recursive inputs disagree on the chain.
-    RecursiveSpendChainMismatch,
+    /// Recursive inputs disagree on the exact network.
+    RecursiveSpendNetworkMismatch,
     /// A transition did not consume its parent nullifier.
     RecursiveSpendMissingPreviousNullifier,
     /// The authenticated paired-proof Pasta backend is not linked.
@@ -628,8 +628,8 @@ impl core::fmt::Display for KagemushaValidationError {
             Self::RecursiveSpendAssetMismatch => {
                 f.write_str("Kagemusha recursive inputs use different assets")
             }
-            Self::RecursiveSpendChainMismatch => {
-                f.write_str("Kagemusha recursive inputs use different chains")
+            Self::RecursiveSpendNetworkMismatch => {
+                f.write_str("Kagemusha recursive inputs use different exact networks")
             }
             Self::RecursiveSpendMissingPreviousNullifier => {
                 f.write_str("Kagemusha transition does not consume its parent nullifier")
@@ -794,14 +794,21 @@ fn validate_kagemusha_root(
 /// Derive the deterministic Kagemusha escrow account for an asset definition.
 #[must_use]
 pub fn offline_escrow_account_id(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     definition_id: &AssetDefinitionId,
 ) -> AccountId {
     let definition_id = definition_id.to_string();
     AccountId::new(derive_non_signing_ed25519_public_key(
         OFFLINE_ESCROW_ACCOUNT_DOMAIN.as_bytes(),
-        &[chain_id.as_str().as_bytes(), definition_id.as_bytes()],
+        &[network_id.as_bytes(), definition_id.as_bytes()],
     ))
+}
+
+#[cfg(test)]
+fn kagemusha_test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
+    )
 }
 
 #[cfg(test)]
@@ -809,21 +816,29 @@ mod offline_escrow_account_tests {
     use super::*;
     use crate::domain::DomainId;
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new([
+                seed,
+            ])),
+        )
+    }
+
     #[test]
     fn derivation_is_stable_without_a_public_signing_seed() {
-        let chain_id = ChainId::from("offline-custody-chain");
+        let network_id = network_id(1);
         let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
-        let custody = offline_escrow_account_id(&chain_id, &definition_id);
+        let custody = offline_escrow_account_id(&network_id, &definition_id);
         assert_eq!(
             custody,
-            offline_escrow_account_id(&chain_id, &definition_id)
+            offline_escrow_account_id(&network_id, &definition_id)
         );
 
         let legacy_seed_material =
-            format!("iroha.offline.escrow|{}|{definition_id}", chain_id.as_str());
+            format!("iroha.offline.escrow|offline-custody-chain|{definition_id}");
         let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
         let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
             .expect("legacy public seed derives");
@@ -831,6 +846,12 @@ mod offline_escrow_account_tests {
             custody,
             AccountId::new(legacy_keypair.public_key().clone()),
             "offline custody must not expose a signing key through public seed derivation"
+        );
+
+        assert_ne!(
+            custody,
+            offline_escrow_account_id(&network_id(2), &definition_id),
+            "different genesis hashes must derive different escrow accounts"
         );
     }
 }
@@ -884,15 +905,15 @@ mod model {
         pub scale: u32,
     }
 
-    /// Scale-, chain-, and asset-bound spendable note descriptor.
+    /// Scale-, network-, and asset-bound spendable note descriptor.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaSpendableNoteDescriptorV2 {
-        /// Chain that scopes the commitment and nullifier.
-        pub chain_id: ChainId,
+        /// Exact network that scopes the commitment and nullifier.
+        pub network_id: NetworkId,
         /// Asset committed by the confidential note.
         pub asset: AssetDefinitionId,
         /// Current note commitment.
@@ -999,8 +1020,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecipientOutputDerivationRequestV2 {
-        /// Chain that scopes the output commitment and nullifier.
-        pub chain_id: ChainId,
+        /// Exact network that scopes the output commitment and nullifier.
+        pub network_id: NetworkId,
         /// Asset definition committed by the receiver output.
         pub asset: AssetDefinitionId,
         /// Exact requested amount at the authoritative asset scale.
@@ -1035,8 +1056,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecipientPaymentRequestSigningPayloadV2 {
-        /// Chain that scopes the note and its nullifier.
-        pub chain_id: ChainId,
+        /// Exact network that scopes the note and its nullifier.
+        pub network_id: NetworkId,
         /// Asset definition requested by the receiver.
         pub asset: AssetDefinitionId,
         /// Exact requested amount at the authoritative asset scale.
@@ -1077,8 +1098,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecipientPaymentRequestV2 {
-        /// Chain that scopes the note and its nullifier.
-        pub chain_id: ChainId,
+        /// Exact network that scopes the note and its nullifier.
+        pub network_id: NetworkId,
         /// Asset definition requested by the receiver.
         pub asset: AssetDefinitionId,
         /// Exact requested amount at the authoritative asset scale.
@@ -1240,7 +1261,7 @@ mod model {
     /// context with the manifest-authenticated roster window, then require its
     /// computed identifier to equal `context_id`. This avoids duplicating the
     /// current roster in every proof without making the context identifier an
-    /// opaque, attacker-selected cross-chain binding.
+    /// opaque, attacker-selected cross-network binding.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1355,8 +1376,6 @@ mod model {
     pub struct KagemushaTopUpFinalityRosterArtifactV2 {
         /// Artifact layout version.
         pub version: u16,
-        /// Chain that scopes the Kagemusha cash state authenticated by this artifact.
-        pub chain_id: ChainId,
         /// Exact genesis-derived network whose consensus votes are trusted.
         pub network_id: NetworkId,
         /// Human-readable roster generation selected by the manifest descriptor.
@@ -1434,9 +1453,9 @@ mod model {
         /// Canonical asset tag.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub asset_tag: [u8; 32],
-        /// Canonical chain tag.
+        /// Canonical network tag.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub chain_tag: [u8; 32],
+        pub network_tag: [u8; 32],
     }
 
     /// Curve role of one proof in the current two-proof Pasta recursion pair.
@@ -1780,8 +1799,8 @@ mod model {
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
-        /// Chain for which the release was built.
-        pub chain_id: ChainId,
+        /// Exact network for which the release was built.
+        pub network_id: NetworkId,
         /// Asset definition for which the release was built.
         pub asset: AssetDefinitionId,
         /// Authoritative fixed asset scale.
@@ -1906,8 +1925,8 @@ mod model {
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
-        /// Chain for which the reviewed candidate was built.
-        pub chain_id: ChainId,
+        /// Exact network for which the reviewed candidate was built.
+        pub network_id: NetworkId,
         /// Asset definition for which the reviewed candidate was built.
         pub asset: AssetDefinitionId,
         /// Native bridge ABI required by the reviewed candidate.
@@ -2525,8 +2544,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendPublicStatementV4 {
-        /// Chain that scopes this cash state.
-        pub chain_id: ChainId,
+        /// Exact network that scopes this cash state.
+        pub network_id: NetworkId,
         /// Asset committed by every note in the transition.
         pub asset: AssetDefinitionId,
         /// Authoritative asset scale.
@@ -2594,8 +2613,8 @@ mod model {
     pub struct KagemushaRecursiveSpendTopUpAnchorV4 {
         /// Anchor schema version.
         pub version: u16,
-        /// Chain that finalized the top-up.
-        pub chain_id: ChainId,
+        /// Exact network that finalized the top-up.
+        pub network_id: NetworkId,
         /// Payer whose online balance funded the anchor.
         pub payer: AccountId,
         /// Exact payer asset, including its balance scope.
@@ -2694,8 +2713,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendSplitIntentV4 {
-        /// Chain inherited from the parent state and receiver request.
-        pub chain_id: ChainId,
+        /// Exact network inherited from the parent state and receiver request.
+        pub network_id: NetworkId,
         /// Asset inherited from the parent state and receiver request.
         pub asset: AssetDefinitionId,
         /// One or two canonical previous branches.
@@ -2727,8 +2746,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendRedemptionIntentV4 {
-        /// Chain inherited from the input bundle.
-        pub chain_id: ChainId,
+        /// Exact network inherited from the input bundle.
+        pub network_id: NetworkId,
         /// Asset inherited from the input bundle.
         pub asset: AssetDefinitionId,
         /// Exact note consumed by unshield-v3.
@@ -3833,6 +3852,11 @@ impl KagemushaSpendableNoteDescriptorV2 {
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
+        if !is_kagemusha_network_id(&self.network_id) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "network_id",
+            });
+        }
         if self.note_commitment == [0; 32] {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "note_commitment",
@@ -4227,6 +4251,11 @@ impl KagemushaRecipientOutputDerivationRequestV2 {
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
+        if !is_kagemusha_network_id(&self.network_id) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "recipient_output_derivation.network_id",
+            });
+        }
         if self.request_id == [0; 32] {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "recipient_output_derivation.request_id",
@@ -4252,8 +4281,8 @@ impl KagemushaRecipientOutputDerivationResultV2 {
     ) -> Result<(), KagemushaValidationError> {
         request.validate()?;
         self.recipient_output.validate_public_binding()?;
-        if self.recipient_output.chain_id != request.chain_id {
-            return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+        if self.recipient_output.network_id != request.network_id {
+            return Err(KagemushaValidationError::RecursiveSpendNetworkMismatch);
         }
         if self.recipient_output.asset != request.asset {
             return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
@@ -4284,8 +4313,8 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
         self.receiver_public_key.validate()?;
         self.amount.validate()?;
         self.recipient_output.validate_public_binding()?;
-        if self.recipient_output.chain_id != self.chain_id {
-            return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+        if self.recipient_output.network_id != self.network_id {
+            return Err(KagemushaValidationError::RecursiveSpendNetworkMismatch);
         }
         if self.recipient_output.asset != self.asset {
             return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
@@ -4352,10 +4381,10 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
 }
 
 impl KagemushaRecipientPaymentRequestV2 {
-    /// Chain namespace for the requested offline note.
+    /// Exact network for the requested offline note.
     #[must_use]
-    pub fn chain_id(&self) -> &ChainId {
-        &self.chain_id
+    pub fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Account that must own the admitted receiver registration.
@@ -4410,7 +4439,7 @@ impl KagemushaRecipientPaymentRequestV2 {
         signature: KagemushaDeviceSignatureV2,
     ) -> Result<Self, KagemushaValidationError> {
         let request = Self {
-            chain_id: payload.chain_id,
+            network_id: payload.network_id,
             asset: payload.asset,
             amount: payload.amount,
             recipient: payload.recipient,
@@ -4432,7 +4461,7 @@ impl KagemushaRecipientPaymentRequestV2 {
     #[must_use]
     pub fn signing_payload(&self) -> KagemushaRecipientPaymentRequestSigningPayloadV2 {
         KagemushaRecipientPaymentRequestSigningPayloadV2 {
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             asset: self.asset.clone(),
             amount: self.amount,
             recipient: self.recipient.clone(),
@@ -5695,7 +5724,7 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.source_tree_sha256 == [0; 32]
             || self.source_repo_dirty
             || !reviewed_source_closure_valid
-            || !is_kagemusha_chain_id(&self.chain_id)
+            || !is_kagemusha_network_id(&self.network_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
             || self.withdrawal_height <= self.activation_height
@@ -5967,7 +5996,7 @@ impl KagemushaRecursiveSpendCandidateV4 {
             reviewed_source_closure_descriptor_sha256: self
                 .manifest
                 .reviewed_source_closure_descriptor_sha256,
-            chain_id: self.manifest.chain_id.clone(),
+            network_id: self.manifest.network_id,
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
         })
@@ -6762,7 +6791,7 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                 != release.manifest().reviewed_source_closure
             || candidate.manifest.reviewed_source_closure_descriptor_sha256
                 != release.manifest().reviewed_source_closure_descriptor_sha256
-            || candidate.manifest.chain_id != release.manifest().chain_id
+            || candidate.manifest.network_id != release.manifest().network_id
             || candidate.manifest.asset != release.manifest().asset
             || candidate.manifest.asset_scale != release.manifest().asset_scale
             || candidate.manifest.activation_height != release.manifest().activation_height
@@ -7146,7 +7175,7 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
         Ok(())
     }
 
-    /// Validate the envelope in an exact chain, asset, scale, and height context.
+    /// Validate the envelope in an exact network, asset, scale, and height context.
     ///
     /// # Errors
     ///
@@ -7154,13 +7183,13 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
     pub fn validate_against_manifest_for_context(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         expected_asset: &AssetDefinitionId,
         expected_asset_scale: u32,
         block_height: u64,
     ) -> Result<(), KagemushaValidationError> {
         self.validate_against_manifest(manifest)?;
-        if &manifest.chain_id != expected_chain_id
+        if &manifest.network_id != expected_network_id
             || &manifest.asset != expected_asset
             || manifest.asset_scale != expected_asset_scale
             || block_height < manifest.activation_height
@@ -7227,12 +7256,8 @@ fn is_kagemusha_source_commit(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn is_kagemusha_chain_id(value: &ChainId) -> bool {
-    let value = value.as_str();
-    !value.is_empty()
-        && value.len() <= 128
-        && value.trim() == value
-        && !value.chars().any(char::is_control)
+fn is_kagemusha_network_id(value: &NetworkId) -> bool {
+    value.as_bytes() != Hash::prehashed([0; Hash::LENGTH]).as_ref()
 }
 
 impl KagemushaTopUpShieldEvidenceV2 {
@@ -7266,7 +7291,7 @@ impl KagemushaTopUpShieldEvidenceV2 {
 }
 
 impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
-    /// Validate a non-zero chain-resolvable identity pair.
+    /// Validate a non-zero network-resolvable identity pair.
     ///
     /// # Errors
     ///
@@ -7300,7 +7325,8 @@ impl KagemushaTopUpFinalityHeightContextV2 {
         let parent_signers_too_large = self.parent_commit_qc.as_ref().is_some_and(|parent| {
             parent.signers.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
         });
-        if self.protocol_version != PROTOCOL_VERSION
+        if !is_kagemusha_network_id(&self.network_id)
+            || self.protocol_version != PROTOCOL_VERSION
             || self.height == 0
             || self.epoch_end_height < self.height
             || next_roster_too_large
@@ -7549,7 +7575,7 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
 }
 
 impl KagemushaTopUpFinalityRosterArtifactV2 {
-    /// Validate chain-scoped, strictly ordered, non-overlapping trust windows
+    /// Validate network-scoped, strictly ordered, non-overlapping trust windows
     /// without performing BLS proof-of-possession pairings.
     ///
     /// # Errors
@@ -7557,7 +7583,7 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2
-            || !is_kagemusha_chain_id(&self.chain_id)
+            || !is_kagemusha_network_id(&self.network_id)
             || !is_kagemusha_portable_identifier(&self.artifact_generation)
             || self.windows.is_empty()
             || self.windows.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2
@@ -7863,7 +7889,7 @@ mod kagemusha_v4_artifact_contract_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
-            chain_id: ChainId::from("v4-artifact-test-chain"),
+            network_id: kagemusha_test_network_id("v4-artifact-test-network"),
             asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
                 "rose".parse().expect("test asset name"),
@@ -8153,7 +8179,8 @@ mod kagemusha_v4_artifact_contract_tests {
         );
 
         let mut other_candidate = candidate.clone();
-        other_candidate.manifest.chain_id = ChainId::from("other-v4-artifact-test-chain");
+        other_candidate.manifest.network_id =
+            kagemusha_test_network_id("other-v4-artifact-test-network");
         other_candidate
             .validate()
             .expect("independently valid substituted candidate");
@@ -8352,7 +8379,7 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     fn retired_top_up_fixture() -> RetiredTopUpUnsignedFixture {
-        let chain_id = ChainId::from("v4-wire-test-chain");
+        let network_id = kagemusha_test_network_id("v4-wire-test-network");
         let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "rose".parse().expect("test asset name"),
@@ -8367,7 +8394,7 @@ mod kagemusha_v4_artifact_contract_tests {
             scale: 2,
         };
         let current_note = KagemushaSpendableNoteDescriptorV2 {
-            chain_id,
+            network_id,
             asset: definition.clone(),
             note_commitment: digest(b"v4 wire note"),
             spend_nullifier: digest(b"v4 wire nullifier"),
@@ -8394,6 +8421,25 @@ mod kagemusha_v4_artifact_contract_tests {
             },
             operation_id: digest(b"v4 wire operation"),
         }
+    }
+
+    #[test]
+    fn offline_note_inputs_reject_zero_network_identity() {
+        let mut note = retired_top_up_fixture().current_note;
+        note.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::prehashed([0; Hash::LENGTH])
+        ));
+        assert!(note.validate_public_binding().is_err());
+
+        let request = KagemushaRecipientOutputDerivationRequestV2 {
+            network_id: note.network_id,
+            asset: note.asset,
+            amount: note.amount,
+            request_id: digest(b"zero-network recipient output request"),
+        };
+        assert!(request.validate().is_err());
     }
 
     #[test]
@@ -9599,7 +9645,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4: u16 = 4;
 struct KagemushaTopUpAnchorDigestPreimageV4 {
     domain: String,
     version: u16,
-    chain_id: ChainId,
+    network_id: NetworkId,
     payer: AccountId,
     asset: AssetId,
     asset_scale: u32,
@@ -9667,7 +9713,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         kagemusha_poseidon_preimage(&KagemushaTopUpAnchorDigestPreimageV4 {
             domain: KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4.to_owned(),
             version: self.version,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             payer: self.payer.clone(),
             asset: self.asset.clone(),
             asset_scale: self.asset_scale,
@@ -9698,7 +9744,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
             || self.asset_scale != self.amount.scale
             || self.current_note.amount != self.amount
             || self.asset.account() != &self.payer
-            || self.current_note.chain_id != self.chain_id
+            || self.current_note.network_id != self.network_id
             || self.current_note.asset != *self.asset.definition()
             || self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
@@ -9904,7 +9950,7 @@ impl KagemushaRecursiveSpendInitRequestV4 {
             || self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
             || self.topup_finality_proof.commit_qc.height_context.height
                 != self.topup_anchor.finalized_height
-            || self.topup_finality_roster_artifact.chain_id != self.topup_anchor.chain_id
+            || self.topup_finality_roster_artifact.network_id != self.topup_anchor.network_id
             || self.topup_finality_roster_artifact.network_id
                 != self
                     .topup_finality_proof
@@ -9943,7 +9989,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             || self.asset_scale != self.transfer_amount.scale
             || self.recipient_request_digest == [0; 32]
             || self.operation_id == [0; 32]
-            || self.recipient_output.chain_id != self.chain_id
+            || self.recipient_output.network_id != self.network_id
             || self.recipient_output.asset != self.asset
             || self.recipient_output.amount != self.transfer_amount
         {
@@ -9958,7 +10004,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             validate_kagemusha_recursive_spend_branch_claims_v2(&input.branch_claims)?;
             if input.bundle_digest == [0; 32]
                 || previous_digest.is_some_and(|previous| previous >= input.bundle_digest)
-                || input.input_note.chain_id != self.chain_id
+                || input.input_note.network_id != self.network_id
                 || input.input_note.asset != self.asset
                 || input.input_note.amount.scale != self.asset_scale
                 || input.input_root == [0; 32]
@@ -9997,7 +10043,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             .as_ref()
             .map_or(Some(self.transfer_amount.atomic_units), |change| {
                 change.validate_public_binding().ok()?;
-                if change.chain_id != self.chain_id
+                if change.network_id != self.network_id
                     || change.asset != self.asset
                     || change.amount.scale != self.asset_scale
                 {
@@ -10109,8 +10155,8 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
         self.input_note.validate_public_binding()?;
         validate_kagemusha_recursive_spend_branch_claims_v2(&self.parent_branch_claims)?;
         self.public_amount.validate()?;
-        if self.input_note.chain_id != self.chain_id {
-            return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+        if self.input_note.network_id != self.network_id {
+            return Err(KagemushaValidationError::RecursiveSpendNetworkMismatch);
         }
         if self.input_note.asset != self.asset {
             return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
@@ -10149,7 +10195,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
             || self.unshield_public_inputs.public_amount
                 != kagemusha_confidential_amount_encoding_v2(self.public_amount.atomic_units)
             || self.unshield_public_inputs.asset_tag == zero
-            || self.unshield_public_inputs.chain_tag == zero
+            || self.unshield_public_inputs.network_tag == zero
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "redemption.v4.unshield_public_inputs",
@@ -10163,8 +10209,8 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
             (Some(change), Some(binding)) if self.public_amount.atomic_units < input_amount => {
                 change.validate_public_binding()?;
                 binding.validate()?;
-                if change.chain_id != self.chain_id {
-                    return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+                if change.network_id != self.network_id {
+                    return Err(KagemushaValidationError::RecursiveSpendNetworkMismatch);
                 }
                 if change.asset != self.asset {
                     return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
@@ -10261,7 +10307,7 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
             .collect::<Vec<_>>();
         claim_roots.sort_unstable();
         claim_roots.dedup();
-        if self.current_note.chain_id != self.chain_id
+        if self.current_note.network_id != self.network_id
             || self.current_note.asset != self.asset
             || self.current_note.amount.scale != self.asset_scale
             || self.next_zero_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
@@ -10784,7 +10830,7 @@ impl KagemushaRecursiveSpendInitResultV4 {
         if self.public_statement_digest == [0; 32]
             || self.public_statement_digest != self.bundle.statement.digest()?
             || self.public_statement_digest != self.bundle.recursive_proof.public_statement_digest
-            || self.bundle.statement.chain_id != anchor.chain_id
+            || self.bundle.statement.network_id != anchor.network_id
             || self.bundle.statement.asset != anchor.asset.definition().clone()
             || self.bundle.statement.asset_scale != anchor.asset_scale
             || self.bundle.statement.final_root != anchor.finalized_root
@@ -10864,7 +10910,7 @@ impl KagemushaRecursiveSpendAppendRequestV4 {
                 || statement.final_root != expected.input_root
                 || statement.proof_step_count != expected.proof_step_count
                 || statement.peer_hop_count != expected.peer_hop_count
-                || statement.chain_id != self.split.chain_id
+                || statement.network_id != self.split.network_id
                 || statement.asset != self.split.asset
                 || statement.asset_scale != self.split.asset_scale
                 || statement.next_zero_leaf_index != expected_next_zero_leaf_index
@@ -10936,7 +10982,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             },
         );
         let statement = &bundle.statement;
-        if statement.chain_id != self.chain_id
+        if statement.network_id != self.network_id
             || statement.asset != self.asset
             || statement.asset_scale != self.asset_scale
             || statement.current_note != *expected_note
@@ -11190,7 +11236,7 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
             || roster_len > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2
             || provenance_len == 0
             || provenance_len > KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4
-            || self.topup_finality_roster_artifact.chain_id != statement.chain_id
+            || self.topup_finality_roster_artifact.network_id != statement.network_id
             || self.topup_finality_roster_artifact.artifact_generation
                 != statement.artifact_binding.generation
         {
@@ -11210,7 +11256,7 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
             let window = self
                 .topup_finality_roster_artifact
                 .window_at(anchor.finalized_height)?;
-            if anchor.chain_id != statement.chain_id
+            if anchor.network_id != statement.network_id
                 || anchor.asset.definition() != &statement.asset
                 || anchor.asset_scale != statement.asset_scale
                 || anchor.artifact_binding != statement.artifact_binding

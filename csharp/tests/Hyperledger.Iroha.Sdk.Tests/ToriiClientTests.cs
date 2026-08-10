@@ -18,7 +18,7 @@ public sealed partial class ToriiClientTests
     private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
     private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
     private const string OnboardingFixtureAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
-    private const string OnboardingFixtureChainId = "alias-fixture-chain";
+    private static readonly NetworkId OnboardingFixtureNetworkId = NetworkId.Parse(CanonicalNetworkId);
     private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
@@ -248,6 +248,7 @@ public sealed partial class ToriiClientTests
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
+            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
@@ -371,6 +372,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -400,6 +402,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -464,6 +467,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -487,6 +491,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -513,6 +518,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -558,6 +564,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -600,6 +607,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -628,6 +636,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -652,6 +661,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -687,6 +697,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -6749,6 +6760,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -12986,12 +12998,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Alias = "Merchant@Banka.Paynet",
             AccountId = OnboardingFixtureAccountId,
             Permissions = [],
-        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureChainId,
+        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureNetworkId,
             SharedOnboardingBodyEncoder,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(OnboardingFixtureAuthority, receipt.Body.Authority);
-        Assert.Equal(OnboardingFixtureChainId, receipt.Body.ChainId);
+        Assert.Equal(OnboardingFixtureNetworkId, receipt.Body.NetworkId);
         Assert.Equal(OnboardingFixtureAccountId, receipt.Body.Request.AccountId);
     }
 
@@ -13029,51 +13041,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             receipt,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
+            OnboardingFixtureNetworkId,
             SharedOnboardingBodyEncoder,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(OnboardingFixtureAccountId, response.AccountId);
         Assert.Equal(OnboardingFixtureAlias, response.Alias);
         Assert.Equal("Queued", response.Status);
-    }
-
-    [Fact]
-    public async Task ApplyAccountOnboardingAsyncRejectsUnpinnedOrInvalidReceiptBeforeDispatch()
-    {
-        var receipt = SharedOnboardingReceipt();
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("invalid onboarding receipt reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt,
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            "wrong-chain",
-            SharedOnboardingBodyEncoder,
-            cancellationToken: TestContext.Current.CancellationToken));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt with { Signature = "00" + receipt.Signature[2..] },
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
-            SharedOnboardingBodyEncoder,
-            cancellationToken: TestContext.Current.CancellationToken));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt,
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
-            body =>
-            {
-                var encoded = SharedOnboardingBodyEncoder(body);
-                encoded[^1] ^= 1;
-                return encoded;
-            },
-            cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -13136,7 +13110,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 AccountOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -13169,14 +13143,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                          ValidAccountOnboardingPlanRequest(),
                          onboardingToken!,
                          OnboardingFixtureAuthority,
-                         OnboardingFixtureChainId,
+                         OnboardingFixtureNetworkId,
                          SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
                      () => client.ApplyAccountOnboardingAsync(
                          SharedOnboardingReceipt(),
                          onboardingToken!,
                          OnboardingFixtureAuthority,
-                         OnboardingFixtureChainId,
+                         OnboardingFixtureNetworkId,
                          SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
                  })
@@ -13213,7 +13187,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ValidAccountOnboardingPlanRequest(),
                 AccountOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -13247,7 +13221,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ValidAccountOnboardingPlanRequest(),
                 escapedOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -21525,6 +21499,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

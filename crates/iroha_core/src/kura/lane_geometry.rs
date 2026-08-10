@@ -41,7 +41,8 @@ use super::{
     AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
     AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
     AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
-    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
+    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1,
+    AutonomousLaneBlockViewStateReadMode, AutonomousLaneMergeBundleV1,
     AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
     AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
     AutonomousLifecycleCursorV2, AutonomousLifecycleTerminalOutcomeSourceV1,
@@ -5937,11 +5938,11 @@ impl Kura {
 
         for (identity, input) in &inputs {
             let autonomous_binding = (
-                input.autonomous_chain_id_hash,
+                input.autonomous_network_id,
                 input.autonomous_epoch,
                 input.autonomous_payload_hash,
             );
-            let (Some(chain_id_hash), Some(epoch), Some(payload_hash)) = autonomous_binding else {
+            let (Some(network_id), Some(epoch), Some(payload_hash)) = autonomous_binding else {
                 if autonomous_binding != (None, None, None) {
                     return Err(self.geometry_error(
                         ErrorKind::InvalidData,
@@ -5977,7 +5978,7 @@ impl Kura {
                 (bundle.executable_payload(), &bundle.certified.proposal)
             };
             if input.proposal != *current
-                || payload.chain_id_hash != chain_id_hash
+                || payload.network_id != network_id
                 || payload.epoch != epoch
                 || payload.payload_hash != payload_hash
                 || input.entrypoint_hashes != payload.entrypoint_hashes
@@ -6009,7 +6010,7 @@ impl Kura {
             let payload = bundle.executable_payload();
             let expected_input = Self::autonomous_lane_block_execution_input_candidate(
                 payload,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
             )
             .map_err(|availability| {
@@ -6073,7 +6074,7 @@ impl Kura {
             })?;
             let expected_input = Self::autonomous_lane_block_execution_input_candidate(
                 &record.payload,
-                record.payload.chain_id_hash,
+                record.payload.network_id,
                 record.payload.epoch,
             )
             .map_err(|availability| {
@@ -6408,7 +6409,7 @@ impl Kura {
             RecoveredLaneBlockPayload {
                 proposal: receipt.proposal.clone(),
                 artifact: receipt.artifact.clone(),
-                autonomous_chain_id_hash: None,
+                autonomous_network_id: None,
                 autonomous_epoch: None,
                 autonomous_payload_hash: None,
                 entrypoints,
@@ -6448,7 +6449,7 @@ impl Kura {
             return false;
         };
         execution.origin_proposal == payload.origin_proposal
-            && execution.autonomous_chain_id_hash == payload.chain_id_hash
+            && execution.autonomous_network_id == payload.network_id
             && execution.autonomous_epoch == payload.epoch
             && execution.autonomous_payload_hash == payload.payload_hash
             && execution.entrypoint_hashes == payload.entrypoint_hashes
@@ -6548,13 +6549,13 @@ impl Kura {
                         "lane retirement native AMX transaction uses the genesis-only domain",
                     )
                 })?;
-                let chain_id_hash = Hash::prehashed(*network_id.as_bytes());
+                let network_id = *network_id;
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     context.native_amx_receipt.as_ref(),
                     &plan,
                     source_id.as_ref(),
                     expected_hash,
-                    chain_id_hash,
+                    network_id,
                     proposal,
                 ) {
                     return Err(self.geometry_error(
@@ -9352,7 +9353,7 @@ impl Kura {
                 let payload = bundle.executable_payload();
                 let expected_input = Self::autonomous_lane_block_execution_input_candidate(
                     payload,
-                    payload.chain_id_hash,
+                    payload.network_id,
                     payload.epoch,
                 )
                 .map_err(|availability| {
@@ -9404,7 +9405,7 @@ impl Kura {
                     })?;
                 let expected_input = Self::autonomous_lane_block_execution_input_candidate(
                     &record.payload,
-                    record.payload.chain_id_hash,
+                    record.payload.network_id,
                     record.payload.epoch,
                 )
                 .map_err(|availability| {
@@ -10173,7 +10174,7 @@ impl Kura {
                 let view_state = self.read_autonomous_lane_block_view_state_locked(
                     &artifact.executable_payload,
                     &view_path,
-                    None,
+                    AutonomousLaneBlockViewStateReadMode::MainOnly,
                 )?;
                 let retired = view_state
                     .as_ref()
@@ -10185,7 +10186,7 @@ impl Kura {
                 }
                 let current = Self::validate_autonomous_lane_block_artifact(
                     &artifact,
-                    artifact.executable_payload.chain_id_hash,
+                    artifact.executable_payload.network_id,
                     artifact.executable_payload.epoch,
                 )
                 .map_err(|message| {
@@ -10626,7 +10627,7 @@ impl Kura {
                                 .read_autonomous_lane_block_view_state_locked(
                                     &artifact.executable_payload,
                                     &view_path,
-                                    None,
+                                    AutonomousLaneBlockViewStateReadMode::MainOnly,
                                 )?
                                 .ok_or_else(|| {
                                     self.geometry_error(
@@ -10719,7 +10720,7 @@ impl Kura {
                     || successor.previous_lane_block_height != previous.previous_lane_block_height
                     || successor.previous_lane_block_descriptor_hash
                         != previous.previous_lane_block_descriptor_hash
-                    || successor_pointer.chain_id_hash != previous_pointer.chain_id_hash
+                    || successor_pointer.network_id != previous_pointer.network_id
                     || successor_pointer.epoch < previous_pointer.epoch
                 {
                     return Err(self.geometry_error(
@@ -10738,7 +10739,7 @@ impl Kura {
                 ));
             }
             if let Some(route) = route_identity.as_ref()
-                && (pointer.chain_id_hash != route.chain_id_hash
+                && (pointer.network_id != route.network_id
                     || pointer.lane_id != route.lane_id
                     || pointer.dataspace_id != route.dataspace_id
                     || pointer.lane_incarnation != route.lane_incarnation

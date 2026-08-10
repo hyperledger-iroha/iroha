@@ -8,7 +8,7 @@ use super::{
     exact12_fixture::{
         account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy, commitment,
         context, encrypted_output, envelope, fcmp_input, fcmp_output, jindo_commitment,
-        jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point, proof_for,
+        jindo_field, network_id, nullifier, orchard_action, p256_ciphertext, p256_point, proof_for,
         proof_variant_name, raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy,
         sample_statements, sorted_fcmp_outputs, statement_for, statement_variant_name,
         zk_ace_allowlist, zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement,
@@ -2000,25 +2000,14 @@ fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
 }
 
 #[test]
-fn context_rejects_unusable_chain_ids_and_action_indexes() {
+fn context_rejects_zero_network_id_and_invalid_action_indexes() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    assert_eq!(
-        usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1).expect("privacy chain-id bound fits usize"),
-        crate::id::MAX_CHAIN_ID_BYTES,
-        "privacy transcripts and canonical ChainId admission must share one byte bound"
-    );
-    assert!("".parse::<ChainId>().is_err());
-    assert!(
-        "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
-            .parse::<ChainId>()
-            .is_err()
-    );
     let mut value = context();
-    value.chain_id = "x"
-        .repeat(crate::id::MAX_CHAIN_ID_BYTES)
-        .parse()
-        .expect("maximum-length chain id");
-    value.validate(&limits).expect("maximum-length chain id");
+    value.network_id = network_id(0);
+    assert_eq!(
+        value.validate(&limits),
+        Err(PrivacyStatementValidationError::ZeroNetworkId)
+    );
 
     value = context();
     value.action_index = 1;
@@ -2110,8 +2099,8 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
     let mut mutations = Vec::new();
 
     let mut mutated = binding.clone();
-    mutated.chain_id = ChainId::from("another-privacy-chain");
-    mutations.push(("chain_id", mutated));
+    mutated.network_id = network_id(201);
+    mutations.push(("network_id", mutated));
 
     let mut mutated = binding.clone();
     mutated.genesis_hash = raw(201);
@@ -2155,26 +2144,17 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
 }
 
 #[test]
-fn native_consensus_binding_rejects_zero_genesis_and_unusable_chain_ids() {
+fn native_consensus_binding_rejects_zero_or_mismatched_network_identity() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     assert_eq!(
         PrivacyNativeConsensusBindingV1::new(&context(), [0; 32], &limits),
         Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
     );
 
-    assert!("".parse::<ChainId>().is_err());
-    assert!(
-        "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
-            .parse::<ChainId>()
-            .is_err()
+    assert_eq!(
+        PrivacyNativeConsensusBindingV1::new(&context(), raw(201), &limits),
+        Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
     );
-    let mut boundary_context = context();
-    boundary_context.chain_id = "x"
-        .repeat(crate::id::MAX_CHAIN_ID_BYTES)
-        .parse()
-        .expect("maximum-length chain id");
-    PrivacyNativeConsensusBindingV1::new(&boundary_context, raw(200), &limits)
-        .expect("maximum-length chain id remains canonical");
 }
 
 #[test]
@@ -2187,11 +2167,11 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
     let mut substitutions = Vec::new();
 
     let mut substituted = base_context.clone();
-    substituted.chain_id = ChainId::from("substituted-chain");
+    substituted.network_id = network_id(201);
     substitutions.push((
-        "chain_id",
+        "network_id",
         substituted,
-        PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch,
+        PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
     ));
 
     let mut substituted = base_context.clone();

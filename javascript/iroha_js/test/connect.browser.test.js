@@ -23,6 +23,7 @@ import {
   resolveConnectLaunchUri,
   resolveConnectLaunchUriForProtocol,
   rewriteConnectUriProtocol,
+  toBase64Url,
   toHex,
 } from "../src/connect.browser.js";
 import { AccountAddress } from "../src/address.js";
@@ -31,6 +32,7 @@ import {
   canonicalRequestSignatureMessage,
 } from "../src/canonicalRequest.js";
 import { NexusAppClient } from "../src/nexusApp.js";
+import { NetworkId } from "../src/networkId.js";
 
 const connectVectors = JSON.parse(
   readFileSync(new URL("../../../fixtures/connect/session_vectors.json", import.meta.url), "utf8"),
@@ -93,6 +95,7 @@ const X25519_HKDF_INFO = encoder.encode("iroha:x25519:session-key");
 const APPROVE_DOMAIN = encoder.encode("iroha-connect|approve|v1");
 const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
 const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
+const CANONICAL_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 
 function u16(value) {
   const out = Buffer.alloc(2);
@@ -195,8 +198,11 @@ test("Connect browser wallet signature encoder validates algorithm labels before
 });
 
 function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
+  const constraints = encodeStruct([Buffer.from(preview.networkId.toBytes())]);
   return Buffer.concat([
     taggedApproveField("domain", APPROVE_DOMAIN),
+    taggedApproveField("network_id", preview.networkId.toBytes()),
+    taggedApproveField("constraints", blake2b(constraints, { dkLen: 32 })),
     taggedApproveField("sid", preview.sidBytes),
     taggedApproveField("app_pk", preview.appKeyPair.publicKey),
     taggedApproveField("wallet_pk", walletPublicKey),
@@ -448,7 +454,7 @@ function decodeAppSignRequest(preview, keys, frameBytes) {
 function makePreview() {
   const appPrivateKey = new Uint8Array(32).fill(0x33);
   return createConnectSessionPreview({
-    chainId: "alpha-net",
+    networkId: CANONICAL_NETWORK_ID,
     node: "https://taira.sora.org",
     nonce: new Uint8Array(16).fill(0x11),
     appKeyPair: {
@@ -506,7 +512,7 @@ async function createApprovedTestSession({ permissions = null } = {}) {
 
 test("createConnectSessionPreview is deterministic with fixed nonce and keypair", () => {
   const options = {
-    chainId: "alpha-net",
+    networkId: CANONICAL_NETWORK_ID,
     node: "https://taira.sora.org",
     nonce: new Uint8Array(16).fill(0x11),
     appKeyPair: {
@@ -521,8 +527,13 @@ test("createConnectSessionPreview is deterministic with fixed nonce and keypair"
   assert.equal(first.sidBase64Url, second.sidBase64Url);
   assert.equal(first.sidBase64Url.includes("="), false);
   assert.equal(toHex(first.nonce), "11".repeat(16));
-  assert.equal(first.walletUri, `iroha://connect?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&role=wallet&node=https%3A%2F%2Ftaira.sora.org`);
-  assert.equal(first.appUri, `iroha://connect?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&role=app&node=https%3A%2F%2Ftaira.sora.org`);
+  const walletUri = new URL(first.walletUri);
+  const appUri = new URL(first.appUri);
+  assert.equal(walletUri.searchParams.get("network_id"), CANONICAL_NETWORK_ID.toString());
+  assert.equal(walletUri.searchParams.get("app_pk"), toBase64Url(first.appKeyPair.publicKey));
+  assert.equal(walletUri.searchParams.get("nonce"), toBase64Url(first.nonce));
+  assert.equal(walletUri.searchParams.get("role"), "wallet");
+  assert.equal(appUri.searchParams.get("role"), "app");
   assert.equal(
     first.wsUrl,
     `wss://taira.sora.org/v1/connect/ws?sid=${first.sidBase64Url}&role=app`,
@@ -538,7 +549,7 @@ test("createConnectSessionPreview rejects coercible non-byte array entries", () 
     const nonce = new Array(16).fill(0x11);
     nonce[0] = entry;
     assert.throws(
-      () => createConnectSessionPreview({ chainId: "alpha-net", nonce, appKeyPair }),
+      () => createConnectSessionPreview({ networkId: CANONICAL_NETWORK_ID, nonce, appKeyPair }),
       (error) => error instanceof TypeError && /nonce\[0\] must be a byte/.test(error.message),
     );
   }
@@ -555,17 +566,21 @@ test("buildConnectWebSocketUrl switches schemes for secure and insecure Torii ur
   );
 });
 
-test("registerConnectSession posts sid and node directly to Torii", async () => {
+test("registerConnectSession posts the exact canonical session identity", async () => {
   const calls = [];
-  const response = await registerConnectSession("https://taira.sora.org", "sid123", {
+  const preview = makePreview();
+  const response = await registerConnectSession("https://taira.sora.org", preview, {
     node: "https://taira.sora.org",
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), init });
       return new Response(
         JSON.stringify({
-          sid: "sid123",
-          wallet_uri: "iroha://connect?sid=sid123&role=wallet&token=wallet-token",
-          app_uri: "iroha://connect?sid=sid123&role=app&token=app-token",
+          sid: preview.sidBase64Url,
+          network_id: preview.networkId.toString(),
+          app_pk: toBase64Url(preview.appKeyPair.publicKey),
+          nonce: toBase64Url(preview.nonce),
+          wallet_uri: `${preview.walletUri}&token=wallet-token`,
+          app_uri: `${preview.appUri}&token=app-token`,
           token_app: "app-token",
           token_wallet: "wallet-token",
           token_management: "management-token",
@@ -582,7 +597,13 @@ test("registerConnectSession posts sid and node directly to Torii", async () => 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://taira.sora.org/v1/connect/session");
   assert.equal(calls[0].init.method, "POST");
-  assert.equal(calls[0].init.body, JSON.stringify({ sid: "sid123", node: "https://taira.sora.org" }));
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    sid: preview.sidBase64Url,
+    network_id: preview.networkId.toString(),
+    app_pk: toBase64Url(preview.appKeyPair.publicKey),
+    nonce: toBase64Url(preview.nonce),
+    node: "https://taira.sora.org",
+  });
   assert.equal(response.token_app, "app-token");
 });
 
@@ -887,6 +908,7 @@ test("createConnectCanonicalRequestAuth signs the exact canonical message with t
   const nonce = "canonical-nonce";
   const request = await buildCanonicalJsonRequest({
     accountId: auth.authAccountId,
+    networkId: CANONICAL_NETWORK_ID,
     method: "POST",
     path: "/v1/multisig/spec",
     body,
@@ -895,6 +917,7 @@ test("createConnectCanonicalRequestAuth signs the exact canonical message with t
     nonce,
   });
   const expectedMessage = canonicalRequestSignatureMessage({
+    networkId: CANONICAL_NETWORK_ID,
     method: "POST",
     path: "/v1/multisig/spec",
     body: JSON.stringify(body),

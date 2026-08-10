@@ -101,7 +101,7 @@ def _assert_split_trust_architecture(source: str) -> None:
                 "prepare_taira_release_source.sh",
                 "$GITHUB_WORKSPACE/scripts/",
                 "configs/soranexus/taira/build_taira_rollout_bundle.sh",
-                "bin/irohad --",
+                "bin/iroha3d --",
             ):
                 assert forbidden not in text, (name, forbidden)
         if name in product_execution_jobs:
@@ -350,8 +350,8 @@ def test_boi_cross_run_input_is_required_content_validated_and_deploy_gating() -
     assert "TAIRA_BOI_QUALIFICATION_EXTERNAL_SIGNER_SHA256" in qualification
     assert "TAIRA_BOI_QUALIFICATION_SIGNING_PUBLIC_KEY_PATH" in qualification
     assert "--trusted-qualification-signing-fingerprint" in qualification
-    assert '--workflow-run-id "$GITHUB_RUN_ID"' in qualification
-    assert '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in qualification
+    assert '--workflow-run-id "$GITHUB_RUN_ID"' in source
+    assert '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in source
     assert "linux-boi-qualification" in jobs["macos-deploy"]["needs"]
     deploy = _job_text(jobs["macos-deploy"])
     assert "taira-privacy-v1-boi-${{ github.run_id }}-${{ github.run_attempt }}" in deploy
@@ -365,6 +365,11 @@ def test_boi_cross_run_input_is_required_content_validated_and_deploy_gating() -
     assert "--expected-boi-qualification-controller-digest" in deploy
     assert "--expected-workflow-run-id" in deploy
     assert "--expected-workflow-run-attempt" in deploy
+    assert "iroha.taira.boi-native-isolation-broker.v1" in qualification
+    assert "iroha.taira.boi-authenticated-run-nonce.v1" in qualification
+    assert "iroha.taira.deploy-authenticated-run-nonce.v1" in deploy
+    assert "iroha.taira.complete-source-identity-attestation.v1" in qualification
+    assert "iroha.taira.complete-source-identity-attestation.v1" in deploy
     assert "TAIRA_PRIVACY_V1_BOI_ARTIFACT_PATH" not in source
 
 

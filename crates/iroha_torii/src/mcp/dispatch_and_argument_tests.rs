@@ -316,6 +316,17 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "iroha.gov.ballots.plain")
     );
+    for name in [
+        "iroha.gov.ballots.zk_v1",
+        "iroha.gov.ballots.zk_v1.ballot_proof",
+        "iroha.gov.ballots.plain",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("governance ballot tool exists");
+        assert_eq!(tool.effect, ToolEffect::Read);
+    }
     assert!(
         tools
             .iter()
@@ -2074,9 +2085,18 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
     }
 
     for (name, fields) in [
-        ("iroha.gov.ballots.zk_v1", &["election_id"][..]),
-        ("iroha.gov.ballots.zk_v1.ballot_proof", &["election_id"][..]),
-        ("iroha.gov.ballots.plain", &["referendum_id"][..]),
+        (
+            "iroha.gov.ballots.zk_v1",
+            &["network_id", "authority", "election_id"][..],
+        ),
+        (
+            "iroha.gov.ballots.zk_v1.ballot_proof",
+            &["network_id", "authority", "election_id"][..],
+        ),
+        (
+            "iroha.gov.ballots.plain",
+            &["network_id", "authority", "referendum_id"][..],
+        ),
         ("iroha.gov.enact", &["proposal_id"][..]),
         ("iroha.gov.finalize", &["referendum_id", "proposal_id"][..]),
     ] {
@@ -2084,6 +2104,19 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
         assert_required(&schema, &["if", "required"], &["body"]);
         assert_required(&schema, &["then", "properties", "body", "required"], fields);
         assert_required(&schema, &["else", "required"], fields);
+        if name.starts_with("iroha.gov.ballots.") {
+            assert_required(&schema, &["required"], &["headers"]);
+            assert_required(
+                &schema,
+                &["properties", "headers", "required"],
+                &[
+                    "X-Iroha-Account",
+                    "X-Iroha-Signature",
+                    "X-Iroha-Timestamp-Ms",
+                    "X-Iroha-Nonce",
+                ],
+            );
+        }
     }
 }
 

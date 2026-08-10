@@ -229,7 +229,6 @@ fn build_transfer(
     build_signed_zk_ace_privacy_transfer_v1(
         ZkAcePrivacyActionTransactionContextV1 {
             network_id: client.network_id,
-            chain_id: client.chain.clone(),
             authority: ALICE_ID.clone(),
             creation_time,
             time_to_live: Some(Duration::from_secs(3_600)),

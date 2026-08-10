@@ -2325,7 +2325,7 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
 #[derive(Encode)]
 struct AutonomousLaneReservationSlotIdentityV1 {
     identity_version: u16,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     height_context_id: wire::HeightContextId,
     epoch: u64,
     proposal_height: u64,
@@ -2380,7 +2380,7 @@ fn encode_autonomous_lane_reservation_identity_hashes(
 /// frozen height context, then compare every reservation key with the returned
 /// pair.
 pub(crate) fn autonomous_lane_reservation_identity_hashes_for_proposal(
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     height_context_id: wire::HeightContextId,
     epoch: u64,
     proposal: &LaneBlockProposalV1,
@@ -2390,7 +2390,7 @@ pub(crate) fn autonomous_lane_reservation_identity_hashes_for_proposal(
     encode_autonomous_lane_reservation_identity_hashes(
         AutonomousLaneReservationSlotIdentityV1 {
             identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
-            chain_id_hash,
+            network_id,
             height_context_id,
             epoch,
             proposal_height: descriptor.proposal_height,
@@ -2554,7 +2554,7 @@ fn assemble_autonomous_lane_reservation_slot(
         encode_autonomous_lane_reservation_identity_hashes(
             AutonomousLaneReservationSlotIdentityV1 {
                 identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
-                chain_id_hash: Hash::prehashed(*context.network_id.as_bytes()),
+                network_id: context.network_id,
                 height_context_id: context.id(),
                 epoch: context.epoch,
                 proposal_height: context.height,

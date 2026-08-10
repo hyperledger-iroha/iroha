@@ -520,12 +520,10 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
 fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_binding() {
     let keypair = checked_torii_test_ed25519_keypair(0xfd, "derive proxy V5 admission fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain_id = "torii-proxy-v5-admission-test"
-        .parse::<ChainId>()
-        .expect("chain id");
+    let network_id = signed_query_test_network_id();
     let transaction = iroha_data_model::transaction::TransactionEntrypoint::External(
         TransactionBuilder::new(
-            signed_query_test_network_id(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -568,7 +566,7 @@ fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_bindin
     };
     let admission_binding = Some(
         QueuePlanAdmissionBindingV2::new(
-            &chain_id,
+            &network_id,
             &transaction,
             &RoutingPlan::single(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12))),
             context,
@@ -661,7 +659,7 @@ fn incoming_proxy_submit_fixture(
         .expect("strict proxy fixture admission context");
     let admission_binding = Some(
         QueuePlanAdmissionBindingV2::new(
-            app.chain_id.as_ref(),
+            app.state.network_id_ref(),
             &transaction,
             &routing_plan,
             context,
@@ -1509,7 +1507,7 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
     };
     *admission_binding = Some(
         QueuePlanAdmissionBindingV2::new(
-            app.chain_id.as_ref(),
+            app.state.network_id_ref(),
             transaction,
             &routing_plan,
             admission_context,

@@ -53,6 +53,46 @@ MAX_HANDOFF_FILE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_HANDOFF_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 MAX_OPERATION_ARG_BYTES = 16 * 1024
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
+BOI_QUALIFICATION_ISOLATION_CONTRACT = (
+    "iroha.taira.boi-native-isolation-broker.v1"
+)
+BOI_QUALIFICATION_RUN_BINDING_CONTRACT = (
+    "iroha.taira.boi-authenticated-run-nonce.v1"
+)
+COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
+    "iroha.taira.complete-source-identity-attestation.v1"
+)
+BOI_QUALIFICATION_ISSUANCE_BARRIER = (
+    "missing preprovisioned iroha.taira.boi-native-isolation-broker.v1: "
+    "candidate archive parsing, ABI loading/symbol inspection, wheel and worker "
+    "probes must run under the attested runtime UID/GID with no_new_privs, "
+    "closed inherited fds, a scrubbed environment, RLIMIT and stdout/stderr "
+    "bounds, a network-denying sandbox, a new session/process-group kill, and "
+    "residual-descendant validation; the distinct pinned qualification signer "
+    "must be reachable only through an authority-UID-authenticated endpoint "
+    "inaccessible to runtime, after every runtime child has exited and candidate "
+    "hashes have been rechecked; missing preprovisioned "
+    "iroha.taira.boi-authenticated-run-nonce.v1: caller workflow run ID/attempt "
+    "must not authorize qualification or replay identity; missing preprovisioned "
+    "iroha.taira.complete-source-identity-attestation.v1: a root-owned authority "
+    "record must independently bind source commit, DPN validator release commit, "
+    "the exact canonical Cargo.lock digest, and workspace source-manifest digest "
+    "(or one stronger immutable candidate identity); caller-echoed values are not "
+    "release authority"
+)
+DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT = (
+    "iroha.taira.deploy-authenticated-run-nonce.v1"
+)
+DEPLOY_ISSUANCE_BARRIER = (
+    "missing preprovisioned iroha.taira.deploy-authenticated-run-nonce.v1: "
+    "neither workflow run ID nor attempt may authorize deployment or replay "
+    "consumption; missing preprovisioned "
+    "iroha.taira.complete-source-identity-attestation.v1: a root-owned authority "
+    "record must independently bind source commit, DPN validator release commit, "
+    "the exact canonical Cargo.lock digest, and workspace source-manifest digest "
+    "(or one stronger immutable candidate identity); deploy-reset is disabled for "
+    "both dry-run and apply before attestation or path inspection"
+)
 PYTHON_ENV_SCRUBBER = (
     "import os,runpy,sys;"
     "names=('HOME','LANG','LC_ALL','PATH','TMPDIR');"
@@ -100,6 +140,7 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/taira_privacy_action_driver_ipc.py",
     "scripts/taira_privacy_protocol_receipt.py",
     "scripts/taira_privacy_sealed_controller.py",
+    "scripts/taira_privacy_verange_case_plan.py",
     "scripts/taira_privacy_rollout_contract.py",
     "scripts/taira_release_authority.py",
     "scripts/taira_rollout_admission.py",
@@ -373,8 +414,12 @@ SEALED_INPUT_DEPENDENCIES: dict[str, set[str]] = {
     "publish-rollout": {"--registry-config", "--signing-public-key"}
 }
 TRUSTED_LITERAL_FLAGS: dict[str, set[str]] = {
-    "assemble-boi": {"--trusted-qualification-signing-fingerprint"},
+    "assemble-boi": {
+        "--trusted-signing-fingerprint",
+        "--trusted-qualification-signing-fingerprint",
+    },
     "deploy-reset": {
+        "--trusted-signing-fingerprint",
         "--trusted-boi-qualification-signing-fingerprint",
         "--expected-boi-qualification-host-id",
         "--expected-boi-qualification-installation-id",
@@ -386,6 +431,18 @@ TRUSTED_LITERAL_FLAGS: dict[str, set[str]] = {
         "--suffix",
         "--trusted-signing-fingerprint",
     }
+}
+SOURCE_COMMIT_FLAGS = {
+    "finalize-linux": "--commit",
+    "extract-privacy": "--source-commit",
+    "prepare-reset": "--source-commit",
+    "capture-four-peer": "--source-commit",
+    "assemble-candidate": "--source-commit",
+    "assemble-boi": "--expected-source-commit",
+    "deploy-reset": "--expected-source-commit",
+    "publish-rollout": "--expected-source-commit",
+    "admit": "--expected-source-commit",
+    "check-public": "--expected-git-sha",
 }
 ROLE_OPERATION_IDENTITY: dict[tuple[str, str], str] = {
     ("public-input-authority", "snapshot-public-privacy"): "root",
@@ -878,6 +935,53 @@ def _validate_trusted_literal(flag: str, value: str) -> None:
             _fail("trusted BOI qualification identity literal is noncanonical")
         return
     _fail("trusted literal flag is not allow-listed")
+
+
+def _require_distinct_release_and_qualification_signers(
+    trusted_values: Sequence[dict[str, str]],
+) -> None:
+    """Reject a runner trust record that collapses the two signing roles."""
+
+    values = {
+        (row.get("operation"), row.get("flag")): row.get("value")
+        for row in trusted_values
+    }
+    for operation, qualification_flag in (
+        ("assemble-boi", "--trusted-qualification-signing-fingerprint"),
+        ("deploy-reset", "--trusted-boi-qualification-signing-fingerprint"),
+    ):
+        release = values.get((operation, "--trusted-signing-fingerprint"))
+        qualification = values.get((operation, qualification_flag))
+        if release is None and qualification is None:
+            continue
+        if (
+            not isinstance(release, str)
+            or SHA256_RE.fullmatch(release) is None
+            or not isinstance(qualification, str)
+            or SHA256_RE.fullmatch(qualification) is None
+        ):
+            _fail("release and qualification signer trust is incomplete")
+        if release == qualification:
+            _fail("release and BOI qualification signing identities must be distinct")
+
+
+def _require_attested_source_commit(
+    operation: str,
+    option_values: dict[str, list[str]],
+    attestation: dict[str, object],
+) -> None:
+    """Bind only the commit to the closure; this is not complete source authority."""
+
+    flag = SOURCE_COMMIT_FLAGS.get(operation)
+    if flag is None or flag not in option_values:
+        return
+    source_commit = attestation.get("source_commit")
+    if (
+        not isinstance(source_commit, str)
+        or COMMIT_RE.fullmatch(source_commit) is None
+        or option_values.get(flag) != [source_commit]
+    ):
+        _fail("controller operation source commit differs from installed attestation")
 
 
 def _validate_trusted_executable_path(
@@ -1567,6 +1671,7 @@ def _attest(
     )
     if sorted((row[0], row[1]) for row in value_keys) != expected_value_pairs:
         _fail("trusted literal records do not exactly cover this runner role")
+    _require_distinct_release_and_qualification_signers(trusted_values)
 
     raw_trusted_inputs = trust.get("trusted_inputs")
     if not isinstance(raw_trusted_inputs, list):
@@ -2094,6 +2199,7 @@ def _validate_operation_args(
     missing = sorted(required - seen)
     if missing:
         _fail(f"controller operation mandatory options are absent: {missing}")
+    _require_attested_source_commit(operation, option_values, attestation)
     unexpected_for_subcommand: set[str] = set()
     if operation == "admit" and subcommand == "init-replay-ledger":
         unexpected_for_subcommand = seen - {"--output"}
@@ -2739,104 +2845,10 @@ def _dispatch_capture_composite(
 def _dispatch_boi_composite(
     operation_args: Sequence[str], attestation: dict[str, object]
 ) -> int:
-    """Qualify privately as authority, then export one root-frozen handoff."""
+    """Refuse the former authority-process native-probe/signing composite."""
 
-    _subcommand, option_values = _operation_option_values(
-        "assemble-boi", operation_args
-    )
-    output_values = option_values.get("--output", [])
-    if len(output_values) != 1:
-        _fail("BOI qualification composite lacks one exact output")
-    final_output = Path(output_values[0])
-    authority_uid, authority_gid, authority_root = _identity_contract(
-        attestation, "authority"
-    )
-    controller_uid = int(attestation["uid"])
-    controller_gid = int(attestation.get("controller_gid", 0))
-    handoff_root = Path(str(attestation["handoff_root"]))
-    scratch = Path(tempfile.mkdtemp(prefix=".boi-qualification-", dir=authority_root))
-    if scratch.parent != authority_root or scratch.is_symlink():
-        _fail("BOI qualification scratch escaped the authority root")
-    os.chown(scratch, authority_uid, authority_gid)
-    scratch.chmod(0o700)
-    scratch_info = scratch.lstat()
-    if (
-        not stat.S_ISDIR(scratch_info.st_mode)
-        or stat.S_ISLNK(scratch_info.st_mode)
-        or scratch_info.st_uid != authority_uid
-        or scratch_info.st_gid != authority_gid
-        or stat.S_IMODE(scratch_info.st_mode) != 0o700
-    ):
-        _fail("BOI qualification scratch is not fresh and owner-private")
-    replay_ledger = scratch / "candidate-replay-ledger-v1.json"
-    private_output = scratch / "qualified-handoff"
-    if replay_ledger.exists() or private_output.exists():
-        _fail("BOI qualification internal outputs are not fresh")
-    transformed: list[str] = []
-    values = list(operation_args)
-    index = 0
-    while index < len(values):
-        flag = values[index]
-        index += 1
-        if flag in BOOLEAN_FLAGS:
-            transformed.append(flag)
-            continue
-        value = values[index]
-        index += 1
-        transformed.extend(
-            (flag, str(private_output) if flag == "--output" else value)
-        )
-    transformed.extend(
-        (
-            "--candidate-replay-ledger",
-            str(replay_ledger),
-            "--qualification-host-id",
-            str(attestation["host_id"]),
-            "--qualification-installation-id",
-            str(attestation["installation_id"]),
-            "--controller-closure-digest",
-            str(attestation["controller_digest"]),
-        )
-    )
-    completed = False
-    try:
-        result = _dispatch(
-            "admit",
-            ["init-replay-ledger", "--output", str(replay_ledger)],
-            (authority_uid, authority_gid),
-        )
-        if result != 0:
-            return result
-        _validate_operation_outputs({replay_ledger}, authority_uid, authority_gid)
-        result = _dispatch(
-            "assemble-boi",
-            transformed,
-            (authority_uid, authority_gid),
-        )
-        if result != 0:
-            return result
-        _validate_operation_outputs(
-            {replay_ledger, private_output}, authority_uid, authority_gid
-        )
-        inspected = inspect_handoff(
-            private_output,
-            "privacy-v1-boi-qualified",
-            handoff_root,
-            controller_uid,
-            final_output.name,
-            controller_gid=controller_gid,
-        )
-        if Path(str(inspected.get("staged_root", ""))) != final_output:
-            _fail("BOI qualification export path differs from the sealed output")
-        _validate_operation_outputs(
-            {final_output}, controller_uid, controller_gid
-        )
-        completed = True
-        return 0
-    finally:
-        _remove_controller_owned_tree(scratch, authority_root)
-        if not completed and (final_output.exists() or final_output.is_symlink()):
-            _remove_controller_owned_tree(final_output, handoff_root)
+    del operation_args, attestation
+    _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
 
 
 def _dispatch_publication_composite(
@@ -3057,6 +3069,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.command == "run" and args.operation == "assemble-boi":
+            _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
+        if args.command == "run" and args.operation == "deploy-reset":
+            _fail(DEPLOY_ISSUANCE_BARRIER)
         attestation = _attest(
             expected_launcher_sha256=args.expected_launcher_sha256,
             expected_controller_digest=args.expected_controller_digest,

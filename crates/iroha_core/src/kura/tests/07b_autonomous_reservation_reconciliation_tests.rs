@@ -5,7 +5,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
+    let (network_id, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
         lane.lane_id,
         lane.dataspace_id,
         1,
@@ -13,11 +13,11 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     );
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist two-reservation payload");
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     let retirement_hash = retirement.digest().expect("retirement digest");
-    kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist exact retirement and pending prefix");
 
     let paths = payload
@@ -26,7 +26,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         .map(|entrypoint_hash| {
             Kura::autonomous_lane_entrypoint_claim_path(
                 temp_dir.path(),
-                &chain_id_hash,
+                &network_id,
                 entrypoint_hash,
             )
         })
@@ -67,7 +67,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         .map(|path| fs::read(path).expect("read claim before rejected prepare"))
         .collect::<Vec<_>>();
     assert!(
-        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+        kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
             .is_err(),
         "an Active/ReleasePending inversion must fail closed",
     );
@@ -90,7 +90,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         .map(|path| fs::read(path).expect("read claim before rejected finalize"))
         .collect::<Vec<_>>();
     assert!(
-        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch,)
+        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch,)
             .is_err(),
         "a ReleasePending/Released inversion must fail closed",
     );
@@ -108,7 +108,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     // after reopening Kura.
     fs::write(&paths[0], encode_claim(&released[0])).expect("write released prefix");
     fs::write(&paths[1], encode_claim(&pending[1])).expect("restore pending suffix");
-    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("resume canonical Released prefix");
     for (path, expected) in paths.iter().zip(&released) {
         assert_eq!(
@@ -120,7 +120,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     reopened
-        .finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+        .finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("exact Released prefix retry is a storage stutter");
 }
 
@@ -131,7 +131,7 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, first) =
+    let (network_id, epoch, first) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let successor = repropose_autonomous_lane_payload_for_kura(
         &first,
@@ -147,24 +147,24 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
         autonomous_reservation_reconciliation_group(successor.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&first, network_id, epoch)
         .expect("persist first attempt");
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
-    kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("retire first attempt");
     let barrier = retirement
         .queue_release_barrier()
         .expect("first release barrier");
-    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("finish first release");
-    kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&successor, network_id, epoch)
         .expect("persist later latest attempt");
 
     let groups = [first_group, successor_group];
     let expected_epochs = [epoch, epoch];
     let assert_exact_attempts = |kura: &Kura| {
         let classified = kura
-            .classify_autonomous_lane_reservation_groups(&groups, chain_id_hash, &expected_epochs)
+            .classify_autonomous_lane_reservation_groups(&groups, network_id, &expected_epochs)
             .expect("classify both exact proposal-height attempts");
         assert!(matches!(
             &classified[0],
@@ -196,7 +196,7 @@ fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
+    let (network_id, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
         lane.lane_id,
         lane.dataspace_id,
         1,
@@ -204,12 +204,12 @@ fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
     );
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist two-reservation payload");
 
     let exact = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&exact, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&exact, network_id, epoch),
         Ok(AutonomousLaneReservationEvidenceV1::ExactLive { .. })
     ));
 
@@ -217,13 +217,13 @@ fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
     reordered_keys.reverse();
     let reordered = autonomous_reservation_reconciliation_group(reordered_keys);
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&reordered, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&reordered, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::ReservationVectorConflict)
     ));
 
     let partial = autonomous_reservation_reconciliation_group(vec![payload.reservation_keys[0]]);
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&partial, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&partial, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::ReservationVectorConflict)
     ));
 }
@@ -235,12 +235,12 @@ fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
@@ -253,7 +253,7 @@ fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
     fs::write(&attempt_path, &malformed).expect("corrupt exact attempt");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
     ));
     assert_eq!(
@@ -270,7 +270,7 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
@@ -279,7 +279,7 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
     assert!(!artifact_directory.exists());
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Ok(AutonomousLaneReservationEvidenceV1::StrictlyAbsent)
     ));
     assert!(
@@ -295,12 +295,12 @@ fn strict_reservation_classifier_exposes_exact_certification() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let (session, signer_pops) =
         committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
@@ -308,7 +308,7 @@ fn strict_reservation_classifier_exposes_exact_certification() {
         .expect("persist exact certified lane artifact");
 
     let classified = kura
-        .classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch)
+        .classify_autonomous_lane_reservation_group(&group, network_id, epoch)
         .expect("strict certified classification");
     assert!(matches!(
         classified,
@@ -326,12 +326,12 @@ fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
@@ -346,7 +346,7 @@ fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
     let canonical_temp_path =
         fs::canonicalize(&temp_path).expect("canonicalize unresolved attempt temp");
 
-    let outcome = kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch);
+    let outcome = kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch);
     assert!(
         matches!(
             &outcome,
@@ -369,7 +369,7 @@ fn strict_reservation_classifier_rejects_same_height_other_attempt_when_exact_is
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, missing) =
+    let (network_id, epoch, missing) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let other = repropose_autonomous_lane_payload_for_kura(
         &missing,
@@ -384,11 +384,11 @@ fn strict_reservation_classifier_rejects_same_height_other_attempt_when_exact_is
         autonomous_reservation_reconciliation_group(missing.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &missing);
-    kura.persist_lane_executable_payload(&other, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&other, network_id, epoch)
         .expect("persist only the competing proposal-height attempt");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&missing_group, chain_id_hash, epoch,),
+        kura.classify_autonomous_lane_reservation_group(&missing_group, network_id, epoch,),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
     ));
 }
@@ -400,7 +400,7 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let conflicting = repropose_autonomous_lane_payload_for_kura(
         &payload,
@@ -414,7 +414,7 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact autonomous payload");
     let (session, signer_pops) =
         committed_lane_block_session_for_kura_proposal(&conflicting.origin_proposal, &signer);
@@ -435,7 +435,7 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
     ));
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict)
     ));
 }
@@ -450,7 +450,7 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
@@ -468,7 +468,7 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
     symlink(&target_path, &attempt_path).expect("install symlinked attempt");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
     ));
     assert_eq!(
@@ -490,7 +490,7 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
@@ -503,7 +503,7 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
     fs::write(&index_path, vec![0_u8; index_len]).expect("write oversized certified index");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
     ));
     assert_eq!(
@@ -522,7 +522,7 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let other = repropose_autonomous_lane_payload_for_kura(
         &payload,
@@ -536,7 +536,7 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist current exact payload");
 
     let other_lane_block_height = other.origin_proposal.descriptor.lane_block_height;
@@ -564,7 +564,7 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
     fs::write(&other_view_path, &other_view_bytes).expect("write competing view state");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
     ));
     assert_eq!(
@@ -585,7 +585,7 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, historical) =
+    let (network_id, epoch, historical) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let later = repropose_autonomous_lane_payload_for_kura(
         &historical,
@@ -599,7 +599,7 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
     let group = autonomous_reservation_reconciliation_group(historical.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &historical);
-    kura.persist_lane_executable_payload(&historical, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&historical, network_id, epoch)
         .expect("persist historical live payload");
 
     let later_descriptor = &later.origin_proposal.descriptor;
@@ -624,7 +624,7 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
     fs::write(&latest_path, &latest_bytes).expect("replace latest pointer with later attempt");
 
     assert!(matches!(
-        kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch),
+        kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
     ));
     assert_eq!(
@@ -645,7 +645,7 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let conflicting = repropose_autonomous_lane_payload_for_kura(
         &payload,
@@ -659,12 +659,12 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact payload and claims");
     let entrypoint_hash = payload.entrypoint_hashes[0];
     let claim_path = Kura::autonomous_lane_entrypoint_claim_path(
         temp_dir.path(),
-        &chain_id_hash,
+        &network_id,
         &entrypoint_hash,
     );
     let temp_path = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
@@ -675,7 +675,7 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     let canonical_temp_path =
         fs::canonicalize(&temp_path).expect("canonicalize conflicting claim temp");
 
-    let outcome = kura.classify_autonomous_lane_reservation_group(&group, chain_id_hash, epoch);
+    let outcome = kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch);
     assert!(
         matches!(
             &outcome,
@@ -700,7 +700,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, first_b) =
+    let (network_id, epoch, first_b) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let incarnation_b = first_b.origin_proposal.descriptor.lane_incarnation;
     let rebound_a = rebind_autonomous_lane_payload_for_kura(
@@ -896,7 +896,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(
             &recreated_b_group,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         Ok(AutonomousLaneReservationEvidenceV1::ExactLive {
@@ -926,7 +926,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         let stale_group =
             autonomous_reservation_reconciliation_group(stale_payload.reservation_keys.clone());
         assert!(matches!(
-            kura.classify_autonomous_lane_reservation_group(&stale_group, chain_id_hash, epoch,),
+            kura.classify_autonomous_lane_reservation_group(&stale_group, network_id, epoch,),
             Err(AutonomousLaneReservationEvidenceError::Kura(_))
         ));
     }
@@ -970,7 +970,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             .expect("revalidate recreated-B recovery dependencies"),
     );
     assert_eq!(
-        kura.read_autonomous_lane_block_artifact(lane.lane_id, 1, chain_id_hash, epoch)
+        kura.read_autonomous_lane_block_artifact(lane.lane_id, 1, network_id, epoch)
             .expect("read recreated-B autonomous payload")
             .executable_payload,
         recreated_b,
@@ -1003,7 +1003,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     );
     assert_eq!(
         reopened
-            .read_autonomous_lane_block_artifact(lane.lane_id, 1, chain_id_hash, epoch)
+            .read_autonomous_lane_block_artifact(lane.lane_id, 1, network_id, epoch)
             .expect("recover recreated-B payload after restart")
             .executable_payload,
         recreated_b,
@@ -1018,7 +1018,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     assert!(matches!(
         reopened.classify_autonomous_lane_reservation_group(
             &recreated_b_group,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         Ok(AutonomousLaneReservationEvidenceV1::ExactLive {
@@ -1142,8 +1142,8 @@ fn historical_autonomous_recovery_record_for_kura(
         .validate()
         .expect("valid historical recovery fixture context");
     assert_eq!(
-        Hash::prehashed(*historical_context.network_id.as_bytes()),
-        payload.chain_id_hash,
+        historical_context.network_id,
+        payload.network_id,
         "fixture carrier context must bind the executable payload chain",
     );
 

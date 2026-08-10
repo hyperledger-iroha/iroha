@@ -2,9 +2,7 @@ import type { Buffer } from "buffer";
 import type { NetworkId } from "./index.js";
 
 export interface NexusAppConfig {
-  /** Human-readable Connect protocol chain label. */
-  chainId?: string;
-  /** Exact genesis-derived domain for ordinary transaction drafts. */
+  /** Exact genesis-derived domain for transactions and Connect sessions. */
   networkId?: NetworkId;
   baseUrl?: string;
   toriiBaseUrl?: string;
@@ -27,7 +25,7 @@ export interface NexusAppConfig {
 
 export interface NexusConnectOptions {
   sid?: string;
-  chainId?: string;
+  networkId?: NetworkId;
   node?: string | null;
   appKeyPair?: unknown;
   nonce?: Buffer | Uint8Array | ArrayBuffer | string;
@@ -108,6 +106,8 @@ export interface NexusTransferInput {
 }
 
 export interface NexusSignableTransaction {
+  /** Application-pinned exact NetworkId expected in payloadBytes. */
+  networkId: NetworkId;
   payloadBytes: Buffer;
   payloadHashHex: string;
   authority: string;

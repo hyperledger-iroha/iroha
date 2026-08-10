@@ -76,7 +76,9 @@ flowchart LR
   are reserved aliases and replication orders published.
 - Pin registration is a public paid operation for an authenticated transaction
   account: no general pin permission token is required, but the account pays
-  the configured fee and consumes its deterministic quota. Attaching or
+  the configured prepaid storage fee, which scales with rounded content bytes,
+  replica count, and retention duration. It also consumes the account's
+  deterministic quota. Attaching or
   reserving an alias requires `CanBindSorafsAlias`. The proof must be canonical bounded
   Norito, commit to the exact canonical content root CID and submission/retention epochs, contain at most a
   64-level Merkle path and 64 distinct sorted council signers, and fit within the
@@ -84,7 +86,9 @@ flowchart LR
 - `RetirePinManifest` is submitter-only and derives its retirement epoch from
   consensus time. Automatic expiry uses the same consensus clock and an
   authenticated ordered expiry index; manual and automatic retirement release
-  the count/byte charge and move the lifecycle-status marker transactionally.
+  live-content bytes and move the lifecycle-status marker transactionally.
+  Retained record-count and successor-fanout charges are not recycled while
+  their lifecycle records and indexes remain in consensus state.
   Retirement epochs cannot predate submission or approval, and reasons are
   bounded, canonical, control-free text.
 - `GET /v1/sorafs/pin` executes the native finalized query and returns a

@@ -1,13 +1,13 @@
 //! Reusable credential-scope binding for the concrete Falcon-512 profile.
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, PRIVACY_MAX_CHAIN_ID_BYTES_V1,
-        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
-        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+        BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     },
 };
 use sha3::{
@@ -32,7 +32,7 @@ pub const BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 /// Maximum 16-bit proposals consumed for one scope coefficient.
 pub const BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 /// Canonical reusable-scope schema owned by the implementation that absorbs it.
-pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+chain-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
+pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+network-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
 
 /// Reusable governed scope permanently signed into one credential.
 ///
@@ -41,7 +41,7 @@ pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE25
 /// context is included.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternCredentialScopeV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     genesis_hash: [u8; 32],
     parameter_id: PrivacyParameterIdV1,
     parameter_digest: PrivacyParameterDigestV1,
@@ -78,16 +78,11 @@ impl BootleLanternCredentialScopeV1 {
         if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
             return Err(CredentialScopeErrorV1::InvalidPolicy);
         }
-        let chain_id_length = context.chain_id.as_str().len();
-        if chain_id_length == 0
-            || u32::try_from(chain_id_length)
-                .ok()
-                .is_none_or(|length| length > PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-        {
-            return Err(CredentialScopeErrorV1::InvalidChainId);
-        }
         if canonical_genesis_hash == [0; 32] {
             return Err(CredentialScopeErrorV1::ZeroBinding("genesis_hash"));
+        }
+        if context.network_id.as_bytes() != &canonical_genesis_hash {
+            return Err(CredentialScopeErrorV1::NetworkGenesisMismatch);
         }
         for (field, is_zero) in [
             ("parameter_id", context.parameter_id.is_zero()),
@@ -107,7 +102,7 @@ impl BootleLanternCredentialScopeV1 {
             }
         }
         Ok(Self {
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             genesis_hash: canonical_genesis_hash,
             parameter_id: context.parameter_id,
             parameter_digest: context.parameter_digest,
@@ -181,7 +176,7 @@ impl BootleLanternCredentialScopeV1 {
             (&b"protocol"[..], PROTOCOL_ID_V1),
             (&b"profile"[..], CONCRETE_PROFILE_ID_V1),
             (&b"version"[..], &SCOPE_VERSION_V1),
-            (&b"chain_id"[..], self.chain_id.as_str().as_bytes()),
+            (&b"network_id"[..], self.network_id.as_bytes()),
             (&b"genesis_hash"[..], &self.genesis_hash),
             (&b"parameter_id"[..], self.parameter_id.as_bytes()),
             (&b"parameter_digest"[..], self.parameter_digest.as_bytes()),
@@ -243,9 +238,9 @@ pub enum CredentialScopeErrorV1 {
     /// The issuer policy is malformed, revoked, or self-inconsistent.
     #[error("Bootle/Lantern credential scope selected an invalid issuer policy")]
     InvalidPolicy,
-    /// The chain identifier is empty or exceeds its fixed public cap.
-    #[error("Bootle/Lantern credential scope chain id is invalid")]
-    InvalidChainId,
+    /// The typed network identity and explicit genesis hash differ.
+    #[error("Bootle/Lantern credential scope network id differs from its genesis hash")]
+    NetworkGenesisMismatch,
     /// A reusable governed binding is zero.
     #[error("Bootle/Lantern credential scope field is zero: {0}")]
     ZeroBinding(&'static str),
@@ -262,6 +257,7 @@ pub enum CredentialScopeErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
         BootleLanternPolynomialV1, PrivacyTransactionIntentDigestV1,
@@ -274,9 +270,17 @@ mod tests {
         [value; 32]
     }
 
+    fn network_id(bytes: [u8; 32]) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed(bytes),
+            ),
+        )
+    }
+
     fn kat_scope() -> BootleLanternCredentialScopeV1 {
         BootleLanternCredentialScopeV1 {
-            chain_id: "scope-kat".parse().expect("chain id"),
+            network_id: network_id(raw(2)),
             genesis_hash: raw(2),
             parameter_id: PrivacyParameterIdV1::new(raw(3)),
             parameter_digest: PrivacyParameterDigestV1::new(raw(4)),
@@ -294,7 +298,7 @@ mod tests {
 
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: "scope-validation".parse().expect("chain id"),
+            network_id: network_id(raw(20)),
             action_index: 3,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
             parameter_id: PrivacyParameterIdV1::new(raw(2)),
@@ -423,7 +427,7 @@ mod tests {
                 mutations.push((stringify!($field), candidate));
             }};
         }
-        mutate!(chain_id, "scope-kat-mutated".parse().expect("chain id"));
+        mutate!(network_id, network_id(raw(22)));
         mutate!(genesis_hash, raw(22));
         mutate!(parameter_id, PrivacyParameterIdV1::new(raw(23)));
         mutate!(parameter_digest, PrivacyParameterDigestV1::new(raw(24)));

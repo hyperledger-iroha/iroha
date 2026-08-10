@@ -40,6 +40,21 @@ APPROVED_PRIVACY_EXPORTS = frozenset(
 
 RUST_BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 C_HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+_JAVASCRIPT_CAPABILITIES = "javascript/iroha_js/src/privacyCapabilities.js"
+_JAVASCRIPT_NATIVE = "javascript/iroha_js/src/native.js"
+_JAVASCRIPT_NATIVE_BROWSER = "javascript/iroha_js/src/native.browser.js"
+_JAVASCRIPT_PACKAGE = "javascript/iroha_js/package.json"
+_JAVASCRIPT_TRANSACTION = "javascript/iroha_js/src/transaction.js"
+_JAVASCRIPT_TEST = (
+    "javascript/iroha_js/test/privacyExact12CapabilityManifest.test.js"
+)
+_PYTHON_CRYPTO = "python/iroha_python/src/iroha_python/crypto.py"
+_PYTHON_CLIENT = "python/iroha_python/src/iroha_python/client.py"
+_PYTHON_TRANSACTION = "python/iroha_python/src/iroha_python/tx.py"
+_PYTHON_RUST_MANIFEST = (
+    "python/iroha_python/iroha_python_rs/src/privacy_capability_manifest.rs"
+)
+_PYTHON_RUST_BRIDGE = "python/iroha_python/iroha_python_rs/src/lib.rs"
 
 
 class AuditError(RuntimeError):
@@ -60,12 +75,13 @@ class SdkContract:
 SDK_CONTRACTS = (
     SdkContract(
         "javascript-napi",
-        ("javascript/iroha_js/src/privacyCapabilities.js",),
+        (_JAVASCRIPT_CAPABILITIES,),
         (
-            "javascript/iroha_js/src/crypto.js",
+            _JAVASCRIPT_NATIVE,
+            _JAVASCRIPT_CAPABILITIES,
             "crates/iroha_js_host/src/lib.rs",
         ),
-        ("javascript/iroha_js/src/transaction.js",),
+        (_JAVASCRIPT_TRANSACTION,),
         (
             "PrivacyExact12CapabilityManifestV1",
             "manifest_digest",
@@ -79,6 +95,26 @@ SDK_CONTRACTS = (
             "validate_privacy_capability_archive_v1",
         ),
         ("requirePrivacyExact12CapabilityTupleV1", "compiledProfileCatalogV1"),
+    ),
+    SdkContract(
+        "python-pyo3",
+        (_PYTHON_CRYPTO, _PYTHON_RUST_MANIFEST),
+        (_PYTHON_CRYPTO, _PYTHON_RUST_MANIFEST, _PYTHON_RUST_BRIDGE),
+        (_PYTHON_CLIENT, _PYTHON_TRANSACTION, _PYTHON_RUST_BRIDGE),
+        (
+            "PrivacyExact12CapabilityManifestV1",
+            "canonical_archive",
+            "manifest_digest",
+            "operation_schema",
+            "execution_mode",
+            "privacy_feature_mask",
+            "activation_state",
+        ),
+        (
+            "privacy_validate_exact12_capability_manifest_v1",
+            "validate_privacy_capability_archive_v1",
+        ),
+        ("require_network_profile", "compiled_privacy_profile_v1"),
     ),
     SdkContract(
         "jvm-android",
@@ -289,6 +325,181 @@ def _require_rust_manifest_contract(root: Path) -> None:
         raise AuditError("Rust canonical Exact12 manifest archive validator is absent")
     if "exact12_capability_manifest_v1" not in torii:
         raise AuditError("Torii does not project committed state into the Exact12 manifest")
+
+
+def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
+    """Require Exact12 to use only the authenticated N-API loader."""
+
+    capabilities = _read(root, _JAVASCRIPT_CAPABILITIES)
+    native = _read(root, _JAVASCRIPT_NATIVE)
+    native_browser = _read(root, _JAVASCRIPT_NATIVE_BROWSER)
+    package = _read(root, _JAVASCRIPT_PACKAGE)
+    transaction = _read(root, _JAVASCRIPT_TRANSACTION)
+    tests = _read(root, _JAVASCRIPT_TEST)
+    authority_start = capabilities.find("function requirePrivacyExact12NativeV1()")
+    authority_end = capabilities.find(
+        "function callPrivacyExact12NativeV1(", authority_start
+    )
+    authority = (
+        capabilities[authority_start:authority_end]
+        if authority_start >= 0 and authority_end > authority_start
+        else ""
+    )
+    browser_start = native_browser.find("export function getNativeBinding()")
+    browser_end = native_browser.find(
+        "/**\n * Native binding verification", browser_start
+    )
+    browser_loader = (
+        native_browser[browser_start:browser_end]
+        if browser_start >= 0 and browser_end > browser_start
+        else ""
+    )
+
+    canonical_model = all(
+        marker in capabilities
+        for marker in (
+            "class PrivacyExact12CapabilityManifestV1",
+            "PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR",
+            "privacyExact12ManifestState",
+            "canonicalArchive: Uint8Array.from(canonicalArchive)",
+            "manifest_digest",
+            "operation_schema",
+            "execution_mode",
+            "privacy_feature_mask",
+            "activation_state",
+            "missing-distribution-wide-knowledge-soundness-evidence",
+        )
+    )
+    authenticated_native_authority = all(
+        (
+            'import { getNativeBinding } from "./native.js";' in capabilities,
+            "native = getNativeBinding();" in authority,
+            authority.count("getNativeBinding()") == 1,
+            authority.count("native =") == 1,
+            authority.count("return native;") == 1,
+            "??" not in authority,
+            "globalThis" not in authority,
+            "__IROHA_NATIVE_BINDING__" not in capabilities,
+            "verifyNativeBindingInternal(" in native,
+            "assertLoadableSourceProvenance(" in native,
+            "materializeVerifiedSnapshot(" in native,
+            "cachedBinding = require(snapshot.path)" in native,
+        )
+    )
+    native_validation = authenticated_native_authority and all(
+        marker in capabilities + "\n" + native
+        for marker in (
+            "privacyValidateExact12CapabilityManifestV1",
+            "privacyExact12CapabilityManifestJsonV1",
+            "privacyRequireExact12CapabilityTupleV1",
+            "requires exact ABI22",
+        )
+    )
+    exact_tuple_match = all(
+        marker in capabilities
+        for marker in (
+            "row.activation_state.activation_state !== \"active\"",
+            "row.compiled_profile.status !== \"available\"",
+            "compiledProfileCatalogFromNativeV1(native)",
+            '"privacyRequireExact12CapabilityTupleV1"',
+            "admitted !== true",
+        )
+    )
+    transaction_admission = all(
+        (
+            "bindPrivacyExact12CapabilityAdmissionV1(" in capabilities,
+            "admitPrivacyExact12CapabilityTupleV1(this, protocolId)" in capabilities,
+            "privacyExact12ManifestState.get(manifest)" in capabilities,
+            "requirePrivacyExact12CapabilityAdmissionV1" in transaction,
+        )
+    )
+    browser_fail_closed = all(
+        (
+            '"./dist/native.js": "./dist/native.browser.js"' in package,
+            "export function getNativeBinding()" in browser_loader,
+            'throw nativeBindingError("iroha_js_host is unavailable in browser builds.")'
+            in browser_loader,
+            "return" not in browser_loader,
+            "globalThis" not in browser_loader,
+            "mutable global bindings cannot authorize Exact12 native admission" in tests,
+            "browser Exact12 exports fail closed even when a fake global binding exists"
+            in tests,
+        )
+    )
+    return {
+        "canonical_manifest_model": canonical_model,
+        "native_canonical_manifest_validation": native_validation,
+        "exact_native_local_tuple_match": exact_tuple_match,
+        "transaction_admission_guard": transaction_admission,
+        "authenticated_native_authority": authenticated_native_authority,
+        "browser_fail_closed": browser_fail_closed,
+    }
+
+
+def _python_cutover_gates(root: Path) -> dict[str, bool]:
+    """Include the Python/PyO3 admission path in Exact12 source parity."""
+
+    crypto = _read(root, _PYTHON_CRYPTO)
+    client = _read(root, _PYTHON_CLIENT)
+    transaction = _read(root, _PYTHON_TRANSACTION)
+    manifest = _read(root, _PYTHON_RUST_MANIFEST)
+    bridge = _read(root, _PYTHON_RUST_BRIDGE)
+
+    canonical_model = all(
+        marker in crypto + "\n" + manifest
+        for marker in (
+            "PyPrivacyExact12CapabilityManifestV1",
+            "canonical_archive",
+            "manifest_digest",
+            "protocol_tuples",
+            "operation_schema",
+            "execution_mode",
+            "privacy_feature_mask",
+            "activation_state",
+            "MissingDistributionWideKnowledgeSoundnessEvidence",
+        )
+    )
+    native_validation = all(
+        (
+            "_crypto = load_crypto_extension()" in crypto,
+            "if not _has_privacy_bridge_abi(_crypto):" in crypto,
+            "privacy_validate_exact12_capability_manifest_v1(canonical)" in crypto,
+            "manifest = decoder(canonical)" in crypto,
+            "if bytes(returned) != canonical:" in crypto,
+            "validate_privacy_capability_archive_v1(archive)" in manifest,
+            "canonical_archive.as_slice() != archive" in manifest,
+        )
+    )
+    exact_tuple_match = all(
+        marker in manifest
+        for marker in (
+            "if !row.is_network_available()",
+            "compiled_privacy_profile_v1(protocol_id)",
+            "if network_profile != local_snapshot",
+            "self.require_network_profile(protocol_id)?",
+        )
+    )
+    transaction_admission = all(
+        (
+            "manifest must be a native PrivacyExact12CapabilityManifestV1" in transaction,
+            "builder.bind_privacy_exact12_capability_manifest_v1(" in transaction,
+            "Option<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>"
+            in bridge,
+            "manifest.require_network_profile(protocol_id)?" in bridge,
+            "requires a validated Torii Exact12 capability manifest" in bridge,
+            "PyRef<'_, privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>"
+            in bridge,
+            'headers={"Accept": "application/x-norito"}' in client,
+            'media_type != "application/x-norito"' in client,
+            "privacy_exact12_capability_manifest_v1(response.content)" in client,
+        )
+    )
+    return {
+        "canonical_manifest_model": canonical_model,
+        "native_canonical_manifest_validation": native_validation,
+        "exact_native_local_tuple_match": exact_tuple_match,
+        "transaction_admission_guard": transaction_admission,
+    }
 
 
 def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
@@ -530,6 +741,28 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
     native_validation = all(marker in native for marker in contract.native_markers)
     tuple_match = all(marker in model + "\n" + native for marker in contract.tuple_markers)
     transaction_admission = bool(_ADMISSION_MARKER.search(transactions))
+    extra_gates: dict[str, bool] = {}
+    if contract.name == "javascript-napi" and _read(root, _JAVASCRIPT_CAPABILITIES):
+        javascript = _javascript_cutover_gates(root)
+        manifest_model = manifest_model and javascript["canonical_manifest_model"]
+        native_validation = (
+            native_validation
+            and javascript["native_canonical_manifest_validation"]
+        )
+        tuple_match = tuple_match and javascript["exact_native_local_tuple_match"]
+        transaction_admission = javascript["transaction_admission_guard"]
+        extra_gates = {
+            "authenticated_native_authority": javascript[
+                "authenticated_native_authority"
+            ],
+            "browser_fail_closed": javascript["browser_fail_closed"],
+        }
+    if contract.name == "python-pyo3" and _read(root, _PYTHON_RUST_MANIFEST):
+        python = _python_cutover_gates(root)
+        manifest_model = manifest_model and python["canonical_manifest_model"]
+        native_validation = python["native_canonical_manifest_validation"]
+        tuple_match = tuple_match and python["exact_native_local_tuple_match"]
+        transaction_admission = python["transaction_admission_guard"]
     if contract.name == "jvm-android":
         jvm = _jvm_cutover_gates(root)
         manifest_model = manifest_model and jvm["canonical_manifest_model"]
@@ -563,6 +796,7 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
         "exact_native_local_tuple_match": tuple_match,
         "transaction_admission_guard": transaction_admission,
         "fail_closed_without_admission": fail_closed,
+        **extra_gates,
     }
     blockers = [name for name, passed in gates.items() if not passed]
     return {

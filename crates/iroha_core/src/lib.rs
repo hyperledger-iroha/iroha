@@ -1106,7 +1106,10 @@ mod tests {
 
     #[test]
     fn trust_gossip_classifies_to_trust_topic() {
-        let gossip = PeerTrustGossip { trust: Vec::new() };
+        let gossip = PeerTrustGossip {
+            network_id: test_network_id(b"trust-gossip-topic"),
+            trust: Vec::new(),
+        };
         let msg = NetworkMessage::PeerTrustGossip(Box::new(gossip));
 
         assert!(matches!(
@@ -1132,7 +1135,10 @@ mod tests {
                 SubscriberRoute::General,
             ),
             (
-                NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip { trust: Vec::new() })),
+                NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip {
+                    network_id: test_network_id(b"trust-gossip-wire-tag"),
+                    trust: Vec::new(),
+                })),
                 10,
                 NetworkTopic::TrustGossip,
                 SubscriberRoute::General,
@@ -1377,7 +1383,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"lane-drain-network-chain"),
+                network_id: test_network_id(b"lane-drain-network-genesis"),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"lane-drain-network-incarnation"),
@@ -1458,7 +1464,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"maximum-lane-drain-network-chain"),
+                network_id: test_network_id(b"maximum-lane-drain-network-genesis"),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"maximum-lane-drain-network-incarnation"),
@@ -1540,7 +1546,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"excess-lane-drain-network-chain"),
+                    network_id: test_network_id(b"excess-lane-drain-network-genesis"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"excess-lane-drain-network-incarnation"),
@@ -1632,7 +1638,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"oversized-lane-drain-network-chain"),
+                    network_id: test_network_id(b"oversized-lane-drain-network-genesis"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"oversized-lane-drain-network-incarnation"),

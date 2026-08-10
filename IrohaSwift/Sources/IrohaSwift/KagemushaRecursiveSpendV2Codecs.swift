@@ -131,7 +131,7 @@ public enum KagemushaRecursiveSpendCodecs {
         _ payload: KagemushaRecipientPaymentRequestSigningPayload
     ) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(chainID(payload.chainID))
+        writer.writeField(payload.networkID.bytes)
         writer.writeField(try assetDefinitionID(payload.assetDefinitionID))
         writer.writeField(try scaledAmount(payload.amount))
         writer.writeField(try accountID(payload.recipient))
@@ -356,7 +356,7 @@ public enum KagemushaRecursiveSpendCodecs {
         _ request: KagemushaRecipientOutputDerivationRequest
     ) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(chainID(request.chainID))
+        writer.writeField(request.networkID.bytes)
         writer.writeField(try assetDefinitionID(request.assetDefinitionID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(request.requestID)
@@ -466,7 +466,7 @@ public enum KagemushaRecursiveSpendCodecs {
 
         var writer = CompactNoritoWriter()
         writer.writeField(uint16(request.version))
-        writer.writeField(chainID(request.chainID))
+        writer.writeField(request.networkID.bytes)
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try accountID(request.payer))
@@ -541,7 +541,7 @@ public enum KagemushaRecursiveSpendCodecs {
             field: "topUpAnchorV4"
         ))
         let version = try scalarUInt16(reader.field(), field: "topUpAnchorV4.version")
-        let chain = try decodeChainID(reader.field())
+        let networkID = try decodeNetworkID(reader.field())
         let payer = try decodeAccountID(
             reader.field(),
             chainDiscriminant: chainDiscriminant
@@ -582,7 +582,7 @@ public enum KagemushaRecursiveSpendCodecs {
         guard version == KagemushaRecursiveSpend.wireVersionV4,
               scale == amount.scale,
               note.amount == amount,
-              note.chainID == chain,
+              note.networkID == networkID,
               assetParts.first.map(String.init) == note.assetDefinitionID,
               assetParts.count >= 2,
               String(assetParts[1]) == payer,
@@ -598,6 +598,7 @@ public enum KagemushaRecursiveSpendCodecs {
             throw KagemushaRecursiveSpendError.invalidArchive("topUpAnchorV4.binding")
         }
         return KagemushaRecursiveSpendTopUpAnchorV4(
+            networkID: networkID,
             topUpOperationID: operationID,
             artifactBinding: binding,
             finalizedHeight: finalizedHeight,
@@ -744,7 +745,7 @@ public enum KagemushaRecursiveSpendCodecs {
         _ reader: inout KagemushaV2Reader,
         chainDiscriminant: UInt16
     ) throws -> KagemushaRecipientPaymentRequestSigningPayload {
-        let chain = try decodeChainID(reader.field())
+        let networkID = try decodeNetworkID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
         let amount = try decodeScaledAmount(reader.field())
         let recipient = try decodeAccountID(
@@ -762,7 +763,7 @@ public enum KagemushaRecursiveSpendCodecs {
         let output = try decodeNote(reader.field())
         let material = try decodeBytes(reader.field(), field: "senderOutputProverMaterial")
         return try KagemushaRecipientPaymentRequestSigningPayload(
-            chainID: chain,
+            networkID: networkID,
             assetDefinitionID: asset,
             amount: amount,
             recipient: recipient,
@@ -794,7 +795,7 @@ public enum KagemushaRecursiveSpendCodecs {
 
     private static func note(_ value: KagemushaSpendableNoteDescriptor) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(chainID(value.chainID))
+        writer.writeField(value.networkID.bytes)
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
         writer.writeField(value.noteCommitment)
         writer.writeField(value.spendNullifier)
@@ -848,14 +849,14 @@ public enum KagemushaRecursiveSpendCodecs {
 
     private static func decodeNote(_ data: Data) throws -> KagemushaSpendableNoteDescriptor {
         var reader = KagemushaV2Reader(data)
-        let chain = try decodeChainID(reader.field())
+        let networkID = try decodeNetworkID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
         let commitment = try packedFixed(reader.field(), count: 32, field: "noteCommitment")
         let nullifier = try packedFixed(reader.field(), count: 32, field: "spendNullifier")
         let amount = try decodeScaledAmount(reader.field())
         try reader.finish("note")
         return try KagemushaSpendableNoteDescriptor(
-            chainID: chain,
+            networkID: networkID,
             assetDefinitionID: asset,
             noteCommitment: commitment,
             spendNullifier: nullifier,
@@ -1069,17 +1070,15 @@ public enum KagemushaRecursiveSpendCodecs {
         )
     }
 
-    private static func chainID(_ value: String) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeField(string(value))
-        return writer.data
-    }
-
-    private static func decodeChainID(_ data: Data) throws -> String {
-        var reader = KagemushaV2Reader(data)
-        let value = try decodeString(reader.field(), field: "chainID")
-        try reader.finish("chainID")
-        return value
+    private static func decodeNetworkID(_ data: Data) throws -> NetworkId {
+        guard data.count == 32 else {
+            throw KagemushaRecursiveSpendError.invalidArchive("networkID")
+        }
+        do {
+            return try NetworkId(bytes: data)
+        } catch {
+            throw KagemushaRecursiveSpendError.invalidArchive("networkID")
+        }
     }
 
     private static func assetDefinitionID(_ value: String) throws -> Data {
