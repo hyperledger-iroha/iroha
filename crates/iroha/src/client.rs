@@ -30024,7 +30024,10 @@ mod tests {
                 || client.get_sumeragi_status(),
             )
             .expect_err("undeclared or noncanonical media types must fail closed");
-            assert!(error.to_string().contains("invalid content-type"), "{error}");
+            assert!(
+                error.to_string().contains("invalid content-type"),
+                "{error}"
+            );
         }
     }
 
@@ -30128,10 +30131,12 @@ mod tests {
             .expect("snapshot captured");
         assert_single_accept_header(&json_snapshot, APPLICATION_JSON);
 
-        let rejected_json =
-            norito::json::to_vec(&status).expect("serialize rejected status JSON");
+        let rejected_json = norito::json::to_vec(&status).expect("serialize rejected status JSON");
         let rejected_responses = [
-            (Some(APPLICATION_NORITO), norito::to_bytes(&status).expect("serialize status")),
+            (
+                Some(APPLICATION_NORITO),
+                norito::to_bytes(&status).expect("serialize status"),
+            ),
             (Some(APPLICATION_NORITO), rejected_json.clone()),
             (None, rejected_json.clone()),
             (Some("application/x-norito-legacy"), rejected_json),
@@ -30145,7 +30150,10 @@ mod tests {
                 || client_with_base_url(base_url()).get_sumeragi_status_json(),
             )
             .expect_err("the JSON-specific helper must not guess or fall back");
-            assert!(error.to_string().contains("invalid content-type"), "{error}");
+            assert!(
+                error.to_string().contains("invalid content-type"),
+                "{error}"
+            );
         }
     }
 
@@ -30491,7 +30499,10 @@ mod tests {
                 || client.get_sumeragi_diagnostics(),
             )
             .expect_err("undeclared or noncanonical diagnostics media must fail closed");
-            assert!(error.to_string().contains("invalid content-type"), "{error}");
+            assert!(
+                error.to_string().contains("invalid content-type"),
+                "{error}"
+            );
         }
     }
 

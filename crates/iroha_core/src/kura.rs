@@ -35407,9 +35407,8 @@ impl Kura {
                 "Native AMX application block lacks durable v2 finality",
             ));
         };
-        let native_manifest = self.native_amx_manifest_for_committed_block(
-            block, merge_association, &finality,
-        )?;
+        let native_manifest =
+            self.native_amx_manifest_for_committed_block(block, merge_association, &finality)?;
         if finality.block_hash != application_block_hash
             || finality
                 .commit_qc
@@ -35550,7 +35549,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false, NativeAmxMergeAssociation::Live(staged_merge_entry),
+                block,
+                false,
+                NativeAmxMergeAssociation::Live(staged_merge_entry),
             )?;
         self.persist_native_amx_participant_application_evidence_under_publication_guard(
             block,
@@ -35647,7 +35648,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::Startup(planned_merge_entry),
+                block,
+                true,
+                NativeAmxMergeAssociation::Startup(planned_merge_entry),
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -35673,7 +35676,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::CommittedOnly,
+                block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let repaired = plan.artifacts.len();
         let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
@@ -35698,7 +35703,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::CommittedOnly,
+                block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -39319,12 +39326,11 @@ impl Kura {
         repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
                     artifact,
                     repair_missing_sidecars,
-                )
-            }
+                ),
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
@@ -39348,12 +39354,11 @@ impl Kura {
         repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
                     artifact,
                     repair_missing_sidecars,
-                )
-            }
+                ),
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
@@ -39380,7 +39385,10 @@ impl Kura {
     ) -> bool {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(artifact)
+                self.lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                )
             }
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(

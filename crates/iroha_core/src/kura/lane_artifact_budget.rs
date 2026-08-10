@@ -1248,7 +1248,7 @@ impl Kura {
             Self::validate_merge_carrier_finality_projection(
                 record,
                 planned,
-                block.header(),
+                &block.header(),
                 finality,
             )?;
             if committed_merge_entry

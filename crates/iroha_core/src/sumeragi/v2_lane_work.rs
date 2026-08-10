@@ -6907,12 +6907,9 @@ impl V2LaneWorkAdapter {
                 let observation = self
                     .historical_recovery_diagnostics
                     .observe(identity, reason);
-                if let Err(error) = self.schedule_historical_recovery_request(
-                    identity,
-                    &session,
-                    observation,
-                    now,
-                ) {
+                if let Err(error) =
+                    self.schedule_historical_recovery_request(identity, &session, observation, now)
+                {
                     self.historical_recovery_sessions.push_front(session);
                     return Err(error);
                 }
@@ -7232,9 +7229,7 @@ impl V2LaneWorkAdapter {
                     && existing.request_hash == request_hash
                     && existing.cadence.reason == observation.reason
             });
-        if self.historical_recovery_requests.contains_key(&identity)
-            && !retained_request_matches
-        {
+        if self.historical_recovery_requests.contains_key(&identity) && !retained_request_matches {
             self.retire_historical_recovery_request(identity);
         }
         if !self.historical_recovery_requests.contains_key(&identity) {
@@ -26141,7 +26136,6 @@ pub(super) mod tests {
         assert!(!adapter.output_guard.restart_required());
     }
 
-
     fn self_contained_historical_recovery_request_fixture() -> (
         V2LaneWorkAdapter,
         Vec<KeyPair>,
@@ -27438,7 +27432,6 @@ pub(super) mod tests {
         assert!(adapter.historical_recovery_requests.is_empty());
         assert!(adapter.historical_recovery_request_owners.is_empty());
     }
-
 
     #[test]
     fn historical_certificate_repairs_missing_ownership_before_canonical_application() {

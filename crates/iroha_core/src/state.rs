@@ -25785,6 +25785,8 @@ impl LaneConsensusLifecycleSnapshot {
     }
 }
 
+include!("state/passive_lane_diagnostic_methods.rs");
+
 impl State {
     /// Return the authenticated Sumeragi-v2 snapshot bootstrap trust root, if this state was
     /// restored from an explicitly authorized audited snapshot boundary.
@@ -37096,20 +37098,20 @@ impl State {
             let certified = self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                requested,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+                    lane_id,
+                    requested,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             if certified.len() > remaining_native_evidence_scan {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "certified autonomous Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
@@ -37552,7 +37554,7 @@ impl State {
             .collect()
     }
 
-    include!("state/passive_lane_diagnostic_methods.rs");
+    state_passive_lane_diagnostic_methods!();
 
     /// Derive bounded autonomous execution stages exclusively from current
     /// lifecycle State and independently revalidated durable Kura evidence.
@@ -37719,20 +37721,21 @@ impl State {
             for certified in self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            ) {
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+            {
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
@@ -38099,20 +38102,20 @@ impl State {
             let artifacts = self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             for artifact in artifacts {
                 let session = crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: artifact.proposal,
