@@ -146,7 +146,7 @@ impl Kura {
     fn active_autonomous_lifecycle_attempt_inventory_for_process_record(
         &self,
         process_record: &AutonomousLifecycleProcessGenerationRecordV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_local_peer_id: &PeerId,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -163,7 +163,7 @@ impl Kura {
         let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
         if entry.dataspace_id != dataspace_id
             || active_incarnation != lane_incarnation
-            || process_record.body.chain_id_hash != expected_chain_id_hash
+            || process_record.body.network_id != expected_network_id
             || &process_record.body.local_peer_id != expected_local_peer_id
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -203,8 +203,7 @@ impl Kura {
         let mut consumed_planner_covered = BTreeSet::new();
         let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         let _sidecar_guard = self.sidecar_lock.lock();
-        let _namespace_budget =
-            self.autonomous_lane_attempt_inventory_counts_locked(&entry, 1)?;
+        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(&entry, 1)?;
         let directory_entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -243,8 +242,7 @@ impl Kura {
             if Self::is_unresolved_autonomous_publication_temporary_name(
                 &name,
                 AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
-            )
-            {
+            ) {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous lifecycle inventory found a bootstrap atomic temporary",
@@ -314,7 +312,7 @@ impl Kura {
                 let pointer =
                     AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
                 let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
-                if pointer.chain_id_hash != expected_chain_id_hash
+                if pointer.network_id != expected_network_id
                     || pointer.lane_id != lane_id
                     || pointer.dataspace_id != dataspace_id
                     || pointer.lane_incarnation != lane_incarnation
@@ -332,7 +330,7 @@ impl Kura {
                         lane_id,
                         lane_block_height,
                         proposal_height,
-                        pointer.chain_id_hash,
+                        pointer.network_id,
                         pointer.epoch,
                         None,
                     )?
@@ -581,7 +579,7 @@ impl Kura {
                                 lane_id,
                                 identity.0,
                                 identity.1,
-                                executable_payload.chain_id_hash,
+                                executable_payload.network_id,
                                 executable_payload.epoch,
                                 None,
                             )?
@@ -781,7 +779,9 @@ impl Kura {
         let resulting_bytes = related_bytes
             .checked_sub(replaced_len)
             .and_then(|bytes| bytes.checked_add(next_len))
-            .ok_or("autonomous lifecycle terminal outcome byte accounting or reservation underflowed")?;
+            .ok_or(
+                "autonomous lifecycle terminal outcome byte accounting or reservation underflowed",
+            )?;
         if resulting_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
             return Err("autonomous lifecycle terminal outcome exceeds the shared byte budget");
         }
@@ -916,14 +916,14 @@ impl Kura {
         let mut matching = batch.lanes.iter().filter_map(|execution| {
             let bundle = Self::decode_autonomous_lane_merge_bundle(
                 &execution.source_bundle,
-                execution.autonomous_chain_id_hash,
+                execution.autonomous_network_id,
                 execution.autonomous_epoch,
             )
             .ok()?;
             (bundle.executable_payload() == payload
                 && bundle.bundle_hash().ok() == Some(execution.source_bundle_hash)
                 && execution.origin_proposal == payload.origin_proposal
-                && execution.autonomous_chain_id_hash == payload.chain_id_hash
+                && execution.autonomous_network_id == payload.network_id
                 && execution.autonomous_epoch == payload.epoch
                 && execution.autonomous_payload_hash == payload.payload_hash)
                 .then_some((execution, bundle))
@@ -1144,7 +1144,7 @@ impl Kura {
                 descriptor.lane_id,
                 descriptor.lane_block_height,
                 descriptor.proposal_height,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
                 None,
             )?
@@ -1192,15 +1192,12 @@ impl Kura {
                     "autonomous lifecycle terminal outcome conflicts with its durable pending source",
                 ));
             }
-            current.validate_for_payload(payload).map_err(|message| {
-                Self::invalid_lane_artifact_error(path.clone(), message)
-            })?;
+            current
+                .validate_for_payload(payload)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
             return Ok(AutonomousLifecycleTerminalPendingPublicationPlan {
                 entry: entry.clone(),
-                identity: (
-                    descriptor.lane_block_height,
-                    descriptor.proposal_height,
-                ),
+                identity: (descriptor.lane_block_height, descriptor.proposal_height),
                 path,
                 outcome: current,
                 pending_bytes: None,
@@ -1215,10 +1212,7 @@ impl Kura {
         }
         Ok(AutonomousLifecycleTerminalPendingPublicationPlan {
             entry: entry.clone(),
-            identity: (
-                descriptor.lane_block_height,
-                descriptor.proposal_height,
-            ),
+            identity: (descriptor.lane_block_height, descriptor.proposal_height),
             path,
             outcome: pending,
             pending_bytes: Some(bytes),
@@ -1272,9 +1266,7 @@ impl Kura {
                 next_len,
                 false,
             )
-            .map_err(|message| {
-                Self::invalid_lane_artifact_error(plan.path.clone(), message)
-            })?;
+            .map_err(|message| Self::invalid_lane_artifact_error(plan.path.clone(), message))?;
             inventory.terminal_outcome_identities.insert(plan.identity);
             inventory.conceptual_bytes = inventory
                 .conceptual_bytes
@@ -1286,9 +1278,8 @@ impl Kura {
                         "autonomous lifecycle Pending reservation consumption overflows",
                     )
                 })?;
-            additional_disk_bytes = additional_disk_bytes
-                .checked_add(next_len)
-                .ok_or_else(|| {
+            additional_disk_bytes =
+                additional_disk_bytes.checked_add(next_len).ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
                         "autonomous lifecycle Pending write-set disk accounting overflows",
@@ -1328,8 +1319,7 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let _sidecar_guard = self.sidecar_lock.lock();
-        let inventory =
-            self.autonomous_lane_attempt_inventory_counts_locked(&entry, identity.0)?;
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(&entry, identity.0)?;
         Ok((
             inventory.has_reserved_terminal_outcome(identity),
             inventory.conceptual_files,
@@ -1372,9 +1362,8 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<AutonomousLifecycleTerminalOutcomeV1> {
-        let plan = self.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
-            entry, payload, source,
-        )?;
+        let plan = self
+            .prepare_autonomous_lifecycle_terminal_outcome_pending_locked(entry, payload, source)?;
         self.preflight_autonomous_lifecycle_terminal_outcomes_pending_locked(
             pending_canonical_bytes,
             std::slice::from_ref(&plan),
@@ -1405,7 +1394,7 @@ impl Kura {
         )>,
         Vec<LaneQueueReservationGroupBindingV1>,
         MergeLedgerCarrierRecord,
-        Hash,
+        iroha_data_model::NetworkId,
     )> {
         self.durable_mutation_authorized()?;
         let entry_hash = crate::merge::merge_ledger_entry_hash(entry);
@@ -1455,20 +1444,20 @@ impl Kura {
         let mut terminal_publication_plans = Vec::new();
         terminal_publication_plans.try_reserve_exact(batch.lanes.len())?;
         let mut seen_groups = BTreeSet::new();
-        let mut expected_chain_id_hash = None;
+        let mut expected_network_id = None;
         for execution in &batch.lanes {
             let bundle = Self::decode_autonomous_lane_merge_bundle(
                 &execution.source_bundle,
-                execution.autonomous_chain_id_hash,
+                execution.autonomous_network_id,
                 execution.autonomous_epoch,
             )
             .map_err(|message| {
                 Self::invalid_lane_artifact_error(self.store_root.clone(), message)
             })?;
             let payload = bundle.executable_payload();
-            if expected_chain_id_hash
-                .replace(payload.chain_id_hash)
-                .is_some_and(|expected| expected != payload.chain_id_hash)
+            if expected_network_id
+                .replace(payload.network_id)
+                .is_some_and(|expected| expected != payload.network_id)
             {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
@@ -1502,10 +1491,10 @@ impl Kura {
             }
             let publication_plan = self
                 .prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
-                &lane_entry,
-                payload,
-                source,
-            )?;
+                    &lane_entry,
+                    payload,
+                    source,
+                )?;
             let outcome = &publication_plan.outcome;
             outcome.validate_for_payload(payload).map_err(|message| {
                 Self::invalid_lane_artifact_error(self.store_root.clone(), message)
@@ -1556,10 +1545,10 @@ impl Kura {
             }
             terminal_publication_plans.push(publication_plan);
         }
-        let expected_chain_id_hash = expected_chain_id_hash.ok_or_else(|| {
+        let expected_network_id = expected_network_id.ok_or_else(|| {
             Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
-                "canonical lifecycle source-outcome set has no chain identity",
+                "canonical lifecycle source-outcome set has no network identity",
             )
         })?;
         self.preflight_autonomous_lifecycle_terminal_outcomes_pending_locked(
@@ -1576,7 +1565,7 @@ impl Kura {
             queue_authorizations,
             complete_reservation_groups,
             carrier,
-            expected_chain_id_hash,
+            expected_network_id,
         ))
     }
 
@@ -1613,11 +1602,7 @@ impl Kura {
             .as_ref()
             .map_or(0, |batch| batch.lanes.len());
         let (queue_authorizations, complete_reservation_groups, _, _) =
-            self.canonical_carrier_source_outcome_set_locked(
-                pending_canonical_bytes,
-                entry,
-                true,
-            )?;
+            self.canonical_carrier_source_outcome_set_locked(pending_canonical_bytes, entry, true)?;
         if queue_authorizations.len() != expected_count
             || complete_reservation_groups.len() > expected_count
         {
@@ -1702,8 +1687,8 @@ impl Kura {
             .execution_batch
             .as_ref()
             .map_or(0, |batch| batch.lanes.len());
-        let (queue_authorizations, complete_reservation_groups, _, _) =
-            self.canonical_carrier_source_outcome_set_locked(
+        let (queue_authorizations, complete_reservation_groups, _, _) = self
+            .canonical_carrier_source_outcome_set_locked(
                 pending_canonical_bytes,
                 &canonical_entry,
                 true,
@@ -1732,11 +1717,10 @@ impl Kura {
     pub(crate) fn persist_autonomous_lifecycle_release_terminal_outcome_pending(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization> {
-        if retirement.chain_id_hash != expected_chain_id_hash || retirement.epoch != expected_epoch
-        {
+        if retirement.network_id != expected_network_id || retirement.epoch != expected_epoch {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "release lifecycle pending outcome has the wrong chain context",
@@ -1757,7 +1741,7 @@ impl Kura {
                 retirement.lane_id,
                 retirement.lane_block_height,
                 retirement.proposal_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
                 None,
             )?
@@ -1817,13 +1801,10 @@ impl Kura {
     /// so deletion cannot be mistaken for an already-Complete outcome.
     pub(crate) fn verify_expected_autonomous_lifecycle_terminal_outcome_stages(
         &self,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_groups: &[AutonomousLifecyclePendingReservationGroupObservation],
     ) -> Result<Vec<AutonomousLifecycleTerminalOutcomeStageObservation>> {
-        if expected_chain_id_hash
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
+        if expected_network_id.as_bytes().iter().all(|byte| *byte == 0)
             || expected_groups.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -1925,7 +1906,7 @@ impl Kura {
                 })?;
             let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
             let binding = outcome.binding();
-            if binding.chain_id_hash != expected_chain_id_hash
+            if binding.network_id != expected_network_id
                 || binding.reservation_group_binding() != expected_group
                 || binding.route_identity()
                     != (
@@ -1951,7 +1932,7 @@ impl Kura {
                     identity.lane_id,
                     identity.lane_block_height,
                     identity.proposal_height,
-                    binding.chain_id_hash,
+                    binding.network_id,
                     binding.epoch,
                     None,
                 )?
@@ -2132,7 +2113,7 @@ impl Kura {
                         binding.lane_id,
                         binding.lane_block_height,
                         binding.proposal_height,
-                        binding.chain_id_hash,
+                        binding.network_id,
                         binding.epoch,
                         None,
                     )?
@@ -2310,7 +2291,7 @@ impl Kura {
                 pending_queue_authorizations,
                 complete_reservation_groups,
                 carrier,
-                expected_chain_id_hash,
+                expected_network_id,
             ) = self.canonical_carrier_source_outcome_set_locked(
                 pending_canonical_bytes,
                 &canonical_entry,
@@ -2341,7 +2322,7 @@ impl Kura {
                             entry: canonical_entry,
                             carrier_block_height: carrier.block_height,
                             carrier_block_hash: carrier.block_hash,
-                            expected_chain_id_hash,
+                            expected_network_id,
                         },
                     ),
                 );
@@ -2431,7 +2412,7 @@ impl Kura {
                 identity.lane_id,
                 identity.lane_block_height,
                 identity.proposal_height,
-                binding.chain_id_hash,
+                binding.network_id,
                 binding.epoch,
                 None,
             )?

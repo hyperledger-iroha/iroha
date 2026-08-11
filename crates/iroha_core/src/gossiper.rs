@@ -17,7 +17,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, DataSpaceId,
+    DataSpaceId, NetworkId,
     account::AccountId,
     isi::InstructionBox,
     nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
@@ -108,7 +108,7 @@ struct PeerRecentSuppressionEntry {
 
 fn tx_gossip_frame_payload_cap(
     network_cfg: &NetworkConfig,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     self_peer_id: &PeerId,
     max_peer_id: &PeerId,
 ) -> usize {
@@ -121,7 +121,7 @@ fn tx_gossip_frame_payload_cap(
     let dummy_keypair = tx_gossip_frame_probe_keypair();
     let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
     let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         dummy_authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -286,8 +286,6 @@ mod handle_tests {
 
 /// Actor which gossips transactions and receives transaction gossips
 pub struct TransactionGossiper {
-    /// Unique id of the blockchain. Used for simple replay attack protection.
-    chain_id: ChainId,
     /// The time between gossip messages. More frequent gossiping shortens
     /// the time to sync, but can overload the network.
     gossip_period: Duration,
@@ -330,10 +328,9 @@ impl TransactionGossiper {
         )
     }
 
-    /// Construct [`Self`] from configuration
+    /// Construct [`Self`], deriving target seeds from the state's exact network identity.
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn from_config(
-        chain_id: ChainId,
         Config {
             gossip_period,
             gossip_size,
@@ -353,9 +350,10 @@ impl TransactionGossiper {
         );
         let now = Instant::now();
         let dataspace_cfg = dataspace;
+        let network_id = *state.network_id_ref();
         let public_seed = GossipTargetSeed::new(
             Self::initial_target_seed(
-                &chain_id,
+                &network_id,
                 &self_peer_id,
                 &max_peer_id,
                 GOSSIP_SEED_PUBLIC_DOMAIN,
@@ -365,7 +363,7 @@ impl TransactionGossiper {
         );
         let restricted_seed = GossipTargetSeed::new(
             Self::initial_target_seed(
-                &chain_id,
+                &network_id,
                 &self_peer_id,
                 &max_peer_id,
                 GOSSIP_SEED_RESTRICTED_DOMAIN,
@@ -375,12 +373,15 @@ impl TransactionGossiper {
         );
         // Keep gossip batches below the plaintext per-topic cap while respecting the encrypted
         // frame ceiling and the P2P message envelope overhead.
-        let tx_frame_cap =
-            tx_gossip_frame_payload_cap(network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+        let tx_frame_cap = tx_gossip_frame_payload_cap(
+            network_cfg,
+            state.network_id_ref(),
+            &self_peer_id,
+            &max_peer_id,
+        );
         let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         let peer_recent_ring = vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS];
         Self {
-            chain_id,
             gossip_period,
             gossip_size,
             gossip_resend_ticks,
@@ -1270,15 +1271,36 @@ impl TransactionGossiper {
     }
 
     fn initial_target_seed(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         self_peer_id: &PeerId,
         max_peer_id: &PeerId,
         domain: u64,
     ) -> u64 {
-        let material = format!(
-            "iroha:tx-gossip-target-seed:v1\n{domain:016x}\n{chain_id}\n{self_peer_id}\n{max_peer_id}"
+        let self_peer = self_peer_id.encode();
+        let max_peer = max_peer_id.encode();
+        let mut material = Vec::with_capacity(
+            b"iroha:tx-gossip-target-seed:v2\0".len()
+                + Hash::LENGTH
+                + core::mem::size_of::<u64>() * 3
+                + self_peer.len()
+                + max_peer.len(),
         );
-        let digest = Hash::new(material.as_bytes());
+        material.extend_from_slice(b"iroha:tx-gossip-target-seed:v2\0");
+        material.extend_from_slice(network_id.as_bytes());
+        material.extend_from_slice(&domain.to_be_bytes());
+        material.extend_from_slice(
+            &u64::try_from(self_peer.len())
+                .expect("canonical peer id length fits in u64")
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&self_peer);
+        material.extend_from_slice(
+            &u64::try_from(max_peer.len())
+                .expect("canonical peer id length fits in u64")
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&max_peer);
+        let digest = Hash::new(&material);
         let mut seed = [0_u8; 8];
         seed.copy_from_slice(&digest.as_ref()[..8]);
         u64::from_le_bytes(seed)
@@ -1804,7 +1826,7 @@ impl TransactionGossiper {
 
         if stateless_cache_cap > 0 && !materialized.is_empty() {
             let cache_context = StatelessValidationContext::new(
-                self.chain_id.clone(),
+                *self.state.network_id_ref(),
                 u64::try_from(max_clock_drift.as_millis()).unwrap_or(u64::MAX),
                 tx_limits,
                 crypto_cfg.allowed_signing.clone(),
@@ -1945,7 +1967,7 @@ impl TransactionGossiper {
                     candidate.entrypoint,
                     Arc::clone(&candidate.payload),
                     candidate.entrypoint_hash,
-                    &self.chain_id,
+                    self.state.network_id_ref(),
                     max_clock_drift,
                     tx_limits,
                     crypto_cfg.as_ref(),
@@ -2424,7 +2446,7 @@ impl TransactionGossiper {
                 entrypoint,
                 Arc::clone(&payload),
                 entrypoint_hash,
-                &self.chain_id,
+                self.state.network_id_ref(),
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
@@ -3578,7 +3600,7 @@ mod tests {
         ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
-        ChainId, DataSpaceId, Level,
+        DataSpaceId, Level,
         account::{AccountDetails, AccountValue},
         domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
@@ -3612,11 +3634,16 @@ mod tests {
         state::{State, World},
     };
 
+    fn test_network_id() -> NetworkId {
+        "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse()
+            .expect("valid default test network id")
+    }
+
     fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = (*ALICE_ID).clone();
         let signed = TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3744,10 +3771,10 @@ mod tests {
     }
 
     fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id();
         let authority = (*ALICE_ID).clone();
         let inner = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3755,13 +3782,13 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let reveal_deadline_height = 10;
         let commitment = compute_sealed_transaction_commitment(
-            &chain_id,
+            &network_id,
             &inner,
             [0x5A; 32],
             reveal_deadline_height,
         );
         let payload = SealedTransactionCommitmentPayload::new(
-            chain_id,
+            network_id,
             authority,
             commitment,
             5,
@@ -3784,7 +3811,6 @@ mod tests {
     }
 
     fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let owner = (*ALICE_ID).clone();
         let signer = checked_ram_lfe_policy_signer();
         let policy_id = "email#retail"
@@ -3837,7 +3863,7 @@ mod tests {
             [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
 
         TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             owner,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4100,7 +4126,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         ));
         let now = Instant::now();
         TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: defaults::network::TRANSACTION_GOSSIP_SIZE,
             gossip_resend_ticks: resend_ticks,
@@ -4152,10 +4177,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 .expect("checked probe public key algorithm"),
             Algorithm::Ed25519
         );
-        let chain_id: ChainId = "probe-signing".parse().expect("chain id");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let transaction = TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4208,14 +4232,16 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         network_cfg.max_frame_bytes_tx_gossip = 1024;
         let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
         let max_peer_id = self_peer_id.clone();
-        let chain_id: ChainId = "test-chain".parse().expect("chain id");
-        let expected =
-            tx_gossip_frame_payload_cap(&network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+        let expected = tx_gossip_frame_payload_cap(
+            &network_cfg,
+            state.network_id_ref(),
+            &self_peer_id,
+            &max_peer_id,
+        );
 
         let network = IrohaNetwork::closed_for_tests();
 
         let gossiper = TransactionGossiper::from_config(
-            chain_id,
             Config {
                 gossip_period: Duration::from_millis(1000),
                 gossip_size: NonZeroU32::new(1).expect("nonzero size"),
@@ -4269,7 +4295,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
         let mut gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: resend_ticks,
@@ -4388,7 +4413,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
         let mut gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: resend_ticks,
@@ -5572,51 +5596,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
-    fn initial_target_seed_is_stable_and_peer_specific() {
-        let chain_id: ChainId = "test-chain".parse().expect("chain id");
-        let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
-        let other_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
-        let max_peer: PeerId = (*CARPENTER_KEYPAIR).public_key().clone().into();
-
-        let seed = TransactionGossiper::initial_target_seed(
-            &chain_id,
-            &self_peer,
-            &max_peer,
-            GOSSIP_SEED_PUBLIC_DOMAIN,
-        );
-        assert_eq!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &self_peer,
-                &max_peer,
-                GOSSIP_SEED_PUBLIC_DOMAIN,
-            ),
-            "initial target seed should be stable for the same identity inputs"
-        );
-        assert_ne!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &self_peer,
-                &max_peer,
-                GOSSIP_SEED_RESTRICTED_DOMAIN,
-            ),
-            "public and restricted gossip planes should start from distinct seeds"
-        );
-        assert_ne!(
-            seed,
-            TransactionGossiper::initial_target_seed(
-                &chain_id,
-                &other_peer,
-                &max_peer,
-                GOSSIP_SEED_PUBLIC_DOMAIN,
-            ),
-            "local peer identity should perturb initial target seed"
-        );
-    }
-
-    #[test]
     fn gossip_target_seed_holds_until_reshuffle_period() {
         let now = Instant::now();
         let mut seed = GossipTargetSeed::new(0xA5A5_1234, Duration::from_secs(5), now);
@@ -5801,7 +5780,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6544,7 +6522,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6663,7 +6640,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6784,9 +6760,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             &TimeSource::new_system(),
         ));
         let mixed_domain_signed = |primary: &str, secondary: &str| {
-            let chain_id: ChainId = "test-chain".parse().expect("chain id");
             TransactionBuilder::new(
-                chain_id,
+                test_network_id(),
                 (*ALICE_ID).clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -6835,7 +6810,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6875,5 +6849,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
     }
 
+    include!("gossiper_network_domain_tests.rs");
     include!("gossiper_restricted_route_tests.rs");
 }

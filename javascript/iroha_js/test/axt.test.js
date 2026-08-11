@@ -22,23 +22,23 @@ const DESCRIPTOR_FIXTURE = JSON.parse(
   ),
 );
 
-test("normalizeAxtRejectContext preserves minima and ids", () => {
+test("normalizeAxtRejectContext preserves exact policy hints and ids", () => {
   const ctx = normalizeAxtRejectContext({
     reason: "era",
     dataspace: 7,
     target_lane: 2,
     snapshot_version: 55,
     detail: "stale handle",
-    next_min_handle_era: 9,
-    next_min_sub_nonce: 4,
+    active_handle_era: 9,
+    next_handle_counter: 4,
   });
   assert.equal(ctx.reason, "era");
   assert.equal(ctx.dataspace, 7);
   assert.equal(ctx.lane, 2);
   assert.equal(ctx.snapshot_version, 55);
   assert.equal(ctx.detail, "stale handle");
-  assert.equal(ctx.next_min_handle_era, 9);
-  assert.equal(ctx.next_min_sub_nonce, 4);
+  assert.equal(ctx.active_handle_era, 9);
+  assert.equal(ctx.next_handle_counter, 4);
 });
 
 test("normalizeAxtRejectContext rejects camelCase fields", () => {
@@ -50,12 +50,27 @@ test("normalizeAxtRejectContext rejects camelCase fields", () => {
         targetLane: 3,
         snapshotVersion: 101,
         detail: null,
-        nextMinHandleEra: 12,
-        nextMinSubNonce: 6,
+        activeHandleEra: 12,
+        nextHandleCounter: 6,
       }),
     {
       name: "TypeError",
-      message: /dataspace/,
+      message: /snake_case/,
+    },
+  );
+});
+
+test("normalizeAxtRejectContext rejects retired minimum terminology", () => {
+  assert.throws(
+    () =>
+      normalizeAxtRejectContext({
+        reason: "era",
+        next_min_handle_era: 12,
+        next_min_sub_nonce: 6,
+      }),
+    {
+      name: "TypeError",
+      message: /snake_case/,
     },
   );
 });
@@ -65,21 +80,21 @@ test("buildHandleRefreshRequest applies overrides", () => {
     reason: "era",
     dataspace: 1,
     lane: 4,
-    next_min_handle_era: 3,
-    next_min_sub_nonce: 2,
+    active_handle_era: 3,
+    next_handle_counter: 2,
     snapshot_version: 9,
     detail: "era too low",
   };
   const request = buildHandleRefreshRequest(base, {
     targetLane: 5,
-    nextMinHandleEra: 7,
+    activeHandleEra: 7,
     reason: "sub_nonce",
   });
   assert.deepEqual(request, {
     dataspace: 1,
     targetLane: 5,
-    nextMinHandleEra: 7,
-    nextMinSubNonce: 2,
+    activeHandleEra: 7,
+    nextHandleCounter: 2,
     reason: "sub_nonce",
     snapshotVersion: 9,
     detail: "era too low",

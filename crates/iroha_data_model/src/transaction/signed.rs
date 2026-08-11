@@ -31,7 +31,7 @@ use super::{
     executable::{Executable, ExecutableBatchItem, IvmBytecode},
 };
 use crate::{
-    ChainId,
+    NetworkId,
     account::{AccountController, AccountId, MultisigPolicy},
     asset::AssetDefinitionId,
     events::data::prelude::AssetBatchTransferOutcome,
@@ -166,15 +166,39 @@ mod model {
         Sponsor(SponsorFeePayment),
     }
 
+    /// Closed security domain signed into every transaction payload.
+    ///
+    /// Ordinary transactions bind the exact genesis-header-derived network
+    /// identity. The marker variant exists solely because a genesis block
+    /// cannot contain its own header hash without a self-reference.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
+    pub enum TransactionDomain {
+        /// Exact deployment identity for every non-genesis transaction.
+        Network(NetworkId),
+        /// Genesis-only marker used to avoid a genesis-hash self-reference.
+        Genesis,
+    }
+
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct TransactionPayload {
-        /// Unique id of the blockchain. Used for simple replay attack protection.
-        pub chain: ChainId,
+        /// Exact signed security domain for replay protection.
+        pub domain: TransactionDomain,
         /// Account ID of transaction creator. Signing rejects a key mismatch;
         /// it never rewrites this signature-bound field.
         pub authority: AccountId,
@@ -283,8 +307,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct SealedTransactionCommitmentPayload {
-        /// Unique id of the blockchain.
-        pub chain_id: ChainId,
+        /// Exact deployment identity of the blockchain.
+        pub network_id: NetworkId,
         /// Account authorized to later reveal the transaction.
         pub authority: AccountId,
         /// Commitment to the canonical signed transaction bytes and salt.
@@ -506,8 +530,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         }
 
         let mut offset = 0usize;
-        let chain =
-            decode_canonical_field::<ChainId>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let domain = decode_canonical_field::<TransactionDomain>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let authority =
             decode_slice_field::<AccountId>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
         let creation_time_ms =
@@ -538,7 +564,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         norito::core::note_payload_access(bytes, offset);
         Ok((
             Self {
-                chain,
+                domain,
                 authority,
                 creation_time_ms,
                 instructions,
@@ -1303,10 +1329,22 @@ impl TransactionPayload {
             .map(|ttl| Duration::from_millis(ttl.into()))
     }
 
-    /// Return transaction chain id.
+    /// Return the exact signed transaction security domain.
     #[inline]
-    pub fn chain(&self) -> &ChainId {
-        &self.chain
+    pub const fn domain(&self) -> &TransactionDomain {
+        &self.domain
+    }
+
+    /// Return the exact network identity for an ordinary transaction.
+    ///
+    /// Genesis payloads return `None` because their explicit marker avoids a
+    /// self-reference to the genesis header hash.
+    #[inline]
+    pub const fn network_id(&self) -> Option<&NetworkId> {
+        match &self.domain {
+            TransactionDomain::Network(network_id) => Some(network_id),
+            TransactionDomain::Genesis => None,
+        }
     }
 }
 
@@ -1409,10 +1447,16 @@ impl SignedTransaction {
         self.payload.nonce
     }
 
-    /// Transaction chain id
+    /// Exact signed transaction security domain.
     #[inline]
-    pub fn chain(&self) -> &ChainId {
-        self.payload.chain()
+    pub const fn domain(&self) -> &TransactionDomain {
+        self.payload.domain()
+    }
+
+    /// Exact network identity for an ordinary transaction.
+    #[inline]
+    pub const fn network_id(&self) -> Option<&NetworkId> {
+        self.payload.network_id()
     }
 
     /// Return the transaction signature
@@ -1591,7 +1635,7 @@ impl SealedTransactionCommitmentPayload {
     /// Construct a sealed transaction commitment payload.
     #[must_use]
     pub fn new(
-        chain_id: ChainId,
+        network_id: NetworkId,
         authority: AccountId,
         commitment: Hash,
         reveal_after_height: u64,
@@ -1599,7 +1643,7 @@ impl SealedTransactionCommitmentPayload {
         nonce: Option<NonZeroU64>,
     ) -> Self {
         Self {
-            chain_id,
+            network_id,
             authority,
             commitment,
             reveal_after_height,
@@ -1710,8 +1754,12 @@ impl SealedTransactionReveal {
     /// Recompute the expected commitment using the stored commitment deadline.
     #[must_use]
     pub fn expected_commitment_with_deadline(&self, reveal_deadline_height: u64) -> Hash {
+        let network_id = self
+            .signed_transaction
+            .network_id()
+            .expect("sealed transactions cannot use the genesis-only transaction domain");
         compute_sealed_transaction_commitment(
-            self.signed_transaction.chain(),
+            network_id,
             &self.signed_transaction,
             self.salt,
             reveal_deadline_height,
@@ -1727,11 +1775,11 @@ impl core::fmt::Display for SealedTransactionReveal {
 
 /// Compute the canonical sealed transaction commitment.
 ///
-/// The input is domain-separated and includes the chain id, the hash of canonical Norito
+/// The input is domain-separated and includes the exact network id, the hash of canonical Norito
 /// signed-transaction bytes, the salt, and the reveal deadline height.
 #[must_use]
 pub fn compute_sealed_transaction_commitment(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     signed_transaction: &SignedTransaction,
     salt: [u8; 32],
     reveal_deadline_height: u64,
@@ -1739,17 +1787,17 @@ pub fn compute_sealed_transaction_commitment(
     let tx_bytes = norito::encode_canonical(signed_transaction)
         .expect("signed transaction must canonically encode to Norito");
     let tx_hash = Hash::new(tx_bytes);
-    let chain_bytes =
-        norito::encode_canonical(chain_id).expect("chain id must canonically encode to Norito");
+    let network_bytes =
+        norito::encode_canonical(network_id).expect("network id must canonically encode to Norito");
     let mut bytes = Vec::with_capacity(
         SEALED_TRANSACTION_COMMITMENT_DOMAIN.len()
-            + chain_bytes.len()
+            + network_bytes.len()
             + Hash::LENGTH
             + salt.len()
             + core::mem::size_of::<u64>(),
     );
     bytes.extend_from_slice(SEALED_TRANSACTION_COMMITMENT_DOMAIN);
-    bytes.extend_from_slice(&chain_bytes);
+    bytes.extend_from_slice(&network_bytes);
     bytes.extend_from_slice(tx_hash.as_ref());
     bytes.extend_from_slice(&salt);
     bytes.extend_from_slice(&reveal_deadline_height.to_le_bytes());
@@ -2132,14 +2180,14 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
 
 impl TransactionBuilder {
     fn new_with_time(
-        chain: ChainId,
+        domain: TransactionDomain,
         authority: AccountId,
         creation_time_ms: u64,
         fee_payment: FeePaymentIntent,
     ) -> Self {
         Self {
             payload: TransactionPayload {
-                chain,
+                domain,
                 authority,
                 creation_time_ms,
                 nonce: None,
@@ -2163,7 +2211,7 @@ impl TransactionBuilder {
     // we don't want to expose this to non-tests
     #[inline]
     pub fn new_with_time_source(
-        chain_id: ChainId,
+        network_id: NetworkId,
         authority: AccountId,
         time_source: &TimeSource,
         fee_payment: FeePaymentIntent,
@@ -2174,13 +2222,52 @@ impl TransactionBuilder {
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
 
-        Self::new_with_time(chain_id, authority, creation_time_ms, fee_payment)
+        Self::new_with_time(
+            TransactionDomain::Network(network_id),
+            authority,
+            creation_time_ms,
+            fee_payment,
+        )
     }
 
     /// Construct [`Self`] with the exact signature-bound fee payment intent.
     #[inline]
-    pub fn new(chain_id: ChainId, authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
-        Self::new_with_time_source(chain_id, authority, &TimeSource::new_system(), fee_payment)
+    pub fn new(network_id: NetworkId, authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
+        Self::new_with_time_source(
+            network_id,
+            authority,
+            &TimeSource::new_system(),
+            fee_payment,
+        )
+    }
+
+    /// Construct a transaction carrying the explicit genesis-only domain.
+    ///
+    /// Runtime admission rejects this domain. Genesis construction and
+    /// validation are the only callers that may use it.
+    #[inline]
+    pub fn new_genesis(authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
+        Self::new_genesis_with_time_source(authority, &TimeSource::new_system(), fee_payment)
+    }
+
+    /// Construct a genesis-domain transaction using an explicit time source.
+    #[inline]
+    pub fn new_genesis_with_time_source(
+        authority: AccountId,
+        time_source: &TimeSource,
+        fee_payment: FeePaymentIntent,
+    ) -> Self {
+        let creation_time_ms = time_source
+            .get_unix_time()
+            .as_millis()
+            .try_into()
+            .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
+        Self::new_with_time(
+            TransactionDomain::Genesis,
+            authority,
+            creation_time_ms,
+            fee_payment,
+        )
     }
 }
 
@@ -2493,6 +2580,13 @@ impl TransactionBuilder {
 }
 
 #[cfg(test)]
+fn test_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([seed; Hash::LENGTH]),
+    ))
+}
+
+#[cfg(test)]
 mod tests {
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::core::DecodeFromSlice;
@@ -2528,7 +2622,7 @@ mod tests {
     };
 
     fn sample_signed_transaction() -> SignedTransaction {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x11);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -2546,6 +2640,131 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "exact slice".into())])
         .sign(&private_key)
+    }
+
+    #[test]
+    fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
+        let network_id = test_network_id(0x35);
+        let network = TransactionDomain::Network(network_id);
+        let network_bytes =
+            norito::encode_canonical(&network).expect("encode network transaction domain");
+        let mut expected_network = vec![0, 0, 0, 0, Hash::LENGTH as u8];
+        expected_network.extend_from_slice(network_id.as_bytes());
+        assert_eq!(network_bytes, expected_network);
+        assert_eq!(
+            norito::decode_from_bytes::<TransactionDomain>(&network_bytes)
+                .expect("decode pinned network transaction domain"),
+            network
+        );
+
+        let genesis = TransactionDomain::Genesis;
+        let genesis_bytes =
+            norito::encode_canonical(&genesis).expect("encode genesis transaction domain");
+        assert_eq!(genesis_bytes, [1, 0, 0, 0]);
+        assert_eq!(
+            norito::decode_from_bytes::<TransactionDomain>(&genesis_bytes)
+                .expect("decode pinned genesis transaction domain"),
+            genesis
+        );
+        assert_ne!(network_bytes, genesis_bytes);
+        assert!(
+            norito::decode_from_bytes::<TransactionDomain>(&[2, 0, 0, 0]).is_err(),
+            "the closed transaction-domain enum must reject unknown discriminants"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
+        let network_id = test_network_id(0x35);
+        let network = TransactionDomain::Network(network_id);
+        let network_id_json =
+            norito::json::to_json(&network_id).expect("serialize canonical network id");
+        let expected_network = format!(r#"{{"kind":"network","value":{network_id_json}}}"#);
+        assert_eq!(
+            norito::json::to_json(&network).expect("serialize network transaction domain"),
+            expected_network
+        );
+        assert_eq!(
+            norito::json::from_str::<TransactionDomain>(&expected_network)
+                .expect("decode canonical network transaction domain"),
+            network
+        );
+        assert_eq!(
+            norito::json::to_json(&TransactionDomain::Genesis)
+                .expect("serialize genesis transaction domain"),
+            r#"{"kind":"genesis"}"#
+        );
+
+        for rejected in [
+            format!(r#"{{"kind":"network","content":{network_id_json}}}"#),
+            format!(r#"{{"network_id":{network_id_json}}}"#),
+            r#"{"chain":"legacy"}"#.to_owned(),
+            r#"{"chainId":"legacy"}"#.to_owned(),
+            r#"{"chain_id":"legacy"}"#.to_owned(),
+            format!(r#"{{"kind":"network","value":{network_id_json},"chain":"legacy"}}"#),
+            r#"{"kind":"genesis","chain":"legacy"}"#.to_owned(),
+            format!(r#"{{"kind":"genesis","value":{network_id_json}}}"#),
+        ] {
+            assert!(
+                norito::json::from_str::<TransactionDomain>(&rejected).is_err(),
+                "legacy, flat, or non-canonical transaction domain must be rejected: {rejected}"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
+        let transaction = sample_signed_transaction();
+        let canonical = norito::json::to_value(transaction.payload())
+            .expect("serialize canonical transaction payload");
+        assert!(
+            norito::json::from_value::<TransactionPayload>(canonical.clone()).is_ok(),
+            "the canonical transaction payload must round-trip"
+        );
+        let canonical_object = canonical
+            .as_object()
+            .expect("transaction payload serializes as an object");
+        assert!(canonical_object.contains_key("domain"));
+        for retired in ["chain", "chain_id", "chainId"] {
+            assert!(!canonical_object.contains_key(retired));
+            let mut hostile = canonical.clone();
+            hostile
+                .as_object_mut()
+                .expect("transaction payload object")
+                .insert(
+                    retired.to_owned(),
+                    norito::json::Value::String("legacy".to_owned()),
+                );
+            assert!(
+                norito::json::from_value::<TransactionPayload>(hostile).is_err(),
+                "retired transaction identity key `{retired}` must be rejected"
+            );
+        }
+
+        let mut unknown = canonical.clone();
+        unknown
+            .as_object_mut()
+            .expect("transaction payload object")
+            .insert(
+                "future_identity".to_owned(),
+                norito::json::Value::String("forbidden".to_owned()),
+            );
+        assert!(
+            norito::json::from_value::<TransactionPayload>(unknown).is_err(),
+            "unknown transaction payload fields must fail closed"
+        );
+
+        let mut missing_domain = canonical;
+        missing_domain
+            .as_object_mut()
+            .expect("transaction payload object")
+            .remove("domain");
+        assert!(
+            norito::json::from_value::<TransactionPayload>(missing_domain).is_err(),
+            "transaction payload domain is mandatory"
+        );
     }
 
     fn sample_fee_asset() -> AssetDefinitionId {
@@ -2583,7 +2802,7 @@ mod tests {
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
-                    chain_id: ChainId::from("privacy-intent-test"),
+                    network_id: test_network_id(0x30),
                     action_index: 0,
                     parameter_id,
                     parameter_digest,
@@ -2630,7 +2849,7 @@ mod tests {
 
     fn privacy_payload_with_executable(executable: Executable) -> TransactionPayload {
         TransactionBuilder::new_with_time(
-            ChainId::from("privacy-intent-test"),
+            TransactionDomain::Network(test_network_id(0x30)),
             privacy_test_authority(),
             1_725_000_000_000,
             FeePaymentIntent::authority(Vec::new(), None),
@@ -2823,7 +3042,7 @@ mod tests {
     fn privacy_test_contract_call() -> ContractInvocation {
         ContractInvocation {
             contract_address: crate::smart_contract::ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &test_network_id(0x30),
                 &privacy_test_authority(),
                 0,
                 crate::nexus::DataSpaceId::UNIVERSAL,
@@ -3167,8 +3386,8 @@ mod tests {
     }
 
     #[test]
-    fn transaction_payload_exposes_execution_identity_ttl_and_chain() {
-        let chain: ChainId = "payload-accessors".parse().expect("chain id");
+    fn transaction_payload_exposes_execution_identity_ttl_and_network() {
+        let chain = test_network_id(0x12);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -3192,7 +3411,7 @@ mod tests {
         assert_eq!(payload.instructions(), &instructions);
         assert_eq!(payload.authority(), &authority);
         assert_eq!(payload.time_to_live(), Some(time_to_live));
-        assert_eq!(payload.chain(), &chain);
+        assert_eq!(payload.network_id(), Some(&chain));
     }
 
     #[test]
@@ -3314,6 +3533,23 @@ mod tests {
             changed_amount
                 .privacy_transaction_intent_digest_v1()
                 .expect("independent action amount remains bound"),
+            expected
+        );
+
+        let mut changed_scope = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_scope, |submission| {
+            let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("ZK-ACE fixture statement");
+            };
+            statement.public_balance_scope =
+                crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+        });
+        assert_ne!(
+            changed_scope
+                .privacy_transaction_intent_digest_v1()
+                .expect("exact public balance scope remains bound"),
             expected
         );
 
@@ -3443,7 +3679,7 @@ mod tests {
             expected
         );
 
-        let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 3] = [
+        let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 4] = [
             |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
                 statement.state_root.0[0] ^= 1;
             },
@@ -3452,6 +3688,10 @@ mod tests {
             },
             |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
                 statement.output_commitments[0].0[0] ^= 1;
+            },
+            |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
+                statement.public_balance_scope =
+                    crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
             },
         ];
         for mutate in independent_mutations {
@@ -3558,8 +3798,8 @@ mod tests {
             }};
         }
 
-        assert_bound!("payload chain", |changed: &mut TransactionPayload| {
-            changed.chain = ChainId::from("privacy-intent-other-chain");
+        assert_bound!("payload network", |changed: &mut TransactionPayload| {
+            changed.domain = TransactionDomain::Network(test_network_id(0xFE));
         });
         assert_bound!("payload authority", |changed: &mut TransactionPayload| {
             let key: iroha_crypto::PublicKey =
@@ -3659,10 +3899,12 @@ mod tests {
                     PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5]));
             }
         );
-        assert_submission_bound!("context chain", |submission: &mut SubmitPrivacyProofV1| {
-            submission.envelope.statement.context_mut().chain_id =
-                ChainId::from("privacy-context-other-chain");
-        });
+        assert_submission_bound!(
+            "context network",
+            |submission: &mut SubmitPrivacyProofV1| {
+                submission.envelope.statement.context_mut().network_id = test_network_id(0x31);
+            }
+        );
         assert_submission_bound!("action index", |submission: &mut SubmitPrivacyProofV1| {
             submission.envelope.statement.context_mut().action_index = 1;
         });
@@ -3918,7 +4160,7 @@ mod tests {
 
     #[test]
     fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
-        let chain: ChainId = "test-chain".parse().expect("chain id");
+        let network_id = test_network_id(0x13);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -3929,7 +4171,7 @@ mod tests {
                 .parse()
                 .expect("private key");
         let contract_address = crate::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             0,
             crate::nexus::DataSpaceId::UNIVERSAL,
@@ -3940,7 +4182,7 @@ mod tests {
         ])
         .expect("bounded argument record");
         let mut transaction = TransactionBuilder::new(
-            chain,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3995,7 +4237,7 @@ mod tests {
 
     #[test]
     fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x14);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -4071,7 +4313,7 @@ mod tests {
 
     #[test]
     fn with_instructions_accepts_instruction_box() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x15);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         // Pre-boxed instruction
@@ -4141,7 +4383,7 @@ mod tests {
             ),
         ];
         let tx = TransactionBuilder::new(
-            "test-chain".parse().expect("chain id"),
+            test_network_id(0x31),
             authority,
             FeePaymentIntent::authority(
                 Vec::new(),
@@ -4170,7 +4412,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_exports_signable_payload_and_accepts_external_signature() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x16);
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let builder = TransactionBuilder::new(
@@ -4196,7 +4438,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_decodes_exact_external_signing_payload() {
-        let chain: ChainId = "external-payload-roundtrip".parse().unwrap();
+        let chain = test_network_id(0x17);
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut builder = TransactionBuilder::new(
@@ -4232,7 +4474,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_payload_roundtrip_preserves_quote_to_sign_preimage() {
-        let chain: ChainId = "quote-sign-payload".parse().unwrap();
+        let chain = test_network_id(0x18);
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let intent = FeePaymentIntent::authority(
@@ -4262,7 +4504,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_from_payload_rejects_retired_fee_metadata() {
-        let chain: ChainId = "invalid-quoted-payload".parse().unwrap();
+        let chain = test_network_id(0x19);
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut payload = TransactionBuilder::new(
@@ -4287,7 +4529,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_try_sign_matches_compatibility_sign() {
-        let chain: ChainId = "try-sign-chain".parse().unwrap();
+        let chain = test_network_id(0x1A);
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let make_builder = || {
@@ -4318,7 +4560,7 @@ mod tests {
 
     #[test]
     fn transaction_signature_decode_from_slice_roundtrip() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x1B);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -4468,7 +4710,7 @@ mod tests {
         )
         .expect("one-of-two multisig policy");
         let builder = TransactionBuilder::new(
-            "wire-proof-chain".parse().expect("chain id"),
+            test_network_id(0x32),
             AccountId::new_multisig(policy),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4650,7 +4892,7 @@ mod tests {
     #[test]
     fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
-        let chain: ChainId = "mldsa-tx-signature-length".parse().expect("chain id");
+        let chain = test_network_id(0x1C);
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = TransactionBuilder::new(
             chain,
@@ -4722,7 +4964,7 @@ mod tests {
     #[test]
     fn signed_transaction_roundtrip_preserves_instruction_order() {
         use crate::parameter::{Parameter, system::SumeragiParameter};
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x1D);
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -4780,7 +5022,7 @@ mod tests {
 
     #[test]
     fn sign_rejects_mismatched_signatory_without_rewriting_payload() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let chain = test_network_id(0x1E);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let stored_public_key: iroha_crypto::PublicKey =
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
@@ -4807,7 +5049,7 @@ mod tests {
 
     #[test]
     fn entrypoint_hashes_match_direct_encoding() {
-        let chain: ChainId = "hash-chain".parse().unwrap();
+        let chain = test_network_id(0x1F);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -4846,7 +5088,7 @@ mod tests {
 
     #[test]
     fn verify_signature_rejects_missing_multisig_signatures() {
-        let chain: ChainId = "multisig-chain".parse().unwrap();
+        let chain = test_network_id(0x20);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = checked_random_keypair();
 
@@ -4856,7 +5098,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -4892,7 +5134,7 @@ mod tests {
 
     #[test]
     fn verify_signature_accepts_multisig_with_quorum() {
-        let chain: ChainId = "multisig-chain-ok".parse().unwrap();
+        let chain = test_network_id(0x21);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = checked_random_keypair();
 
@@ -4902,7 +5144,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy.clone());
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -4943,7 +5185,7 @@ mod tests {
 
     #[test]
     fn verify_signature_rejects_multisig_bundle_for_single_controller() {
-        let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
+        let chain = test_network_id(0x22);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
@@ -4980,7 +5222,7 @@ mod tests {
 
     #[test]
     fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
-        let chain: ChainId = "multisig-empty-try-sign".parse().unwrap();
+        let chain = test_network_id(0x23);
         let signer = checked_random_keypair();
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
@@ -5002,7 +5244,7 @@ mod tests {
 
     #[test]
     fn verify_signature_rejects_empty_multisig_bundle() {
-        let chain: ChainId = "multisig-chain-empty".parse().unwrap();
+        let chain = test_network_id(0x24);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = checked_random_keypair();
 
@@ -5012,7 +5254,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -5043,7 +5285,7 @@ mod tests {
 
     #[test]
     fn verify_signature_rejects_unknown_signer() {
-        let chain: ChainId = "multisig-chain-unknown".parse().unwrap();
+        let chain = test_network_id(0x25);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let member_key = checked_random_keypair();
         let unknown_key = checked_random_keypair();
@@ -5054,7 +5296,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -5089,7 +5331,7 @@ mod tests {
 
     #[test]
     fn verify_signature_does_not_double_count_duplicates() {
-        let chain: ChainId = "multisig-chain-duplicate".parse().unwrap();
+        let chain = test_network_id(0x26);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = checked_random_keypair();
         let other = checked_random_keypair();
@@ -5102,7 +5344,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -5138,7 +5380,7 @@ mod tests {
 
     #[test]
     fn verify_signature_accepts_mixed_algorithms() {
-        let chain: ChainId = "multisig-mixed-algo".parse().unwrap();
+        let chain = test_network_id(0x27);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let ed = checked_random_keypair();
         let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
@@ -5164,7 +5406,7 @@ mod tests {
 
     #[test]
     fn signature_count_tracks_all_multisig_entries() {
-        let chain: ChainId = "multisig-count".parse().unwrap();
+        let chain = test_network_id(0x28);
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = checked_random_keypair();
 
@@ -5174,7 +5416,7 @@ mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(chain),
             authority,
             creation_time_ms: 0,
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
@@ -5237,15 +5479,16 @@ mod tests {
                 .unwrap();
         let salt = [0xA5; 32];
         let reveal_deadline_height = 42;
+        let network_id = tx.network_id().expect("ordinary transaction network id");
         let commitment =
-            compute_sealed_transaction_commitment(tx.chain(), &tx, salt, reveal_deadline_height);
+            compute_sealed_transaction_commitment(network_id, &tx, salt, reveal_deadline_height);
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             assert_eq!(
                 compute_sealed_transaction_commitment(
-                    tx.chain(),
+                    network_id,
                     &tx,
                     salt,
                     reveal_deadline_height,
@@ -5254,7 +5497,7 @@ mod tests {
             );
         }
         let payload = SealedTransactionCommitmentPayload::new(
-            tx.chain().clone(),
+            *network_id,
             tx.authority().clone(),
             commitment,
             10,
@@ -5287,10 +5530,11 @@ mod tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
+        let network_id = *tx.network_id().expect("ordinary transaction network id");
         let payload = SealedTransactionCommitmentPayload::new(
-            tx.chain().clone(),
+            network_id,
             tx.authority().clone(),
-            compute_sealed_transaction_commitment(tx.chain(), &tx, [0x5A; 32], 64),
+            compute_sealed_transaction_commitment(&network_id, &tx, [0x5A; 32], 64),
             11,
             64,
             core::num::NonZeroU64::new(9),

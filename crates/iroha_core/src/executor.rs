@@ -259,6 +259,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindDomainCommittee(_)
         | SingularQueryBox::FindSorafsProviderOwner(_)
         | SingularQueryBox::FindSorafsPinManifest(_)
+        | SingularQueryBox::FindSorafsPinManifests(_)
         | SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
@@ -5874,7 +5875,7 @@ impl Executor {
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                     state_transaction,
                     replay.completed_axt,
-                );
+                )?;
                 for (path, value) in replay.durable_state_overlay {
                     let authorization = replay
                         .durable_state_authorizations
@@ -7221,7 +7222,8 @@ impl Executor {
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                // Thread chain_id from StateTransaction into the IVM host for VRF binding
+                // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
+                // hydration above installs the exact NetworkId used by VRF verification.
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
@@ -9001,6 +9003,16 @@ fn initial_permission_capability_root_authority(
                 &token.asset_definition,
             )?
         }
+        "CanManageAssetDefinitionConfidentialPolicy" => {
+            let token = decode!(
+                executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy
+            );
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
         "CanMintAssetWithDefinition" => {
             let token = decode!(executor_permission::asset::CanMintAssetWithDefinition);
             authority_owns_asset_definition(
@@ -9140,12 +9152,8 @@ fn initial_permission_capability_root_authority(
             let token = decode!(executor_permission::settlement::CanExecuteSettlement);
             token.debited_asset.account() == authority
         }
-        "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
-            if permission.name() == "CanSetFxCorridorPolicy" {
-                let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
-            } else {
-                let _ = decode!(executor_permission::settlement::CanSettleFxCorridor);
-            }
+        "CanSetFxCorridorPolicy" => {
+            let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
             let manager: Permission = executor_permission::settlement::CanManageFxCorridors.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
@@ -9178,15 +9186,6 @@ fn initial_permission_capability_root_authority(
         }
         "CanEnrollFeeSponsorProgram" => {
             let token = decode!(executor_permission::nexus::CanEnrollFeeSponsorProgram);
-            let manager: Permission = executor_permission::nexus::CanManageFeeSponsorProgram {
-                sponsor: token.program_id.sponsor.clone(),
-            }
-            .into();
-            token.program_id.sponsor == *authority
-                || authority_has_permission(&state_transaction.world, authority, &manager)?
-        }
-        "CanWithdrawFeeSponsorProgram" => {
-            let token = decode!(executor_permission::nexus::CanWithdrawFeeSponsorProgram);
             let manager: Permission = executor_permission::nexus::CanManageFeeSponsorProgram {
                 sponsor: token.program_id.sponsor.clone(),
             }
@@ -9879,10 +9878,13 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
+        iroha_data_model::isi::bridge::FundSccpRouteEscrow,
+        iroha_data_model::isi::bridge::RefundSccpRouteEscrow,
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
+        iroha_data_model::isi::governance::EnactSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
         iroha_data_model::isi::governance::ApproveGovernanceProposal,
@@ -10906,6 +10908,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyDomainMetadata",
     "CanUnregisterAssetDefinition",
     "CanModifyAssetDefinitionMetadata",
+    "CanManageAssetDefinitionConfidentialPolicy",
     "CanRegisterAccount",
     "CanUnregisterAccount",
     "CanModifyAccountMetadata",
@@ -10951,13 +10954,11 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
-    "CanSettleFxCorridor",
     "CanPublishSpaceDirectoryManifest",
     "CanPublishSpaceDirectoryManifestForUaid",
     "CanPublishSpaceDirectoryManifestForAccountDomain",
     "CanManageFeeSponsorProgram",
     "CanEnrollFeeSponsorProgram",
-    "CanWithdrawFeeSponsorProgram",
     "CanProposeContractDeployment",
     "CanProposeRuntimeUpgrade",
     "CanSubmitGovernanceBallot",
@@ -10966,9 +10967,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanRecordCitizenService",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
-    "CanRegisterSorafsPin",
-    "CanApproveSorafsPin",
-    "CanRetireSorafsPin",
     "CanBindSorafsAlias",
     "CanDeclareSorafsCapacity",
     "CanSubmitSorafsTelemetry",
@@ -11670,6 +11668,12 @@ mod tests {
         KeyPair::try_random().expect("executor fixture key generation should succeed")
     }
 
+    fn executor_test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
+    }
+
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
             .assets
@@ -11809,7 +11813,9 @@ mod tests {
     fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
         let authority = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             31,
             DataSpaceId::UNIVERSAL,
@@ -11976,136 +11982,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() {
-        use iroha_data_model::{
-            account::{
-                AccountAddress,
-                rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
-            },
-            nexus::{DataSpaceCatalog, DataSpaceId},
-            sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
-        };
-
-        let retired = checked_account_id();
-        let active = checked_account_id();
-        let unrelated = checked_account_id();
-        let mut world = World::with(
-            [],
-            [
-                Account::new(active.clone()).build(&active),
-                Account::new(unrelated.clone()).build(&active),
-            ],
-            [],
-        );
-        let alias = AccountAlias::domainless(
-            "executor-lineage".parse().expect("alias label"),
-            DataSpaceId::UNIVERSAL,
-        );
-        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
-            .expect("alias selector");
-        let address = AccountAddress::from_account_id(&active).expect("active account address");
-        let mut lease = NameRecordV1::new(
-            selector.clone(),
-            active.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            0,
-            100,
-            200,
-            300,
-            Metadata::default(),
-        );
-        let storage_key = crate::sns::record_storage_key(&selector);
-        world
-            .smart_contract_state_mut_for_testing()
-            .insert(storage_key.clone(), lease.encode());
-        world.account_aliases.insert(alias.clone(), active.clone());
-        let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
-            .repoint_for_account_id_rekey(active.clone())
-            .expect("canonical account-id rekey fixture");
-        world
-            .account_rekey_records
-            .insert(alias.clone(), canonical.clone());
-
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
-        let mut state_transaction = block.transaction();
-
-        assert!(
-            initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("lineage check")
-        );
-        assert!(
-            initial_accounts_share_active_lineage(&state_transaction, &active, &retired)
-                .expect("reverse lineage check")
-        );
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &unrelated, &active)
-                .expect("unrelated lineage check")
-        );
-
-        lease.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
-            reason: "revoked".to_owned(),
-        });
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key.clone(), lease.encode());
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("revoked lineage check")
-        );
-
-        lease.status = NameStatus::Active;
-        lease.expires_at_ms = 40;
-        lease.grace_expires_at_ms = 45;
-        lease.redemption_expires_at_ms = 50;
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key.clone(), lease.encode());
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("stale lineage check")
-        );
-
-        lease.expires_at_ms = 100;
-        lease.grace_expires_at_ms = 200;
-        lease.redemption_expires_at_ms = 300;
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key, lease.encode());
-        state_transaction.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), retired.clone())
-                .reassign_alias_to_account(active.clone())
-                .expect("alias reassignment fixture"),
-        );
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("alias reassignment lineage check")
-        );
-
-        let mut cyclic = canonical;
-        cyclic.previous_account_ids.push(active.clone());
-        cyclic
-            .transition_provenance
-            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
-        state_transaction
-            .world
-            .account_rekey_records
-            .insert(alias, cyclic);
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("malformed lineage check")
-        );
-    }
+    include!("executor_account_lineage_tests.rs");
 
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
@@ -12242,12 +12119,15 @@ mod tests {
 
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
-        let chain_id = ChainId::from("initial-governance-scope-regression");
+        let network_id: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("canonical test network id");
         let contract_address =
-            ContractAddress::derive(&chain_id, &authority, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 1, DataSpaceId::UNIVERSAL)
                 .expect("canonical contract address");
         let other_contract_address =
-            ContractAddress::derive(&chain_id, &authority, 2, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 2, DataSpaceId::UNIVERSAL)
                 .expect("second canonical contract address");
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
@@ -12367,11 +12247,12 @@ mod tests {
                 }),
             ]),
         );
-        let state = State::new_with_chain(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id,
+            iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id,
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
@@ -12677,7 +12558,9 @@ mod tests {
         // The address deliberately embeds the attacker as its subject. Contract subjects are
         // not registrar authorities and therefore cannot mint invocation permissions.
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -12880,6 +12763,14 @@ mod tests {
                 true,
             ),
             (
+                "CanManageAssetDefinitionConfidentialPolicy",
+                executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
                 "CanMintAssetWithDefinition",
                 executor_permission::asset::CanMintAssetWithDefinition {
                     asset_definition: asset_definition.clone(),
@@ -13074,11 +12965,6 @@ mod tests {
                 true,
             ),
             (
-                "CanSettleFxCorridor",
-                executor_permission::settlement::CanSettleFxCorridor { policy_id }.into(),
-                true,
-            ),
-            (
                 "CanPublishSpaceDirectoryManifest",
                 executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into(),
                 false,
@@ -13113,15 +12999,7 @@ mod tests {
             ),
             (
                 "CanEnrollFeeSponsorProgram",
-                executor_permission::nexus::CanEnrollFeeSponsorProgram {
-                    program_id: program_id.clone(),
-                }
-                .into(),
-                true,
-            ),
-            (
-                "CanWithdrawFeeSponsorProgram",
-                executor_permission::nexus::CanWithdrawFeeSponsorProgram { program_id }.into(),
+                executor_permission::nexus::CanEnrollFeeSponsorProgram { program_id }.into(),
                 true,
             ),
             (
@@ -13953,7 +13831,9 @@ mod tests {
     fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
         let subject = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &subject,
             404,
             DataSpaceId::UNIVERSAL,
@@ -14022,7 +13902,9 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             505,
             DataSpaceId::UNIVERSAL,
@@ -14178,7 +14060,9 @@ mod tests {
         );
 
         let sibling_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             506,
             DataSpaceId::UNIVERSAL,
@@ -14212,7 +14096,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14291,7 +14175,9 @@ mod tests {
                 .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             405,
             DataSpaceId::UNIVERSAL,
@@ -14308,7 +14194,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14494,7 +14380,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14717,7 +14603,10 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &asset_definition_id);
-        let mut program = iroha_data_model::nexus::FeeSponsorProgram::new(program_id.clone());
+        let mut program = iroha_data_model::nexus::FeeSponsorProgram::new(
+            program_id.clone(),
+            program_id.sponsor.clone(),
+        );
         program.lifecycle = FeeSponsorProgramLifecycle::Active;
         program.active_revision = Some(1);
         world
@@ -14793,7 +14682,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             beneficiary.clone(),
             FeePaymentIntent::sponsor(
                 program_id.clone(),
@@ -14886,8 +14775,7 @@ mod tests {
     #[test]
     fn stateful_fee_admission_exempts_authenticated_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14925,8 +14813,7 @@ mod tests {
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14959,8 +14846,7 @@ mod tests {
         }
         .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15017,7 +14903,9 @@ mod tests {
             ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -15032,8 +14920,7 @@ mod tests {
             "contract_address".parse().expect("contract address key"),
             Json::new(contract_address.to_string()),
         );
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15115,7 +15002,7 @@ mod tests {
     fn stateful_fee_admission_does_not_exempt_non_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15155,7 +15042,7 @@ mod tests {
         )];
         assert!(isi_gas::meter_instructions(&instructions) > 0);
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15215,7 +15102,7 @@ mod tests {
         let (state, keypair, authority, tech_account, _, gas_asset, _) =
             pipeline_fee_state_fixture();
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15608,7 +15495,7 @@ mod tests {
         assert!(gas_used > 0);
         let expected_fee = Quantity::from(u128::from(gas_used));
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15880,7 +15767,7 @@ mod tests {
         }];
 
         let payload = TransactionBuilder::new(
-            ChainId::from("fee-quote"),
+            executor_test_network_id(b"fee-quote"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16108,7 +15995,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16192,7 +16079,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -17008,9 +16895,8 @@ mod tests {
         let attachments_dup = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
 
-        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
         let tx1 = TransactionBuilder::new(
-            chain.clone(),
+            state.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -17018,7 +16904,7 @@ mod tests {
         .with_attachments(attachments)
         .sign(ALICE_KEYPAIR.private_key());
         let tx2 = TransactionBuilder::new(
-            chain,
+            state.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -17106,8 +16992,14 @@ mod tests {
             );
             let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
             attachment.vk_commitment = Some(vk_commitment);
+            let state = State::new_with_chain(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+                ChainId::from("test-chain"),
+            );
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -17117,13 +17009,6 @@ mod tests {
                     .expect("one attachment is a valid bounded proof list"),
             )
             .sign(ALICE_KEYPAIR.private_key());
-
-            let state = State::new_with_chain(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-                ChainId::from("test-chain"),
-            );
             let block_header = BlockHeader::new(
                 std::num::NonZeroU64::new(block_height).expect("nonzero block height"),
                 None,
@@ -17204,7 +17089,7 @@ mod tests {
                 VerifyingKeyId::new(backend_ident, format!("missing_vk_{idx}")),
             );
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -17338,7 +17223,7 @@ mod tests {
 
         for (label, attachments, expected_msg) in cases {
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -18271,7 +18156,9 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             808,
             DataSpaceId::UNIVERSAL,
@@ -18378,7 +18265,9 @@ mod tests {
             .insert(contract_subject.clone(), contract_address.clone());
 
         let inactive_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             809,
             DataSpaceId::UNIVERSAL,
@@ -18459,7 +18348,9 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18547,7 +18438,9 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18609,7 +18502,9 @@ mod tests {
             beneficiary.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -18670,7 +18565,9 @@ mod tests {
                 .expect("commit bootstrap block");
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &alice_id,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -18794,7 +18691,9 @@ mod tests {
                 other => panic!("unsupported test instruction kind {other}"),
             };
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &caller,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -19150,13 +19049,13 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let chain: ChainId = "test-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let state = State::new_with_chain(world, kura, query_handle, chain);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         let instruction = SetKeyValue::nft(nft_id, "foo".parse().expect("key"), "value");
         let tx = TransactionBuilder::new(
-            chain,
+            state.network_id,
             bob_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -19199,7 +19098,6 @@ mod tests {
     #[test]
     fn multisig_account_direct_signing_is_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
         let signer = checked_keypair();
         let member = iroha_data_model::account::MultisigMember::new(signer.public_key().clone(), 1)
             .expect("valid member");
@@ -19218,7 +19116,7 @@ mod tests {
         let mut block = state.block(block_header);
 
         let builder = TransactionBuilder::new(
-            chain,
+            state.network_id,
             multisig_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -19689,7 +19587,9 @@ seiyaku GuardedValue {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -19709,10 +19609,10 @@ seiyaku GuardedValue {
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let transaction = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -20033,7 +19933,9 @@ seiyaku OrderedBatchGuard {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             93,
             DataSpaceId::UNIVERSAL,
@@ -20050,7 +19952,7 @@ seiyaku OrderedBatchGuard {
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -20075,7 +19977,7 @@ seiyaku OrderedBatchGuard {
             )),
         ];
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -20122,7 +20024,7 @@ seiyaku OrderedBatchGuard {
         state_tx.apply();
 
         let capped_transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -20190,7 +20092,7 @@ seiyaku OrderedBatchGuard {
             .parse()
             .expect("rollback marker name");
         let failing_transaction = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -20255,7 +20157,9 @@ seiyaku MeteredFailure {
         let account = Account::new(authority.clone()).build(&authority);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             94,
             DataSpaceId::UNIVERSAL,
@@ -20355,7 +20259,7 @@ seiyaku IdentityRequired {
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -20368,7 +20272,7 @@ seiyaku IdentityRequired {
         );
         let bytecode = IvmBytecode::from_compiled(program);
         let raw = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -20379,7 +20283,7 @@ seiyaku IdentityRequired {
         .with_executable(Executable::Ivm(bytecode.clone()))
         .sign(ALICE_KEYPAIR.private_key());
         let proved = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -20456,7 +20360,9 @@ seiyaku IdentityRequired {
     #[test]
     fn contract_invocation_rejects_a_live_code_rebind() {
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             77,
             DataSpaceId::UNIVERSAL,
@@ -20505,7 +20411,9 @@ seiyaku IdentityRequired {
         );
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             1,
             DataSpaceId::UNIVERSAL,
@@ -20546,7 +20454,9 @@ seiyaku IdentityRequired {
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
             .expect("prepare nested-view contract");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             2,
             DataSpaceId::UNIVERSAL,
@@ -20728,7 +20638,9 @@ seiyaku IdentityRequired {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             44,
             DataSpaceId::UNIVERSAL,
@@ -20823,7 +20735,7 @@ seiyaku IdentityRequired {
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
@@ -20835,7 +20747,7 @@ seiyaku IdentityRequired {
         let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
         let transaction = |metadata: Metadata| {
             TransactionBuilder::new(
-                chain_id.clone(),
+                state.network_id,
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(
                     Vec::new(),

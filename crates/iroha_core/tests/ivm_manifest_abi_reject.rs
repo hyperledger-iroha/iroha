@@ -157,6 +157,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     // Prepare a minimal IVM program and its hashes
     let (prog, mut manifest) = minimal_contract_artifact(1);
@@ -195,7 +196,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
@@ -241,19 +242,16 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     // Prepare a minimal IVM program and its hashes
     let (prog, manifest) = minimal_contract_artifact(1);
     let code_hash = manifest
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &account_id,
-        1,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive manifest admission contract address");
+    let contract_address =
+        ContractAddress::derive(&network_id, &account_id, 1, DataSpaceId::UNIVERSAL)
+            .expect("derive manifest admission contract address");
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
 
@@ -304,7 +302,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
@@ -343,6 +341,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     // Prepare a minimal IVM program (v1) and its hashes
     let (prog, mut manifest) = minimal_contract_artifact(1);
@@ -377,7 +376,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
@@ -420,18 +419,15 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     let (prog, manifest) = minimal_contract_artifact(1);
     let code_hash = manifest
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &account_id,
-        2,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive manifest admission contract address");
+    let contract_address =
+        ContractAddress::derive(&network_id, &account_id, 2, DataSpaceId::UNIVERSAL)
+            .expect("derive manifest admission contract address");
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash
@@ -477,7 +473,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
@@ -515,6 +511,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     let unknown_syscall = unlisted_syscall_number();
     let (valid_artifact, mut manifest) = minimal_contract_artifact(1);
@@ -552,7 +549,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )

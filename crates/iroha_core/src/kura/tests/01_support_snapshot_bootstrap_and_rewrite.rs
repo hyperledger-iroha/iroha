@@ -11,6 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(label)),
+    )
+}
+
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -489,7 +495,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
     authorization_operation_id: [u8; 32],
     outer_authority: &KeyPair,
 ) -> TransactionEntrypoint {
-    let chain_id = ChainId::from("kura-offline-operation-index");
+    let network_id = test_network_id(b"kura-offline-operation-index-network");
     let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
     let definition = AssetDefinitionId::derive_from_components(
         domain_id,
@@ -504,7 +510,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
         asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
         amount,
         current_note: KagemushaSpendableNoteDescriptorV2 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: definition.clone(),
             note_commitment: [0x31; 32],
             spend_nullifier: [0x32; 32],
@@ -557,7 +563,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
     };
     let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
     let transaction = TransactionBuilder::new(
-        ChainId::from("kura-offline-operation-index"),
+        network_id,
         outer_authority_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -653,7 +659,7 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
         prepare_qc,
         commit_qc,
         signer_proofs: Vec::new(),
-        autonomous_chain_id_hash: Hash::new(b"kura-index-refresh-chain"),
+        autonomous_network_id: test_network_id(b"kura-index-refresh-genesis"),
         autonomous_epoch: 0,
         autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
         entrypoint_hashes,
@@ -892,7 +898,7 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         "fixture finality artifacts must form a contiguous chain"
     );
     let context = HeightContext {
-        chain_id: ChainId::from("kura-v2-finality-test"),
+        network_id: test_network_id(b"kura-v2-finality-test"),
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -1093,7 +1099,7 @@ fn retained_archive_sccp_block(
         })
         .collect::<Vec<_>>();
     let transaction = TransactionBuilder::new(
-        ChainId::from("kura-retained-sccp-archive"),
+        test_network_id(b"kura-retained-sccp-archive"),
         SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2648,11 +2654,12 @@ fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
         1
     );
 
-    let state = State::new_with_chain_for_testing(
+    let state = State::new_with_chain_and_network_id_for_testing(
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
-        artifact.height_context.chain_id.clone(),
+        ChainId::from("kura-v2-finality-test"),
+        artifact.height_context.network_id,
     );
     for _ in 0..4 {
         let proof = crate::bridge::build_finality_proof(&state, artifact.height)

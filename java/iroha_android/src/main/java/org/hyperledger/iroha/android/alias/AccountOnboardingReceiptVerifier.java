@@ -11,6 +11,7 @@ import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Canonical hash and onboarding-authority signature verification for stateless receipts. */
 public final class AccountOnboardingReceiptVerifier {
@@ -28,15 +29,15 @@ public final class AccountOnboardingReceiptVerifier {
     return IrohaHash.prehash(preimage);
   }
 
-  /** Verifies the canonical body hash and the signature of the authority embedded in the body. */
-  public static boolean verify(final AccountOnboardingPlanReceiptV1 receipt) {
-    return verify(receipt, null);
-  }
-
-  /** Verifies the receipt and optionally pins its signer to a configured onboarding authority. */
+  /** Verifies the receipt against the exact local network and optional authority. */
   public static boolean verify(
-      final AccountOnboardingPlanReceiptV1 receipt, final String expectedAuthority) {
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final NetworkId expectedNetworkId,
+      final String expectedAuthority) {
     Objects.requireNonNull(receipt, "receipt");
+    if (!receipt.body().networkId().equals(Objects.requireNonNull(expectedNetworkId, "expectedNetworkId"))) {
+      return false;
+    }
     if (expectedAuthority != null) {
       final String canonicalExpected;
       try {
@@ -70,39 +71,29 @@ public final class AccountOnboardingReceiptVerifier {
     }
   }
 
-  /** Requires a valid hash and signature from the authority embedded in the receipt. */
+  /** Requires a valid receipt for the exact local network and optional authority. */
   public static AccountOnboardingPlanReceiptV1 requireValid(
-      final AccountOnboardingPlanReceiptV1 receipt) {
-    return requireValid(receipt, null);
-  }
-
-  /** Requires a valid receipt signed by the expected configured authority when supplied. */
-  public static AccountOnboardingPlanReceiptV1 requireValid(
-      final AccountOnboardingPlanReceiptV1 receipt, final String expectedAuthority) {
-    if (!verify(receipt, expectedAuthority)) {
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final NetworkId expectedNetworkId,
+      final String expectedAuthority) {
+    if (!verify(receipt, expectedNetworkId, expectedAuthority)) {
       throw new IllegalArgumentException(
-          "account onboarding receipt hash or authority signature is invalid");
+          "account onboarding receipt network, hash, or authority signature is invalid");
     }
     return receipt;
   }
 
-  /** Also binds a verified receipt to the exact canonical request sent by the caller. */
-  public static AccountOnboardingPlanReceiptV1 requireValidForRequest(
-      final AccountOnboardingPlanRequestV1 request,
-      final AccountOnboardingPlanReceiptV1 receipt) {
-    return requireValidForRequest(request, receipt, null);
-  }
-
-  /** Binds a pinned receipt to the exact canonical request sent by the caller. */
+  /** Binds a network-pinned receipt to the exact canonical request sent by the caller. */
   public static AccountOnboardingPlanReceiptV1 requireValidForRequest(
       final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
+      final NetworkId expectedNetworkId,
       final String expectedAuthority) {
     if (!Objects.requireNonNull(request, "request").equals(receipt.body().request())) {
       throw new IllegalArgumentException(
           "account onboarding receipt does not match the exact normalized request");
     }
-    return requireValid(receipt, expectedAuthority);
+    return requireValid(receipt, expectedNetworkId, expectedAuthority);
   }
 
   private static boolean verifyEd25519(

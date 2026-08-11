@@ -23,7 +23,7 @@
         "multilane_native_source_claim_round_height_drift_bug.cfg",
         "multilane_native_source_claim_round_view_drift_bug.cfg",
         "multilane_native_source_claim_epoch_drift_bug.cfg",
-        "multilane_native_source_claim_chain_id_hash_drift_bug.cfg",
+        "multilane_native_source_claim_network_id_drift_bug.cfg",
         "multilane_native_source_claim_authority_context_height_drift_bug.cfg",
         "multilane_native_source_claim_coordinator_lane_id_drift_bug.cfg",
         "multilane_native_source_claim_coordinator_dataspace_id_drift_bug.cfg",
@@ -713,7 +713,7 @@
           "native_amx_receipts",
           "payload.computed_payload_hash()?",
           "Signature::try_new",
-          "payload.validate(chain_id_hash, epoch)?"
+          "payload.validate(network_id, epoch)?"
         ]
       },
       {
@@ -1623,6 +1623,27 @@
       {
         "path": "crates/iroha_core/src/kura.rs",
         "kind": "method",
+        "symbol": "Kura::revalidate_autonomous_lifecycle_bootstrap_for_completion",
+        "required_tokens": [
+          "authority.store_root != self.store_root",
+          "validate_autonomous_lifecycle_process_generation_claim",
+          "prune_lock.lock",
+          "ensure_prune_recovery_not_required",
+          "canonical_chain_lock.lock",
+          "lane_block_application_receipt_available_under_prune_and_canonical_guards",
+          "lane_geometry_lock.lock",
+          "autonomous_lane_attempt_inventory_counts_locked",
+          "read_regular_sidecar_bytes",
+          "bytes != authority.expected_bytes",
+          "decode_autonomous_lifecycle_bootstrap",
+          "bootstrap != authority.bootstrap",
+          "autonomous_lifecycle_bootstrap_authority_locked",
+          "receipt_terminal: already_terminal"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
         "symbol": "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
         "required_tokens": [
           "match fence {",
@@ -1645,7 +1666,9 @@
           "delete_completed_autonomous_lifecycle_bootstrap",
           "read_autonomous_lifecycle_cursor",
           "lane_block_application_receipt_available",
-          "consume_autonomous_lifecycle_bootstrap_completion_fence"
+          "consume_autonomous_lifecycle_bootstrap_completion_fence",
+          "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
+          "AutonomousLifecycleBootstrapCompletionOutcome::Completed"
         ]
       },
       {
@@ -1773,7 +1796,7 @@
         "symbol": "AutonomousLaneReadyQcPersistenceAuthorization",
         "required_tokens": [
           "projection: ProductionInFlightFirstReleaseTransitionProjection",
-          "chain_id_hash: Hash",
+          "network_id: iroha_data_model::NetworkId",
           "epoch: u64",
           "executable_payload_hash: Hash",
           "origin_proposal_hash: Hash",
@@ -1787,7 +1810,7 @@
         "symbol": "AutonomousLaneReadyQcPersistenceAuthorization::consume_for_persistence",
         "required_tokens": [
           "lane_queue_reservation_group_binding_from_ordered_keys(",
-          "self.chain_id_hash != payload.chain_id_hash",
+          "self.network_id != payload.network_id",
           "self.epoch != payload.epoch",
           "self.executable_payload_hash != payload.payload_hash",
           "self.origin_proposal_hash != payload.origin_proposal.proposal_hash",
@@ -2266,7 +2289,7 @@
         "required_tokens": [
           "pub format: LaneBlockExecutionInputArtifactFormat",
           "pub proposal: LaneBlockProposalV1",
-          "pub autonomous_chain_id_hash: Option<Hash>",
+          "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
           "pub autonomous_epoch: Option<u64>",
           "pub autonomous_payload_hash: Option<Hash>",
           "pub entrypoint_hashes: Vec<Hash>",
@@ -2322,7 +2345,7 @@
         "kind": "method",
         "symbol": "Kura::authorize_autonomous_execution_input_persistence",
         "required_tokens": [
-          ".validate(chain_id_hash, epoch)",
+          ".validate(network_id, epoch)",
           "autonomous_lane_block_execution_input_candidate(",
           "expected != *input",
           ".local_peer_id",
@@ -2469,7 +2492,7 @@
         "kind": "method",
         "symbol": "AutonomousLaneReleaseProjectionContext::from_payload",
         "required_tokens": [
-          ".validate(payload.chain_id_hash, payload.epoch)",
+          ".validate(payload.network_id, payload.epoch)",
           "!retirement.matches_payload(payload)",
           "validator_count == 0 || validator_count > 128",
           ".position(|peer| peer == &payload.producer)",
@@ -3047,7 +3070,7 @@
         "kind": "fn",
         "symbol": "finalize_certified_merge_reservations",
         "required_tokens": [
-          "authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?",
+          "authenticate_committed_canonical_carrier(state, kura, entry, expected_network_id)?",
           "let carrier_height = authenticated.carrier_height;",
           "let carrier_block_hash = authenticated.carrier_block_hash;",
           "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(entry)?",
@@ -3070,7 +3093,7 @@
         "symbol": "recover_pending_canonical_terminal_outcome",
         "required_tokens": [
           "recovery.consume_for_v2_apply()",
-          "authenticate_committed_canonical_carrier(state, kura, &entry, expected_chain_hash)?",
+          "authenticate_committed_canonical_carrier(state, kura, &entry, expected_network_id)?",
           "terminal_evidence.len() != expected_terminal_evidence",
           "complete_autonomous_lifecycle_canonical_terminal_outcome(evidence)",
           "release_post_wsv_lane_artifact_budget_reservation("
@@ -3098,7 +3121,7 @@
         "required_tokens": [
           "committed_block_merge_entry(kura, block)?",
           "if reference.execution_batch_hash.is_none()",
-          "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_chain_hash)"
+          "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)"
         ]
       }
     ],
@@ -3498,6 +3521,26 @@
       {
         "path": "crates/iroha_core/src/kura.rs",
         "kind": "method",
+        "symbol": "Kura::revalidate_autonomous_lifecycle_bootstrap_for_completion",
+        "tokens": [
+          "self.validate_autonomous_lifecycle_process_generation_claim(",
+          "self.prune_lock.lock()",
+          "self.ensure_prune_recovery_not_required()?;",
+          "self.canonical_chain_lock.lock()",
+          ".lane_block_application_receipt_available_under_prune_and_canonical_guards(",
+          "self.lane_geometry_lock.lock()",
+          "self.autonomous_lane_attempt_inventory_counts_locked(",
+          ".read_regular_sidecar_bytes(",
+          "if bytes != authority.expected_bytes",
+          "Self::decode_autonomous_lifecycle_bootstrap(",
+          "if bootstrap != authority.bootstrap",
+          "self.autonomous_lifecycle_bootstrap_authority_locked(",
+          "receipt_terminal: already_terminal"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
         "symbol": "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
         "tokens": [
           "match fence {",
@@ -3520,7 +3563,9 @@
           "self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;",
           "self.read_autonomous_lifecycle_cursor(",
           "self.lane_block_application_receipt_available(&payload.origin_proposal)",
-          "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);"
+          "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);",
+          "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
+          "AutonomousLifecycleBootstrapCompletionOutcome::Completed"
         ]
       },
       {
@@ -3611,7 +3656,7 @@
         "symbol": "Kura::persist_committed_lane_block_session_inner",
         "tokens": [
           "let _prune_guard = self.prune_lock.lock();",
-          "let autonomous_source = if let Some((chain_id_hash, epoch))",
+          "let autonomous_source = if let Some((network_id, epoch))",
           "self.durable_autonomous_lane_merge_source_under_prune_guard(",
           "let lane_commit_authorization = autonomous_source",
           "Self::authorize_autonomous_lane_commit_persistence(source, &artifact)",
@@ -4112,7 +4157,7 @@
         "kind": "fn",
         "symbol": "finalize_certified_merge_reservations",
         "tokens": [
-          "authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?",
+          "authenticate_committed_canonical_carrier(state, kura, entry, expected_network_id)?",
           "let carrier_height = authenticated.carrier_height;",
           "let carrier_block_hash = authenticated.carrier_block_hash;",
           "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(entry)?",
@@ -4138,7 +4183,7 @@
         "symbol": "recover_pending_canonical_terminal_outcome",
         "tokens": [
           "recovery.consume_for_v2_apply()",
-          "authenticate_committed_canonical_carrier(state, kura, &entry, expected_chain_hash)?",
+          "authenticate_committed_canonical_carrier(state, kura, &entry, expected_network_id)?",
           "authenticate_autonomous_lifecycle_pending_canonical_queue_terminal_outcomes(",
           "for evidence in terminal_evidence",
           "complete_autonomous_lifecycle_canonical_terminal_outcome(evidence)",
@@ -4729,7 +4774,7 @@
         "symbol": "KuraReplicaAdvertV1",
         "required_tokens": [
           "version: u16",
-          "chain_id: ChainId",
+          "network_id: NetworkId",
           "height: u64",
           "block_hash: HashOf<BlockHeader>",
           "executed_block_wire_len: u64",
@@ -4747,7 +4792,7 @@
         "required_tokens": [
           "KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1",
           "version: self.version",
-          "chain_id: self.chain_id.clone()",
+          "network_id: self.network_id",
           "height: self.height",
           "block_hash: self.block_hash",
           "executed_block_wire_len: self.executed_block_wire_len",
@@ -4894,7 +4939,7 @@
         "kind": "struct",
         "symbol": "KuraReplicaAdvertSourceV1",
         "required_tokens": [
-          "chain_id: ChainId",
+          "network_id: NetworkId",
           "height: u64",
           "block_hash: HashOf<BlockHeader>",
           "executed_block_wire_len: u64",
@@ -5573,7 +5618,7 @@
           "invariant": "MLNativeSourceClaimInjective"
         },
         {
-          "config": "multilane_native_source_claim_chain_id_hash_drift_bug.cfg",
+          "config": "multilane_native_source_claim_network_id_drift_bug.cfg",
           "invariant": "MLNativeSourceClaimInjective"
         },
         {
@@ -5732,7 +5777,7 @@
             "plan_digest",
             "round",
             "epoch",
-            "chain_id_hash",
+            "network_id",
             "authority_context_height",
             "coordinator_lane_id",
             "coordinator_dataspace_id",
@@ -5762,7 +5807,7 @@
             "plan_digest: body.plan_digest",
             "round: body.round",
             "epoch: body.epoch",
-            "chain_id_hash: body.chain_id_hash",
+            "network_id: body.network_id",
             "authority_context_height: body.authority_context_height",
             "coordinator_lane_id: body.coordinator_lane_id",
             "coordinator_dataspace_id: body.coordinator_dataspace_id",
@@ -6166,7 +6211,7 @@
           "kind": "fn",
           "symbol": "execution_commitment_from_projection",
           "required_tokens": [
-            "new_with_native_amx_application_manifest_and_merge_carrier",
+            "new_with_manifests",
             "native_amx_manifest.root()",
             "native_amx_manifest.count()",
             "merge_carrier",
@@ -6244,6 +6289,7 @@
             "prune_lock.lock",
             "ensure_prune_recovery_not_required",
             "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "true,",
             "NativeAmxMergeAssociation::CommittedOnly",
             "persist_native_amx_participant_application_evidence_under_publication_guard",
             "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair"
@@ -6316,7 +6362,7 @@
             "finality.verify()",
             "finality.validate_for_header(&header)",
             "finality.commit_qc.execution_commitment != need.execution_commitment",
-            "finality.height_context.chain_id != context.chain_id"
+            "finality.height_context.network_id != context.network_id"
           ]
         },
         {
@@ -8539,7 +8585,7 @@
           "kind": "fn",
           "symbol": "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending",
           "required_tokens": [
-            "canonical_carrier_source_outcome_set_locked(entry, true)",
+            "canonical_carrier_source_outcome_set_locked(pending_canonical_bytes, entry, true)",
             "queue_authorizations.len() != expected_count",
             "AutonomousLifecycleCanonicalCarrierSourceOutcomePublication"
           ]
@@ -8551,7 +8597,7 @@
           "required_tokens": [
             "read_lane_block_application_receipt_without_sidecar_repair",
             "entry_by_hash(merge_entry_hash)",
-            "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)",
+            ".canonical_carrier_source_outcome_set_locked(\n                pending_canonical_bytes,\n                &canonical_entry,\n                true,\n            )?",
             "queue_authorizations.len() != expected_count",
             "group == reservation_group"
           ]
@@ -8576,7 +8622,7 @@
             "autonomous_lane_attempt_inventory_counts_locked(&entry, 1)",
             "if outcome.is_complete()",
             "queue_finalization_authorization",
-            "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)",
+            "canonical_carrier_source_outcome_set_locked(\n                pending_canonical_bytes,\n                &canonical_entry,\n                false,\n            )?",
             "pending_queue_authorizations",
             "complete_reservation_groups"
           ]
@@ -8686,7 +8732,7 @@
             ".entry(publication.entry_hash())",
             "let mut carrier_heights = BTreeMap::new();",
             "let mut source_authorized_carriers = Vec::with_capacity(carrier_publications.len());",
-            "authenticate_committed_canonical_carrier(state, kura, &entry, chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, &entry, network_id)?",
             ".insert(authenticated.carrier_height, entry_hash)",
             "publication.consume_for_v2_apply(&entry)",
             "let mut carrier_groups = Vec::with_capacity(authenticated.groups.len());",
@@ -8749,7 +8795,7 @@
           "kind": "fn",
           "symbol": "pending_terminal_recovery_observations",
           "required_tokens": [
-            "recovery.chain_id_hash() != chain_id_hash",
+            "recovery.network_id() != network_id",
             "let route_identities = recovery.route_identities();",
             "recovery.pending_reservation_groups()",
             "pending_groups.len() != recovery.pending_outcome_count()",
@@ -8779,7 +8825,7 @@
             "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
             "active_lifecycle_routes(state, context)",
             "pending_autonomous_lifecycle_terminal_outcome_inventory",
-            "pending_terminal_recovery_observations(&recovery, chain_id_hash, &active_routes)?",
+            "pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?",
             "pending_terminal_group_has_exact_queue_owner(&initial_snapshot, observation)?",
             "let deferred = !owned_group_hashes.is_empty();",
             "pending_groups: pending_groups.clone()",
@@ -9608,7 +9654,7 @@
           "required_tokens": [
             "committed_block_merge_entry(kura, block)?",
             "if reference.execution_batch_hash.is_none()",
-            "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_chain_hash)"
+            "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)"
           ]
         },
         {
@@ -10565,7 +10611,7 @@
           "symbol": "QueuePlanAdmissionBindingV2",
           "required_tokens": [
             "version",
-            "chain_id_digest",
+            "network_id_digest",
             "request_id",
             "entrypoint_hash",
             "routing_plan_digest",
@@ -10577,9 +10623,9 @@
         {
           "path": "crates/iroha_core/src/torii_proxy.rs",
           "kind": "fn",
-          "symbol": "validate_queue_plan_admission_certificate_for_chain_digest_v2",
+          "symbol": "validate_queue_plan_admission_certificate_for_network_digest_v2",
           "required_tokens": [
-            "expected_chain_id_digest",
+            "expected_network_id_digest",
             "QueuePlanAdmissionCertificateStrengthV2::Quorum",
             "coordinator",
             "durability_threshold",
@@ -10782,7 +10828,7 @@
           "required_tokens": [
             "version",
             "route",
-            "chain_id_digest",
+            "network_id_digest",
             "entrypoint_hash",
             "binding_hash",
             "member_identity"
@@ -10795,12 +10841,12 @@
           "required_tokens": [
             "Self::validate_queue_plan_pending_obligation_route(&route)?",
             "obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
-            "obligation.chain_id_digest",
+            "obligation.network_id_digest",
             "obligation.entrypoint_hash",
             "obligation.binding_hash",
             ".routes.binary_search(&route).is_err()",
             "Self::queue_plan_pending_route_member_identity_from_claim(",
-            "obligation.chain_id_digest",
+            "obligation.network_id_digest",
             "obligation.entrypoint_hash.clone()",
             "obligation.binding_hash",
             "route"
@@ -10813,12 +10859,12 @@
           "required_tokens": [
             "entrypoint_hash: HashOf<TransactionEntrypoint>",
             "Self::validate_queue_plan_pending_obligation_route(&route)?",
-            "chain_id_digest.as_ref().iter().all(|byte| *byte == 0)",
+            "network_id_digest.as_ref().iter().all(|byte| *byte == 0)",
             "entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)",
             "binding_hash.as_ref().iter().all(|byte| *byte == 0)",
             "norito::to_bytes(&(",
             "QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
-            "chain_id_digest",
+            "network_id_digest",
             "entrypoint_hash",
             "binding_hash",
             "route",
@@ -10833,7 +10879,7 @@
           "required_tokens": [
             "version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
             "route",
-            "chain_id_digest: obligation.chain_id_digest",
+            "network_id_digest: obligation.network_id_digest",
             "entrypoint_hash: obligation.entrypoint_hash.clone()",
             "binding_hash: obligation.binding_hash",
             "queue_plan_pending_route_member_identity(obligation, route)?"
@@ -10858,7 +10904,7 @@
           "symbol": "queue_plan_pending_route_member_marker_payload",
           "required_tokens": [
             "marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
-            "marker.chain_id_digest",
+            "marker.network_id_digest",
             "marker.entrypoint_hash",
             "marker.binding_hash",
             "marker.member_identity",

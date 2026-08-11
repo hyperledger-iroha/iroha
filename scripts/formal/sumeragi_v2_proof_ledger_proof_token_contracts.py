@@ -3308,9 +3308,48 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "IndexedHistoricalFixedClockPrerequisiteSurface",
     ),
     (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+    ): (
+        "HistoricalDiscoveryPhysicalKernelsDischargeLifecycleService",
+        "HistoricalDiscoveryLifecycleServiceDischargesPacketService",
+        "HistoricalDiscoveryCandidateServeOwnerServiceClosesIdentityBudget",
+        "HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual",
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+    ): (
+        "IndexedChainSpecAlwaysHistoricalTemporalSupport",
+        "HistoricalDiscoveryPacketTailHasFrozenConcreteAction",
+        "IndexedHistoricalTemporalSupportAt",
+        "HistoricalDiscoveryPacketConcreteActionSelectionProperty",
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+    ): (
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+        "IndexedHistoricalFixedClockPacketCorridorTemporalResidual",
+        "IndexedHistoricalCandidateCausalDagTemporalResidual",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryCandidateExactRunnerServiceProperty",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryServeExactWorkerServiceProperty",
+    ),
+    (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalFixedClockPacketResidualClosesPacketLeaves",
     ): (
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+        "IndexedChainSpecAlwaysHistoricalTemporalSupport",
+        "IndexedHistoricalTemporalSupportAt",
+        "AsyncCandidateProducerContinuationExternalCoverageInvariant",
+        "AsyncCandidateProducerContinuationLocalReplayCapacityInvariant",
         "IndexedHistoricalFixedClockPacketCorridorTemporalResidual",
         "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
         "IndexedHistoricalFixedClockPacketLeafProperties",
@@ -3693,7 +3732,7 @@ EXACT_TARGET_NEUTRAL_FORBIDDEN_TOKENS = (
 # structurally by ``check_exact_target_neutral_contract``.
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 130
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_SHA256 = (
-    "f7fce69ffd8a77882fc7c361b04ef66459230e77dd7582861e6377c250058422"
+    "7ff27326210b0864298a3c7338e45aae2303decb380df0e68a6e20eb44e409fb"
 )
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 66
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_SHA256 = (
@@ -3996,6 +4035,10 @@ PROOF_STATUS_DEPENDENCIES = {
         "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
+    ),
+    "successor-activation-starvation-freedom": (
+        "epoch-boundary",
+        "async-type-invariant",
     ),
     "successor-activation-exact-recovery-production-refinement": (
         "epoch-boundary",

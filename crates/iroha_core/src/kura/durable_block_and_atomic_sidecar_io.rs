@@ -71,18 +71,19 @@ impl Kura {
             return;
         }
         bytes.push(b'\n');
-        let pending_canonical_bytes =
-            match self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards() {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    debug!(
-                        ?error,
-                        path = %path.display(),
-                        "skipping debug block dump because pending canonical capacity is unavailable"
-                    );
-                    return;
-                }
-            };
+        let pending_canonical_bytes = match self
+            .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                debug!(
+                    ?error,
+                    path = %path.display(),
+                    "skipping debug block dump because pending canonical capacity is unavailable"
+                );
+                return;
+            }
+        };
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         if let Err(error) = self.validate_configured_autonomous_mutation_disk_peak_locked(
@@ -546,10 +547,7 @@ impl Kura {
                 entry, block,
             )
             .map_err(|error| {
-                self.committed_recovery_failure(
-                    "post-WSV lane artifact budget reservation",
-                    &error,
-                )
+                self.committed_recovery_failure("post-WSV lane artifact budget reservation", &error)
             })?;
         }
         self.append_debug_block_dump(block);

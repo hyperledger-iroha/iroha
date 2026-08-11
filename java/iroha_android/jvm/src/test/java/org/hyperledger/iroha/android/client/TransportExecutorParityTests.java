@@ -122,6 +122,31 @@ public final class TransportExecutorParityTests {
   }
 
   @Test
+  public void jdkExecutorRejectsRedirectFollowingClientBeforeOneShotDispatch() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+      final java.net.http.HttpClient unsafeClient =
+          java.net.http.HttpClient.newBuilder()
+              .followRedirects(java.net.http.HttpClient.Redirect.ALWAYS)
+              .build();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("POST")
+              .setUri(server.url("/signed").uri())
+              .setBody("signed-bytes".getBytes(StandardCharsets.UTF_8))
+              .build();
+
+      try {
+        new JavaHttpExecutor(unsafeClient).execute(request);
+        throw new AssertionError("redirect-following client must be rejected");
+      } catch (final IllegalArgumentException expected) {
+        assert expected.getMessage().contains("redirects disabled");
+      }
+      assert server.getRequestCount() == 0 : "unsafe client must fail before network dispatch";
+    }
+  }
+
+  @Test
   public void jdkExecutorRejectsChunkedBodyAboveConfiguredLimit() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(

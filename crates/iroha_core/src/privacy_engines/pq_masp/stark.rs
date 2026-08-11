@@ -1961,13 +1961,21 @@ mod tests {
                 context_substitutions.push(($axis, substituted_statement, substituted_binding));
             }};
         }
-        push_context_substitution!(
-            "chain_id",
-            chain_id,
-            "pq-masp-substituted-chain"
-                .parse()
-                .expect("substituted chain id")
-        );
+        let mut substituted_network_statement = statement.clone();
+        substituted_network_statement.context.network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xC3; 32]),
+            ));
+        let mut substituted_network_binding = binding.clone();
+        substituted_network_binding.network_id = substituted_network_statement.context.network_id;
+        substituted_network_binding.genesis_hash = [0xC3; 32];
+        context_substitutions.push((
+            "network_id",
+            substituted_network_statement,
+            substituted_network_binding,
+        ));
         push_context_substitution!(
             "transaction_intent_digest",
             transaction_intent_digest,
@@ -2043,10 +2051,10 @@ mod tests {
         );
         assert_eq!(
             super::super::verify_pq_masp_v1(&statement, &other_genesis, &limits, &authorized_proof,),
-            Err(super::super::PqMaspProofErrorV1::Authorization(
-                PqMaspWireErrorV1::AuthorizationFailed,
+            Err(super::super::PqMaspProofErrorV1::ConsensusBinding(
+                iroha_data_model::privacy::PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch,
             )),
-            "the unchanged complete proof was replayed under another nonzero genesis"
+            "an inconsistent network/genesis binding reached proof verification"
         );
 
         let statement_digest =

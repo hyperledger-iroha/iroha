@@ -70,7 +70,11 @@ This initial slice provides the foundation needed for a usable managed SDK:
   SM/default/policy labels, curve id lists, query aggregate labels, projection
   constants/codecs, checkpoint heights, and checkpoint block hashes before
   callers can serialize or trust manually constructed capability metadata
-- direct runtime ABI/metrics DTO construction rejects non-v1 ABI versions,
+- node capabilities, active runtime ABI, and runtime metrics fail before dispatch
+  unless both canonical request credentials and an immutable local signing context
+  with the deployment's exact `NetworkId` are configured; their empty `GET`
+  requests are signed over the exact method/path/query/body and dispatched once,
+  while `/v1/runtime/abi/hash` remains a public read; direct runtime ABI/metrics DTO construction rejects non-v1 ABI versions,
   missing metrics counters, negative upgrade counters, non-`V1` ABI hash
   policies, and malformed ABI hashes before callers can serialize or trust
   manually constructed runtime metadata
@@ -89,9 +93,23 @@ This initial slice provides the foundation needed for a usable managed SDK:
   once outside the JSON body, and is never replayed across redirects. There is
   no direct-registration overload or multisig-specific onboarding route.
 
-When injecting a custom `HttpClient`, configure its underlying
-`HttpClientHandler.AllowAutoRedirect` to `false`; redirect policy belongs to the
-injected transport and cannot be changed after `HttpClient` construction.
+When injecting a custom `HttpClient`, configure its complete handler chain as an
+identity, one-shot transport for signed, nonce-bearing, and credential-bearing
+requests: set `HttpClientHandler.AllowAutoRedirect` to `false` and do not attach
+automatic retry/resilience handlers. Redirect and retry policy belongs to the
+injected transport and cannot be inspected or changed after `HttpClient`
+construction. `ToriiClient` dispatches these bodies once and surfaces 3xx,
+non-success, and network failures. For an ambiguous transaction outcome, query
+the pipeline status by transaction hash instead of replaying the body; a
+deliberate signed-query retry must use a freshly signed envelope and nonce.
+
+The public pipeline-status response is metadata-only: canonical hash, closed status kind,
+optional committed height, scope, and resolution source. Retired rejection, diagnostic,
+trigger, and batch fields are rejected. For details, build an exact-entrypoint predicate with
+`SignedIterableQueryBuilder.FindTransactionDetails(...)` and pass the resulting envelope to
+`GetPipelineTransactionDetailsAsync(...)`. The signature is bound to the deployment's exact
+genesis-derived `NetworkId`; Torii admits only an involved account or operator, and the SDK
+sends the nonce-bearing body once without redirects or retries.
 - multisig propose/approve helpers reject zero `creation_time_ms` when supplied, and generic/contract-call multisig response DTOs reject zero returned `creation_time_ms` before callers trust signing material
 - native multisig propose instruction-list DTOs snapshot assigned arrays, return
   detached arrays on access, reject null instruction elements during direct
@@ -238,10 +256,19 @@ injected transport and cannot be changed after `HttpClient` construction.
   `SignedIterableQueryBuilder` for the current canonical iterable subset
   (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`,
   `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`,
+  exact-entrypoint `FindTransactionDetails`,
   `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`,
   `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`,
   `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`,
-  `FindProofRecords`, and cursor `Continue(...)`), and typed
+  `FindProofRecords`, and cursor `Continue(...)`); both builders require the
+  exact checksummed genesis-header network id and bind it
+  into every signature together with the authority, current Unix time, a
+  non-zero bounded lifetime, and a fresh 32-byte operating-system random nonce;
+  explicit offline replay contexts receive the same strict validation, and
+  signed query bodies are submitted only once because a lost response may
+  follow successful admission; custom `HttpClient` handlers must therefore
+  disable both automatic redirects and transport retries for these one-shot
+  bodies; typed
   `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` plus typed
   explorer block/transaction/instruction SSE projections; raw
   `GetJsonDocumentAsync(...)`, `PostJsonDocumentAsync(...)`, signed-query JSON,
@@ -301,9 +328,9 @@ injected transport and cannot be changed after `HttpClient` construction.
   transaction-status reads validate exact
   hash/scope request text before dispatch while retaining explicit 32-byte hash
   casing/`0x` canonicalization and empty-scope defaulting, and reject malformed
-  status envelopes, non-exact returned hash/scope/resolution text, negative
-  heights, and non-exact or noncanonical rejection-content base64 before
-  returning status objects; `ToriiClient` construction validates absolute
+  status envelopes, unknown status kinds, non-exact returned hash/scope/resolution
+  text, non-positive heights, and retired rejection/diagnostic/trigger/batch fields
+  before returning status objects; `ToriiClient` construction validates absolute
   HTTP(S) base URIs without user-info, query, or fragment components while
   preserving exact path prefixes; low-level request setup validates exact
   HTTP Bearer token grammar, HTTP-token method text, and root-relative path
@@ -321,7 +348,8 @@ injected transport and cannot be changed after `HttpClient` construction.
   hooks may add ordinary headers but cannot mutate the validated method, URI,
   content object, Authorization/Accept headers, signed content bytes, or
   canonical signing headers after request setup; canonical request signing
-  requires generated or caller-supplied 16-byte lowercase-hex nonces and
+  requires an immutable exact `NetworkId`, generated or caller-supplied
+  16-byte lowercase-hex nonces, and
   applies the same root-relative path guard and canonical query signing rejects
   the same ambiguous segments/names plus malformed-escape/control-byte drift
   before sorting or signing; SSE event-filter query preflight rejects malformed
@@ -380,7 +408,7 @@ Broader iterable families beyond the current canonical subset, richer typed even
 The managed SDK exposes the unchanged Kagemusha routes through
 `GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
-Readiness accepts bridge ABI 21 and the manifest-V4 Eq/Ep verifier identity;
+Readiness accepts bridge ABI 22 and the manifest-V4 Eq/Ep verifier identity;
 ABI-19 and V3 projections fail instead of being upgraded.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
@@ -394,7 +422,9 @@ Torii's route-specific request limits.
 `CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
 `SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii
 routes, so set `ToriiClientOptions.CanonicalRequestCredentials` with a
-canonical I105 account id before using those helpers. Session creation requires the quote id, committed
+canonical I105 account id and set `LocalSigningContext` to the exact
+genesis-derived `NetworkId` before using those helpers. Human-readable labels
+never substitute for that signing domain. Session creation requires the quote id, committed
 `OpenVpnLeaseEscrow` transaction hash, and the same metering public key that was
 bound into the quote. Empty quote/session exit class still selects Torii's
 profile default, and an empty receipt lease id still lets Torii derive the
@@ -435,7 +465,7 @@ using var torii = new ToriiClient(
     toriiUri,
     options: new ToriiClientOptions
     {
-        LocalSigningContext = new ToriiLocalSigningContext("production-chain"),
+        LocalSigningContext = new ToriiLocalSigningContext(NetworkId.Parse(networkId)),
     });
 
 var draft = await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
@@ -480,7 +510,7 @@ envelopes, submit instructions, intent projections and digests, unsigned
 payloads, versioned signed transactions, and pipeline hashes for all twelve
 rows; `ValidateExact12FixtureBundleV1(...)` accepts only the canonical bundle
 and enforces a 2 MiB input ceiling. Native
-availability requires ABI 21, both compiled-catalog symbols, both exact-12 fixture
+availability requires ABI 22, both compiled-catalog symbols, both exact-12 fixture
 symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
@@ -515,7 +545,7 @@ changes, and whitespace normalization.
 
 `Hyperledger.Iroha.SoraFs.SoraFsReferenceValidators` validates canonical
 `GovernanceDagBlockV1` bytes and signed `GovernanceDagHeadV1` chains through
-`connect_norito_bridge` ABI 21. `ValidateGovernanceDagBlockJson(...)` accepts an
+`connect_norito_bridge` ABI 22. `ValidateGovernanceDagBlockJson(...)` accepts an
 optional expected block CID, while `ValidateGovernanceDagHeadChainJson(...)`
 accepts at most 64 root-to-head `SoraFsGovernanceDagBlockInput` snapshots. Both
 return the native `ValidationOutcomeV1` JSON only after strict UTF-8, exact V1
@@ -540,10 +570,10 @@ cd csharp
 dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release
 ```
 
-The live smoke currently probes unauthenticated read endpoints:
+The live smoke probes public reads plus these account-authenticated runtime reads:
 
-- `/v1/node/capabilities`
-- `/v1/runtime/abi/active`
+- `/v1/node/capabilities` (canonical account signature required)
+- `/v1/runtime/abi/active` (canonical account signature required)
 - `/v1/accounts`
 - `/v1/explorer/accounts/{account_id}/qr`
 - `/v1/explorer/accounts`, `/v1/explorer/domains`, `/v1/explorer/asset-definitions`, `/v1/explorer/assets`, `/v1/explorer/nfts`, and `/v1/explorer/rwas` with first-item detail reads when present
@@ -560,16 +590,23 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE` to override the default contract-instance namespace (`universal`)
 - `IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH` to override the code hash used for `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view`
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
-- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create a signed VPN quote and verify that Torii returns an `OpenVpnLeaseEscrow` instruction skeleton
+
+The live smoke requires runtime-only `IROHA_CSHARP_CANONICAL_ACCOUNT_ID`,
+`IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact checksummed
+`IROHA_CSHARP_NETWORK_ID`. They authenticate node-capability and active-ABI reads
+and also enable the signed VPN quote probe; do not persist these values in source.
 
 ## Fee quotes and sponsor programs
 
-Every `TransactionBuilder` requires a `FeePaymentIntent`. The guided ledger
+Every `TransactionBuilder` requires the exact checksummed `NetworkId` derived
+from the deployment's genesis header and a `FeePaymentIntent`. Ordinary client
+transactions cannot use the genesis transaction-domain marker. The guided ledger
 flow freezes the unsigned payload, account-signs `POST /v1/fees/quote`, verifies
 that the quote retained the payer, exact sponsor program/revision, and gas
 bound, then replaces only the charge maxima before signing:
 
 ```csharp
+using Hyperledger.Iroha;
 using Hyperledger.Iroha.Transactions;
 
 var requested = FeePaymentIntent.Sponsor(
@@ -578,7 +615,7 @@ var requested = FeePaymentIntent.Sponsor(
     chargeLimits: Array.Empty<FeeChargeLimit>());
 
 var transaction = client.Ledger
-    .BuildTransaction(chainId, authorityAccountId, requested)
+    .BuildTransaction(NetworkId.Parse(networkId), authorityAccountId, requested)
     .TransferAsset(assetId, NumericV1.QuantityValue.ParseCanonical("1"), destinationAccountId)
     .SetCreationTime(DateTimeOffset.UtcNow)
     .SetTimeToLiveMilliseconds(30_000);
@@ -587,7 +624,8 @@ var quoted = await client.Ledger.QuoteAndSignAsync(transaction, privateKeySeed);
 ```
 
 Configure `ToriiClientOptions.CanonicalRequestCredentials` for the same
-authority before calling the guided flow. Use
+authority and `LocalSigningContext` for the exact network before calling the
+guided flow. Use
 `client.Torii.GetFeeSponsorProgramAsync(programId)` to inspect one exact
 lifecycle record. Contract/IVM intents also require a positive gas bound.
 Metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
@@ -600,7 +638,7 @@ their intended execution order:
 
 ```csharp
 var transaction = client.Ledger
-    .BuildTransaction(chainId, authorityAccountId, feeIntentWithGasLimit)
+    .BuildTransaction(NetworkId.Parse(networkId), authorityAccountId, feeIntentWithGasLimit)
     .AddInstruction(registerInstruction)
     .AddContractCall(new TransactionContractInvocation(
         contractAddress,
@@ -619,11 +657,25 @@ are rejected before signing; contract addresses must use lowercase V1 Bech32m.
 
 ```csharp
 using Hyperledger.Iroha;
+using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
-using var client = new IrohaClient(new Uri("https://taira.sora.org"));
+var accountId = Environment.GetEnvironmentVariable("IROHA_CSHARP_CANONICAL_ACCOUNT_ID")!;
+var privateKeySeed = Convert.FromHexString(
+    Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX")!);
+var networkId = NetworkId.Parse(
+    Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID")!);
+using var client = new IrohaClient(
+    new Uri("https://taira.sora.org"),
+    toriiOptions: new ToriiClientOptions
+    {
+        LocalSigningContext = new ToriiLocalSigningContext(networkId),
+        CanonicalRequestCredentials = new CanonicalRequestCredentials(
+            accountId,
+            privateKeySeed),
+    });
 try
 {
     var capabilities = await client.Torii.GetNodeCapabilitiesAsync();
@@ -637,27 +689,22 @@ try
     Console.WriteLine($"Faucet puzzle difficulty: {faucetPuzzle.DifficultyBits}");
 
     // Transaction building is available through client.Ledger.
-    // var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
-    // if (!string.IsNullOrWhiteSpace(seedHex))
-    // {
     //     var transaction = client.Ledger
     //         .BuildTransaction(
-    //             "00000042",
+    //             networkId,
     //             accounts.Items[0].Id,
     //             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
     //         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", NumericV1.QuantityValue.ParseCanonical("1"), accounts.Items[0].Id)
     //         .SetCreationTime(DateTimeOffset.UtcNow)
     //         .SetTimeToLiveMilliseconds(5_000)
     //         .SetNonce(1);
-    //     // Configure matching CanonicalRequestCredentials on the client first.
     //     var signed = await client.Ledger.QuoteAndSignAsync(
     //         transaction,
-    //         Convert.FromHexString(seedHex));
+    //         privateKeySeed);
     //
     //     Console.WriteLine($"Signed tx hash: {signed.Transaction.TransactionHashHex}");
     //     // await client.Ledger.SubmitAsync(signed.Transaction);
     //     // var status = await client.Ledger.WaitForAsync(signed.Transaction.TransactionHashHex);
-    // }
 }
 catch (ToriiApiException exception)
 {
@@ -727,6 +774,7 @@ catch (ToriiApiException exception)
 - `LedgerClient.SubmitAsync(...)`
 - `LedgerClient.SubmitAndWaitAsync(...)`
 - `ToriiClient.GetPipelineTransactionStatusAsync(...)`
+- `ToriiClient.GetPipelineTransactionDetailsAsync(...)`
 - `ToriiClient.SubmitSignedQueryAsync(...)`
 - `ToriiClient.OpenEventSseAsync(...)`
 - `ToriiClient.StreamEventsAsync(...)`
@@ -776,7 +824,8 @@ var issue = TransactionInstruction.IssueReplicationOrder(
     orderId,
     replicationOrderBytes,
     issuedEpoch: 20,
-    deadlineEpoch: 28);
+    deadlineEpoch: 28,
+    musubiArchiveId: archiveId);
 var complete = TransactionInstruction.CompleteReplicationOrder(
     orderId,
     providerId,
@@ -800,9 +849,12 @@ var expire = TransactionInstruction.ExpireReplicationOrder(
 IDs must be non-zero lowercase 64-hex strings. Issue accepts bytes or canonical
 standard base64, caps the decoded archive at 1 MiB, and validates canonical
 `ReplicationOrderV1` framing, ID binding, target/provider ordering, and
-deadlines. Completion requires the exact six-field authority hard cut, including
-the provider owner, four-part signer-policy chain, assignment revision, and
-finalized anchor. Missing, retired three-field, and alias forms have no overload.
+deadlines. Its fifth field is an optional `ArchiveId`: use `null` for a generic
+order or a canonical archive ID to install the immutable Musubi purpose binding
+atomically with the order. Completion requires the exact six-field authority
+hard cut, including the provider owner, four-part signer-policy chain,
+assignment revision, and finalized anchor. Missing, retired three-field, and
+alias forms have no overload.
 
 ## Asset-lock cancellation
 
@@ -875,9 +927,9 @@ assets:
 
 Build each library on a runner whose Rust host exactly matches its target. Each
 runner must record and reverify the copied release library with
-`scripts/check_native_sdk_abi21_artifact.py --sdk csharp`. Merge the five
+`scripts/check_native_sdk_abi22_artifact.py --sdk csharp`. Merge the five
 uploads into an input root containing exactly
-`<target>/<library>` and `<target>/native-sdk-abi21.json`, then assemble the
+`<target>/<library>` and `<target>/native-sdk-abi22.json`, then assemble the
 pack tree:
 
 ```bash
@@ -895,12 +947,23 @@ dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj \
 ```
 
 Both commands require the same clean Git revision recorded by all five
-canonical ABI-21 manifests. Missing, extra, noncanonical, substituted, or stale
+canonical ABI-22 manifests. Missing, extra, noncanonical, substituted, or stale
 inputs fail before NuGet packing. The project invokes `verify-stage` again
 immediately before `GenerateNuspec`; CI then runs `verify-package` against the
 primary `.nupkg` and exercises that package on all five native hosts. The
 workflow is source-complete, but it is not evidence that a five-host run has
 passed until the corresponding CI artifacts exist.
+
+From the `csharp/` directory, the release package and package-consumer gate use
+the same paths as CI:
+
+```bash
+dotnet restore Hyperledger.Iroha.Sdk.sln
+dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
+dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \
+  ../ci/check_csharp_sdk_package_consumer.sh
+```
 
 The package-consumer guard creates an isolated temporary `net8.0` application,
 installs `Hyperledger.Iroha.Sdk` from `csharp/artifacts/packages`, verifies the
@@ -909,7 +972,9 @@ with warnings as errors, and runs managed Ed25519, canonical request, and SCCP
 route checks through the packed NuGet assembly. Set
 `CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
 the guard also verifies the NuGet runtime inventory and requires the packaged
-ABI-21 appeal-finance bridge:
+ABI-22 appeal-finance bridge:
+
+From the repository root, the equivalent consumer invocation is:
 
 ```bash
 CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \

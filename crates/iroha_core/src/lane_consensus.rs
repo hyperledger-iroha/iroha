@@ -7,6 +7,7 @@ use iroha_crypto::PrivateKey;
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::merge::MergeSignerProof;
 use iroha_data_model::{
+    NetworkId,
     block::{
         AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1, BlockHeader,
         consensus::{
@@ -130,8 +131,8 @@ pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
 pub struct LaneExecutablePayloadV1 {
     /// Artifact schema version. Only version two is accepted.
     pub version: u8,
-    /// Hash of the chain identifier that owns this payload.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns this payload.
+    pub network_id: NetworkId,
     /// Consensus epoch at the proposal height.
     pub epoch: u64,
     /// First canonical proposal that advertised this executable payload.
@@ -150,7 +151,7 @@ pub struct LaneExecutablePayloadV1 {
     /// Autonomous payloads carry one element per entrypoint: `Some` for a
     /// cross-dataspace native AMX plan and `None` for a single-route plan.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-    /// View-neutral digest of chain, epoch, lane coordinates, predecessor,
+    /// View-neutral digest of network, epoch, lane coordinates, predecessor,
     /// committee, and every exact entrypoint/reservation/routing/receipt tuple.
     pub payload_hash: Hash,
     /// Lane committee member that authenticated the origin payload.
@@ -163,7 +164,7 @@ pub struct LaneExecutablePayloadV1 {
 struct LaneExecutablePayloadPreimage {
     purpose: String,
     version: u8,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     epoch: u64,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -190,7 +191,7 @@ struct LaneExecutablePayloadPreimage {
 struct LaneExecutablePayloadSignaturePreimage {
     purpose: String,
     version: u8,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     epoch: u64,
     origin_proposal_hash: Hash,
     origin_descriptor_hash: Hash,
@@ -205,8 +206,8 @@ struct LaneExecutablePayloadSignaturePreimage {
 pub struct LaneBlockNewViewBodyV1 {
     /// Certificate schema version. Only version one is accepted.
     pub version: u8,
-    /// Hash of the chain identifier that owns this transition.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns this transition.
+    pub network_id: NetworkId,
     /// Consensus epoch at the proposal height.
     pub epoch: u64,
     /// Lane whose view advances.
@@ -242,7 +243,7 @@ pub struct LaneBlockNewViewBodyV1 {
 }
 
 impl LaneBlockNewViewBodyV1 {
-    /// Canonical, chain-bound BLS signature preimage.
+    /// Canonical, exact-network-bound BLS signature preimage.
     ///
     /// # Errors
     ///
@@ -614,9 +615,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// The embedded standalone lane proposal is invalid.
     #[error("invalid autonomous lane proposal")]
     InvalidProposal,
-    /// The artifact belongs to another chain or epoch.
-    #[error("autonomous lane artifact chain or epoch mismatch")]
-    ChainOrEpochMismatch,
+    /// The artifact belongs to another exact network or epoch.
+    #[error("autonomous lane artifact network or epoch mismatch")]
+    NetworkOrEpochMismatch,
     /// Entrypoint count exceeds the defensive hard limit.
     #[error("autonomous lane payload entrypoint limit exceeded")]
     EntrypointLimitExceeded,
@@ -744,7 +745,7 @@ impl LaneExecutablePayloadV1 {
     /// ownership, routing-plan, and Native AMX receipt-slot bindings.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_signed_with_reservations(
-        chain_id_hash: Hash,
+        network_id: NetworkId,
         epoch: u64,
         origin_proposal: LaneBlockProposalV1,
         entrypoints: Vec<TransactionEntrypoint>,
@@ -762,7 +763,7 @@ impl LaneExecutablePayloadV1 {
             .collect::<Vec<_>>();
         let mut payload = Self {
             version: LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            chain_id_hash,
+            network_id,
             epoch,
             origin_proposal,
             entrypoint_hashes,
@@ -780,7 +781,7 @@ impl LaneExecutablePayloadV1 {
             .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
             .payload()
             .to_vec();
-        payload.validate(chain_id_hash, epoch)?;
+        payload.validate(network_id, epoch)?;
         Ok(payload)
     }
 
@@ -788,7 +789,7 @@ impl LaneExecutablePayloadV1 {
     pub(crate) fn computed_payload_hash(&self) -> Result<Hash, LaneAutonomousArtifactError> {
         compute_lane_executable_payload_hash(
             self.version,
-            self.chain_id_hash,
+            self.network_id,
             self.epoch,
             &self.origin_proposal,
             &self.entrypoints,
@@ -803,7 +804,7 @@ impl LaneExecutablePayloadV1 {
         norito::encode_canonical(&LaneExecutablePayloadSignaturePreimage {
             purpose: "nexus:lane-executable-payload-signature:v2".to_owned(),
             version: self.version,
-            chain_id_hash: self.chain_id_hash,
+            network_id: self.network_id,
             epoch: self.epoch,
             origin_proposal_hash: self.origin_proposal.proposal_hash,
             origin_descriptor_hash: descriptor.descriptor_hash,
@@ -814,16 +815,16 @@ impl LaneExecutablePayloadV1 {
         .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
     }
 
-    /// Validate shape, chain/epoch binding, transaction hashes, producer
+    /// Validate shape, network/epoch binding, transaction hashes, producer
     /// authority, canonical digest, and producer signature.
     pub(crate) fn validate(
         &self,
-        expected_chain_id_hash: Hash,
+        expected_network_id: NetworkId,
         expected_epoch: u64,
     ) -> Result<(), LaneAutonomousArtifactError> {
         validate_lane_executable_payload_body(
             self.version,
-            self.chain_id_hash,
+            self.network_id,
             self.epoch,
             &self.origin_proposal,
             &self.entrypoint_hashes,
@@ -832,7 +833,7 @@ impl LaneExecutablePayloadV1 {
             &self.routing_plans,
             &self.native_amx_receipts,
             self.payload_hash,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )?;
         if !self
@@ -869,10 +870,10 @@ impl LaneExecutablePayloadV1 {
     pub(crate) fn attach_global_hint_exact(
         &self,
         hint: LaneBlockProposalPayloadHintV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: NetworkId,
         expected_epoch: u64,
     ) -> Result<Self, LaneAutonomousArtifactError> {
-        self.validate(expected_chain_id_hash, expected_epoch)?;
+        self.validate(expected_network_id, expected_epoch)?;
         if self.origin_proposal.payload_block_hint.is_some()
             || hint.proposal_height == 0
             || hint.proposal_height != self.origin_proposal.descriptor.proposal_height
@@ -883,7 +884,7 @@ impl LaneExecutablePayloadV1 {
 
         let mut attached = self.clone();
         attached.origin_proposal.payload_block_hint = Some(hint);
-        attached.validate(expected_chain_id_hash, expected_epoch)?;
+        attached.validate(expected_network_id, expected_epoch)?;
 
         let mut normalized = attached.clone();
         normalized.origin_proposal.payload_block_hint = self.origin_proposal.payload_block_hint;
@@ -934,10 +935,10 @@ impl LaneExecutablePayloadV1 {
 /// known.
 pub(crate) fn autonomous_lane_payload_envelope(
     payload: &LaneExecutablePayloadV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<AutonomousLanePayloadEnvelopeV1, LaneAutonomousArtifactError> {
-    payload.validate(expected_chain_id_hash, expected_epoch)?;
+    payload.validate(expected_network_id, expected_epoch)?;
     if payload.origin_proposal.payload_block_hint.is_some()
         || payload.origin_proposal.descriptor.lane_block_view != 0
     {
@@ -953,7 +954,7 @@ pub(crate) fn autonomous_lane_payload_envelope(
     let descriptor = &payload.origin_proposal.descriptor;
     let envelope = AutonomousLanePayloadEnvelopeV1 {
         version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-        chain_id_hash: payload.chain_id_hash,
+        network_id: payload.network_id,
         epoch: payload.epoch,
         lane_id: descriptor.lane_id,
         dataspace_id: descriptor.dataspace_id,
@@ -982,7 +983,7 @@ pub(crate) fn autonomous_lane_payload_envelope(
 /// layouts and trailing data before any identity is trusted.
 pub(crate) fn decode_autonomous_lane_payload_envelope(
     envelope: &AutonomousLanePayloadEnvelopeV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<LaneExecutablePayloadV1, LaneAutonomousArtifactError> {
     if envelope.version != AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1 {
@@ -1009,10 +1010,10 @@ pub(crate) fn decode_autonomous_lane_payload_envelope(
     {
         return Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint);
     }
-    payload.validate(expected_chain_id_hash, expected_epoch)?;
+    payload.validate(expected_network_id, expected_epoch)?;
 
     let descriptor = &payload.origin_proposal.descriptor;
-    if envelope.chain_id_hash != payload.chain_id_hash
+    if envelope.network_id != payload.network_id
         || envelope.epoch != payload.epoch
         || envelope.lane_id != descriptor.lane_id
         || envelope.dataspace_id != descriptor.dataspace_id
@@ -1035,10 +1036,10 @@ pub(crate) fn decode_autonomous_lane_payload_envelope(
 pub(crate) fn lane_payload_availability_body(
     executable_payload: &LaneExecutablePayloadV1,
     current_proposal: &LaneBlockProposalV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<LanePayloadAvailabilityBodyV1, LaneAutonomousArtifactError> {
-    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    executable_payload.validate(expected_network_id, expected_epoch)?;
     validate_lane_block_proposal(current_proposal)
         .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
     if !executable_payload.matches_proposal_static(current_proposal) {
@@ -1065,7 +1066,7 @@ pub(crate) fn lane_payload_availability_body(
     let current = &current_proposal.descriptor;
     let body = LanePayloadAvailabilityBodyV1 {
         version: 1,
-        chain_id_hash: expected_chain_id_hash,
+        network_id: expected_network_id,
         epoch: expected_epoch,
         lane_id: current.lane_id,
         dataspace_id: current.dataspace_id,
@@ -1097,13 +1098,13 @@ pub(crate) fn validate_lane_payload_availability_body_against_payload(
     body: &LanePayloadAvailabilityBodyV1,
     executable_payload: &LaneExecutablePayloadV1,
     current_proposal: &LaneBlockProposalV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
     let expected = lane_payload_availability_body(
         executable_payload,
         current_proposal,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )?;
     if body != &expected {
@@ -1460,7 +1461,7 @@ pub(crate) fn validate_lane_payload_availability_qc(
 
 pub(crate) fn compute_lane_executable_payload_hash(
     version: u8,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     epoch: u64,
     origin_proposal: &LaneBlockProposalV1,
     entrypoints: &[TransactionEntrypoint],
@@ -1475,7 +1476,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
     let preimage = LaneExecutablePayloadPreimage {
         purpose: "nexus:lane-executable-payload:v2".to_owned(),
         version,
-        chain_id_hash,
+        network_id,
         epoch,
         lane_id: descriptor.lane_id,
         dataspace_id: descriptor.dataspace_id,
@@ -1505,7 +1506,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
 #[allow(clippy::too_many_arguments)]
 fn validate_lane_executable_payload_body(
     version: u8,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     epoch: u64,
     origin_proposal: &LaneBlockProposalV1,
     entrypoint_hashes: &[Hash],
@@ -1514,14 +1515,14 @@ fn validate_lane_executable_payload_body(
     routing_plans: &[RoutingPlan],
     native_amx_receipts: &[Option<NativeAmxReceipt>],
     payload_hash: Hash,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
     if version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2 {
         return Err(LaneAutonomousArtifactError::UnsupportedVersion);
     }
-    if chain_id_hash != expected_chain_id_hash || epoch != expected_epoch {
-        return Err(LaneAutonomousArtifactError::ChainOrEpochMismatch);
+    if network_id != expected_network_id || epoch != expected_epoch {
+        return Err(LaneAutonomousArtifactError::NetworkOrEpochMismatch);
     }
     validate_lane_block_proposal(origin_proposal)
         .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
@@ -1617,7 +1618,7 @@ fn validate_lane_executable_payload_body(
             routing_plan,
             accepted.hash().as_ref(),
             *entrypoint_hash,
-            chain_id_hash,
+            network_id,
             origin_proposal,
         ) {
             return Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch);
@@ -1625,7 +1626,7 @@ fn validate_lane_executable_payload_body(
     }
     if compute_lane_executable_payload_hash(
         version,
-        chain_id_hash,
+        network_id,
         epoch,
         origin_proposal,
         entrypoints,
@@ -1731,10 +1732,10 @@ impl LaneBlockNewViewBodyV1 {
         source: &LaneBlockProposalV1,
         executable_payload: &LaneExecutablePayloadV1,
         target_view: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: NetworkId,
         expected_epoch: u64,
     ) -> Result<Self, LaneAutonomousArtifactError> {
-        executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+        executable_payload.validate(expected_network_id, expected_epoch)?;
         if !executable_payload.matches_proposal_static(source) {
             return Err(LaneAutonomousArtifactError::NewViewSourceMismatch);
         }
@@ -1742,7 +1743,7 @@ impl LaneBlockNewViewBodyV1 {
         let descriptor = &source.descriptor;
         Ok(Self {
             version: 1,
-            chain_id_hash: expected_chain_id_hash,
+            network_id: expected_network_id,
             epoch: expected_epoch,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -2329,10 +2330,10 @@ pub(crate) fn validate_lane_block_new_view_certificate(
 pub(crate) fn validate_lane_payload_availability_certificate(
     durable: &DurableLanePayloadAvailabilityCertificateV1,
     executable_payload: &LaneExecutablePayloadV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
-    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    executable_payload.validate(expected_network_id, expected_epoch)?;
     if durable.certificate.body.phase != CertPhase::Prepare {
         return Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate);
     }
@@ -2352,7 +2353,7 @@ pub(crate) fn validate_lane_payload_availability_certificate(
         &availability_qc.body,
         executable_payload,
         certified_proposal,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )?;
     validate_lane_payload_availability_qc(availability_qc)
@@ -2376,10 +2377,10 @@ pub(crate) fn validate_lane_block_new_view_transition(
     target: &LaneBlockProposalV1,
     executable_payload: &LaneExecutablePayloadV1,
     durable_certificate: &DurableLaneBlockNewViewCertificateV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
-    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    executable_payload.validate(expected_network_id, expected_epoch)?;
     validate_lane_block_new_view_certificate(
         &durable_certificate.certificate,
         &durable_certificate.signer_pops,
@@ -2388,7 +2389,7 @@ pub(crate) fn validate_lane_block_new_view_transition(
         source,
         executable_payload,
         target.descriptor.lane_block_view,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )?;
     if durable_certificate.certificate.body != expected_body {
@@ -2405,10 +2406,10 @@ pub(crate) fn validate_lane_block_new_view_transition(
 pub(crate) fn validate_lane_block_view_checkpoint(
     checkpoint: &DurableLaneBlockViewCheckpointV1,
     executable_payload: &LaneExecutablePayloadV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
-    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    executable_payload.validate(expected_network_id, expected_epoch)?;
     let source_view = checkpoint.source_proposal.descriptor.lane_block_view;
     if source_view == 0 {
         return Err(LaneAutonomousArtifactError::InvalidNewViewBody);
@@ -2431,14 +2432,14 @@ pub(crate) fn validate_lane_block_view_checkpoint(
         &checkpoint.target_proposal,
         executable_payload,
         &checkpoint.certificate,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct LaneBlockNewViewSlotKey {
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     epoch: u64,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -2450,7 +2451,7 @@ struct LaneBlockNewViewSlotKey {
 impl From<&LaneBlockNewViewBodyV1> for LaneBlockNewViewSlotKey {
     fn from(body: &LaneBlockNewViewBodyV1) -> Self {
         Self {
-            chain_id_hash: body.chain_id_hash,
+            network_id: body.network_id,
             epoch: body.epoch,
             lane_id: body.lane_id,
             dataspace_id: body.dataspace_id,
@@ -5659,7 +5660,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"lane-drain-chain"),
+                    network_id: network_id(b"lane-drain-genesis"),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),
@@ -6052,7 +6053,7 @@ mod tests {
 
         let mut forged_bodies = Vec::new();
         let mut forged = certificate.clone();
-        forged.body.intent.chain_id_digest = Hash::new(b"wrong-chain");
+        forged.body.intent.network_id = network_id(b"foreign-drain-genesis");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);
@@ -6189,7 +6190,7 @@ mod tests {
     fn signed_autonomous_prepare_vote(
         payload: &LaneExecutablePayloadV1,
         current_proposal: &LaneBlockProposalV1,
-        chain_id_hash: Hash,
+        network_id: NetworkId,
         epoch: u64,
         keypair: &KeyPair,
         all_keypairs: &[KeyPair],
@@ -6197,7 +6198,7 @@ mod tests {
         let body = current_proposal.vote_body(CertPhase::Prepare);
         let mut vote = signed_vote(&body, keypair);
         let availability_body =
-            lane_payload_availability_body(payload, current_proposal, chain_id_hash, epoch)
+            lane_payload_availability_body(payload, current_proposal, network_id, epoch)
                 .expect("fixture availability body");
         vote.payload_availability_vote = Some(
             LanePayloadAvailabilityVoteV1::new_signed(
@@ -6280,7 +6281,9 @@ mod tests {
         proposal
     }
 
-    fn autonomous_payload_fixture(keypairs: &[KeyPair]) -> (Hash, u64, LaneExecutablePayloadV1) {
+    fn autonomous_payload_fixture(
+        keypairs: &[KeyPair],
+    ) -> (NetworkId, u64, LaneExecutablePayloadV1) {
         let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let entrypoint = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
@@ -6329,7 +6332,9 @@ mod tests {
             }),
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let chain_id_hash = Hash::new(b"lane-autonomous-chain");
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"lane-autonomous-genesis",
+        )));
         let epoch = 4;
         let producer =
             deterministic_lane_author(&validator_set, proposal.descriptor.lane_block_height)
@@ -6365,7 +6370,7 @@ mod tests {
             proposal_identity_hash: proposal.proposal_hash,
         };
         let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
+            network_id,
             epoch,
             proposal,
             vec![entrypoint],
@@ -6376,7 +6381,7 @@ mod tests {
             producer_key.private_key(),
         )
         .expect("signed autonomous payload");
-        (chain_id_hash, epoch, payload)
+        (network_id, epoch, payload)
     }
 
     #[test]
@@ -6386,13 +6391,13 @@ mod tests {
             checked_bls_keypair(72),
             checked_bls_keypair(73),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         assert_eq!(payload.version, LANE_EXECUTABLE_PAYLOAD_VERSION_V2);
 
         let mut hint_free = payload.clone();
         hint_free.origin_proposal.payload_block_hint = None;
         hint_free
-            .validate(chain_id_hash, epoch)
+            .validate(network_id, epoch)
             .expect("removing the advisory hint preserves authentication");
         let payload_hash = hint_free.payload_hash;
         let producer_signature = hint_free.producer_signature.clone();
@@ -6405,7 +6410,7 @@ mod tests {
             )),
         };
         let attached = hint_free
-            .attach_global_hint_exact(replacement_hint, chain_id_hash, epoch)
+            .attach_global_hint_exact(replacement_hint, network_id, epoch)
             .expect("the finalized hint does not change authenticated payload identity");
         assert_eq!(
             attached.origin_proposal.payload_block_hint,
@@ -6415,34 +6420,34 @@ mod tests {
         assert_eq!(attached.producer_signature, producer_signature);
         assert_eq!(attached.reservation_keys.encode(), reservation_bytes);
         assert_eq!(
-            payload.attach_global_hint_exact(replacement_hint, chain_id_hash, epoch),
+            payload.attach_global_hint_exact(replacement_hint, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint),
             "an already hinted payload cannot be rebound to another carrier"
         );
         let mut zero_height = replacement_hint;
         zero_height.proposal_height = 0;
         assert_eq!(
-            hint_free.attach_global_hint_exact(zero_height, chain_id_hash, epoch),
+            hint_free.attach_global_hint_exact(zero_height, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint)
         );
         let mut zero_hash = replacement_hint;
         zero_hash.proposal_block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
         assert_eq!(
-            hint_free.attach_global_hint_exact(zero_hash, chain_id_hash, epoch),
+            hint_free.attach_global_hint_exact(zero_hash, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint)
         );
 
         let mut legacy = payload.clone();
         legacy.version = 1;
         assert_eq!(
-            legacy.validate(chain_id_hash, epoch),
+            legacy.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
         );
         let mut unknown = payload;
         unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;
         assert_eq!(
-            unknown.validate(chain_id_hash, epoch),
+            unknown.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
         );
     }
@@ -6454,7 +6459,7 @@ mod tests {
             checked_bls_keypair(75),
             checked_bls_keypair(76),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let descriptor = &payload.origin_proposal.descriptor;
         assert_eq!(
             deterministic_lane_author(&descriptor.validator_set, descriptor.lane_block_height),
@@ -6476,7 +6481,7 @@ mod tests {
             .payload()
             .to_vec();
         assert_eq!(
-            wrong_author.validate(chain_id_hash, epoch),
+            wrong_author.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ProducerNotDeterministicAuthor),
             "committee membership and a valid signature must not confer slot authorship",
         );
@@ -6492,7 +6497,7 @@ mod tests {
                         b"lane-author-independent-global-view",
                     )),
                 },
-                chain_id_hash,
+                network_id,
                 epoch,
             )
             .expect("global carrier view must not change autonomous authorship");
@@ -6507,15 +6512,15 @@ mod tests {
             checked_bls_keypair(82),
             checked_bls_keypair(83),
         ];
-        let (chain_id_hash, epoch, mut payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, mut payload) = autonomous_payload_fixture(&keypairs);
         payload.origin_proposal.payload_block_hint = None;
         payload
-            .validate(chain_id_hash, epoch)
+            .validate(network_id, epoch)
             .expect("V2 payload remains authenticated after removing its advisory hint");
         let reservation_bytes = payload.reservation_keys.encode();
-        let envelope = autonomous_lane_payload_envelope(&payload, chain_id_hash, epoch)
+        let envelope = autonomous_lane_payload_envelope(&payload, network_id, epoch)
             .expect("hint-free payload encodes into a bounded global anchor");
-        let decoded = decode_autonomous_lane_payload_envelope(&envelope, chain_id_hash, epoch)
+        let decoded = decode_autonomous_lane_payload_envelope(&envelope, network_id, epoch)
             .expect("canonical autonomous anchor decodes");
         assert_eq!(decoded, payload);
         assert_eq!(decoded.reservation_keys.encode(), reservation_bytes);
@@ -6530,13 +6535,13 @@ mod tests {
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             assert_eq!(
-                autonomous_lane_payload_envelope(&payload, chain_id_hash, epoch)
+                autonomous_lane_payload_envelope(&payload, network_id, epoch)
                     .expect("encode envelope under alternate ambient layout"),
                 envelope,
                 "autonomous envelope bytes must ignore the caller's ambient Norito layout"
             );
             assert_eq!(
-                decode_autonomous_lane_payload_envelope(&envelope, chain_id_hash, epoch)
+                decode_autonomous_lane_payload_envelope(&envelope, network_id, epoch)
                     .expect("decode canonical envelope under alternate ambient layout"),
                 payload
             );
@@ -6568,7 +6573,7 @@ mod tests {
             reservation.proposal_identity_hash = nonzero_view_proposal.proposal_hash;
         }
         let nonzero_view_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
+            network_id,
             epoch,
             nonzero_view_proposal,
             payload.entrypoints.clone(),
@@ -6580,7 +6585,7 @@ mod tests {
         )
         .expect("construct independently valid nonzero-view payload");
         assert_eq!(
-            autonomous_lane_payload_envelope(&nonzero_view_payload, chain_id_hash, epoch),
+            autonomous_lane_payload_envelope(&nonzero_view_payload, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint)
         );
         let nonzero_view_descriptor = &nonzero_view_payload.origin_proposal.descriptor;
@@ -6593,21 +6598,21 @@ mod tests {
         nonzero_view_envelope.canonical_payload =
             norito::to_bytes(&nonzero_view_payload).expect("nonzero-view payload encodes");
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&nonzero_view_envelope, chain_id_hash, epoch,),
+            decode_autonomous_lane_payload_envelope(&nonzero_view_envelope, network_id, epoch,),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint)
         );
 
         let mut legacy_envelope = envelope.clone();
         legacy_envelope.version = 0;
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&legacy_envelope, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&legacy_envelope, network_id, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
         );
 
         let mut field_substitution = envelope.clone();
         field_substitution.descriptor_hash = Hash::new(b"substituted-envelope-descriptor");
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&field_substitution, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&field_substitution, network_id, epoch),
             Err(LaneAutonomousArtifactError::PayloadEnvelopeMismatch)
         );
 
@@ -6615,7 +6620,7 @@ mod tests {
         substituted_reservations[0].reservation_owner_hash =
             Hash::new(b"substituted-reservation-owner");
         let substituted_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
+            network_id,
             epoch,
             payload.origin_proposal.clone(),
             payload.entrypoints.clone(),
@@ -6630,14 +6635,14 @@ mod tests {
         body_substitution.canonical_payload =
             norito::to_bytes(&substituted_payload).expect("substituted payload encodes");
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&body_substitution, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&body_substitution, network_id, epoch),
             Err(LaneAutonomousArtifactError::PayloadEnvelopeMismatch)
         );
 
         let mut trailing = envelope.clone();
         trailing.canonical_payload.push(0);
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&trailing, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&trailing, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)
         );
 
@@ -6647,14 +6652,14 @@ mod tests {
                 .expect("alternate valid payload framing encodes");
         assert_ne!(noncanonical.canonical_payload, envelope.canonical_payload);
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&noncanonical, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&noncanonical, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)
         );
 
         let mut oversized = envelope;
         oversized.canonical_payload = vec![0; MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES + 1];
         assert_eq!(
-            decode_autonomous_lane_payload_envelope(&oversized, chain_id_hash, epoch),
+            decode_autonomous_lane_payload_envelope(&oversized, network_id, epoch),
             Err(LaneAutonomousArtifactError::PayloadEnvelopeByteLimitExceeded)
         );
     }
@@ -6663,7 +6668,7 @@ mod tests {
         source: &LaneBlockProposalV1,
         payload: &LaneExecutablePayloadV1,
         keypairs: &[KeyPair],
-        chain_id_hash: Hash,
+        network_id: NetworkId,
         epoch: u64,
     ) -> DurableLaneBlockNewViewCertificateV1 {
         let target_view = source
@@ -6671,14 +6676,9 @@ mod tests {
             .lane_block_view
             .checked_add(1)
             .expect("fixture view");
-        let body = LaneBlockNewViewBodyV1::for_transition(
-            source,
-            payload,
-            target_view,
-            chain_id_hash,
-            epoch,
-        )
-        .expect("NewView body");
+        let body =
+            LaneBlockNewViewBodyV1::for_transition(source, payload, target_view, network_id, epoch)
+                .expect("NewView body");
         let votes = keypairs
             .iter()
             .map(|keypair| {
@@ -6709,13 +6709,13 @@ mod tests {
             checked_bls_keypair(2),
             checked_bls_keypair(3),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let body = payload.origin_proposal.vote_body(CertPhase::Prepare);
         let votes = [
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[0],
                 &keypairs,
@@ -6723,7 +6723,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[1],
                 &keypairs,
@@ -6731,7 +6731,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[2],
                 &keypairs,
@@ -6744,7 +6744,7 @@ mod tests {
         )
         .expect("availability READY quorum");
         let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
-        validate_lane_payload_availability_certificate(&durable, &payload, chain_id_hash, epoch)
+        validate_lane_payload_availability_certificate(&durable, &payload, network_id, epoch)
             .expect("availability DELIVER certificate");
 
         let mut wrong_payload = durable.clone();
@@ -6759,7 +6759,7 @@ mod tests {
             validate_lane_payload_availability_certificate(
                 &wrong_payload,
                 &payload,
-                chain_id_hash,
+                network_id,
                 epoch,
             ),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch)
@@ -6772,7 +6772,7 @@ mod tests {
             .expect("availability QC")
             .bls_aggregate_signature[0] ^= 1;
         assert_eq!(
-            validate_lane_payload_availability_certificate(&forged, &payload, chain_id_hash, epoch,),
+            validate_lane_payload_availability_certificate(&forged, &payload, network_id, epoch,),
             Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
         );
         let mut forged_prepare = durable;
@@ -6781,7 +6781,7 @@ mod tests {
             validate_lane_payload_availability_certificate(
                 &forged_prepare,
                 &payload,
-                chain_id_hash,
+                network_id,
                 epoch,
             ),
             Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
@@ -6795,12 +6795,12 @@ mod tests {
             checked_bls_keypair(32),
             checked_bls_keypair(33),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let outer_votes = [
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[0],
                 &keypairs,
@@ -6808,7 +6808,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[1],
                 &keypairs,
@@ -6816,7 +6816,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &payload.origin_proposal,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[2],
                 &keypairs,
@@ -6920,11 +6920,11 @@ mod tests {
             checked_bls_keypair(42),
             checked_bls_keypair(43),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let source = payload.origin_proposal.clone();
         let target = retarget_lane_block_proposal_view(&source, 1).expect("next-view proposal");
         let new_view =
-            durable_new_view_certificate(&source, &payload, &keypairs, chain_id_hash, epoch);
+            durable_new_view_certificate(&source, &payload, &keypairs, network_id, epoch);
         let mut lane_height_above_proposal = new_view.certificate.body.clone();
         lane_height_above_proposal.proposal_height = lane_height_above_proposal
             .lane_block_height
@@ -6939,12 +6939,7 @@ mod tests {
             Err(LaneAutonomousArtifactError::InvalidNewViewBody)
         );
         validate_lane_block_new_view_transition(
-            &source,
-            &target,
-            &payload,
-            &new_view,
-            chain_id_hash,
-            epoch,
+            &source, &target, &payload, &new_view, network_id, epoch,
         )
         .expect("authenticated contiguous NewView transition");
 
@@ -6952,7 +6947,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &target,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[0],
                 &keypairs,
@@ -6960,7 +6955,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &target,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[1],
                 &keypairs,
@@ -6968,7 +6963,7 @@ mod tests {
             signed_autonomous_prepare_vote(
                 &payload,
                 &target,
-                chain_id_hash,
+                network_id,
                 epoch,
                 &keypairs[2],
                 &keypairs,
@@ -6982,12 +6977,7 @@ mod tests {
         .expect("next-view exact availability QC");
         let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
         assert_eq!(
-            validate_lane_payload_availability_certificate(
-                &durable,
-                &payload,
-                chain_id_hash,
-                epoch,
-            ),
+            validate_lane_payload_availability_certificate(&durable, &payload, network_id, epoch,),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch),
             "NewView is only a transport cursor and must not create a second READY subject",
         );
@@ -7004,7 +6994,7 @@ mod tests {
             validate_lane_payload_availability_certificate(
                 &stale_origin,
                 &payload,
-                chain_id_hash,
+                network_id,
                 epoch,
             ),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch)
@@ -7022,7 +7012,7 @@ mod tests {
             validate_lane_payload_availability_certificate(
                 &stale_incarnation,
                 &payload,
-                chain_id_hash,
+                network_id,
                 epoch,
             ),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch)
@@ -7037,7 +7027,7 @@ mod tests {
             proposal
         };
         assert_eq!(
-            lane_payload_availability_body(&payload, &unrelated, chain_id_hash, epoch,),
+            lane_payload_availability_body(&payload, &unrelated, network_id, epoch,),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch)
         );
 
@@ -7045,12 +7035,7 @@ mod tests {
             .expect("canonical but unauthorized skipped-view proposal");
         assert_eq!(
             validate_lane_block_new_view_transition(
-                &source,
-                &skipped,
-                &payload,
-                &new_view,
-                chain_id_hash,
-                epoch,
+                &source, &skipped, &payload, &new_view, network_id, epoch,
             ),
             Err(LaneAutonomousArtifactError::InvalidNewViewBody)
         );
@@ -7063,10 +7048,10 @@ mod tests {
             checked_bls_keypair(52),
             checked_bls_keypair(53),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let proposal = payload.origin_proposal.clone();
         let availability_body =
-            lane_payload_availability_body(&payload, &proposal, chain_id_hash, epoch)
+            lane_payload_availability_body(&payload, &proposal, network_id, epoch)
                 .expect("authorized availability body");
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let mut cache = LaneBlockSessionCache::new(1);
@@ -7127,12 +7112,7 @@ mod tests {
             cache
                 .insert_vote(
                     signed_autonomous_prepare_vote(
-                        &payload,
-                        &proposal,
-                        chain_id_hash,
-                        epoch,
-                        keypair,
-                        &keypairs,
+                        &payload, &proposal, network_id, epoch, keypair, &keypairs,
                     ),
                     None,
                 )
@@ -7174,12 +7154,12 @@ mod tests {
             checked_bls_keypair(22),
             checked_bls_keypair(23),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let descriptor = &payload.origin_proposal.descriptor;
         let receipt = NativeAmxReceipt {
             version: 2,
             source_id: [0xA5; Hash::LENGTH],
-            chain_id_hash,
+            network_id,
             plan_digest: Hash::new(b"payload-hash-bound-native-amx-plan"),
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -7192,7 +7172,7 @@ mod tests {
         };
         let with_receipt = compute_lane_executable_payload_hash(
             payload.version,
-            chain_id_hash,
+            network_id,
             epoch,
             &payload.origin_proposal,
             &payload.entrypoints,
@@ -7206,7 +7186,7 @@ mod tests {
         let mut misaligned = payload;
         misaligned.native_amx_receipts.push(None);
         assert_eq!(
-            misaligned.validate(chain_id_hash, epoch),
+            misaligned.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
         );
     }
@@ -7218,12 +7198,12 @@ mod tests {
             checked_bls_keypair(62),
             checked_bls_keypair(63),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
 
         let mut missing_reservation = payload.clone();
         missing_reservation.reservation_keys.clear();
         assert_eq!(
-            missing_reservation.validate(chain_id_hash, epoch),
+            missing_reservation.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
         let mut extra_reservation = payload.clone();
@@ -7231,34 +7211,34 @@ mod tests {
             .reservation_keys
             .push(payload.reservation_keys[0]);
         assert_eq!(
-            extra_reservation.validate(chain_id_hash, epoch),
+            extra_reservation.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
         let mut zero_owner = payload.clone();
         zero_owner.reservation_keys[0].reservation_owner_hash = Hash::prehashed([0; Hash::LENGTH]);
         assert_eq!(
-            zero_owner.validate(chain_id_hash, epoch),
+            zero_owner.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
         let mut zero_proposal_identity = payload.clone();
         zero_proposal_identity.reservation_keys[0].proposal_identity_hash =
             Hash::prehashed([0; Hash::LENGTH]);
         assert_eq!(
-            zero_proposal_identity.validate(chain_id_hash, epoch),
+            zero_proposal_identity.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
         let mut unsupported_reservation_version = payload.clone();
         unsupported_reservation_version.reservation_keys[0].version =
             LaneQueueReservationKeyV2::VERSION + 1;
         assert_eq!(
-            unsupported_reservation_version.validate(chain_id_hash, epoch),
+            unsupported_reservation_version.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
 
         let mut missing_plan = payload.clone();
         missing_plan.routing_plans.clear();
         assert_eq!(
-            missing_plan.validate(chain_id_hash, epoch),
+            missing_plan.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
         );
         let mut extra_plan = payload.clone();
@@ -7266,7 +7246,7 @@ mod tests {
             .routing_plans
             .push(payload.routing_plans[0].clone());
         assert_eq!(
-            extra_plan.validate(chain_id_hash, epoch),
+            extra_plan.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
         );
         let mut cross_bound_plan = payload.clone();
@@ -7274,20 +7254,20 @@ mod tests {
             crate::queue::RoutingDecision::new(LaneId::new(99), DataSpaceId::new(101)),
         );
         assert_eq!(
-            cross_bound_plan.validate(chain_id_hash, epoch),
+            cross_bound_plan.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
         );
 
         let mut missing_receipt_slot = payload.clone();
         missing_receipt_slot.native_amx_receipts.clear();
         assert_eq!(
-            missing_receipt_slot.validate(chain_id_hash, epoch),
+            missing_receipt_slot.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
         );
         let mut extra_receipt_slot = payload.clone();
         extra_receipt_slot.native_amx_receipts.push(None);
         assert_eq!(
-            extra_receipt_slot.validate(chain_id_hash, epoch),
+            extra_receipt_slot.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
         );
 
@@ -7296,7 +7276,7 @@ mod tests {
         forged_receipt.native_amx_receipts[0] = Some(NativeAmxReceipt {
             version: 2,
             source_id: [0x7A; Hash::LENGTH],
-            chain_id_hash,
+            network_id,
             plan_digest: forged_receipt.routing_plans[0].digest(),
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -7308,7 +7288,7 @@ mod tests {
             legs: Vec::new(),
         });
         assert_eq!(
-            forged_receipt.validate(chain_id_hash, epoch),
+            forged_receipt.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
         );
     }
@@ -7320,7 +7300,7 @@ mod tests {
             checked_bls_keypair(2),
             checked_bls_keypair(3),
         ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
             .expect("canonical checkpoint source");
         let target =
@@ -7329,77 +7309,14 @@ mod tests {
             source_proposal: source.clone(),
             target_proposal: target,
             certificate: durable_new_view_certificate(
-                &source,
-                &payload,
-                &keypairs,
-                chain_id_hash,
-                epoch,
+                &source, &payload, &keypairs, network_id, epoch,
             ),
         };
 
-        validate_lane_block_view_checkpoint(&checkpoint, &payload, chain_id_hash, epoch)
+        validate_lane_block_view_checkpoint(&checkpoint, &payload, network_id, epoch)
             .expect("checkpoint validates without the first 256 certificates");
         assert_eq!(checkpoint.source_proposal.descriptor.lane_block_view, 256);
         assert_eq!(checkpoint.target_proposal.descriptor.lane_block_view, 257);
-    }
-
-    #[test]
-    fn compacted_new_view_checkpoint_rejects_forged_jump_and_replay_domains() {
-        let keypairs = [
-            checked_bls_keypair(11),
-            checked_bls_keypair(12),
-            checked_bls_keypair(13),
-        ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
-        let source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
-            .expect("canonical checkpoint source");
-        let target =
-            retarget_lane_block_proposal_view(&source, 257).expect("canonical checkpoint target");
-        let mut checkpoint = DurableLaneBlockViewCheckpointV1 {
-            source_proposal: source.clone(),
-            target_proposal: target,
-            certificate: durable_new_view_certificate(
-                &source,
-                &payload,
-                &keypairs,
-                chain_id_hash,
-                epoch,
-            ),
-        };
-
-        checkpoint.source_proposal.descriptor.lane_block_view = 255;
-        checkpoint.source_proposal.descriptor.descriptor_hash = checkpoint
-            .source_proposal
-            .descriptor
-            .computed_descriptor_hash();
-        checkpoint.source_proposal.proposal_hash =
-            checkpoint.source_proposal.computed_proposal_hash();
-        assert!(matches!(
-            validate_lane_block_view_checkpoint(&checkpoint, &payload, chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::NewViewSourceMismatch)
-        ));
-
-        let valid_source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
-            .expect("canonical checkpoint source");
-        checkpoint.source_proposal = valid_source;
-        assert!(matches!(
-            validate_lane_block_view_checkpoint(
-                &checkpoint,
-                &payload,
-                Hash::new(b"another-chain"),
-                epoch,
-            ),
-            Err(LaneAutonomousArtifactError::ChainOrEpochMismatch)
-        ));
-        assert!(matches!(
-            validate_lane_block_view_checkpoint(
-                &checkpoint,
-                &payload,
-                chain_id_hash,
-                epoch.saturating_add(1),
-            ),
-            Err(LaneAutonomousArtifactError::ChainOrEpochMismatch)
-        ));
     }
 
     fn lane_block_fixture_entrypoint_hash(domain: &[u8], identity: &[u8], ordinal: u8) -> Hash {

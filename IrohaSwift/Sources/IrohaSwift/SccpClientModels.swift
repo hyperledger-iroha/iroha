@@ -345,7 +345,7 @@ enum SccpSubmitValidation {
         expectedFeePayment: FeePaymentIntent?
     ) throws {
         var transaction = SccpCompactTransactionCursor(payload)
-        let chain = try transaction.takeField("chain")
+        let domain = try transaction.takeField("domain")
         let authority = try transaction.takeField("authority")
         let creation = try transaction.takeField("creation_time_ms")
         let executable = try transaction.takeField("instructions")
@@ -354,12 +354,13 @@ enum SccpSubmitValidation {
         let feePayment = try transaction.takeField("fee_payment")
         let metadata = try transaction.takeField("metadata")
         let attachments = try transaction.takeField("attachments")
-        guard transaction.isFinished, !chain.isEmpty, !authority.isEmpty, !executable.isEmpty,
+        guard transaction.isFinished, !authority.isEmpty, !executable.isEmpty,
               creation.count == MemoryLayout<UInt64>.size else {
             throw SccpV1Error.invalid(
                 "transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload"
             )
         }
+        try requireCanonicalNetworkDomain(domain)
         let exactCreation = creation.withUnsafeBytes { bytes in
             UInt64(littleEndian: bytes.loadUnaligned(as: UInt64.self))
         }
@@ -405,6 +406,28 @@ enum SccpSubmitValidation {
               metadataCursor.isFinished else {
             throw SccpV1Error.invalid(
                 "SCCP transaction metadata must be empty; fee selection belongs in fee_payment"
+            )
+        }
+    }
+
+    private static func requireCanonicalNetworkDomain(_ payload: Data) throws {
+        var domain = SccpCompactTransactionCursor(payload)
+        guard try domain.takeUInt32("domain.kind") == 0 else {
+            throw SccpV1Error.invalid(
+                "transaction domain must use TransactionDomain::Network"
+            )
+        }
+        let networkIdBytes = try domain.takeField("domain.value")
+        guard domain.isFinished else {
+            throw SccpV1Error.invalid(
+                "transaction domain must contain exactly one NetworkId"
+            )
+        }
+        do {
+            _ = try NetworkId(bytes: networkIdBytes)
+        } catch {
+            throw SccpV1Error.invalid(
+                "transaction domain contains an invalid canonical NetworkId"
             )
         }
     }

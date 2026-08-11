@@ -86,6 +86,7 @@ import org.hyperledger.iroha.android.crypto.Blake3;
 import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
@@ -465,7 +466,8 @@ public final class MusubiInstructionsV1FixtureTests {
             .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final TransactionPayload transaction =
         TransactionPayload.builder()
-            .setChainId("musubi-fixture")
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
             .setAuthority(authority)
             .setCreationTimeMs(1_735_555_000_000L)
             .setBatch(items)
@@ -476,7 +478,7 @@ public final class MusubiInstructionsV1FixtureTests {
             .encodeTransaction(transaction);
 
     final NoritoDecoder transactionDecoder = canonicalDecoder(encoded);
-    readField(transactionDecoder, "chain_id");
+    readField(transactionDecoder, "network_id");
     readField(transactionDecoder, "authority");
     readField(transactionDecoder, "creation_time_ms");
     final byte[] executablePayload = readField(transactionDecoder, "executable");
@@ -1068,8 +1070,7 @@ public final class MusubiInstructionsV1FixtureTests {
     final Map<String, Object> binding = object(payload.get("binding"));
     assertSemanticKeys(
         binding,
-        "chain_id",
-        "genesis_block_hash",
+        "network_id",
         "publisher",
         "ingress_broker",
         "seed_provider",
@@ -1079,8 +1080,7 @@ public final class MusubiInstructionsV1FixtureTests {
         "car_body_length",
         "nonce");
     final SeedIngressReceiptBinding bindingValue = new SeedIngressReceiptBinding(
-        string(binding.get("chain_id")),
-        fixed32(binding.get("genesis_block_hash")),
+        NetworkId.parse(string(binding.get("network_id"))),
         string(binding.get("publisher")),
         string(binding.get("ingress_broker")),
         newtypeText(binding.get("seed_provider")),
@@ -1113,8 +1113,7 @@ public final class MusubiInstructionsV1FixtureTests {
     final Map<String, Object> binding = object(payload.get("binding"));
     assertSemanticKeys(
         binding,
-        "chain_id",
-        "genesis_block_hash",
+        "network_id",
         "provider_id",
         "completed_by",
         "completion_authority",
@@ -1143,8 +1142,7 @@ public final class MusubiInstructionsV1FixtureTests {
     assertSemanticKeys(anchor, "height", "block_hash");
     final ProviderBundleVerificationBinding bindingValue =
         new ProviderBundleVerificationBinding(
-            string(binding.get("chain_id")),
-            fixed32(binding.get("genesis_block_hash")),
+            NetworkId.parse(string(binding.get("network_id"))),
             newtypeText(binding.get("provider_id")),
             string(binding.get("completed_by")),
             new ProviderCompletionAuthority(string(authority.get("provider_owner")), policy),
@@ -1175,8 +1173,7 @@ public final class MusubiInstructionsV1FixtureTests {
       final String completedBy,
       final ProviderCompletionAuthority completionAuthority) {
     return new ProviderBundleVerificationBinding(
-        template.chainId(),
-        template.genesisBlockHash(),
+        template.networkId(),
         template.providerId(),
         completedBy,
         completionAuthority,

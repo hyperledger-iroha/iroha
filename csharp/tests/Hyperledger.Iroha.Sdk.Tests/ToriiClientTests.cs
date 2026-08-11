@@ -18,10 +18,12 @@ public sealed partial class ToriiClientTests
     private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
     private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
     private const string OnboardingFixtureAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
-    private const string OnboardingFixtureChainId = "alias-fixture-chain";
+    private static readonly NetworkId OnboardingFixtureNetworkId = NetworkId.Parse(CanonicalNetworkId);
     private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string CanonicalNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string AlternateNetworkId = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
     private static readonly string MultisigMemberAccountId2 = TestAccountId(0x42);
     private static readonly string CanonicalMultisigAccountId = TestAccountId(0x43);
@@ -30,7 +32,6 @@ public sealed partial class ToriiClientTests
     private static readonly string ContractFeeSponsorAccountId = TestAccountId(0x46);
     private static readonly string MultisigFeeSponsorAccountId = TestAccountId(0x47);
     private static readonly string VerifyingKeyAuthorityAccountId = TestAccountId(0x48);
-    private const string VerifyingKeySigningChainId = "test-chain";
     private static readonly string SoraFsAuthorityAccountId = TestAccountId(0x49);
     private static readonly string ExplorerTransactionAuthorityAccountId = TestAccountId(0x4B);
     private static readonly string MultisigTransactionPayloadBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("multisig"));
@@ -247,6 +248,7 @@ public sealed partial class ToriiClientTests
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
+            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
@@ -370,6 +372,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -399,6 +402,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -463,6 +467,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -486,6 +491,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -512,6 +518,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -557,6 +564,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -599,6 +607,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -627,6 +636,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -651,6 +661,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -686,6 +697,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -768,7 +780,7 @@ public sealed partial class ToriiClientTests
             Content = new StringContent(responseBody),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, capabilities.AbiVersion);
@@ -911,7 +923,7 @@ public sealed partial class ToriiClientTests
         using var handler = new RecordingHandler(_ => JsonResponse(NodeCapabilitiesResponseJsonWithSm(
             "sm3-256",
             new JsonArray("ed25519", "sm2"))));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1363,7 +1375,7 @@ public sealed partial class ToriiClientTests
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -6748,6 +6760,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -9285,7 +9298,7 @@ public sealed partial class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/query", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
             Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
 
@@ -9321,7 +9334,7 @@ public sealed partial class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/query", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
             Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
 
@@ -9344,7 +9357,7 @@ public sealed partial class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        seenEnvelope = new SignedQueryBuilder("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+        seenEnvelope = new SignedQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
             .FindParameters()
             .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
 
@@ -9391,7 +9404,7 @@ public sealed partial class ToriiClientTests
             client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("value.id must not appear more than once", error.Message);
-        Assert.Equal("/query?limit=1", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/query?limit=1", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -12563,7 +12576,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task GetPipelineTransactionStatusAsyncParsesEnvelopePayload()
+    public async Task GetPipelineTransactionStatusAsyncParsesPublicMetadata()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
         using var handler = new RecordingHandler(request =>
@@ -12576,17 +12589,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Content = new StringContent("""
                 {
-                  "kind": "Transaction",
-                  "content": {
-                    "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                    "status": {
-                      "kind": "Applied",
-                      "block_height": 9,
-                      "content": null
-                    },
-                    "scope": "auto",
-                    "resolved_from": "state"
-                  }
+                  "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
+                  "status": { "kind": "Applied", "block_height": 9 },
+                  "scope": "auto",
+                  "resolved_from": "state"
                 }
                 """),
             };
@@ -12606,6 +12612,45 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
+    public async Task GetPipelineTransactionDetailsAsyncPostsOneExactSignedQuery()
+    {
+        var transactionHash = new string('1', 64);
+        var signedQuery = new SignedIterableQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
+            .FindTransactionDetails(transactionHash)
+            .BuildSigned(
+                CanonicalPrivateKeySeed,
+                1_735_689_600_000,
+                100_000,
+                Enumerable.Repeat((byte)0x5A, 32).ToArray());
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/v1/pipeline/transactions/details", request.RequestUri!.AbsolutePath);
+            Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal(
+                signedQuery.VersionedNoritoBytes,
+                request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
+            return JsonResponse($$"""
+                {
+                  "hash": "{{transactionHash}}",
+                  "transaction": {},
+                  "trigger_completions": []
+                }
+                """);
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        using var details = await client.GetPipelineTransactionDetailsAsync(
+            signedQuery,
+            transactionHash,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(transactionHash, details.RootElement.GetProperty("hash").GetString());
+        Assert.Equal(JsonValueKind.Object, details.RootElement.GetProperty("transaction").ValueKind);
+        Assert.Empty(details.RootElement.GetProperty("trigger_completions").EnumerateArray());
+    }
+
+    [Fact]
     public async Task GetPipelineTransactionStatusAsyncRejectsDuplicateJsonResponseKeys()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
@@ -12613,13 +12658,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent($$"""
                 {
-                  "content": {
-                    "hash": "{{transactionHash}}",
-                    "status": {
-                      "kind": "Applied",
-                      "kind": "Rejected"
-                    }
-                  }
+                  "hash": "{{transactionHash}}",
+                  "status": { "kind": "Applied", "kind": "Rejected" },
+                  "scope": "global",
+                  "resolved_from": "state"
                 }
                 """),
         });
@@ -12628,106 +12670,58 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.GetPipelineTransactionStatusAsync(transactionHash, cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("content.status.kind must not appear more than once", error.Message);
+        Assert.Contains("status.kind must not appear more than once", error.Message);
         Assert.Equal("/v1/pipeline/transactions/status", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
-    public async Task GetPipelineTransactionStatusAsyncParsesExactRejectionContent()
+    public async Task GetPipelineTransactionStatusAsyncRejectsRetiredSensitiveFields()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("""
                 {
-                  "kind": "Transaction",
-                  "content": {
-                    "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                    "status": {
-                      "kind": "Rejected",
-                      "content": "cmVqZWN0ZWQ="
-                    }
-                  }
+                  "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
+                  "status": { "kind": "Rejected", "rejection_reason": "secret" },
+                  "summary": "secret",
+                  "diagnostics": [{ "message": "secret" }],
+                  "trigger_completions": [],
+                  "batch_transfer_outcomes": [],
+                  "scope": "global",
+                  "resolved_from": "state"
                 }
                 """),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var status = await client.GetPipelineTransactionStatusAsync(transactionHash, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.NotNull(status);
-        Assert.Equal(PipelineTransactionState.Rejected, status!.State);
-        Assert.Equal("cmVqZWN0ZWQ=", status.RejectionContentBase64);
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetPipelineTransactionStatusAsync(transactionHash, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("missing or unsupported fields", error.Message);
     }
 
     [Fact]
-    public async Task GetPipelineTransactionStatusAsyncPreservesUnknownExactStatusKinds()
+    public async Task GetPipelineTransactionStatusAsyncRejectsUnknownStatusKinds()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("""
                 {
-                  "kind": "Transaction",
-                  "content": {
-                    "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                    "status": "Finalizing",
-                    "block_height": 42,
-                    "scope": "global",
-                    "resolved_from": "index"
-                  }
+                  "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
+                  "status": { "kind": "Finalizing", "block_height": 42 },
+                  "scope": "global",
+                  "resolved_from": "state"
                 }
                 """),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var status = await client.GetPipelineTransactionStatusAsync(transactionHash, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.NotNull(status);
-        Assert.Equal(PipelineTransactionState.Unknown, status!.State);
-        Assert.Equal("Finalizing", status.RawKind);
-        Assert.Equal((ulong)42, status.BlockHeight);
-        Assert.Equal("global", status.Scope);
-        Assert.Equal("index", status.ResolvedFrom);
-    }
-
-    [Theory]
-    [InlineData("", "non-empty")]
-    [InlineData(" cmVqZWN0ZWQ=", "surrounding whitespace")]
-    [InlineData("cmVqZWN0ZWQ= ", "surrounding whitespace")]
-    [InlineData("cmVq ZWN0ZWQ=", "whitespace")]
-    [InlineData("cmVqZWN0ZWQ=\u00A0", "surrounding whitespace")]
-    [InlineData("cmVqZWN0ZWQ=\u0001", "control characters")]
-    [InlineData("not-base64", "valid base64")]
-    [InlineData("AR==", "canonical base64")]
-    public async Task GetPipelineTransactionStatusAsyncRejectsNonExactRejectionContentResponse(
-        string rejectionContentBase64,
-        string expectedMessage)
-    {
-        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
-                {
-                  "kind": "Transaction",
-                  "content": {
-                    "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                    "status": {
-                      "kind": "Rejected",
-                      "content": {{JsonSerializer.Serialize(rejectionContentBase64)}}
-                    }
-                  }
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.GetPipelineTransactionStatusAsync(transactionHash, cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("pipeline transaction status response.status.content", error.Message);
-        Assert.Contains(expectedMessage, error.Message);
+        Assert.Contains("status.kind", error.Message);
+        Assert.Contains("not a supported pipeline status kind", error.Message);
     }
 
     public static IEnumerable<object[]> InvalidPipelineTransactionStatusResponses()
@@ -12735,15 +12729,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
 
         yield return new object[] { "response", "[]", "object" };
-        yield return new object[] { "content", """{ "content": null }""", "must not be null" };
-        yield return new object[] { "content", """{ "content": [] }""", "object" };
+        yield return new object[] { "response", """{ "content": null }""", "missing or unsupported fields" };
         yield return new object[]
         {
             "status",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}" }
+              "hash": "{{transactionHash}}",
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "missing or unsupported fields",
+        };
+        yield return new object[]
+        {
+            "status",
+            $$"""
+            {
+              "hash": "{{transactionHash}}",
+              "status": null,
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
             "must not be null",
@@ -12753,52 +12760,23 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "status",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": null }
+              "hash": "{{transactionHash}}",
+              "status": 7,
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
-            "must not be null",
-        };
-        yield return new object[]
-        {
-            "status",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": 7 }
-            }
-            """,
-            "string or object",
+            "object",
         };
         yield return new object[]
         {
             "status.kind",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": "" }
-            }
-            """,
-            "non-empty",
-        };
-        yield return new object[]
-        {
-            "status.kind",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": {} }
-            }
-            """,
-            "must not be null",
-        };
-        yield return new object[]
-        {
-            "status.kind",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": { "kind": 7 } }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": 7 },
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
             "must be a string",
@@ -12808,107 +12786,78 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "status.kind",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": { "kind": "Applied Now" } }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied Now" },
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
             "whitespace",
-        };
-        yield return new object[]
-        {
-            "status.content",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": { "kind": "Rejected", "content": 7 } }
-            }
-            """,
-            "must be a string",
         };
         yield return new object[]
         {
             "status.block_height",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": { "kind": "Applied", "block_height": -1 } }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied", "block_height": -1 },
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
             "unsigned integer",
         };
         yield return new object[]
         {
-            "content.block_height",
+            "status.block_height",
             $$"""
             {
-              "kind": "Transaction",
-              "content": {
-                "hash": "{{transactionHash}}",
-                "status": "Applied",
-                "block_height": -1
-              }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied", "block_height": null },
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
-            "unsigned integer",
+            "must not be null",
         };
         yield return new object[]
         {
-            "content.hash",
-            """
+            "hash",
+            $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": 7, "status": "Applied" }
+              "hash": 7,
+              "status": { "kind": "Applied" },
+              "scope": "global",
+              "resolved_from": "state"
             }
             """,
             "must be a string",
         };
         yield return new object[]
         {
-            "content.hash",
-            """
+            "scope",
+            $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "abc123", "status": "Applied" }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied" },
+              "scope": "remote",
+              "resolved_from": "state"
             }
             """,
-            "32-byte hex string",
+            "local, auto, or global",
         };
         yield return new object[]
         {
-            "content.scope",
+            "resolved_from",
             $$"""
             {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": "Applied", "scope": 7 }
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied" },
+              "scope": "global",
+              "resolved_from": "index"
             }
             """,
-            "must be a string",
-        };
-        yield return new object[]
-        {
-            "content.scope",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": { "hash": "{{transactionHash}}", "status": "Applied", "scope": "local scope" }
-            }
-            """,
-            "whitespace",
-        };
-        yield return new object[]
-        {
-            "content.resolved_from",
-            $$"""
-            {
-              "kind": "Transaction",
-              "content": {
-                "hash": "{{transactionHash}}",
-                "status": "Applied",
-                "resolved_from": "state\u0001"
-              }
-            }
-            """,
-            "control characters",
+            "cache, queue, or state",
         };
     }
 
@@ -12991,11 +12940,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent("""
                 {
-                  "kind": "Transaction",
-                  "content": {
-                    "hash": " da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                    "status": "Applied"
-                  }
+                  "hash": " da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
+                  "status": { "kind": "Applied" },
+                  "scope": "global",
+                  "resolved_from": "state"
                 }
                 """),
         });
@@ -13004,7 +12952,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.GetPipelineTransactionStatusAsync("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("content.hash", error.Message);
+        Assert.Contains("response.hash", error.Message);
         Assert.Contains("whitespace", error.Message);
         Assert.NotNull(handler.LastRequest);
     }
@@ -13050,12 +12998,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Alias = "Merchant@Banka.Paynet",
             AccountId = OnboardingFixtureAccountId,
             Permissions = [],
-        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureChainId,
+        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureNetworkId,
             SharedOnboardingBodyEncoder,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(OnboardingFixtureAuthority, receipt.Body.Authority);
-        Assert.Equal(OnboardingFixtureChainId, receipt.Body.ChainId);
+        Assert.Equal(OnboardingFixtureNetworkId, receipt.Body.NetworkId);
         Assert.Equal(OnboardingFixtureAccountId, receipt.Body.Request.AccountId);
     }
 
@@ -13093,51 +13041,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             receipt,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
+            OnboardingFixtureNetworkId,
             SharedOnboardingBodyEncoder,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(OnboardingFixtureAccountId, response.AccountId);
         Assert.Equal(OnboardingFixtureAlias, response.Alias);
         Assert.Equal("Queued", response.Status);
-    }
-
-    [Fact]
-    public async Task ApplyAccountOnboardingAsyncRejectsUnpinnedOrInvalidReceiptBeforeDispatch()
-    {
-        var receipt = SharedOnboardingReceipt();
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("invalid onboarding receipt reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt,
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            "wrong-chain",
-            SharedOnboardingBodyEncoder,
-            cancellationToken: TestContext.Current.CancellationToken));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt with { Signature = "00" + receipt.Signature[2..] },
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
-            SharedOnboardingBodyEncoder,
-            cancellationToken: TestContext.Current.CancellationToken));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
-            receipt,
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            OnboardingFixtureChainId,
-            body =>
-            {
-                var encoded = SharedOnboardingBodyEncoder(body);
-                encoded[^1] ^= 1;
-                return encoded;
-            },
-            cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -13200,7 +13110,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 AccountOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -13233,14 +13143,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                          ValidAccountOnboardingPlanRequest(),
                          onboardingToken!,
                          OnboardingFixtureAuthority,
-                         OnboardingFixtureChainId,
+                         OnboardingFixtureNetworkId,
                          SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
                      () => client.ApplyAccountOnboardingAsync(
                          SharedOnboardingReceipt(),
                          onboardingToken!,
                          OnboardingFixtureAuthority,
-                         OnboardingFixtureChainId,
+                         OnboardingFixtureNetworkId,
                          SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
                  })
@@ -13277,7 +13187,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ValidAccountOnboardingPlanRequest(),
                 AccountOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -13311,7 +13221,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ValidAccountOnboardingPlanRequest(),
                 escapedOnboardingToken,
                 OnboardingFixtureAuthority,
-                OnboardingFixtureChainId,
+                OnboardingFixtureNetworkId,
                 SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18347,7 +18257,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var active = await client.GetRuntimeAbiActiveAsync(cancellationToken: TestContext.Current.CancellationToken);
         var hash = await client.GetRuntimeAbiHashAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -18574,7 +18484,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(async () =>
         {
@@ -18760,7 +18670,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent("""{ "error": "invalid account id literal" }"""),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var exception = await Assert.ThrowsAsync<ToriiApiException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18778,7 +18688,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ReasonPhrase = "upstream failed",
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var exception = await Assert.ThrowsAsync<ToriiApiException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -21589,22 +21499,22 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
             });
     }
 
-    private static ToriiClient CreateVerifyingKeyClient(
-        RecordingHandler handler,
-        string chainId = VerifyingKeySigningChainId)
+    private static ToriiClient CreateVerifyingKeyClient(RecordingHandler handler)
     {
         return new ToriiClient(
             new Uri("https://torii.example"),
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(chainId),
+                LocalSigningContext = new ToriiLocalSigningContext(
+                    NetworkId.Parse(CanonicalNetworkId)),
             });
     }
 
@@ -28793,7 +28703,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     private static byte[] CanonicalVerifyingKeyTransactionPayload(
         object? request = null,
         string? wireNameOverride = null,
-        string chainId = VerifyingKeySigningChainId,
+        NetworkId? networkId = null,
         string? authorityOverride = null,
         string? idBackendOverride = null,
         string? idNameOverride = null,
@@ -28874,8 +28784,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var feeValue = VkFields(VkUInt64(0), [0]);
         var feePayment = VkConcat(VkUInt32(0), VkCompactField(feeValue));
 
+        var transactionDomain = VkConcat(
+            VkUInt32(0),
+            VkCompactField((networkId ?? NetworkId.Parse(CanonicalNetworkId)).ToBytes()));
         return VkFields(
-            VkCompactField(VkString(chainId)),
+            transactionDomain,
             authority,
             VkUInt64(1),
             executable,
@@ -29531,7 +29444,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     private static SignedTransactionEnvelope ValidSignedTransactionEnvelope()
     {
         return new TransactionBuilder(
-            "00000042",
+            NetworkId.Parse(CanonicalNetworkId),
             CanonicalAccountId,
             EmptyAuthorityFeePayment)
             .TransferAsset(

@@ -18,7 +18,7 @@ summary: Checklist for DA ingestion/replication/PDP-PoTR evidence shared with st
 
 - **Ingestion latency:** p95 `sorafs_orchestrator_fetch_duration_ms` = {{ ingest_p95_ms }} ms (target ≤ {{ ingest_target_ms }} ms). Spike summary: {{ ingest_notes }}.
 - **Chunk latency tail:** 99th percentile `sorafs_orchestrator_chunk_latency_ms` = {{ chunk_p99_ms }} ms. Watchlist providers: {{ chunk_watchlist }}.
-- **Replication backlog:** `torii_sorafs_replication_backlog_total` = {{ replication_backlog }} orders; `torii_sorafs_replication_deadline_slack_epochs` median = {{ slack_median_epochs }} epochs. Notes: {{ replication_notes }}.
+- **Pin accounting:** `torii_sorafs_pin_retained_manifests` = {{ retained_pin_records }} records; `torii_sorafs_pin_live_content_bytes` = {{ live_pin_content_bytes }} bytes. Replication-order notes from the finalized registry export: {{ replication_notes }}.
 - **Gateway retries/denials:** `torii_sorafs_gateway_refusals_total` increase (24 h) = {{ gateway_refusals }} / `torii_sorafs_range_fetch_throttle_events_total` = {{ throttle_events }}.
 
 ## PDP / PoTR Challenge Outcomes
@@ -37,7 +37,7 @@ summary: Checklist for DA ingestion/replication/PDP-PoTR evidence shared with st
 | Metric | Value | Target | Notes |
 |--------|-------|--------|-------|
 | `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity` (avg) | {{ retention_ratio }} % | {{ retention_target }} % | {{ retention_notes }} |
-| `torii_sorafs_replication_sla_total{outcome="met"}` (weekly delta) | {{ sla_met }} | Track trend | {{ sla_notes }} |
+| Finalized replication completions within SLA (weekly registry export) | {{ sla_met }} | Track trend | {{ sla_notes }} |
 | `torii_sorafs_slash_proposals_total` (weekly delta) | {{ slash_delta }} | 0 unless planned | {{ slash_notes }} |
 
 ## Alerts & Follow-Ups

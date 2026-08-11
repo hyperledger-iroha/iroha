@@ -44,15 +44,11 @@ def _async_extended_strong_type_induction_errors(
         bridges = (
             "<2>3f. AsyncProducerTypeInvariant BY <1>1, "
             "AsyncInitEstablishesProducerTypeInvariant",
-            "<2>3g. AsyncServeProducerEpisodeTypeInvariant BY <1>1, "
-            "AsyncInitEstablishesServeProducerEpisodeTypeInvariant",
-            "<2>3h. AsyncServeProducerEpisodeOwnershipInvariant BY <1>1, Isa "
-            "DEF AsyncInitAt, AsyncBaseInitAt, AsyncServeProducerEpisodeInit, "
-            "AsyncServeProducerEpisodeOwnershipInvariant",
-            "<2>3i. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
-            "BY <1>1, Isa DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit, "
-            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant, "
-            "AsyncTimeoutRecoveryEpisodes, AsyncTimeoutRecoveryEpisodesIn",
+            "<2>3p. /\\ AsyncServeProducerEpisodeTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant BY <1>1, "
+            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "<2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+            "BY <1>1, AsyncInitEstablishesTimeoutRecoveryCurrentBoundary",
         )
         if any(body.count(bridge) != 1 for bridge in bridges):
             errors.append(
@@ -77,23 +73,25 @@ def _async_extended_strong_type_induction_errors(
         steps = (
             "<2>4e. AsyncProducerTypeInvariant' BY <1>1, <2>1, "
             "AsyncProducerVarsFramePreservesTypeInvariant DEF AsyncAllVars",
-            "<2>4f. AsyncServeProducerEpisodeTypeInvariant' BY <1>1, <2>1, "
-            "AsyncServeProducerEpisodeFramePreservesTypeInvariant DEF AsyncAllVars",
-            "<2>4g. AsyncServeProducerEpisodeOwnershipInvariant' BY <1>1, "
-            "<2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, "
+            "<2>8p. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' "
+            "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, "
+            "AsyncServeProducerEpisodeTypeInvariant, "
             "AsyncServeProducerEpisodeOwnershipInvariant, "
             "AsyncServeIngressLifecycleOwnerIdentities, "
-            "AsyncServeIngressAdmissionIdentities, AsyncServeOffQueueReservations",
-            "<2>4h. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+            "AsyncServeIngressAdmissionIdentities, "
+            "AsyncServeOffQueueReservations, AsyncServeJobQueued, "
+            "AsyncIoServeIdentities",
+            "<2>8t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
             "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, vars, "
             "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant, "
             "AsyncTimeoutRecoveryEpisodes, AsyncTimeoutRecoveryEpisodesIn, "
-            "NodeHasDecision",
+            "NodeHasDecision, AsyncNodeHasDecisionIn",
         )
         qed = (
             "<2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, "
-            "<2>4c, <2>4d, <2>4e, <2>4f, <2>4g, <2>4h, <2>5, <2>6, "
-            "<2>7, <2>8 DEF AsyncStrongTypeInvariant"
+            "<2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7, <2>8, <2>8p, "
+            "<2>8t DEF AsyncStrongTypeInvariant"
         )
         if body.count(projection) != 1:
             errors.append(
@@ -125,35 +123,24 @@ def _async_extended_strong_type_induction_errors(
             "BY <1>1 DEF AsyncStrongTypeInvariant"
         )
         producer_type = (
-            "<2>14. AsyncProducerTypeInvariant' BY <1>1, <2>2, "
+            "<2>4f. AsyncProducerTypeInvariant' BY <1>1, <2>2, "
             "AsyncProducerProjectionPreservesTypeInvariant DEF AsyncNext"
         )
         serve_type = (
-            "<2>15. AsyncServeProducerEpisodeTypeInvariant' BY <1>1, <2>2, "
-            "AsyncServeProducerEpisodeTransitionPreservesTypeInvariant "
-            "DEF AsyncNext, AsyncTypeInvariant"
+            "<2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' BY <1>1, "
+            "AsyncNextPreservesServeProducerEpisodeInvariants"
         )
-        ownership = re.search(r"<2>16\..*?(?=<2>17\.)", body)
-        boundary = re.search(r"<2>17\..*?(?=<2> QED)", body)
-        ownership_tokens = (
-            "<2>16. AsyncServeProducerEpisodeOwnershipInvariant'",
-            "<2>2m",
-            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
-            "ResetNodeSchedulerForRestartDischargesServeIngressDebt",
-            "PopSelectedIngressDoesNotCreateServeIngressOwners",
-            "ServeReceiverCloseRollbackDoesNotCreateIngressOwners",
-            "AsyncServeProducerEpisodeTransition",
-            "AsyncServeProducerEpisodeFinalRetirementStep",
-            "AsyncServeProducerEpisodeActiveThisStep",
+        boundary = (
+            "<2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+            "BY <1>1, <2>2h, "
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant"
         )
-        boundary_tokens = (
-            "<2>17. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'",
-            "<2>2m",
-            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
-            "AsyncTimeoutRecoveryEpisodeRetiresThisStep",
-            "AsyncTimeoutRecoveryEpisodeCreationReadyIn",
-            "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission",
-            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+        qed = (
+            "<2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, "
+            "<2>4c, <2>4d, <2>4e, <2>4f, <2>5, <2>6, <2>7, <2>8, "
+            "<2>9, <2>10, <2>11, <2>12, <2>13 "
+            "DEF AsyncStrongTypeInvariant"
         )
         if body.count(projection) != 1:
             errors.append(
@@ -173,21 +160,23 @@ def _async_extended_strong_type_induction_errors(
                 "prime AsyncServeProducerEpisodeTypeInvariant through the "
                 "exact one-shot transition"
             )
-        if ownership is None or any(
-            ownership.group(0).count(token) != 1 for token in ownership_tokens
-        ):
+        if body.count(serve_type) != 1:
             errors.append(
                 f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                 "prime AsyncServeProducerEpisodeOwnershipInvariant through "
                 "the reviewed admission, retirement, and reset cases"
             )
-        if boundary is None or any(
-            boundary.group(0).count(token) != 1 for token in boundary_tokens
-        ):
+        if body.count(boundary) != 1:
             errors.append(
                 f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                 "prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
                 "through retained, created, and vote-updated episodes"
+            )
+        if body.count(qed) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "retain every producer and timeout-boundary prime as an "
+                "exact QED dependency"
             )
     return errors
 

@@ -1007,6 +1007,9 @@ fn preflight_singular_source_materialization(
                 charge(manifest, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindSorafsPinManifests(_) => {
+            return Err(reject_unbounded("SoraFS pin-manifest page query"));
+        }
         SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
@@ -1194,6 +1197,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsPinManifest(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPinManifests(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsOrderbookPolicy(q) => {
@@ -4524,7 +4530,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level,
+        AccountId, ChainId, DomainId, Level, NetworkId,
         isi::Log,
         query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
         transaction::TransactionBuilder,
@@ -6499,8 +6505,6 @@ mod tests {
         valid_tx_per_block: usize,
         invalid_tx_per_block: usize,
     ) -> Result<State> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura.clone(), query_handle);
@@ -6515,7 +6519,7 @@ mod tests {
             let valid_tx = {
                 let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
                 let tx = TransactionBuilder::new(
-                    chain_id.clone(),
+                    state.network_id,
                     ALICE_ID.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -6523,7 +6527,7 @@ mod tests {
                 .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(
                     tx,
-                    &chain_id,
+                    &state.network_id,
                     max_clock_drift,
                     tx_limits,
                     crypto_cfg.as_ref(),
@@ -6532,7 +6536,7 @@ mod tests {
             let invalid_tx = {
                 let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
                 let tx = TransactionBuilder::new(
-                    chain_id.clone(),
+                    state.network_id,
                     ALICE_ID.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -6540,7 +6544,7 @@ mod tests {
                 .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(
                     tx,
-                    &chain_id,
+                    &state.network_id,
                     max_clock_drift,
                     tx_limits,
                     crypto_cfg.as_ref(),
@@ -8325,10 +8329,11 @@ mod tests {
         let (peer_pk, _) = bls_test_keypair().into_parts();
         let peer_id = PeerId::new(peer_pk);
         let topology = Topology::new(vec![peer_id]);
-        let unverified_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, parent_block.as_deref())
-            .sign(ALICE_KEYPAIR.private_key())
-            .unpack(|_| {});
+        let unverified_block =
+            BlockBuilder::new(vec![dummy_accepted_transaction(state.network_id)])
+                .chain(0, parent_block.as_deref())
+                .sign(ALICE_KEYPAIR.private_key())
+                .unpack(|_| {});
         let vcb = unverified_block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
@@ -10016,6 +10021,9 @@ mod tests {
 
         let qwp = QueryWithParams {
             query: (),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::account::prelude::FindAccounts,
+            ),
             item: QueryItemKind::Account,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::ids_only()),
@@ -10082,6 +10090,9 @@ mod tests {
 
         let qwp = QueryWithParams {
             query: (),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+            ),
             item: QueryItemKind::AssetDefinition,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<AssetDefinition>::PASS,

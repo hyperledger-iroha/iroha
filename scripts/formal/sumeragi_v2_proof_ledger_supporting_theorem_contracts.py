@@ -662,8 +662,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ TimeoutPhysicalControlPacketOwner(item) "
         "/\\ packet \\in TimeoutPhysicalControlExactPackets(item) "
-        "/\\ packet = OldestDueSourcePacket(recipient, item.source) "
-        "/\\ AdmitIngressPacket(recipient, item.source) "
+        "/\\ packet = OldestDueSourcePacket( "
+        "recipient, packet.authenticatedSource) "
+        "/\\ AdmitIngressPacket(recipient, packet.authenticatedSource) "
         "=> \\/ TimeoutPhysicalControlTerminal(item)' "
         "\\/ TimeoutPhysicalControlIngressOwner(item)' "
         "\\/ TimeoutPhysicalControlCandidateOwner(item)'"
@@ -2323,8 +2324,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncServeIngressAdmissionOwned( "
         "archive, ExactDecisionServeLifecycleIdentity( "
         "archive, request))' "
-        "/\\ request \\in SequenceSet( "
-        "IngressLane( archive, IngressResourceSource(request)))' "
+        "/\\ \\E source \\in AsyncIngressSources: "
+        "request \\in SequenceSet( "
+        "IngressLane(archive, source))' "
         "/\\ ExactDecisionRequestFrozenServeBarrierIdentities( "
         "archive, request)' = {}"
     ),
@@ -2716,7 +2718,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "recipient \\in Responsive, source \\in AsyncIngressSources: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ packet.item.envelope.recipient = recipient "
-        "/\\ packet.item.source = source "
+        "/\\ packet.authenticatedSource = source "
         "/\\ PostGstAdmitHiddenPacket(recipient, source) "
         "=> ExactDecisionTargetNeutralPacketDependencyRank(packet)' "
         "\\in SetLessThan( "
@@ -4296,6 +4298,39 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ): (
         "IndexedChainSpec => "
         "IndexedHistoricalFixedClockNonPacketServiceProperty"
+    ),
+    (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+    ): (
+        "\\A specification: "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationExternalCoverageInvariant) "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationLocalReplayCapacityInvariant) "
+        "/\\ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual( "
+        "specification) => "
+        "/\\ HistoricalDiscoveryFixedClockPacketServiceProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryCandidateServeIdentityBudgetProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+    ): (
+        "IndexedChainSpec => "
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+    ): (
+        "IndexedHistoricalFixedClockPacketCorridorTemporalResidual => "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedHistoricalTransport(initialContext)! "
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties( "
+        "IndexedChainSpec)"
     ),
     (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",

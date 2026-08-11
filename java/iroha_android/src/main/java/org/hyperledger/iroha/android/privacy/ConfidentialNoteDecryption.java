@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.privacy;
 
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.ConfidentialEncryptedPayload;
 
 /** Decrypts confidential-v2 note payload envelopes into validated note openings. */
@@ -9,30 +10,14 @@ public final class ConfidentialNoteDecryption {
   public static ConfidentialNoteOpening decryptNote(
       final ConfidentialEncryptedPayload encryptedPayload,
       final byte[] recipientPrivateKey,
-      final byte[] spendKey) {
-    return decryptNote(encryptedPayload, recipientPrivateKey, spendKey, null);
-  }
-
-  public static ConfidentialNoteOpening decryptNote(
-      final ConfidentialEncryptedPayload encryptedPayload,
-      final byte[] recipientPrivateKey,
       final byte[] spendKey,
-      final String expectedChainId) {
+      final NetworkId expectedNetworkId) {
     return ConfidentialNoteCrypto.decryptNote(
         encryptedPayload,
         recipientPrivateKey,
         spendKey,
         ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
-        expectedChainId);
-  }
-
-  public static ConfidentialNoteOpening decryptNoteWithOwnerTag(
-      final ConfidentialEncryptedPayload encryptedPayload,
-      final byte[] recipientPrivateKey,
-      final byte[] spendKey,
-      final byte[] expectedOwnerTag) {
-    return decryptNoteWithOwnerTag(
-        encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, null);
+        expectedNetworkId);
   }
 
   public static ConfidentialNoteOpening decryptNoteWithOwnerTag(
@@ -40,8 +25,8 @@ public final class ConfidentialNoteDecryption {
       final byte[] recipientPrivateKey,
       final byte[] spendKey,
       final byte[] expectedOwnerTag,
-      final String expectedChainId) {
+      final NetworkId expectedNetworkId) {
     return ConfidentialNoteCrypto.decryptNote(
-        encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, expectedChainId);
+        encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, expectedNetworkId);
   }
 }

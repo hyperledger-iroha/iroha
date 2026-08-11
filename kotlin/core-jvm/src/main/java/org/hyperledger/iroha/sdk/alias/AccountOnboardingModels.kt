@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.alias
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Secret-free intent accepted by the sponsored account-onboarding planner. */
 class AccountOnboardingPlanRequestV1(
@@ -47,7 +48,7 @@ class AccountOnboardingPlanBodyV1(
     version: Int,
     /** Canonical embedded request. */ @JvmField val request: AccountOnboardingPlanRequestV1,
     authority: String,
-    chainId: String,
+    /** Exact genesis-derived network identity. */ @JvmField val networkId: NetworkId,
     /** World-state planning anchor. */ @JvmField val anchor: AliasPlanAnchorV1,
     /** Canonically resolved account-alias disposition. */ @JvmField val resource: AliasPlanResourceV1,
     /** Acquisition terms used only if the alias remains absent. */
@@ -66,10 +67,6 @@ class AccountOnboardingPlanBodyV1(
     @JvmField
     val authority: String = requireCanonicalI105Address(authority, "authority")
 
-    /** Chain to which the receipt is bound. */
-    @JvmField
-    val chainId: String = chainId.also { requireOnboardingToken(it, "chainId") }
-
     /** Exact ordered server-signed transaction frames. */
     @JvmField
     val instructions: List<AliasFramedInstructionV1> = instructions.toList()
@@ -82,7 +79,7 @@ class AccountOnboardingPlanBodyV1(
         "version" to version,
         "request" to request.toJsonMap(),
         "authority" to authority,
-        "chain_id" to chainId,
+        "network_id" to networkId.literal,
         "anchor" to anchor.toJsonMap(),
         "resource" to resource.toJsonMap(),
         "acquisition" to acquisition.toJsonMap(),
@@ -263,7 +260,7 @@ object AccountOnboardingJsonParser {
         parser.exactKeys(
             root,
             setOf(
-                "version", "request", "authority", "chain_id", "anchor", "resource",
+                "version", "request", "authority", "network_id", "anchor", "resource",
                 "acquisition", "quote_guard", "instructions", "owner_auto_renew_instruction",
                 "valid_until_ms",
             ),
@@ -286,7 +283,7 @@ object AccountOnboardingJsonParser {
                 parser.intField(requestRoot, "version", "body.request.version"),
             ),
             parser.stringField(root, "authority", "body.authority"),
-            parser.stringField(root, "chain_id", "body.chain_id"),
+            NetworkId.parse(parser.stringField(root, "network_id", "body.network_id")),
             parser.parseAnchor(parser.objectField(root, "anchor", "body.anchor")),
             parser.parseResource(parser.objectField(root, "resource", "body.resource"), "body.resource"),
             AliasLeaseAcquisitionV1(

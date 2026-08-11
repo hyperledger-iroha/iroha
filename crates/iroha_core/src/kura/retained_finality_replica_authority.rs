@@ -1735,7 +1735,7 @@ impl Kura {
             let score = Hash::new(
                 KuraReplicaKeeperScoreV1 {
                     domain: KURA_REPLICA_KEEPER_SELECTION_DOMAIN_V1.to_vec(),
-                    chain_id: artifact.height_context.chain_id.clone(),
+                    network_id: artifact.height_context.network_id,
                     context_id: artifact.context_id(),
                     height: artifact.height,
                     block_hash: artifact.block_hash,
@@ -1811,7 +1811,7 @@ impl Kura {
         let selected_keepers = self.deterministic_kura_replica_keepers(&record.artifact);
         Ok(Some(VerifiedKuraReplicaAuthority {
             key,
-            chain_id: record.artifact.height_context.chain_id.clone(),
+            network_id: record.artifact.height_context.network_id,
             selected_keepers,
         }))
     }

@@ -121,7 +121,12 @@ class UrlConnectionTransportExecutorTest {
     }
 
     @Test
-    fun redirectsAreReturnedWithoutForwardingSensitiveHeaders() {
+    fun permanentRedirectsAreReturnedWithoutForwardingSensitiveHeaders() {
+        assertRedirectIsNotFollowed(307)
+        assertRedirectIsNotFollowed(308)
+    }
+
+    private fun assertRedirectIsNotFollowed(status: Int) {
         ServerSocket(0).use { server ->
             server.soTimeout = 1_000
             val port = server.localPort
@@ -131,7 +136,7 @@ class UrlConnectionTransportExecutorTest {
                     readHeaders(socket.getInputStream())
                     socket.getOutputStream().apply {
                         write(
-                            ("HTTP/1.1 302 Found\r\n" +
+                            ("HTTP/1.1 $status Redirect\r\n" +
                                 "Location: http://127.0.0.1:$port/redirected\r\n" +
                                 "Content-Length: 0\r\nConnection: close\r\n\r\n")
                                 .toByteArray(StandardCharsets.UTF_8),
@@ -165,7 +170,7 @@ class UrlConnectionTransportExecutorTest {
 
             val response = UrlConnectionTransportExecutor().execute(request).get()
 
-            assertEquals(302, response.statusCode)
+            assertEquals(status, response.statusCode)
             serverThread.join(3_000)
             assertNull(redirectedRequest.get(), "redirect target must not receive a second request")
         }

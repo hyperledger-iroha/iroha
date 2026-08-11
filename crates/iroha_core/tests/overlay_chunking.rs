@@ -23,11 +23,17 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     let world = iroha_core::state::World::with([domain], [account], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_with_chain_for_testing(
+    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"overlay-chunking-test-network"),
+    ));
+    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world,
         kura,
         query,
         ChainId::from("chain"),
+        network_id,
     );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
@@ -55,7 +61,7 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
         );
     }
     let tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        network_id,
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

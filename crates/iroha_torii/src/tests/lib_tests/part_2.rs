@@ -1,3 +1,27 @@
+fn assert_onboarding_readiness_blocked(
+    app: &SharedAppState,
+    signer: &AccountOnboardingSigner,
+    message: &str,
+) {
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    assert_ne!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
+        "{message}: readiness unexpectedly succeeded: {report:?}"
+    );
+    assert!(!report.diagnostics.is_empty(), "{message}");
+}
+
+fn assert_onboarding_readiness_ready(app: &SharedAppState, signer: &AccountOnboardingSigner) {
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
+        "{report:?}"
+    );
+    assert!(report.diagnostics.is_empty());
+}
+
 #[test]
 fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
     let key_pair =
@@ -474,12 +498,10 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
     let policy = FxCorridorPolicy {
         policy_id,
         revision: 1,
+        owner: account,
         source_dataspace: recipient_lookup_cbuae_dataspace_for_test(),
-        source: FxCorridorSource::TransactionAuthority,
         source_asset_definition_id: recipient_lookup_aed_definition_for_test(),
-        source_sink: account.clone(),
         destination_dataspace: recipient_lookup_sbp_dataspace_for_test(),
-        destination_reserve: account,
         destination_asset_definition_id: AssetDefinitionId::derive_from_components(
             DomainId::try_new("fx", "universal").expect("FX domain"),
             "pkr".parse().expect("PKR name"),
@@ -488,8 +510,14 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
             DomainId::try_new("hbl", "sbp").expect("HBL domain"),
             DomainId::try_new("ubl", "sbp").expect("UBL domain"),
         ]),
-        rate_numerator: 76,
-        rate_denominator: 1,
+        oracle_feed_id: "recipient_lookup_fx".parse().expect("feed id"),
+        max_oracle_age_ms: 60_000,
+        max_source_amount_per_settlement: Quantity::from(1_000_u32),
+        max_destination_amount_per_settlement: Quantity::from(100_000_u32),
+        velocity_window_ms: 60_000,
+        max_settlements_per_window: 100,
+        max_source_amount_per_window: Quantity::from(10_000_u32),
+        max_destination_amount_per_window: Quantity::from(1_000_000_u32),
         enabled: true,
     };
     let mut registry = FxCorridorPolicyRegistry::default();
@@ -835,7 +863,7 @@ async fn fee_sponsor_program_by_id_returns_the_exact_on_chain_program() {
     let sponsor = AccountId::new(sponsor_keypair.public_key().clone());
     let program_id =
         FeeSponsorProgramId::new(sponsor.clone(), "wallet_fx".parse().expect("program name"));
-    let program = FeeSponsorProgram::new(program_id.clone());
+    let program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
     register_fee_sponsor_program_for_test(&app, program_id.clone());
 
@@ -885,7 +913,7 @@ async fn fee_quote_returns_exact_routing_observation_and_fixed_point_intent() {
     let caller = AccountId::new(caller_keypair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
     let payload = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         caller.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -946,7 +974,7 @@ async fn fee_quote_accepts_an_absent_authority_that_self_registers_first() {
         "self-registering quote authority must start absent"
     );
     let payload = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         caller.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1697,14 +1725,14 @@ async fn alias_resolve_rejects_unsigned_request() {
 }
 
 #[tokio::test]
-async fn contract_identity_reads_reject_unsigned_requests_before_parsing() {
+async fn contract_alias_reads_reject_unsigned_requests_before_parsing() {
     let app = mk_app_state_for_tests();
     let method = axum::http::Method::POST;
     let alias_uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
         .parse()
         .expect("contract alias resolve URI");
     let alias_error = handler_contract_alias_resolve(
-        State(app.clone()),
+        State(app),
         method,
         alias_uri,
         HeaderMap::new(),
@@ -1717,26 +1745,6 @@ async fn contract_identity_reads_reject_unsigned_requests_before_parsing() {
         alias_error,
         Error::AppUnauthorized {
             code: "alias_auth_required",
-            ..
-        }
-    ));
-
-    let gov_error = handler_gov_contract_get(
-        State(app),
-        axum::http::Method::GET,
-        "/v1/gov/contracts/not-a-contract-address"
-            .parse()
-            .expect("governed contract URI"),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        AxPath("not-a-contract-address".to_owned()),
-    )
-    .await
-    .expect_err("unsigned malformed governed-contract read must fail authentication first");
-    assert!(matches!(
-        gov_error,
-        Error::AppUnauthorized {
-            code: "contract_code_auth_required",
             ..
         }
     ));

@@ -13,23 +13,14 @@ public final class LocalZkAssetMerklePathProvider implements ZkAssetMerklePathPr
 
   private final List<byte[]> roots;
   private final List<byte[]> commitments;
-  private final ZkAssetMerkleHasher hasher;
 
   public LocalZkAssetMerklePathProvider(
       final List<byte[]> rootHistory, final List<byte[]> commitmentHistory) {
-    this(rootHistory, commitmentHistory, PastaPoseidonNodeHasher.instance());
-  }
-
-  public LocalZkAssetMerklePathProvider(
-      final List<byte[]> rootHistory,
-      final List<byte[]> commitmentHistory,
-      final ZkAssetMerkleHasher hasher) {
     this.roots = copyFixed32List(rootHistory, "rootHistory");
     this.commitments = copyFixed32List(commitmentHistory, "commitmentHistory");
     if (this.commitments.size() > CONFIDENTIAL_TREE_CAPACITY_V2) {
       throw new IllegalArgumentException("commitmentHistory exceeds confidential v2 tree capacity");
     }
-    this.hasher = java.util.Objects.requireNonNull(hasher, "hasher");
   }
 
   @Override
@@ -76,29 +67,17 @@ public final class LocalZkAssetMerklePathProvider implements ZkAssetMerklePathPr
   }
 
   private ZkAssetMerklePath computePath(final int leafIndex) {
-    ArrayList<byte[]> layer = new ArrayList<>(CONFIDENTIAL_TREE_CAPACITY_V2);
-    for (final byte[] commitment : commitments) {
-      layer.add(commitment.clone());
-    }
-    while (layer.size() < CONFIDENTIAL_TREE_CAPACITY_V2) {
-      layer.add(new byte[32]);
-    }
+    final byte[] encoded =
+        PrivacyNativeBridge.deriveConfidentialMerklePathV3(commitments, leafIndex);
+    final byte[] root = Arrays.copyOfRange(encoded, 0, 32);
     final ArrayList<byte[]> siblings = new ArrayList<>(CONFIDENTIAL_TREE_DEPTH_V2);
-    final byte[] directions = new byte[CONFIDENTIAL_TREE_DEPTH_V2];
-    int currentIndex = leafIndex;
     for (int level = 0; level < CONFIDENTIAL_TREE_DEPTH_V2; level++) {
-      final boolean isRight = (currentIndex & 1) == 1;
-      final int siblingIndex = isRight ? currentIndex - 1 : currentIndex + 1;
-      directions[level] = (byte) (isRight ? 1 : 0);
-      siblings.add(layer.get(siblingIndex).clone());
-      final ArrayList<byte[]> next = new ArrayList<>(layer.size() / 2);
-      for (int i = 0; i < layer.size(); i += 2) {
-        next.add(hasher.hashPair(layer.get(i), layer.get(i + 1)));
-      }
-      currentIndex /= 2;
-      layer = next;
+      final int offset = 32 + level * 32;
+      siblings.add(Arrays.copyOfRange(encoded, offset, offset + 32));
     }
-    final byte[] root = layer.get(0);
+    final byte[] directions =
+        Arrays.copyOfRange(
+            encoded, 32 + CONFIDENTIAL_TREE_DEPTH_V2 * 32, encoded.length);
     if (!roots.isEmpty() && !Arrays.equals(roots.get(roots.size() - 1), root)) {
       throw new IllegalArgumentException(
           "latest rootHistory entry does not match computed commitment frontier root");

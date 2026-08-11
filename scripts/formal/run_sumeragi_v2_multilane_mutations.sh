@@ -159,7 +159,7 @@ run_mutant native-source-claim-epoch-drift "$NATIVE_MODULE" \
   multilane_native_source_claim_epoch_drift_bug.cfg \
   MLNativeSourceClaimInjective
 run_mutant native-source-claim-chain-drift "$NATIVE_MODULE" \
-  multilane_native_source_claim_chain_id_hash_drift_bug.cfg \
+  multilane_native_source_claim_network_id_drift_bug.cfg \
   MLNativeSourceClaimInjective
 run_mutant native-source-claim-authority-height-drift "$NATIVE_MODULE" \
   multilane_native_source_claim_authority_context_height_drift_bug.cfg \

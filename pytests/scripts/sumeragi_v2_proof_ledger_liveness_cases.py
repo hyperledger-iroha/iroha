@@ -189,28 +189,30 @@ def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> 
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2>16. AsyncServeProducerEpisodeOwnershipInvariant'\n",
-            "    <2>16. TRUE\n",
+            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
+            "             /\\ AsyncServeProducerEpisodeOwnershipInvariant'\n",
+            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
+            "             /\\ TRUE\n",
             "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
         ),
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2>17. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'\n",
-            "    <2>17. TRUE\n",
+            "    <2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'\n",
+            "    <2>4e. TRUE\n",
             "must prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant through retained, created, and vote-updated episodes",
         ),
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "         AsyncServeProducerEpisodeBlocksFreshServeAdmission,\n",
+            "      BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants\n",
             "",
             "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
         ),
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "         AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState,\n",
+            "         AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant\n",
             "",
             "must prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant through retained, created, and vote-updated episodes",
         ),
@@ -608,14 +610,6 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
         (
             "operator",
             "AsyncStrongTypeInvariant",
-            "  /\\ AsyncCandidateLifecycleSchedulerCoverageInvariant\n",
-            "",
-            "AsyncStrongTypeInvariant must include the exact recovery "
-            "execution premise",
-        ),
-        (
-            "operator",
-            "AsyncStrongTypeInvariant",
             "  /\\ AsyncOrdinaryIngressCarrierOwnershipInvariant\n",
             "",
             "AsyncStrongTypeInvariant must include the exact recovery "
@@ -659,10 +653,10 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
             "theorem",
             "AsyncInitEstablishesStrongTypeInvariant",
             "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e,\n"
-            "                <2>3f, <2>3g, <2>3h, <2>3i, <2>4, <2>5, <2>6, <2>7\n",
+            "                <2>3f, <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7\n",
             "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e,\n"
-            "                <2>3g, <2>3h, <2>3i, <2>4, <2>5, <2>6, <2>7\n",
-            "must retain the exact candidate/Serve/leader/ordinary "
+            "                <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7\n",
+            "must retain the exact candidate/Serve/producer/timeout/leader/ordinary "
             "scheduler-coverage QED dependency set",
         ),
         (

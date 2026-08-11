@@ -1028,7 +1028,7 @@ fn target_source_units(
     )))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
 
@@ -1132,8 +1132,9 @@ exports = ["value"]
         let workspace = load_workspace(temp.path()).expect("workspace");
         let selector: MusubiPackageSelectorV1 = "apps.sora/demo".parse().expect("selector");
         let lock = LockfileV1::new(
-            "musubi-compiler-test".parse().expect("chain"),
-            [1; 32],
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("network id"),
             MusubiRegistrySnapshotV1 {
                 finalized_height: 1,
                 finalized_block_hash: [2; 32],

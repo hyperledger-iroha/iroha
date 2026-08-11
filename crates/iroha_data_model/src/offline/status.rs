@@ -494,7 +494,7 @@ mod tests {
     fn sample_readiness() -> OfflineReadiness {
         OfflineReadiness {
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 21,
+            required_bridge_abi_version: 22,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(6),
@@ -536,7 +536,7 @@ mod tests {
         let status = OfflineStatus {
             mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 21,
+            required_bridge_abi_version: 22,
             max_hops: 8,
             ready: true,
             assets: Vec::new(),

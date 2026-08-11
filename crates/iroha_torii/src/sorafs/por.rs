@@ -29,6 +29,8 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as 
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
+#[cfg(feature = "app_api")]
+use iroha_data_model::NetworkId;
 use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 #[cfg(feature = "app_api")]
 use iroha_futures::supervisor::ShutdownSignal;
@@ -797,6 +799,9 @@ pub enum VrfError {
     /// Provider is not in the current council-approved admission registry.
     #[error("provider is not admitted for PoR VRF submissions")]
     UnadmittedProvider,
+    /// Submission targets another exact genesis-derived network.
+    #[error("provider VRF submission targets a different network")]
+    WrongNetwork,
     /// Ed25519 submission authentication failed or used a stale advert key.
     #[error("provider VRF submission signature is invalid: {0}")]
     InvalidSignature(String),
@@ -882,6 +887,7 @@ struct VrfProviderSequenceV1 {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfStateSnapshotV1 {
     version: u8,
+    network_id: NetworkId,
     entries: Vec<VrfStateEntryV1>,
     sequences: Vec<VrfProviderSequenceV1>,
 }
@@ -898,7 +904,7 @@ struct VrfState {
 #[derive(Debug)]
 pub struct VerifiedVrfProvider {
     admission: Arc<super::AdmissionRegistry>,
-    chain_id: Vec<u8>,
+    network_id: NetworkId,
     state_path: PathBuf,
     max_entries: usize,
     retention_epochs: u64,
@@ -911,15 +917,15 @@ impl VerifiedVrfProvider {
     /// Load and fully reverify durable provider VRF state.
     pub fn with_persistence(
         admission: Arc<super::AdmissionRegistry>,
-        chain_id: Vec<u8>,
+        network_id: NetworkId,
         state_path: PathBuf,
         max_entries: usize,
         retention_epochs: u64,
         max_clock_skew_secs: u64,
     ) -> Result<Self, VrfError> {
-        if admission.is_empty() || chain_id.is_empty() || chain_id.len() > 255 {
+        if admission.is_empty() {
             return Err(VrfError::Persistence(
-                "admission registry and bounded chain id are required".to_owned(),
+                "admission registry is required".to_owned(),
             ));
         }
         if max_entries == 0 || max_entries > 65_536 || retention_epochs == 0 {
@@ -927,10 +933,10 @@ impl VerifiedVrfProvider {
                 "VRF bounds must be non-zero and max_entries <= 65536".to_owned(),
             ));
         }
-        let state = load_vrf_state(&state_path, max_entries, &admission, &chain_id)?;
+        let state = load_vrf_state(&state_path, max_entries, &admission, &network_id)?;
         Ok(Self {
             admission,
-            chain_id,
+            network_id,
             state_path,
             max_entries,
             retention_epochs,
@@ -946,6 +952,9 @@ impl VerifiedVrfProvider {
         current_epoch: u64,
     ) -> Result<(), VrfError> {
         submission.validate()?;
+        if submission.network_id != *self.network_id.as_bytes() {
+            return Err(VrfError::WrongNetwork);
+        }
         if submission.issued_at > now_secs.saturating_add(self.max_clock_skew_secs)
             || now_secs.saturating_sub(submission.issued_at) > self.max_clock_skew_secs
         {
@@ -962,7 +971,7 @@ impl VerifiedVrfProvider {
         submission
             .verify_signature_for_provider(record.advert_key())
             .map_err(|error| VrfError::InvalidSignature(error.to_string()))?;
-        verify_provider_vrf(submission, record.por_vrf_key(), &self.chain_id)
+        verify_provider_vrf(submission, record.por_vrf_key(), &self.network_id)
     }
 
     fn accept_verified(
@@ -1014,7 +1023,7 @@ impl VerifiedVrfProvider {
             .sequences
             .insert(submission.provider_id, submission.sequence);
         state.entries.insert(key, submission);
-        if let Err(error) = persist_vrf_state(&self.state_path, &state) {
+        if let Err(error) = persist_vrf_state(&self.state_path, &self.network_id, &state) {
             *state = previous;
             return Err(error);
         }
@@ -1085,7 +1094,7 @@ impl VrfProvider for VerifiedVrfProvider {
 fn verify_provider_vrf(
     submission: &ProviderVrfSubmissionV1,
     key: &sorafs_manifest::ProviderVrfPublicKeyV1,
-    chain_id: &[u8],
+    network_id: &NetworkId,
 ) -> Result<(), VrfError> {
     let input = provider_vrf_input(
         &submission.provider_id,
@@ -1095,17 +1104,17 @@ fn verify_provider_vrf(
     );
     let output = match key {
         sorafs_manifest::ProviderVrfPublicKeyV1::BlsNormal(public_key) => {
-            iroha_crypto::vrf::verify_normal_bytes_with_chain(
+            iroha_crypto::vrf::verify_normal_bytes_with_network_id(
                 public_key,
-                chain_id,
+                network_id.as_bytes(),
                 &input,
                 &submission.proof,
             )
         }
         sorafs_manifest::ProviderVrfPublicKeyV1::BlsSmall(public_key) => {
-            iroha_crypto::vrf::verify_small_bytes_with_chain(
+            iroha_crypto::vrf::verify_small_bytes_with_network_id(
                 public_key,
-                chain_id,
+                network_id.as_bytes(),
                 &input,
                 &submission.proof,
             )
@@ -1118,9 +1127,14 @@ fn verify_provider_vrf(
 }
 
 #[cfg(feature = "app_api")]
-fn persist_vrf_state(path: &Path, state: &VrfState) -> Result<(), VrfError> {
+fn persist_vrf_state(
+    path: &Path,
+    network_id: &NetworkId,
+    state: &VrfState,
+) -> Result<(), VrfError> {
     let snapshot = VrfStateSnapshotV1 {
         version: VRF_STATE_VERSION_V1,
+        network_id: *network_id,
         entries: state
             .entries
             .iter()
@@ -1147,7 +1161,7 @@ fn load_vrf_state(
     path: &Path,
     max_entries: usize,
     admission: &super::AdmissionRegistry,
-    chain_id: &[u8],
+    network_id: &NetworkId,
 ) -> Result<VrfState, VrfError> {
     let max_bytes = max_entries
         .checked_mul(768)
@@ -1164,6 +1178,7 @@ fn load_vrf_state(
         to_bytes(&snapshot).map_err(|error| VrfError::Persistence(error.to_string()))?;
     if canonical != bytes
         || snapshot.version != VRF_STATE_VERSION_V1
+        || snapshot.network_id != *network_id
         || snapshot.entries.len() > max_entries
     {
         return Err(VrfError::Persistence(
@@ -1177,9 +1192,10 @@ fn load_vrf_state(
             || entry.key.epoch_id != entry.submission.epoch_id
             || entry.key.provider_id != entry.submission.provider_id
             || entry.key.manifest_digest != entry.submission.manifest_digest
+            || entry.submission.network_id != *network_id.as_bytes()
         {
             return Err(VrfError::Persistence(
-                "VRF state entries are duplicate, unordered, or misbound".to_owned(),
+                "VRF state entries are duplicate, unordered, or misbound to the network".to_owned(),
             ));
         }
         previous_key = Some(entry.key);
@@ -1211,7 +1227,8 @@ fn load_vrf_state(
             );
             continue;
         }
-        if let Err(error) = verify_provider_vrf(&entry.submission, record.por_vrf_key(), chain_id) {
+        if let Err(error) = verify_provider_vrf(&entry.submission, record.por_vrf_key(), network_id)
+        {
             iroha_logger::warn!(
                 provider_id = %hex::encode(entry.key.provider_id),
                 epoch_id = entry.key.epoch_id,
@@ -2165,6 +2182,13 @@ mod tests {
         root
     }
 
+    #[cfg(feature = "app_api")]
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([seed; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
+
     fn provider_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0xAB; 32])
     }
@@ -2784,122 +2808,7 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
-    #[test]
-    fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            let dir = tempdir().expect("temp dir");
-            let root = canonical_temp_root(&dir);
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-                .expect("private state root");
-            let path = root.join("vrf-state.to");
-            let provider_id = [0x41; 32];
-            let manifest_digest = [0x42; 32];
-            let submission = ProviderVrfSubmissionV1 {
-                version: POR_VRF_SUBMISSION_VERSION_V1,
-                provider_id,
-                manifest_digest,
-                epoch_id: 7,
-                drand_round: 9,
-                output: [0x43; 32],
-                proof: iroha_crypto::vrf::VrfProof::SigInG1([0x44; 48]),
-                sequence: 11,
-                issued_at: 1_800_000_000,
-                signature: AdvertSignature {
-                    algorithm: SignatureAlgorithm::Ed25519,
-                    public_key: vec![0x45; 32],
-                    signature: vec![0x46; 64],
-                },
-            };
-            submission.validate().expect("structural submission");
-            let key = VrfStateKeyV1 {
-                epoch_id: submission.epoch_id,
-                provider_id,
-                manifest_digest,
-            };
-            let mut persisted = VrfState::default();
-            persisted.entries.insert(key, submission);
-            persisted.sequences.insert(provider_id, 11);
-            persist_vrf_state(&path, &persisted).expect("persist admitted-era state");
-
-            let restored = load_vrf_state(
-                &path,
-                16,
-                &crate::sorafs::AdmissionRegistry::empty(),
-                b"test-chain",
-            )
-            .expect("revoked-provider state must not brick restart");
-            assert!(restored.entries.is_empty());
-            assert_eq!(restored.sequences.get(&provider_id), Some(&11));
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn vrf_restart_drops_entries_invalidated_by_active_key_rotation() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            let dir = tempdir().expect("temp dir");
-            let root = canonical_temp_root(&dir);
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-                .expect("private state root");
-            let path = root.join("vrf-rotated-state.to");
-            let envelope: ProviderAdmissionEnvelopeV1 = norito::decode_from_bytes(include_bytes!(
-                "../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"
-            ))
-            .expect("decode provider admission fixture");
-            let provider_id = envelope.proposal.provider_id;
-            let trusted_signers = envelope
-                .council_signatures
-                .iter()
-                .map(|signature| signature.signer)
-                .collect::<HashSet<_>>();
-            let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
-                .expect("fixture council policy");
-            let admission = crate::sorafs::AdmissionRegistry::from_envelopes(policy, [envelope])
-                .expect("active admission fixture");
-            let manifest_digest = [0x52; 32];
-            let submission = ProviderVrfSubmissionV1 {
-                version: POR_VRF_SUBMISSION_VERSION_V1,
-                provider_id,
-                manifest_digest,
-                epoch_id: 8,
-                drand_round: 10,
-                output: [0x53; 32],
-                proof: iroha_crypto::vrf::VrfProof::SigInG1([0x54; 48]),
-                sequence: 12,
-                issued_at: 1_800_000_000,
-                // Structurally valid old-key material that cannot verify under the current
-                // council-admitted provider key.
-                signature: AdvertSignature {
-                    algorithm: SignatureAlgorithm::Ed25519,
-                    public_key: vec![0x55; 32],
-                    signature: vec![0x56; 64],
-                },
-            };
-            submission
-                .validate()
-                .expect("structural old-key submission");
-            let key = VrfStateKeyV1 {
-                epoch_id: submission.epoch_id,
-                provider_id,
-                manifest_digest,
-            };
-            let mut persisted = VrfState::default();
-            persisted.entries.insert(key, submission);
-            persisted.sequences.insert(provider_id, 12);
-            persist_vrf_state(&path, &persisted).expect("persist pre-rotation state");
-
-            let restored = load_vrf_state(&path, 16, &admission, b"test-chain")
-                .expect("governed key rotation must not brick restart");
-            assert!(restored.entries.is_empty());
-            assert_eq!(restored.sequences.get(&provider_id), Some(&12));
-        }
-    }
+    include!("por/vrf_state_tests.rs");
 
     fn sample_challenge(forced: bool) -> PorChallengeV1 {
         let manifest_digest = [0x22; 32];

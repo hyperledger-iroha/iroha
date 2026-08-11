@@ -9,10 +9,70 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                    continue;\n",
-            "                    continue;\n",
-            "all seven serialized height-loop continue edges",
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n",
+            "                continue;\n",
+            "all four explicit serialized height-loop continue edges",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                advance_executor(\n"
+            "                    &block_rx,\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+            "                advance_executor(\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+            "ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
+            "let _ = (&block_rx, &mut executor, &mut services);",
+            "retained response episode must receive exactly one direct typed pacemaker turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "service_certified_serve_barrier_liveness_turn(\n",
+            "service_certified_serve_barrier_liveness_turn_for_test(\n",
+            "selected Serve must keep certificate escape inside",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n",
+            "        let _ = CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode;\n",
+            "selected-Serve liveness service must admit TimeoutVote, drain its retained prefix, and run the pacemaker in reviewed order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
+            "            recovery.assert_complete();\n",
+            "            assert!(recovery.entered_view_one());\n",
+            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "    service()\n"
+            "}\n\n"
+            "/// Execute at most one typed timeout/Progress-root transition",
+            "    if _older_runtime_episode_claimed {\n"
+            "        service()\n"
+            "    } else {\n"
+            "        Ok(())\n"
+            "    }\n"
+            "}\n\n"
+            "/// Execute at most one typed timeout/Progress-root transition",
+            "selected-Serve pacemaker service must remain independent of the "
+            "one-shot predecessor-episode claim",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
+            "wake_rx.recv_timeout(remaining)",
+            "pending-tip recovery must wait only for the lesser of its remaining deadline",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -271,7 +331,21 @@ def test_async_source_fidelity_rejects_an_unreviewed_model_local_theorem(
         "AsyncCandidateServiceStageOrdinalIsBounded",
         "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum",
         "AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal",
+        "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
         "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+        "AsyncTimeoutRecoveryDefinedVoteCandidateOwnerIsMember",
+        "AsyncLeaderWireCarrierCannotBypassFrozenPrefix",
+        "RetireLeaderWireLifecycleRecoveryCutPrunesOnlyDormant",
+        "AsyncServeProducerEpisodeMeasureIsFinite",
+        "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+        "AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt",
+        "AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt",
+        "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode",
+        "AsyncTimeoutRecoverySupersedesOnlyExactPreTimeoutRetransmit",
+        "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
+        "AsyncCandidateProducerContinuationStatusTransitionIsMonotone",
+        "AsyncTimeoutVoteFairIngressDrainLeavesCoreState",
+        "AsyncTimeoutRecoveryRolloverInstanceStartsEmpty",
     ),
 )
 def test_async_source_fidelity_rejects_reviewed_theorem_omission(
@@ -345,8 +419,23 @@ def test_async_source_fidelity_rejects_stale_reviewed_theorem_alias(
     ), errors
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    (
+        (
+            "AsyncCandidateServiceStageCarrierHasExactlyElevenClasses",
+            "AsyncCandidateServiceStageOrdinalIsBounded",
+        ),
+        (
+            "AsyncServeProducerEpisodeMeasureIsFinite",
+            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+        ),
+    ),
+)
 def test_async_source_fidelity_rejects_reviewed_theorem_order_drift(
     tmp_path: Path,
+    first: str,
+    second: str,
 ) -> None:
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -357,8 +446,6 @@ def test_async_source_fidelity_rejects_reviewed_theorem_order_drift(
     )
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
-    first = "AsyncCandidateServiceStageCarrierHasExactlyElevenClasses"
-    second = "AsyncCandidateServiceStageOrdinalIsBounded"
     first_span = module._top_level_declaration_span(
         source, first, kind="theorem"
     )
@@ -415,6 +502,48 @@ def test_async_source_fidelity_pins_fairness_refinement_proof_statement(
 
     assert any(
         "AsyncFairActionsRefineAsyncNextObligation must state only" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "  /\\ AsyncServeProducerEpisodeTransition\n",
+            "",
+        ),
+        (
+            "  /\\ AsyncProducerProjectionStep\n"
+            "  /\\ AsyncServeProducerEpisodeTransition\n",
+            "  /\\ AsyncServeProducerEpisodeTransition\n"
+            "  /\\ AsyncProducerProjectionStep\n",
+        ),
+    ),
+)
+def test_async_next_requires_ordered_serve_producer_episode_frame(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, "AsyncNext", old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncNext must equal only the exact reviewed" in error
         for error in errors
     ), errors
 
@@ -1577,8 +1706,8 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
         ),
         (
             "CommitCertificateResponseAuthorized",
-            "  /\\ item.source \\in CurrentVoters\n",
-            "",
+            "  /\\ item.source = item.envelope.request.envelope.recipient\n",
+            "  /\\ item.source = AsyncUntrustedSource\n",
             "CommitCertificateResponseAuthorized must equal only",
         ),
         (
@@ -1722,6 +1851,31 @@ def test_async_historical_recovery_and_busy_carrier_mutations_fail_closed(
     errors = module._async_source_fidelity_errors(formal_dir)
 
     assert any(expected_error in error for error in errors), errors
+    if symbol == "CommitCertificateResponseAuthorized" and "request.envelope.recipient" in old:
+        for related_symbol, related_old, related_new in (
+            (
+                "AsyncItemTyped",
+                "            /\\ item.source =\n"
+                "                 item.envelope.request.envelope.recipient\n",
+                "            /\\ item.source = AsyncUntrustedSource\n",
+            ),
+            (
+                "AsyncCommitImportResponseEvidence",
+                "  /\\ candidate.evidence.source =\n"
+                "       candidate.evidence.envelope.request.envelope.recipient\n",
+                "  /\\ candidate.evidence.source = AsyncUntrustedSource\n",
+            ),
+        ):
+            path.write_text(
+                mutate_tla_operator(source, related_symbol, related_old, related_new),
+                encoding="utf-8",
+            )
+            related_errors = module._async_source_fidelity_errors(formal_dir)
+            assert any(
+                f"{related_symbol} must equal only" in error
+                or f"{related_symbol} omits required production behavior" in error
+                for error in related_errors
+            ), related_errors
 
 
 @pytest.mark.parametrize(

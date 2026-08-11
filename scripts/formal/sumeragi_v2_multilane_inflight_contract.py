@@ -454,7 +454,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "native_amx_receipts",
             "payload.computed_payload_hash()?",
             "Signature::try_new",
-            "payload.validate(chain_id_hash, epoch)?",
+            "payload.validate(network_id, epoch)?",
         ),
     ),
     (
@@ -1467,6 +1467,27 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
         "crates/iroha_core/src/kura.rs",
         "method",
+        "Kura::revalidate_autonomous_lifecycle_bootstrap_for_completion",
+        (
+            "authority.store_root != self.store_root",
+            "validate_autonomous_lifecycle_process_generation_claim",
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "canonical_chain_lock.lock",
+            "lane_block_application_receipt_available_under_prune_and_canonical_guards",
+            "lane_geometry_lock.lock",
+            "autonomous_lane_attempt_inventory_counts_locked",
+            "read_regular_sidecar_bytes",
+            "bytes != authority.expected_bytes",
+            "decode_autonomous_lifecycle_bootstrap",
+            "bootstrap != authority.bootstrap",
+            "autonomous_lifecycle_bootstrap_authority_locked",
+            "receipt_terminal: already_terminal",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
         "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
         (
             "match fence {",
@@ -1490,6 +1511,8 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "read_autonomous_lifecycle_cursor",
             "lane_block_application_receipt_available",
             "consume_autonomous_lifecycle_bootstrap_completion_fence",
+            "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
+            "AutonomousLifecycleBootstrapCompletionOutcome::Completed",
         ),
     ),
     (
@@ -1617,7 +1640,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "AutonomousLaneReadyQcPersistenceAuthorization",
         (
             "projection: ProductionInFlightFirstReleaseTransitionProjection",
-            "chain_id_hash: Hash",
+            "network_id: iroha_data_model::NetworkId",
             "epoch: u64",
             "executable_payload_hash: Hash",
             "origin_proposal_hash: Hash",
@@ -1631,7 +1654,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "AutonomousLaneReadyQcPersistenceAuthorization::consume_for_persistence",
         (
             "lane_queue_reservation_group_binding_from_ordered_keys(",
-            "self.chain_id_hash != payload.chain_id_hash",
+            "self.network_id != payload.network_id",
             "self.epoch != payload.epoch",
             "self.executable_payload_hash != payload.payload_hash",
             "self.origin_proposal_hash != payload.origin_proposal.proposal_hash",
@@ -2101,7 +2124,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "pub format: LaneBlockExecutionInputArtifactFormat",
             "pub proposal: LaneBlockProposalV1",
-            "pub autonomous_chain_id_hash: Option<Hash>",
+            "pub autonomous_network_id: Option<iroha_data_model::NetworkId>",
             "pub autonomous_epoch: Option<u64>",
             "pub autonomous_payload_hash: Option<Hash>",
             "pub entrypoint_hashes: Vec<Hash>",
@@ -2157,7 +2180,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "method",
         "Kura::authorize_autonomous_execution_input_persistence",
         (
-            ".validate(chain_id_hash, epoch)",
+            ".validate(network_id, epoch)",
             "autonomous_lane_block_execution_input_candidate(",
             "expected != *input",
             ".local_peer_id",
@@ -2304,7 +2327,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "method",
         "AutonomousLaneReleaseProjectionContext::from_payload",
         (
-            ".validate(payload.chain_id_hash, payload.epoch)",
+            ".validate(payload.network_id, payload.epoch)",
             "!retirement.matches_payload(payload)",
             "validator_count == 0 || validator_count > 128",
             ".position(|peer| peer == &payload.producer)",
@@ -2882,7 +2905,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "fn",
         "finalize_certified_merge_reservations",
         (
-            "authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, entry, expected_network_id)?",
             "let carrier_height = authenticated.carrier_height;",
             "let carrier_block_hash = authenticated.carrier_block_hash;",
             "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(entry)?",
@@ -2905,7 +2928,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "recover_pending_canonical_terminal_outcome",
         (
             "recovery.consume_for_v2_apply()",
-            "authenticate_committed_canonical_carrier(state, kura, &entry, expected_chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, &entry, expected_network_id)?",
             "terminal_evidence.len() != expected_terminal_evidence",
             "complete_autonomous_lifecycle_canonical_terminal_outcome(evidence)",
             "release_post_wsv_lane_artifact_budget_reservation(",
@@ -2933,7 +2956,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "committed_block_merge_entry(kura, block)?",
             "if reference.execution_batch_hash.is_none()",
-            "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_chain_hash)",
+            "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)",
         ),
     ),
 )
@@ -3333,6 +3356,26 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/kura.rs",
         "method",
+        "Kura::revalidate_autonomous_lifecycle_bootstrap_for_completion",
+        (
+            "self.validate_autonomous_lifecycle_process_generation_claim(",
+            "self.prune_lock.lock()",
+            "self.ensure_prune_recovery_not_required()?;",
+            "self.canonical_chain_lock.lock()",
+            ".lane_block_application_receipt_available_under_prune_and_canonical_guards(",
+            "self.lane_geometry_lock.lock()",
+            "self.autonomous_lane_attempt_inventory_counts_locked(",
+            ".read_regular_sidecar_bytes(",
+            "if bytes != authority.expected_bytes",
+            "Self::decode_autonomous_lifecycle_bootstrap(",
+            "if bootstrap != authority.bootstrap",
+            "self.autonomous_lifecycle_bootstrap_authority_locked(",
+            "receipt_terminal: already_terminal",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
         "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
         (
             "match fence {",
@@ -3356,6 +3399,8 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "self.read_autonomous_lifecycle_cursor(",
             "self.lane_block_application_receipt_available(&payload.origin_proposal)",
             "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);",
+            "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
+            "AutonomousLifecycleBootstrapCompletionOutcome::Completed",
         ),
     ),
     (
@@ -3446,7 +3491,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "Kura::persist_committed_lane_block_session_inner",
         (
             "let _prune_guard = self.prune_lock.lock();",
-            "let autonomous_source = if let Some((chain_id_hash, epoch))",
+            "let autonomous_source = if let Some((network_id, epoch))",
             "self.durable_autonomous_lane_merge_source_under_prune_guard(",
             "let lane_commit_authorization = autonomous_source",
             "Self::authorize_autonomous_lane_commit_persistence(source, &artifact)",
@@ -3947,7 +3992,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "fn",
         "finalize_certified_merge_reservations",
         (
-            "authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, entry, expected_network_id)?",
             "let carrier_height = authenticated.carrier_height;",
             "let carrier_block_hash = authenticated.carrier_block_hash;",
             "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(entry)?",
@@ -3973,7 +4018,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "recover_pending_canonical_terminal_outcome",
         (
             "recovery.consume_for_v2_apply()",
-            "authenticate_committed_canonical_carrier(state, kura, &entry, expected_chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, &entry, expected_network_id)?",
             "authenticate_autonomous_lifecycle_pending_canonical_queue_terminal_outcomes(",
             "for evidence in terminal_evidence",
             "complete_autonomous_lifecycle_canonical_terminal_outcome(evidence)",

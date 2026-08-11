@@ -10,7 +10,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Typed first-release builder for the consensus {@code RegisterPinManifest} instruction. */
+/**
+ * Typed first-release builder for the consensus {@code RegisterPinManifest} instruction.
+ * The recorded submission epoch comes exclusively from the block consensus timestamp.
+ */
 public final class RegisterPinManifestInstruction implements InstructionTemplate {
 
   public static final String ACTION = "RegisterPinManifest";
@@ -22,8 +25,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
           new HashSet<>(
               Arrays.asList(
                   "action",
-                  "manifest_payload_base64",
-                  "submitted_epoch")));
+                  "manifest_payload_base64")));
   private static final Set<String> OPTIONAL_ARGUMENTS =
       Collections.unmodifiableSet(
           new HashSet<>(
@@ -31,14 +33,12 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
                   "successor_of_hex", "alias.name", "alias.namespace", "alias.proof_hex")));
 
   private final String manifestPayloadBase64;
-  private final long submittedEpoch;
   private final String successorOfHex;
   private final AliasBinding aliasBinding;
   private final Map<String, String> arguments;
 
   private RegisterPinManifestInstruction(final Builder builder) {
     manifestPayloadBase64 = builder.manifestPayloadBase64;
-    submittedEpoch = builder.submittedEpoch;
     successorOfHex = builder.successorOfHex;
     aliasBinding = builder.aliasBinding;
     arguments = Collections.unmodifiableMap(builder.canonicalArguments());
@@ -51,10 +51,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
   /** Returns a fresh copy of the canonical Norito manifest payload. */
   public byte[] manifestPayloadBytes() {
     return Base64.getDecoder().decode(manifestPayloadBase64);
-  }
-
-  public long submittedEpoch() {
-    return submittedEpoch;
   }
 
   public String successorOfHex() {
@@ -94,7 +90,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
     return builder()
         .setManifestPayloadBase64(require(arguments, "manifest_payload_base64"))
-        .setSubmittedEpoch(requireLong(arguments, "submitted_epoch"))
         .setSuccessorOfHex(arguments.get("successor_of_hex"))
         .setAliasBinding(AliasBinding.fromArguments(arguments))
         .build();
@@ -109,20 +104,18 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       return false;
     }
     final RegisterPinManifestInstruction other = (RegisterPinManifestInstruction) obj;
-    return submittedEpoch == other.submittedEpoch
-        && Objects.equals(manifestPayloadBase64, other.manifestPayloadBase64)
+    return Objects.equals(manifestPayloadBase64, other.manifestPayloadBase64)
         && Objects.equals(successorOfHex, other.successorOfHex)
         && Objects.equals(aliasBinding, other.aliasBinding);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(manifestPayloadBase64, submittedEpoch, successorOfHex, aliasBinding);
+    return Objects.hash(manifestPayloadBase64, successorOfHex, aliasBinding);
   }
 
   public static final class Builder {
     private String manifestPayloadBase64;
-    private Long submittedEpoch;
     private String successorOfHex;
     private AliasBinding aliasBinding;
 
@@ -144,14 +137,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       return this;
     }
 
-    public Builder setSubmittedEpoch(final long submittedEpoch) {
-      if (submittedEpoch < 0) {
-        throw new IllegalArgumentException("submittedEpoch must be non-negative");
-      }
-      this.submittedEpoch = submittedEpoch;
-      return this;
-    }
-
     public Builder setSuccessorOfHex(final String successorOfHex) {
       this.successorOfHex =
           successorOfHex == null
@@ -169,9 +154,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       if (manifestPayloadBase64 == null) {
         throw new IllegalStateException("manifestPayload must be set");
       }
-      if (submittedEpoch == null) {
-        throw new IllegalStateException("submittedEpoch must be set");
-      }
       return new RegisterPinManifestInstruction(this);
     }
 
@@ -179,7 +161,6 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       final Map<String, String> result = new LinkedHashMap<>();
       result.put("action", ACTION);
       result.put("manifest_payload_base64", manifestPayloadBase64);
-      result.put("submitted_epoch", Long.toString(submittedEpoch));
       if (successorOfHex != null) {
         result.put("successor_of_hex", successorOfHex);
       }
@@ -397,13 +378,4 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     return value;
   }
 
-  private static long requireLong(final Map<String, String> arguments, final String key) {
-    final String value = require(arguments, key);
-    try {
-      return Long.parseLong(value);
-    } catch (final NumberFormatException ex) {
-      throw new IllegalArgumentException(
-          "Instruction argument '" + key + "' must be a number: " + value, ex);
-    }
-  }
 }

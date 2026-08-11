@@ -1,3 +1,5 @@
+//! Lifecycle aggregation tests for the desktop supervisor shell.
+
 use std::collections::HashSet;
 
 use mochi_core::SupervisorError;

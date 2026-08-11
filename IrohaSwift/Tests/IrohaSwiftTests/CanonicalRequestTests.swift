@@ -20,6 +20,7 @@ final class CanonicalRequestTests: XCTestCase {
         let timestampMs: UInt64 = 1_717_171_717_000
         let nonce = "swift-canonical-nonce"
         let message = try CanonicalRequest.signatureMessage(
+            networkId: TestNetworkIds.canonical,
             method: "get",
             path: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets",
             query: "limit=1",
@@ -29,6 +30,7 @@ final class CanonicalRequestTests: XCTestCase {
         )
         let headers = try CanonicalRequest.signingHeaders(
             accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            networkId: TestNetworkIds.canonical,
             method: "get",
             path: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets",
             query: "limit=1",
@@ -50,6 +52,7 @@ final class CanonicalRequestTests: XCTestCase {
 
         XCTAssertThrowsError(
             try CanonicalRequest.signatureMessage(
+                networkId: TestNetworkIds.canonical,
                 method: "get",
                 path: "/v1/accounts",
                 timestampMs: 1,
@@ -62,6 +65,7 @@ final class CanonicalRequestTests: XCTestCase {
         XCTAssertThrowsError(
             try CanonicalRequest.signingHeaders(
                 accountId: " account",
+                networkId: TestNetworkIds.canonical,
                 method: "get",
                 path: "/v1/accounts",
                 signer: signingKey,
@@ -75,6 +79,7 @@ final class CanonicalRequestTests: XCTestCase {
         XCTAssertThrowsError(
             try CanonicalRequest.signingHeaders(
                 accountId: "account",
+                networkId: TestNetworkIds.canonical,
                 method: "get",
                 path: "/v1/accounts",
                 signer: signingKey,

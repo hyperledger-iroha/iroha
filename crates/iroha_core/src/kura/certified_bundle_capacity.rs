@@ -345,14 +345,14 @@ impl Kura {
             .prepare_qc
             .payload_availability_qc
             .as_ref()
-            .map(|availability| (availability.body.chain_id_hash, availability.body.epoch));
-        let autonomous_source = if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
+            .map(|availability| (availability.body.network_id, availability.body.epoch));
+        let autonomous_source = if let Some((network_id, epoch)) = autonomous_context.as_ref() {
             let descriptor = &artifact.proposal.descriptor;
             Some(
                 self.durable_autonomous_lane_merge_source_under_prune_guard(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    *chain_id_hash,
+                    *network_id,
                     *epoch,
                     Some(&artifact),
                     false,
@@ -386,13 +386,13 @@ impl Kura {
             lane_commit_authorization,
         )?;
         self.ensure_prune_recovery_not_required()?;
-        if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
+        if let Some((network_id, epoch)) = autonomous_context.as_ref() {
             let descriptor = &artifact.proposal.descriptor;
             let source = self
                 .durable_autonomous_lane_merge_source_under_prune_guard(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    *chain_id_hash,
+                    *network_id,
                     *epoch,
                     None,
                     false,
@@ -414,7 +414,7 @@ impl Kura {
                 .durable_autonomous_lane_merge_source_under_prune_guard(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    *chain_id_hash,
+                    *network_id,
                     *epoch,
                     None,
                     true,
@@ -956,7 +956,7 @@ impl Kura {
                 lane_block_view: descriptor.lane_block_view,
                 lane_block_descriptor_hash: descriptor.descriptor_hash,
                 proposal_hash: artifact.proposal.proposal_hash,
-                autonomous_chain_id_hash: availability.body.chain_id_hash,
+                autonomous_network_id: availability.body.network_id,
                 autonomous_epoch: availability.body.epoch,
             },
             certified_bytes_hash: Hash::new(&certified_bytes),
@@ -1390,7 +1390,7 @@ impl Kura {
         entry: &LaneConfigEntry,
         frontier: Option<&CertifiedLaneBlockArtifact>,
         frontier_source: Option<&DurableAutonomousLaneMergeSource>,
-    ) -> Result<Vec<(u64, Hash, u64)>> {
+    ) -> Result<Vec<(u64, iroha_data_model::NetworkId, u64)>> {
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
         let certified_recovery = if let Some(frontier) = frontier {
@@ -1544,7 +1544,7 @@ impl Kura {
                 }
                 Self::validate_autonomous_lane_merge_bundle(
                     &bundle,
-                    bundle.executable_payload().chain_id_hash,
+                    bundle.executable_payload().network_id,
                     bundle.executable_payload().epoch,
                 )
                 .map_err(|message| {
@@ -1658,7 +1658,7 @@ impl Kura {
             }
             persisted.push((
                 *height,
-                availability.body.chain_id_hash,
+                availability.body.network_id,
                 availability.body.epoch,
             ));
         }
@@ -2211,11 +2211,11 @@ impl Kura {
                         None,
                     )?
                 };
-                for (height, chain_id_hash, epoch) in persisted {
+                for (height, network_id, epoch) in persisted {
                     self.durable_autonomous_lane_merge_source_under_prune_guard(
                         entry.lane_id,
                         height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                         None,
                         true,
@@ -2234,7 +2234,7 @@ impl Kura {
                 .durable_autonomous_lane_merge_source_under_prune_guard(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    availability.body.chain_id_hash,
+                    availability.body.network_id,
                     availability.body.epoch,
                     Some(&artifact),
                     false,
@@ -2263,11 +2263,11 @@ impl Kura {
                 )?;
                 (plan, consumed, persisted)
             };
-            for (height, chain_id_hash, epoch) in persisted {
+            for (height, network_id, epoch) in persisted {
                 self.durable_autonomous_lane_merge_source_under_prune_guard(
                     entry.lane_id,
                     height,
-                    chain_id_hash,
+                    network_id,
                     epoch,
                     None,
                     true,

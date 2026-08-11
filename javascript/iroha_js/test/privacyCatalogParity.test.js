@@ -198,10 +198,19 @@ test("retired catalog and research-builder exports are absent", () => {
 test("privacy capability policy is available only from the optional subpath", () => {
   const expectedOptionalExports = [
     "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
     "PrivacyCapabilitySnapshotError",
+    "PrivacyExact12CapabilityManifestError",
+    "PrivacyExact12CapabilityManifestV1",
+    "compiledProfileCatalogV1",
+    "decodePrivacyExact12CapabilityManifestV1",
     "getPrivacyCapabilitiesV1",
+    "getPrivacyExact12CapabilityManifestV1",
     "parsePrivacyCapabilitySnapshotV1",
+    "requirePrivacyExact12CapabilityAdmissionV1",
+    "requirePrivacyExact12CapabilityTupleV1",
   ];
   for (const [label, rootApi] of [
     ["source root", sourceApi],

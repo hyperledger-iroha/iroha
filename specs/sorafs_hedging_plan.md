@@ -31,7 +31,7 @@ The source bridge surface also exposes the same reference validator through
 `sorafs_reference_validate_hedging_json`, Connect C/JNI
 `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM, Java
 Android, and Swift SDK wrappers. The bridge source and checked C header both
-declare the sole first-release ABI, version 21; packaged
+declare the sole first-release ABI, version 22; packaged
 native artifacts still need to be regenerated before SDK release consumption.
 `scripts/check_sorafs_hedging_rollout_evidence.py` now provides the SFM-5
 promotion gate for staged rollout evidence. It requires feed-collector,
@@ -212,6 +212,13 @@ The separate `sorafs_node::hedging_billing_service` and supervised
 `irohad::sorafs_hedging_billing_runtime` now implement the local committed
 service pipeline. The bounded finalized-query and consensus-journal-verifier
 interfaces ingest contiguous typed event pages and authenticated period closes.
+The service policy and every finalized page or close, journal commitment,
+replay identity, checkpoint or compacted archive, signed statement,
+acknowledgement, epoch witness, and hedge intent carry the mandatory
+genesis-derived `NetworkId`. Digest and signature preimages bind its exact raw
+bytes; a human-readable chain label is display-only and is never accepted as a
+security domain or compatibility fallback. Stock `irohad` derives the runtime
+identity from mandatory `genesis.expected_hash` before opening durable state.
 The durable projector deterministically derives open accruals, per-account
 governed statements, aggregate XOR exposure, and never-automatic hedge intents;
 it retains exact finalized cursors, replay receipts, delivery state, dead

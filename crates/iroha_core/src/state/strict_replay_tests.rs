@@ -294,6 +294,7 @@ struct TwoBlockReplayFixture {
 impl StrictReplayFixture {
     fn new() -> Self {
         let chain_id: ChainId = "strict-production-v2-replay".into();
+        let network_id = crate::sumeragi::synthetic_network_id("strict-production-v2-replay");
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -309,7 +310,7 @@ impl StrictReplayFixture {
             })
             .collect::<Vec<_>>();
         let mut context = wire::HeightContext {
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: HEIGHT,
             epoch: 0,
@@ -340,6 +341,7 @@ impl StrictReplayFixture {
         let state = Arc::new(Self::new_state(
             Arc::clone(&kura),
             chain_id.clone(),
+            network_id.clone(),
             genesis_account.clone(),
         ));
         context.nexus_amx_context_hash =
@@ -365,7 +367,6 @@ impl StrictReplayFixture {
             Arc::clone(&kura),
             None,
             None,
-            chain_id.clone(),
             Duration::from_secs(1),
             genesis_account.clone(),
             events_sender,
@@ -373,7 +374,7 @@ impl StrictReplayFixture {
         );
 
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -509,7 +510,7 @@ impl StrictReplayFixture {
 
     fn into_two_block(self) -> TwoBlockReplayFixture {
         let second_context = wire::HeightContext {
-            chain_id: self.chain_id.clone(),
+            network_id: self.context.network_id.clone(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 2,
             epoch: 0,
@@ -657,15 +658,21 @@ impl StrictReplayFixture {
         }
     }
 
-    fn new_state(kura: Arc<Kura>, chain_id: ChainId, genesis_account: AccountId) -> State {
+    fn new_state(
+        kura: Arc<Kura>,
+        chain_id: ChainId,
+        network_id: iroha_data_model::NetworkId,
+        genesis_account: AccountId,
+    ) -> State {
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
         let account = Account::new(genesis_account.clone()).build(&genesis_account);
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             World::with([genesis_domain], [account], []),
             kura,
             LiveQueryStore::start_test(),
             chain_id,
+            network_id,
         );
         let nexus = state.nexus_snapshot();
         let lane_manifests =
@@ -682,7 +689,12 @@ impl StrictReplayFixture {
     }
 
     fn replay_state(&self, kura: Arc<Kura>) -> State {
-        Self::new_state(kura, self.chain_id.clone(), self.genesis_account.clone())
+        Self::new_state(
+            kura,
+            self.chain_id.clone(),
+            self.context.network_id.clone(),
+            self.genesis_account.clone(),
+        )
     }
 
     fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {

@@ -29,8 +29,8 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
     waitForTransactionStatusThrowsOnFailure();
-    waitForTransactionStatusFailureIncludesRejectionReason();
-    waitForTransactionStatusFailureUsesCurrentDiagnosticReason();
+    waitForTransactionStatusRejectsRetiredFailureDetails();
+    waitForTransactionStatusFailureIsMetadataOnly();
     waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails();
     waitForTransactionStatusUsesCompactJsonMessage();
     waitForTransactionStatusUsesNestedJsonErrorMessage();
@@ -167,7 +167,7 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
 
-  private static void waitForTransactionStatusFailureIncludesRejectionReason() {
+  private static void waitForTransactionStatusRejectsRetiredFailureDetails() {
     final String rejectionReason = "build_claim_missing";
     final String hash = canonicalHash("cafed00d");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
@@ -184,22 +184,20 @@ public final class HttpClientTransportStatusTests {
     } catch (final RuntimeException ex) {
       threw = true;
       final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-      assert cause instanceof TransactionStatusException : "Expected TransactionStatusException";
-      final TransactionStatusException statusError = (TransactionStatusException) cause;
-      assert rejectionReason.equals(statusError.rejectionReason().orElse(null))
-          : "Expected rejection reason to be surfaced";
-      assert statusError.getMessage().contains("reason=" + rejectionReason)
-          : "Expected rejection reason in exception message";
+      assert cause instanceof IllegalStateException
+          : "Retired public failure details must be rejected";
+      assert cause.getMessage().contains("retired or unsupported fields")
+          : "Expected closed public status fields";
     }
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
 
-  private static void waitForTransactionStatusFailureUsesCurrentDiagnosticReason() {
+  private static void waitForTransactionStatusFailureIsMetadataOnly() {
     final String rejectionReason = "allowance_exceeded";
     final String hash = canonicalHash("cafe0001");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
-            newResponse(200, statusPayloadWithRejectionReason(hash, rejectionReason))),
+            newResponse(200, statusPayload(hash, "Rejected"))),
         ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
     boolean threw = false;
@@ -213,8 +211,12 @@ public final class HttpClientTransportStatusTests {
       final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
       assert cause instanceof TransactionStatusException : "Expected TransactionStatusException";
       final TransactionStatusException statusError = (TransactionStatusException) cause;
-      assert rejectionReason.equals(statusError.rejectionReason().orElse(null))
-          : "Expected diagnostic rejection reason to be surfaced";
+      assert !statusError.getMessage().contains(rejectionReason)
+          : "Public failure exception must not expose a rejection reason";
+      for (final java.lang.reflect.Method method : statusError.getClass().getMethods()) {
+        assert !"rejectionReason".equals(method.getName())
+            : "Retired rejectionReason API must stay absent";
+      }
     }
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
@@ -822,9 +824,7 @@ public final class HttpClientTransportStatusTests {
             + kind
             + "\""
             + renderedBlockHeight
-            + "},\"summary\":\""
-            + kind
-            + "\",\"diagnostics\":[],\"scope\":\""
+            + "},\"scope\":\""
             + scope
             + "\",\"resolved_from\":\""
             + resolvedFrom
@@ -851,7 +851,8 @@ public final class HttpClientTransportStatusTests {
   private static SignedTransaction sampleTransaction(final byte seed) {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", seed))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(seed))
             .setAuthority(TestAccountIds.ed25519Authority(0x27))
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})

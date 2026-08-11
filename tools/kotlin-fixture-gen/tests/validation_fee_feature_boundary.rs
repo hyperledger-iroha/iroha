@@ -4,7 +4,7 @@ use std::str::FromStr as _;
 
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     domain::DomainId,
@@ -46,8 +46,9 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
     let proposal_id = [0x12; 32];
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        chain_id: ChainId::from("kotlin-fixture-no-governance"),
-        genesis_hash: [7; 32],
+        network_id: "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse::<NetworkId>()
+            .expect("canonical validation-fee network id"),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: AssetDefinitionId::derive_from_components(

@@ -8,7 +8,7 @@
 use std::{path::PathBuf, process, sync::Arc};
 
 use clap::Parser;
-use iroha_data_model::ChainId;
+use iroha_data_model::{ChainId, NetworkId};
 use irohad::StockGovernanceDagServiceRuntimeProviderRegistryV1;
 use sorafs_node::{
     GovernanceDagServiceRuntimeProviderRegistryV1, run_governance_dag_service_with_runtime_registry,
@@ -29,6 +29,9 @@ struct Args {
     /// Canonical public chain identity used by the exact broker handshake.
     #[arg(long, value_name = "CHAIN_ID")]
     chain_id: ChainId,
+    /// Exact genesis-header-derived identity used by the broker handshake.
+    #[arg(long, value_name = "NETWORK_ID")]
+    network_id: NetworkId,
     /// Reconcile exactly once without starting the query listener.
     #[arg(long)]
     once: bool,
@@ -39,10 +42,11 @@ async fn main() {
     let Args {
         config,
         chain_id,
+        network_id,
         once,
     } = Args::parse();
     let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = Arc::new(
-        StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id),
+        StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id, network_id),
     );
     if let Err(error) =
         run_governance_dag_service_with_runtime_registry(config, once, Some(runtime_registry)).await
@@ -64,10 +68,16 @@ mod tests {
             "governance.toml",
             "--chain-id",
             "sora.production",
+            "--network-id",
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
             "--once",
         ])
         .expect("parse canonical launcher arguments");
         assert_eq!(args.chain_id, ChainId::from("sora.production"));
+        assert_eq!(
+            args.network_id.to_string(),
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        );
         assert!(args.once);
 
         assert!(
@@ -77,12 +87,20 @@ mod tests {
                 "governance.toml",
                 "--chain-id",
                 "not canonical",
+                "--network-id",
+                "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
             ])
             .is_err()
         );
         assert!(
-            Args::try_parse_from(["sorafs_governance_dag", "--config", "governance.toml",])
-                .is_err()
+            Args::try_parse_from([
+                "sorafs_governance_dag",
+                "--config",
+                "governance.toml",
+                "--chain-id",
+                "sora.production",
+            ])
+            .is_err()
         );
     }
 }

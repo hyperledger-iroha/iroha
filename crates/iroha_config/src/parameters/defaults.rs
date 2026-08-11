@@ -1099,6 +1099,16 @@ pub mod snapshot {
     /// JSON restoration uses additional transient memory; operators should size this below
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
+    /// Maximum typed-decoder nesting depth for one snapshot payload.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(128_usize);
+    /// Maximum aggregate collection items decoded from one snapshot payload.
+    pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
+    /// Maximum UTF-8 bytes accepted for any individual snapshot string.
+    pub const MAX_STRING_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    /// Maximum bytes accepted for any individual snapshot blob.
+    pub const MAX_BLOB_BYTES: NonZeroUsize = nonzero!(67_108_864_usize);
+    /// Maximum transient allocation budget during typed snapshot restoration.
+    pub const MAX_TRANSIENT_BYTES: NonZeroUsize = nonzero!(2_147_483_648_usize);
 }
 
 /// Norito streaming control-plane defaults.
@@ -1477,6 +1487,74 @@ pub mod sorafs {
             /// Time-to-live assigned to one completion transaction.
             pub const COMPLETION_TRANSACTION_TTL_MS: u64 = 5 * 60_000;
 
+            /// Default-off Musubi provider-attestation journal bounds.
+            ///
+            /// The clock-seal, approval-signer, and inventory binding triplets
+            /// intentionally have no defaults and must be supplied together for
+            /// an activation request.
+            pub mod provider_attestation_journal {
+                use iroha_config_base::util::Bytes;
+
+                /// Request capture-child activation; stock `irohad` currently rejects
+                /// this request until a concrete child is qualified.
+                pub const ENABLED: bool = false;
+                /// Maximum retained active and terminal entries, independently of
+                /// the checkpoint byte cap.
+                pub const MAX_ENTRIES: usize = 1_024;
+                /// Hard upper bound on retained entries.
+                pub const MAX_ENTRIES_LIMIT: usize = 4_096;
+                /// Maximum approval or inventory-handoff attempts per stage.
+                pub const MAX_ATTEMPTS: u32 = 8;
+                /// Hard upper bound on attempts per stage.
+                pub const MAX_ATTEMPTS_LIMIT: u32 = 64;
+                /// Lease duration for approval and inventory-handoff claims.
+                pub const LEASE_TTL_MS: u64 = 60_000;
+                /// Hard upper bound on one claim lease.
+                pub const LEASE_TTL_MAX_MS: u64 = 24 * 60 * 60 * 1_000;
+                /// Maximum external approval-signer operation duration.
+                pub const APPROVAL_TIMEOUT_MS: u64 = 30_000;
+                /// Maximum external coordinator-inventory operation duration.
+                pub const HANDOFF_TIMEOUT_MS: u64 = 30_000;
+                /// Hard upper bound on one external stage operation.
+                pub const EXTERNAL_TIMEOUT_MAX_MS: u64 = 5 * 60 * 1_000;
+                /// Delay before retrying a transient stage failure.
+                pub const RETRY_DELAY_MS: u64 = 1_000;
+                /// Hard upper bound on a retry delay.
+                pub const RETRY_DELAY_MAX_MS: u64 = 24 * 60 * 60 * 1_000;
+                /// Canonical checkpoint framing reserved independently of entries.
+                pub const CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1: usize = 64 * 1024;
+                /// Canonical state and framing reserved around one active entry.
+                pub const ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1: usize = 64 * 1024;
+                /// Conservative canonical reserve for one stored approval intent.
+                ///
+                /// This covers the two Musubi account identities bounded at 8 KiB each,
+                /// the 255-byte chain identifier, immutable digests, cursors, signer
+                /// policy, attestation key, sequence, and Norito framing.
+                pub const STORED_APPROVAL_INTENT_CANONICAL_RESERVE_BYTES_V1: usize = 64 * 1024;
+                /// Schema-derived reserve for one active intent through its worst-case
+                /// provider-attestation state transition.
+                pub const SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1: usize =
+                    CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1
+                    + STORED_APPROVAL_INTENT_CANONICAL_RESERVE_BYTES_V1
+                    + iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
+                    + ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1;
+                /// Smallest useful checkpoint policy.
+                ///
+                /// Four times the public complete-attestation ceiling is deliberately
+                /// conservative: it exceeds [`SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1`]
+                /// while leaving headroom for canonical framing evolution within V1.
+                pub const CHECKPOINT_MIN_BYTES: usize = 4
+                    * iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1;
+                /// Maximum canonical checkpoint size, independently of the entry cap.
+                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                /// Physical and decoder ceiling for one canonical checkpoint.
+                pub const CHECKPOINT_MAX_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+                /// Maximum CAS conflicts retried by one journal operation.
+                pub const MAX_CAS_RETRIES: u32 = 16;
+                /// Hard upper bound on CAS conflicts retried by one operation.
+                pub const MAX_CAS_RETRIES_LIMIT: u32 = 64;
+            }
+
             /// Daemon-owned immutable finalized-assignment archive defaults.
             pub mod finalized_archive {
                 use iroha_config_base::util::Bytes;
@@ -1555,9 +1633,10 @@ pub mod sorafs {
                 /// Canonical reserve for terminal evidence other than `completed_by`.
                 ///
                 /// This includes the bounded manifest identifier, completion
-                /// epoch, committed hash, finalized cursor, enum tag, and
+                /// epoch, committed hash, finalized cursor, enum tag, the
+                /// bounded pre-completion Musubi verification receipt, and
                 /// length framing for the largest `FinalizedCompleted` variant.
-                pub const TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1: u64 = 2 * 1024;
+                pub const TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1: u64 = 12 * 1024;
                 /// Canonical entry/container framing reserved around terminal fields.
                 pub const TERMINAL_ENTRY_CANONICAL_FRAMING_RESERVE_BYTES_V1: u64 = 2 * 1024;
                 /// Canonical bytes reserved for one payload-free terminal entry.
@@ -2292,6 +2371,8 @@ pub mod torii {
     pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
     pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
+    /// Per-account memory budget for retained `/v1/zk/ivm/prove` job state.
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER: Bytes<u64> = Bytes(32 * 1024 * 1024); // 32 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -2673,6 +2754,8 @@ pub mod torii {
     pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
     pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES: usize = 1_024;
+    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one account.
+    pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER: usize = 32;
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
@@ -2818,10 +2901,32 @@ pub mod torii {
 
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
+        use iroha_config_base::util::Bytes;
+        use nonzero_ext::nonzero;
+        use std::num::NonZeroUsize;
+
         /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain
         /// is used to derive the canonical remote IP.
         pub fn trusted_proxy_cidrs() -> Vec<String> {
             Vec::new()
+        }
+
+        /// HTTP/1 server socket and parser limits.
+        pub mod http {
+            use super::*;
+
+            /// Maximum accepted TCP connections retained by Torii.
+            pub const MAX_CONNECTIONS: NonZeroUsize = nonzero!(1024usize);
+            /// Maximum accepted TCP connections retained for one source IP.
+            pub const MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(64usize);
+            /// Absolute deadline for reading one HTTP/1 request head.
+            pub const HEADER_READ_TIMEOUT_MS: u64 = 10_000;
+            /// Maximum duration without socket write progress.
+            pub const WRITE_TIMEOUT_MS: u64 = 30_000;
+            /// Maximum number of HTTP/1 headers accepted in one request.
+            pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
+            /// Maximum HTTP/1 parser buffer, including the request head.
+            pub const MAX_HEADER_BYTES: Bytes<u64> = Bytes(64 * 1024);
         }
 
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
@@ -2853,10 +2958,6 @@ pub mod torii {
         pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
         /// Maximum number of tools returned per `tools/list` response page.
         pub const MAX_TOOLS_PER_LIST: usize = 500;
-        /// Retention window for asynchronous MCP jobs.
-        pub const ASYNC_JOB_TTL_SECS: u64 = 300;
-        /// Maximum number of asynchronous MCP jobs retained in memory.
-        pub const ASYNC_JOB_MAX_ENTRIES: usize = 2_000;
         /// Default MCP tool profile (`read_only`, `writer`, `operator`).
         pub const PROFILE: &str = "read_only";
         /// Expose operator-only routes in the MCP registry.
@@ -3451,6 +3552,12 @@ pub mod nexus {
         pub const THRESHOLD_BASE: u16 = 43;
         /// Number of shards each attester must verify per slot.
         pub const PER_ATTESTER_SHARDS: u16 = 25;
+        /// Number of consecutive block heights in one deterministic ingest quota window.
+        pub const INGEST_QUOTA_WINDOW_BLOCKS: u64 = 100;
+        /// Maximum accepted DA ingests per account in one quota window.
+        pub const INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT: u64 = 1_024;
+        /// Maximum canonical DA payload bytes per account in one quota window (64 GiB).
+        pub const INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT: u64 = 64 << 30;
 
         /// Rolling audit defaults ensuring long-term coverage.
         pub mod audit {
@@ -4472,6 +4579,18 @@ pub mod governance {
         pub const APPROVAL_QUORUM: u16 = 1;
         /// Hard ceiling for governed SoraFS pin-approval signers.
         pub const MAX_APPROVAL_SIGNERS: usize = 64;
+        /// Maximum number of retained pin-manifest records in consensus state.
+        pub const MAX_GLOBAL_MANIFESTS: u64 = 1_000_000;
+        /// Maximum aggregate content bytes represented by live pin manifests.
+        pub const MAX_GLOBAL_BYTES: u64 = 1 << 50;
+        /// Maximum number of retained pin-manifest records submitted by one account.
+        pub const MAX_MANIFESTS_PER_AUTHORITY: u64 = 10_000;
+        /// Maximum aggregate content bytes represented by one account's live pins.
+        pub const MAX_BYTES_PER_AUTHORITY: u64 = 1 << 40;
+        /// Maximum predecessor depth admitted for a manifest lineage.
+        pub const MAX_LINEAGE_DEPTH: u32 = 64;
+        /// Maximum number of retained direct successors admitted for one manifest.
+        pub const MAX_SUCCESSOR_FANOUT: u32 = 32;
     }
 
     /// Default SoraFS public pin fee configuration.
@@ -4590,6 +4709,8 @@ pub mod confidential {
     pub const POLICY_TRANSITION_DELAY_BLOCKS: u64 = 100;
     /// Grace window around policy activation for conversions.
     pub const POLICY_TRANSITION_WINDOW_BLOCKS: u64 = 200;
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub const POLICY_TRANSITION_MAX_PER_HEIGHT: NonZeroU32 = nonzero!(256_u32);
     /// Non-zero commitment tree root history length retained.
     pub const TREE_ROOTS_HISTORY_LEN: NonZeroUsize = nonzero!(10_000_usize);
     /// Commitment tree frontier checkpoint interval.
@@ -4794,101 +4915,5 @@ pub mod settlement {
 }
 
 #[cfg(test)]
-mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::account::AccountId;
-
-    use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
-
-    #[test]
-    fn gas_technical_account_matches_default_bootstrap_identity() {
-        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-            super::common::chain_discriminant(),
-        );
-        let parsed = AccountId::parse_encoded(pipeline::GAS_TECH_ACCOUNT_ID)
-            .expect("default gas technical account must be canonical I105")
-            .into_account_id();
-        assert_eq!(parsed, governance::bond_escrow_account_id());
-    }
-
-    #[test]
-    fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
-        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-            super::common::chain_discriminant(),
-        );
-        let parsed = AccountId::parse_encoded(fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
-            .expect("default sponsor vault custody account must be canonical I105")
-            .into_account_id();
-        assert_eq!(parsed, fees::sponsor_vault_custody_account_id());
-        assert_ne!(parsed.to_string(), pipeline::GAS_TECH_ACCOUNT_ID);
-    }
-
-    #[test]
-    fn jdg_signature_schemes_includes_simple_threshold() {
-        let schemes = governance::jdg_signature_schemes();
-        assert!(schemes.contains(&"simple_threshold".to_string()));
-    }
-
-    #[test]
-    fn soracloud_public_runtime_defaults_are_non_zero() {
-        assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
-        assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10));
-        assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
-        assert_eq!(
-            torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES.get(),
-            64 * 1024 * 1024
-        );
-        assert_eq!(
-            torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
-            Some(8)
-        );
-        assert_eq!(torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN, Some(16));
-        assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
-    }
-
-    #[test]
-    fn queue_defaults_allow_two_times_legacy_soak_capacity() {
-        assert_eq!(queue::CAPACITY.get(), 262_144);
-        assert_eq!(queue::CAPACITY_PER_USER.get(), 16_384);
-        assert!(queue::CAPACITY_PER_USER < queue::CAPACITY);
-        assert_eq!(queue::MAX_RETAINED_BYTES.get(), 128 * 1024 * 1024);
-    }
-
-    #[test]
-    fn oracle_custody_defaults_are_public_only_and_not_legacy_seeded() {
-        let legacy_reward_pool_keypair =
-            KeyPair::try_from_seed(b"oracle-reward-pool".to_vec(), Algorithm::Ed25519)
-                .expect("legacy reward-pool seed derives");
-        let legacy_slash_receiver_keypair =
-            KeyPair::try_from_seed(b"oracle-slash-receiver".to_vec(), Algorithm::Ed25519)
-                .expect("legacy slash-receiver seed derives");
-        let reward_pool = oracle::reward_pool();
-        let slash_receiver = oracle::slash_receiver();
-
-        assert_eq!(
-            reward_pool,
-            AccountId::new(
-                oracle::REWARD_POOL_PUBLIC_KEY
-                    .parse()
-                    .expect("reward-pool public key")
-            )
-        );
-        assert_eq!(
-            slash_receiver,
-            AccountId::new(
-                oracle::SLASH_RECEIVER_PUBLIC_KEY
-                    .parse()
-                    .expect("slash-receiver public key")
-            )
-        );
-        assert_ne!(reward_pool, slash_receiver);
-        assert_ne!(
-            reward_pool,
-            AccountId::new(legacy_reward_pool_keypair.public_key().clone())
-        );
-        assert_ne!(
-            slash_receiver,
-            AccountId::new(legacy_slash_receiver_keypair.public_key().clone())
-        );
-    }
-}
+#[path = "defaults_tests.rs"]
+mod tests;

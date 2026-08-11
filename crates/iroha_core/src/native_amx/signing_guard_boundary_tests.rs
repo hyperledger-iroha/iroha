@@ -1,3 +1,12 @@
+fn network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
+}
+
+fn checked_random_ed25519_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked native AMX fixture keypair")
+}
+
 #[cfg(unix)]
 #[test]
 fn signing_guard_durably_binds_full_source_session_and_participant_incarnation() {
@@ -157,7 +166,7 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     epoch.epoch = epoch.epoch.saturating_add(1);
     let mut chain = base;
     chain.phase = NativeAmxPhase::Commit;
-    chain.chain_id_hash = Hash::new(b"source-chain-drift");
+    chain.network_id = network_id(b"source-foreign-genesis");
     let mut authority_height = base;
     authority_height.phase = NativeAmxPhase::Commit;
     authority_height.authority_context_height =

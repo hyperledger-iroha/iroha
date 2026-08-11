@@ -20,6 +20,7 @@ use iroha_config::parameters::{
     },
     is_production_runtime_handle, validate_webauthn_origin_v1, validate_webauthn_rp_id_v1,
 };
+use iroha_data_model::NetworkId;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 
 use crate::IrohaRuntimeDeps;
@@ -161,11 +162,17 @@ pub enum IrohaRuntimeProviderSlotV1 {
     ModerationPanelNotificationArchive = 55,
     /// Native Bootle/Lantern issuer and opaque-client authentication registry.
     BootleLanternIssuanceProviderRegistry = 56,
+    /// Rollback-resistant monotonic clock seal for Musubi provider attestations.
+    MusubiProviderAttestationClockSeal = 57,
+    /// Approval-only HSM/KMS or threshold signer for Musubi provider attestations.
+    MusubiProviderAttestationApprovalSigner = 58,
+    /// Authenticated coordinator inventory for Musubi provider attestations.
+    MusubiProviderAttestationAuthenticatedInventory = 59,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 59] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -222,6 +229,9 @@ impl IrohaRuntimeProviderSlotV1 {
         Self::StreamTokenGatewayAdmission,
         Self::ModerationPanelNotificationArchive,
         Self::BootleLanternIssuanceProviderRegistry,
+        Self::MusubiProviderAttestationClockSeal,
+        Self::MusubiProviderAttestationApprovalSigner,
+        Self::MusubiProviderAttestationAuthenticatedInventory,
     ];
 
     /// Return the stable first-release broker protocol identifier for this role.
@@ -290,6 +300,9 @@ impl IrohaRuntimeProviderSlotV1 {
             54 => Some(Self::StreamTokenGatewayAdmission),
             55 => Some(Self::ModerationPanelNotificationArchive),
             56 => Some(Self::BootleLanternIssuanceProviderRegistry),
+            57 => Some(Self::MusubiProviderAttestationClockSeal),
+            58 => Some(Self::MusubiProviderAttestationApprovalSigner),
+            59 => Some(Self::MusubiProviderAttestationAuthenticatedInventory),
             _ => None,
         }
     }
@@ -1439,6 +1452,7 @@ const fn native_signer_role_for_slot(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IrohaRuntimeProviderBindingsV1 {
     chain_id: String,
+    network_id: NetworkId,
     bindings: Vec<IrohaRuntimeProviderBindingV1>,
 }
 
@@ -1479,6 +1493,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         });
         Ok(Self {
             chain_id: config.common.chain.to_string(),
+            network_id: NetworkId::from_genesis_hash(config.genesis.expected_hash),
             bindings,
         })
     }
@@ -1499,6 +1514,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// binding.
     pub fn try_from_governance_dag_service_view(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let service = &view.service;
@@ -1607,6 +1623,7 @@ impl IrohaRuntimeProviderBindingsV1 {
 
         Self::try_from_governance_dag_service_projection(
             chain_id,
+            network_id,
             GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator,
                 head_authenticator,
@@ -1629,11 +1646,17 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// invalid issuer, policy, or authorization-lifetime bindings.
     pub fn try_from_bootle_lantern_issuance_service(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         handle: impl Into<String>,
         revision: u64,
         policy_digest: [u8; 32],
         bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        if network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+            ));
+        }
         let binding = IrohaRuntimeProviderBindingV1::try_new_bootle_lantern_issuance(
             handle,
             revision,
@@ -1642,6 +1665,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         )?;
         Ok(Self {
             chain_id: chain_id.to_string(),
+            network_id,
             bindings: vec![binding],
         })
     }
@@ -1660,6 +1684,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// request-size bound.
     pub fn try_from_governance_dag_service(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         service: &sorafs_node::GovernanceDagServiceRuntimeProviderBindingsV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let head_authenticator = match (
@@ -1683,6 +1708,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         };
         Self::try_from_governance_dag_service_projection(
             chain_id,
+            network_id,
             GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
                     handle: service.ipfs_authenticator_handle(),
@@ -1698,6 +1724,7 @@ impl IrohaRuntimeProviderBindingsV1 {
 
     fn try_from_governance_dag_service_projection(
         chain_id: &iroha_data_model::ChainId,
+        network_id: NetworkId,
         service: GovernanceDagServiceBindingProjectionV1<'_>,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let mut bindings = Vec::with_capacity(3);
@@ -1735,6 +1762,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         });
         Ok(Self {
             chain_id: chain_id.to_string(),
+            network_id,
             bindings,
         })
     }
@@ -1743,6 +1771,12 @@ impl IrohaRuntimeProviderBindingsV1 {
     #[must_use]
     pub fn chain_id(&self) -> &str {
         &self.chain_id
+    }
+
+    /// Return the exact genesis-derived network identity for this catalog.
+    #[must_use]
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Iterate over the stable, deterministically ordered provider requests.
@@ -1768,6 +1802,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     pub(crate) fn empty_for_test(chain_id: impl Into<String>) -> Self {
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: Vec::new(),
         }
     }
@@ -1783,6 +1818,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     slot,
@@ -1807,6 +1843,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_dag_signer(
                     handle,
@@ -1867,7 +1904,8 @@ impl IrohaRuntimeProviderBindingsV1 {
         let mut bindings = vec![publication, checkpoint, archive];
         bindings.sort_unstable_by_key(|binding| binding.slot);
         Self {
-            chain_id: fixture.chain_id.as_str().to_owned(),
+            chain_id: "server-test-chain".to_owned(),
+            network_id: fixture.network_id,
             bindings,
         }
     }
@@ -1892,6 +1930,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         binding.evidence_viewer_transparency_publisher_public_key = Some(public_key);
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![binding],
         }
     }
@@ -1931,6 +1970,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         .expect("test request-ingress binding must be production-shaped");
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_request_auth(
                     slot,
@@ -1965,6 +2005,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         bindings.sort_unstable_by_key(IrohaRuntimeProviderBindingV1::slot);
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings,
         }
     }
@@ -1980,6 +2021,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     ) -> Self {
         Self {
             chain_id: chain_id.into(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_provider_ingest_source(
                     handle,
@@ -1991,6 +2033,21 @@ impl IrohaRuntimeProviderBindingsV1 {
             ],
         }
     }
+
+    /// Attach one explicit network identity to a test catalog.
+    #[cfg(test)]
+    pub(crate) fn with_network_id_for_test(mut self, network_id: NetworkId) -> Self {
+        self.network_id = network_id;
+        self
+    }
+}
+#[cfg(test)]
+pub(crate) fn runtime_provider_test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x15; iroha_crypto::Hash::LENGTH]),
+        ),
+    )
 }
 
 include!("runtime_provider_registry/software_signer_partition.rs");
@@ -2094,6 +2151,7 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
 ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
     validate_fenced_privacy_binding_pair(bindings)?;
+    validate_musubi_provider_attestation_binding_set(bindings)?;
     let Some(registry) = registry else {
         return if bindings.is_empty() {
             Ok(IrohaRuntimeDeps::default())
@@ -2112,6 +2170,12 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
+    qualify_musubi_provider_attestation_dependencies(bindings, &dependencies)?;
+    // TODO: Before the provider-attestation startup rejection can be removed,
+    // run authenticated readiness and revalidate all three live effects
+    // against these exact bindings around every operation, and fence approval
+    // authority against finalized package-owner state. This registry probe is
+    // deliberately inert and does not establish operation-time readiness.
     qualify_bootle_lantern_issuance_dependency(bindings, &dependencies)?;
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
@@ -2563,6 +2627,225 @@ fn validate_fenced_privacy_binding_pair(
     Ok(())
 }
 
+fn validate_musubi_provider_attestation_binding_set(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use IrohaRuntimeProviderSlotV1 as Slot;
+
+    const SLOTS: [Slot; 3] = [
+        Slot::MusubiProviderAttestationClockSeal,
+        Slot::MusubiProviderAttestationApprovalSigner,
+        Slot::MusubiProviderAttestationAuthenticatedInventory,
+    ];
+    let group = bindings
+        .iter()
+        .filter(|binding| SLOTS.contains(&binding.slot()))
+        .collect::<Vec<_>>();
+    if group.is_empty() {
+        return Ok(());
+    }
+    if group.len() != SLOTS.len()
+        || SLOTS
+            .into_iter()
+            .any(|slot| !group.iter().any(|binding| binding.slot() == slot))
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
+    }
+    Ok(())
+}
+
+fn musubi_provider_attestation_expected_qualification(
+    binding: &IrohaRuntimeProviderBindingV1,
+) -> Result<(u64, [u8; 32]), IrohaRuntimeProviderRegistryErrorV1> {
+    let revision =
+        binding
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                binding.slot(),
+            ))?;
+    let policy_digest =
+        binding
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                binding.slot(),
+            ))?;
+    Ok((revision, policy_digest))
+}
+
+fn validate_musubi_provider_attestation_runtime_handle(
+    binding: &IrohaRuntimeProviderBindingV1,
+    runtime_handle: &str,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    if !is_production_runtime_handle(runtime_handle) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
+    }
+    if runtime_handle != binding.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn qualify_musubi_provider_attestation_dependencies(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use IrohaRuntimeProviderSlotV1 as Slot;
+
+    let Some(clock_binding) = bindings
+        .iter()
+        .find(|binding| binding.slot() == Slot::MusubiProviderAttestationClockSeal)
+    else {
+        return Ok(());
+    };
+    let signer_binding = bindings
+        .iter()
+        .find(|binding| binding.slot() == Slot::MusubiProviderAttestationApprovalSigner)
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let inventory_binding = bindings
+        .iter()
+        .find(|binding| binding.slot() == Slot::MusubiProviderAttestationAuthenticatedInventory)
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+
+    let clock = dependencies
+        .sorafs_musubi_provider_attestation_clock_seal
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let clock_handle_before = clock.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(clock_binding, &clock_handle_before)?;
+    let (clock_revision, clock_policy_digest) =
+        musubi_provider_attestation_expected_qualification(clock_binding)?;
+    let clock_qualification_before = clock.qualification().map_err(|error| match error {
+        sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::MusubiProviderAttestationClockSealErrorV1::Rejected
+        | sorafs_node::MusubiProviderAttestationClockSealErrorV1::Ambiguous => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    let expected_clock_qualification =
+        sorafs_node::MusubiProviderAttestationClockSealQualificationV1::new(
+            clock_revision,
+            clock_policy_digest,
+        );
+    if clock_qualification_before != expected_clock_qualification {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    let clock_handle_after = clock.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(clock_binding, &clock_handle_after)?;
+    let clock_qualification_after = clock.qualification().map_err(|error| match error {
+        sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::MusubiProviderAttestationClockSealErrorV1::Rejected
+        | sorafs_node::MusubiProviderAttestationClockSealErrorV1::Ambiguous => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    if clock_handle_after != clock_handle_before
+        || clock_qualification_after != clock_qualification_before
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+
+    let signer = dependencies
+        .sorafs_musubi_provider_attestation_approval_signer
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let signer_handle_before = signer.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(signer_binding, &signer_handle_before)?;
+    let (signer_revision, signer_policy_digest) =
+        musubi_provider_attestation_expected_qualification(signer_binding)?;
+    let signer_qualification_before = signer.qualification().map_err(|error| match error {
+        sorafs_node::MusubiProviderAttestationSignerErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::MusubiProviderAttestationSignerErrorV1::Rejected => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    signer_qualification_before
+        .validate()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+    // Owner/controller state and governed signer policy are request-scoped;
+    // only the independent deployment-adapter identity is pinned here.
+    if signer_qualification_before.adapter_revision() != signer_revision
+        || signer_qualification_before.adapter_policy_digest() != signer_policy_digest
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    let signer_handle_after = signer.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(signer_binding, &signer_handle_after)?;
+    let signer_qualification_after = signer.qualification().map_err(|error| match error {
+        sorafs_node::MusubiProviderAttestationSignerErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::MusubiProviderAttestationSignerErrorV1::Rejected => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    signer_qualification_after
+        .validate()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+    if signer_handle_after != signer_handle_before
+        || signer_qualification_after != signer_qualification_before
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+
+    let inventory = dependencies
+        .sorafs_musubi_provider_attestation_inventory
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let inventory_handle_before = inventory.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(
+        inventory_binding,
+        &inventory_handle_before,
+    )?;
+    let (inventory_revision, inventory_policy_digest) =
+        musubi_provider_attestation_expected_qualification(inventory_binding)?;
+    let inventory_qualification_before =
+        inventory.qualification().map_err(|error| match error {
+            sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable => {
+                IrohaRuntimeProviderRegistryErrorV1::Unavailable
+            }
+            sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected => {
+                IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            }
+        })?;
+    inventory_qualification_before
+        .validate()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+    if inventory_qualification_before.adapter_revision() != inventory_revision
+        || inventory_qualification_before.policy_digest() != inventory_policy_digest
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    let inventory_handle_after = inventory.runtime_handle().to_owned();
+    validate_musubi_provider_attestation_runtime_handle(
+        inventory_binding,
+        &inventory_handle_after,
+    )?;
+    let inventory_qualification_after = inventory.qualification().map_err(|error| match error {
+        sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    inventory_qualification_after
+        .validate()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+    if inventory_handle_after != inventory_handle_before
+        || inventory_qualification_after != inventory_qualification_before
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+
+    Ok(())
+}
+
 fn validate_fenced_privacy_provider_observation(
     binding: &IrohaRuntimeProviderBindingV1,
     provider_handle: &str,
@@ -2913,11 +3196,8 @@ fn qualify_provider_ingest_dependencies(
             Ok(qualification)
         };
         let expected_qualification = observe()?;
-        let chain_id = bindings
-            .chain_id()
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-        if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
+        let network_id = bindings.network_id();
+        if let Some(record) = authority.load_latest(network_id).map_err(|error| {
             match error {
             iroha_core::query::provider_ingest_finalized::
                 ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
@@ -2985,11 +3265,8 @@ fn qualify_reputation_retention_dependency(
         Ok(qualification)
     };
     let expected_qualification = observe()?;
-    let chain_id = bindings
-        .chain_id()
-        .parse::<iroha_data_model::ChainId>()
-        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-    if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
+    let network_id = bindings.network_id();
+    if let Some(record) = authority.load_latest(network_id).map_err(|error| {
         match error {
         iroha_core::query::reputation_finalized::
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
@@ -3354,7 +3631,7 @@ mod tests {
 
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 
     fn standalone_bootle_lantern_bindings()
     -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
@@ -3369,9 +3646,11 @@ mod tests {
     #[test]
     fn standalone_bootle_lantern_catalog_is_exactly_one_qualified_slot() {
         let chain_id = iroha_data_model::ChainId::from("taira");
+        let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         let catalog = IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
             &chain_id,
+            network_id,
             "runtime://privacy/bootle-lantern/taira-primary",
             7,
             [0x93; 32],
@@ -3380,6 +3659,7 @@ mod tests {
         .expect("construct exact standalone slot-56 catalog");
 
         assert_eq!(catalog.chain_id(), "taira");
+        assert_eq!(catalog.network_id(), &network_id);
         assert_eq!(catalog.len(), 1);
         let binding = catalog.iter().next().expect("one exact slot");
         assert_eq!(
@@ -3398,6 +3678,7 @@ mod tests {
     #[test]
     fn standalone_bootle_lantern_catalog_rejects_unqualified_or_test_bindings() {
         let chain_id = iroha_data_model::ChainId::from("taira");
+        let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         for (handle, revision, digest) in [
             ("runtime://privacy/bootle-lantern/test", 7, [0x93; 32]),
@@ -3410,7 +3691,7 @@ mod tests {
         ] {
             assert!(
                 IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
-                    &chain_id, handle, revision, digest, exact,
+                    &chain_id, network_id, handle, revision, digest, exact,
                 )
                 .is_err(),
                 "must reject standalone binding {handle:?}/{revision}/{digest:?}"
@@ -3623,6 +3904,7 @@ mod tests {
         let archive = por_archive_config(binding);
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_por_replay_archive(&archive)
                     .expect("valid archive request"),
@@ -3711,7 +3993,7 @@ mod tests {
 
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 56];
+        let mut seen = [false; 60];
         for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
             let wire_id = slot.wire_id();
             assert_eq!(
@@ -3733,7 +4015,7 @@ mod tests {
             seen[1..].iter().all(|present| *present),
             "the V1 slot inventory must not omit a wire ID"
         );
-        for unknown in [0, 56, u16::MAX] {
+        for unknown in [0, 60, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
@@ -3749,7 +4031,7 @@ mod tests {
             .map(IrohaRuntimeProviderSlotV1::max_configured_multiplicity)
             .sum::<usize>();
         assert_eq!(derived, RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1);
-        assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1, 182);
+        assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1, 185);
         assert_eq!(
             IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
                 .max_configured_multiplicity(),
@@ -3864,6 +4146,7 @@ mod tests {
     ) -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "hf-credential-registry-test".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(configured)
                     .expect("valid HF credential-provider binding"),
@@ -4173,6 +4456,7 @@ mod tests {
 
         let empty = IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         assert!(matches!(
@@ -5303,6 +5587,47 @@ mod tests {
         );
     }
 
+    fn configure_musubi_provider_attestation_journal(config: &mut Config) {
+        configure_provider_ingest_runtime(config);
+        config
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider-ingest runtime")
+            .provider_attestation_journal = Some(
+            iroha_config::parameters::actual::SorafsProviderAttestationJournal {
+                clock_seal:
+                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
+                        handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
+                        revision: 11,
+                        policy_digest: [0xC1; 32],
+                    },
+                approval_signer:
+                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
+                        handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
+                        revision: 12,
+                        policy_digest: [0xC2; 32],
+                    },
+                inventory:
+                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
+                        handle: "coordinator://sorafs/provider-attestation/inventory-primary"
+                            .to_owned(),
+                        revision: 13,
+                        policy_digest: [0xC3; 32],
+                    },
+                max_entries: 4_096,
+                max_attempts: 8,
+                lease_ttl_ms: 30_000,
+                approval_timeout_ms: 10_000,
+                handoff_timeout_ms: 10_000,
+                retry_delay_ms: 1_000,
+                checkpoint_max_bytes: 16 * 1024 * 1024,
+                max_cas_retries: 16,
+            },
+        );
+    }
+
     fn configure_stream_token_runtime(config: &mut Config) {
         let signer = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
             .expect("stream-token signer key");
@@ -5752,6 +6077,7 @@ mod tests {
                     max_signed_transaction_bytes: Bytes(1024 * 1024),
                     max_status_page_size: 256,
                 },
+                provider_attestation_journal: None,
             },
         );
     }
@@ -6028,6 +6354,7 @@ mod tests {
             .expect("configured evidence viewer");
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-archive-test-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_archive(viewer)
                     .expect("valid evidence-viewer archive request"),
@@ -6046,6 +6373,7 @@ mod tests {
             .expect("configured evidence viewer");
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-transparency-test-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_transparency_publisher(
                     viewer,
@@ -6106,6 +6434,7 @@ mod tests {
         bindings.sort_unstable_by_key(IrohaRuntimeProviderBindingV1::slot);
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings,
         }
     }
@@ -6113,6 +6442,7 @@ mod tests {
     fn one_binding_catalog() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     IrohaRuntimeProviderSlotV1::BillingStatementSigner,
@@ -6188,9 +6518,20 @@ mod tests {
     }
 
     #[test]
+    fn configured_catalog_projects_exact_genesis_derived_network_id() {
+        let config = default_runtime_config();
+        let expected = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("project configured runtime-provider catalog");
+
+        assert_eq!(catalog.network_id(), &expected);
+    }
+
+    #[test]
     fn disabled_services_need_no_registry() {
         let bindings = IrohaRuntimeProviderBindingsV1 {
             chain_id: "default-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
 
@@ -6433,6 +6774,7 @@ mod tests {
         .expect("valid evidence-viewer checkpoint-store binding");
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![binding],
         };
         assert!(matches!(
@@ -6451,6 +6793,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6482,6 +6825,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6562,6 +6906,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6630,6 +6975,7 @@ mod tests {
 
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: vec![binding.clone()],
         };
         assert!(matches!(
@@ -6649,6 +6995,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6793,6 +7140,7 @@ mod tests {
 
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
+            network_id: test_network_id(0xA5),
             bindings: Vec::new(),
         };
         let runtime = Arc::new(FencedPrivacyRuntime::exact());
@@ -6876,6 +7224,100 @@ mod tests {
         assert!(matches!(
             resolve_runtime_deps_from_bindings(&requested, Some(&registry)),
             Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+    }
+
+    #[test]
+    fn musubi_provider_attestation_catalog_is_absent_without_journal_policy() {
+        use IrohaRuntimeProviderSlotV1 as Slot;
+
+        let mut config = default_runtime_config();
+        configure_provider_ingest_runtime(&mut config);
+        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("project provider-ingest bindings without attestation journal");
+        assert!(!bindings.iter().any(|binding| {
+            matches!(
+                binding.slot(),
+                Slot::MusubiProviderAttestationClockSeal
+                    | Slot::MusubiProviderAttestationApprovalSigner
+                    | Slot::MusubiProviderAttestationAuthenticatedInventory
+            )
+        }));
+    }
+
+    #[test]
+    fn musubi_provider_attestation_catalog_projects_exact_ordered_effect_bindings() {
+        use IrohaRuntimeProviderSlotV1 as Slot;
+
+        let mut config = default_runtime_config();
+        configure_musubi_provider_attestation_journal(&mut config);
+        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("project Musubi provider-attestation effect bindings");
+        let projected = bindings
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    binding.slot(),
+                    Slot::MusubiProviderAttestationClockSeal
+                        | Slot::MusubiProviderAttestationApprovalSigner
+                        | Slot::MusubiProviderAttestationAuthenticatedInventory
+                )
+            })
+            .map(|binding| {
+                (
+                    binding.slot(),
+                    binding.handle(),
+                    binding.revision(),
+                    binding.policy_digest(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            projected,
+            vec![
+                (
+                    Slot::MusubiProviderAttestationClockSeal,
+                    "sealed://sorafs/provider-attestation/clock-primary",
+                    Some(11),
+                    Some([0xC1; 32]),
+                ),
+                (
+                    Slot::MusubiProviderAttestationApprovalSigner,
+                    "hsm://sorafs/provider-attestation/approval-primary",
+                    Some(12),
+                    Some([0xC2; 32]),
+                ),
+                (
+                    Slot::MusubiProviderAttestationAuthenticatedInventory,
+                    "coordinator://sorafs/provider-attestation/inventory-primary",
+                    Some(13),
+                    Some([0xC3; 32]),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn musubi_provider_attestation_catalog_rejects_invalid_manual_actual_binding() {
+        let mut config = default_runtime_config();
+        configure_musubi_provider_attestation_journal(&mut config);
+        config
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider-ingest runtime")
+            .provider_attestation_journal
+            .as_mut()
+            .expect("configured provider-attestation journal")
+            .inventory
+            .policy_digest = [0; 32];
+
+        assert!(matches!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory
+            ))
         ));
     }
 

@@ -1783,19 +1783,13 @@ mod tests {
     }
 }
 
-// --------------- Register ZK Asset (Hybrid) ---------------
+// --------------- Register ZK Asset ---------------
 
 #[derive(clap::Args, Debug)]
 pub struct ZkRegisterAssetArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Allow proof-authenticated Kagemusha public-to-confidential top-ups (default: true)
-    #[arg(long, default_value_t = true)]
-    allow_shield: bool,
-    /// Allow unshielding from shielded to public (default: true)
-    #[arg(long, default_value_t = true)]
-    allow_unshield: bool,
     /// Verifying key id for unshield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_unshield: Option<String>,
@@ -1822,7 +1816,7 @@ fn parse_vk_id_pair(s: &str) -> eyre::Result<iroha::data_model::proof::Verifying
 
 impl Run for ZkRegisterAssetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
-        use iroha::data_model::isi::zk::{RegisterZkAsset, ZkAssetMode};
+        use iroha::data_model::isi::zk::RegisterZkAsset;
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
 
         let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
@@ -1834,15 +1828,11 @@ impl Run for ZkRegisterAssetArgs {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,
         };
-        let ib: InstructionBox = RegisterZkAsset::new(
-            asset,
-            ZkAssetMode::Hybrid,
-            self.allow_shield,
-            self.allow_unshield,
-            vk_unshield,
-            vk_shield,
-        )
-        .into();
+        let registration = RegisterZkAsset::new(asset, vk_unshield, vk_shield);
+        registration
+            .validate_verifier_roles()
+            .map_err(|message| eyre::eyre!(message))?;
+        let ib: InstructionBox = registration.into();
         context.finish(vec![ib])
     }
 }

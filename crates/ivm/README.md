@@ -182,10 +182,10 @@ cargo build --release
 cargo test
 ```
 
-To enable the optional startup jingle, build `irohad` with the `beep` feature:
+To enable the optional startup jingle, build `iroha3d` with the `beep` feature:
 
 ```bash
-cargo build -p irohad --features beep
+cargo build -p irohad --bin iroha3d --features beep
 ```
 
 Beep runs by default; set `ivm.banner.beep = false` in your configuration to disable

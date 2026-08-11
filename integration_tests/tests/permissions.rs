@@ -251,10 +251,10 @@ async fn genesis_transactions_are_validated_by_executor() {
     ) else {
         return;
     };
-    // Build `irohad` ahead of the timeout so the initial binary compilation does not consume the limit.
+    // Build `iroha3d` ahead of the timeout so the initial binary compilation does not consume the limit.
     iroha_test_network::Program::Irohad
         .resolve()
-        .expect("irohad binary should be buildable");
+        .expect("iroha3d binary should be buildable");
     let genesis = network.genesis();
     let peer = network.peer();
 
@@ -306,12 +306,11 @@ fn permissions_disallow_asset_transfer() {
         );
         return;
     }
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let Some((network, _rt)) = start_network(stringify!(permissions_disallow_asset_transfer))
     else {
         return;
     };
+    let network_id = network.network_id();
     let iroha = network.client();
 
     // Given
@@ -357,7 +356,7 @@ fn permissions_disallow_asset_transfer() {
         alice_id.clone(),
     );
     let transfer_tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         mouse_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -435,7 +434,7 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
     let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
     let tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -486,11 +485,10 @@ fn permissions_disallow_asset_burn() {
         );
         return;
     }
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let Some((network, _rt)) = start_network(stringify!(permissions_disallow_asset_burn)) else {
         return;
     };
+    let network_id = network.network_id();
     let iroha = network.client();
 
     let alice_id = ALICE_ID.clone();
@@ -533,7 +531,7 @@ fn permissions_disallow_asset_burn() {
         AssetId::new(asset_definition_id, mouse_id.clone()),
     );
     let burn_tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         mouse_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -599,7 +597,6 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
 
 #[test]
 fn permissions_differ_not_only_by_names() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let outfit_domain: DomainId = DomainId::try_new("outfit", "universal").expect("Valid");
 
     let Some((network, _rt)) = start_network_with_builder(
@@ -608,6 +605,7 @@ fn permissions_differ_not_only_by_names() {
     ) else {
         return;
     };
+    let network_id = network.network_id();
     let client = network.client();
     submit_ensure_domain_for_network(&network, &client, Domain::new(outfit_domain.clone()))
         .expect("Failed to register outfit domain");
@@ -617,7 +615,7 @@ fn permissions_differ_not_only_by_names() {
                                  authority_keypair: &KeyPair|
      -> Result<HashOf<SignedTransaction>> {
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -713,12 +711,11 @@ fn permissions_differ_not_only_by_names() {
 
 #[test]
 fn stored_vs_granted_permission_payload() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let Some((network, _rt)) = start_network(stringify!(stored_vs_granted_permission_payload))
     else {
         return;
     };
+    let network_id = network.network_id();
     let iroha = network.client();
 
     // Given
@@ -764,7 +761,7 @@ fn stored_vs_granted_permission_payload() {
     );
 
     let attempted_holder_grant = TransactionBuilder::new(
-        chain_id,
+        network_id,
         mouse_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

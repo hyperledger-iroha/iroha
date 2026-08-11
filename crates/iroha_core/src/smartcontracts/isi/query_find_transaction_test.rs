@@ -1,7 +1,5 @@
 #[tokio::test]
 async fn find_transaction() -> Result<()> {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world_with_test_domains(), kura.clone(), query_handle);
@@ -15,7 +13,7 @@ async fn find_transaction() -> Result<()> {
 
     let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -24,7 +22,7 @@ async fn find_transaction() -> Result<()> {
 
     let va_tx = AcceptedTransaction::accept(
         tx,
-        &chain_id,
+        &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -52,7 +50,7 @@ async fn find_transaction() -> Result<()> {
     let state_view = state.view();
 
     let unapplied_tx = TransactionBuilder::new(
-        chain_id,
+        state.network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

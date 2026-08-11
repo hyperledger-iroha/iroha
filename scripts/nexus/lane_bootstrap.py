@@ -497,7 +497,7 @@ def build_summary(
             "Copy the manifest into the configured `nexus.registry.manifest_directory` (and cache directory, if set).",
             "Append the catalog snippet to your Nexus config and bump `[nexus] lane_count` accordingly.",
             encode_step,
-            "Restart irohad with `--trace-config` to validate the new geometry and capture evidence for the rollout ticket.",
+            "Restart iroha3d with `--trace-config` to validate the new geometry and capture evidence for the rollout ticket.",
             "Follow specs/nexus_elastic_lane.md to complete validator bootstrap and telemetry wiring.",
         ],
     }

@@ -8,7 +8,7 @@ struct ToriiCanonicalTransactionDraft {
   private static let maximumMetadataJSONBytes = 1 * 1024 * 1024
 
   struct Payload {
-    let chainId: String
+    let networkId: NetworkId
     let authority: Data
     let creationTimeMs: UInt64
     let executable: Data
@@ -161,7 +161,7 @@ struct ToriiCanonicalTransactionDraft {
 
   private static func parsePayload(_ bytes: Data, context: String) throws -> Payload {
     var transaction = ToriiVerifyingKeyCompactReader(bytes)
-    let chain = try transaction.takeField("\(context).chain")
+    let domain = try transaction.takeField("\(context).domain")
     let authority = try transaction.takeField("\(context).authority")
     let creation = try transaction.takeField("\(context).creation_time_ms")
     let executable = try transaction.takeField("\(context).executable")
@@ -195,7 +195,7 @@ struct ToriiCanonicalTransactionDraft {
         "\(context) attachments must use the exact None encoding.")
     }
     return Payload(
-      chainId: try decodeChain(chain, context: context),
+      networkId: try decodeNetworkDomain(domain, context: context),
       authority: authority,
       creationTimeMs: creationTimeMs,
       executable: executable,
@@ -214,26 +214,26 @@ struct ToriiCanonicalTransactionDraft {
     )
   }
 
-  private static func decodeChain(_ bytes: Data, context: String) throws -> String {
-    var archive = ToriiVerifyingKeyCompactReader(bytes)
-    let value = try decodeString(
-      try archive.takeField("\(context).chain.value"),
-      field: "\(context).chain.value"
-    )
-    guard archive.isFinished,
-      !value.isEmpty,
-      value.utf8.count <= 128,
-      let first = value.utf8.first,
-      let last = value.utf8.last,
-      isASCIIAlphanumeric(first),
-      isASCIIAlphanumeric(last),
-      value.utf8.allSatisfy({
-        isASCIIAlphanumeric($0) || $0 == 46 || $0 == 95 || $0 == 58 || $0 == 45
-      })
-    else {
-      throw ToriiClientError.invalidPayload("\(context) chain id is not canonical.")
+  private static func decodeNetworkDomain(_ bytes: Data, context: String) throws -> NetworkId {
+    var domain = ToriiVerifyingKeyCompactReader(bytes)
+    guard try domain.takeUInt32("\(context).domain.kind") == 0 else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) transaction domain must use TransactionDomain::Network."
+      )
     }
-    return value
+    let networkIdBytes = try domain.takeField("\(context).domain.value")
+    guard domain.isFinished else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) transaction domain must contain exactly one NetworkId."
+      )
+    }
+    do {
+      return try NetworkId(bytes: networkIdBytes)
+    } catch {
+      throw ToriiClientError.invalidPayload(
+        "\(context) transaction domain contains an invalid canonical NetworkId."
+      )
+    }
   }
 
   static func decodeString(_ bytes: Data, field: String) throws -> String {
@@ -331,9 +331,5 @@ struct ToriiCanonicalTransactionDraft {
       throw ToriiClientError.invalidPayload("\(context) metadata contains trailing bytes.")
     }
     return result
-  }
-
-  private static func isASCIIAlphanumeric(_ byte: UInt8) -> Bool {
-    (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
   }
 }

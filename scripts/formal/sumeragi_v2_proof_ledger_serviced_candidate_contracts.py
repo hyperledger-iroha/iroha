@@ -912,7 +912,7 @@ record.status() == ProducerContinuationStatus::Terminal
         (
             "let producer_reservation = self.reserve_selected_producer_continuation(producer_candidate)?",
             "self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)",
-            "self.reducer.step(event)",
+            "self.step_reducer(event)",
             "self.record_serviced_candidate",
         ),
         "direct service must reserve and persist producer ownership before source retirement",
@@ -961,7 +961,7 @@ let producer_continuation = self
         "drain_deferred_with_handoff_for_ordinals",
         (
             "self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)",
-            "self.reducer.step(event)",
+            "self.step_reducer(event)",
             "self.record_serviced_candidate",
             """
 self.deferred_producer_continuations
@@ -1185,7 +1185,7 @@ assert!(
         "drive_effects",
         (
             "let persisted = reducer::Event::Persisted { tag, id }",
-            "let continuation = match self.reducer.step(persisted.clone())",
+            "let continuation = match self.step_reducer(persisted.clone())",
             "self.prune_ingress_records()",
             "self.reclaim_serviced_candidates()?",
             "self.record_reducer_outcome",
@@ -1262,6 +1262,29 @@ Ok(command_minimum)
     require_item_sequence(
         "runtime",
         runtime_items,
+        "minimum_runnable_lifecycle_ordinal",
+        """
+if let Some(evidence) = completion_evidence {
+    if !evidence.validate_exact()
+        || !self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(evidence.lifecycle_ordinal())
+            .map_err(|_| EnqueueError::FailClosed)?
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+    let lifecycle_ordinal = evidence.lifecycle_ordinal();
+    minimum =
+        Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
+}
+""",
+        "serviced-candidate runnable selection must admit only exact minted "
+        "completion evidence into the least-owner minimum",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
         "dormant_local_fifo_replacement",
         """
 self.dormant_local_fifo_replacement_inner(command, false)
@@ -1314,6 +1337,43 @@ self.finish_dispatched_step(
 )
 """,
         "runtime step must transfer the exact parent statement and handoff into shared completion",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "finish_dispatched_step",
+        (
+            """
+self.retain_effect_ownership(
+    effect_source,
+    Some(&effect_parent),
+    effect_parent_statement.as_ref(),
+    &effects,
+)
+""",
+            """
+if token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()
+    || token.identity().causal_lifecycle_key()
+        != effect_parent.causal_origin().lifecycle_key
+{
+    self.latch_fail_closed("producer handoff changed its selected lifecycle identity");
+    return Err(RuntimeError::FailClosed);
+}
+""",
+            "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+            "self.driver.acknowledge_producer_handoff(token, evidence)",
+            """
+self.complete_driver_dispatch_leader_wire_owners(
+    &effect_parent,
+    retained_deferred_ingress,
+    completed_producer_handoff,
+)
+""",
+            "self.observe_effects(now, &effects)",
+        ),
+        "live dispatch completion must retain successors, acknowledge the exact producer, "
+        "terminalize the selected parent before adapter-side orphans, and publish every "
+        "terminal before observing effects",
     )
     require_item_order(
         "runtime",
@@ -1438,3 +1498,782 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                     f"{forbidden}"
                 )
     return errors
+
+
+def _effect_capacity_fetch_owner_source_fidelity_errors(
+    effects_path: Path,
+    source: str,
+    generic_executor_context: tuple[tuple[str, ...], ...],
+    errors: list[str],
+) -> None:
+    """Bind durable producer retirement and exact Fetch-owner admission."""
+
+    adapter_path = effects_path.with_name("v2.rs")
+    if not adapter_path.is_file() or adapter_path.is_symlink():
+        errors.append(
+            f"{adapter_path}: durable producer tombstone source must be a regular file"
+        )
+    else:
+        adapter_source = adapter_path.read_text(encoding="utf-8")
+        deferred_exact_owners = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "deferred_body_pipeline_completion_exact_owner_ordinals",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            deferred_exact_owners,
+            (("impl", "SumeragiV2Adapter"),),
+            "Busy-deferred exact completion owner inventory",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            """
+input.completion_evidence.as_ref() == Some(candidate)
+    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+        == Some(expected_stage)
+""",
+            "Busy-deferred owner inventory must require the exact stage and full completion evidence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            ".map(|input| input.admission_ordinal)",
+            "Busy-deferred owner inventory must return the runtime ownership-map key",
+            errors,
+        )
+        adapter_preflight = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "preflight_runtime_command_admission",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            adapter_preflight,
+            (("impl", "SumeragiV2Adapter"),),
+            "durable producer-tombstone admission preflight",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let serviced = self.serviced_candidates.contains_key(&key);
+let matching = self
+    .producer_continuations
+    .iter()
+    .filter(|(_, record)| record.identity().candidate() == key)
+    .collect::<Vec<_>>();
+""",
+            "terminal preflight must join the service marker to its exact producer record",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let identity = record.identity();
+if serviced
+    || record.status() != ProducerContinuationStatus::Reserved
+    || !self
+        .restored_dormant_producer_continuations
+        .contains(address)
+    || self.durable_producer_continuations.get(address) != Some(record)
+{
+    return Preflight::CoalesceOwned {
+        causal_lifecycle_key: identity.causal_lifecycle_key(),
+        admission_ordinal: identity.admission_ordinal(),
+    };
+}
+""",
+            "live and terminal producer coalescence must return the immutable retained owner",
+            errors,
+        )
+
+        retire_restored_producer = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "retire_restored_producer_continuation",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            retire_restored_producer,
+            (("impl", "SumeragiV2Adapter"),),
+            "persistent stage-7 producer-record retirement",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+self.ensure_ingress()?;
+if admission_ordinal == 0
+    || producer_stage != ServicedCandidateStage::BodyAvailable as u8
+    || self.selected_producer_lifecycle.is_some()
+{
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer retirement carried an invalid stage, ordinal, or active selection"
+            .to_owned(),
+    ));
+}
+""",
+                "persistent producer retirement must accept only an inactive nonzero stage-7 owner",
+            ),
+            (
+                """
+let matches = self
+    .producer_continuations
+    .iter()
+    .filter_map(|(address, record)| {
+        let identity = record.identity();
+        (identity.causal_lifecycle_key() == causal_lifecycle_key
+    && identity.admission_ordinal() == admission_ordinal
+    && identity.stage() == producer_stage)
+    .then_some((*address, record.clone()))
+    })
+    .collect::<Vec<_>>();
+""",
+                "persistent producer retirement must join the exact lifecycle key, ordinal, and stage",
+            ),
+            (
+                """
+let [(address, record)] = matches.as_slice() else {
+    return match matches.len() {
+        0 => Ok(false),
+        _ => Err(self.fail_serviced_candidate_store(
+            "restored producer retirement matched multiple bounded addresses".to_owned(),
+        )),
+    };
+};
+self.persist_restored_body_producer_retirement(*address, record)?;
+Ok(true)
+""",
+                "persistent producer retirement must select one exact record before delegating durable removal",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                retire_restored_producer,
+                sequence,
+                description,
+                errors,
+            )
+
+        persist_restored_body_producer = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "persist_restored_body_producer_retirement",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            persist_restored_body_producer,
+            (("impl", "SumeragiV2Adapter"),),
+            "shared persist-first stage-7 producer-record retirement",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+if record.status() != ProducerContinuationStatus::Reserved
+    || record.source_class() != ProducerContinuationSourceClass::VolatileBody
+    || record.identity().address() != address
+    || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
+    || self.durable_producer_continuations.get(&address) != Some(record)
+    || !self
+        .restored_dormant_producer_continuations
+        .contains(&address)
+    || self
+        .deferred_producer_continuations
+        .values()
+        .any(|reservation| reservation.address == address)
+    || self.pending_producer_handoffs.contains_key(&address)
+{
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer retirement did not own one exact dormant durable record"
+            .to_owned(),
+    ));
+}
+""",
+                "persistent producer retirement must own one exact dormant durable stage-7 volatile-body record with no live alias",
+            ),
+            (
+                """
+let process_previous = self
+    .producer_continuations
+    .remove(&address)
+    .expect("matched process producer remains present");
+let durable_previous = self
+    .durable_producer_continuations
+    .remove(&address)
+    .expect("matched durable producer remains present");
+let dormant_removed = self
+    .restored_dormant_producer_continuations
+    .remove(&address);
+debug_assert!(dormant_removed);
+if let Err(reason) = self
+    .serviced_candidate_store
+    .persist_with_producer_continuations(
+        &self.durable_serviced_candidates,
+        &self.durable_producer_continuations,
+        self.serviced_candidates_decision_reclaimed,
+    )
+{
+    self.producer_continuations
+        .insert(address, process_previous);
+    self.durable_producer_continuations
+        .insert(address, durable_previous);
+    if dormant_removed {
+        self.restored_dormant_producer_continuations.insert(address);
+    }
+    return Err(self.fail_serviced_candidate_store(reason));
+}
+Ok(())
+""",
+                "stage-7 retirement must persist process/durable/dormant removal and roll all memory back on persistence failure",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                persist_restored_body_producer,
+                sequence,
+                description,
+                errors,
+            )
+
+        persistent_retirement_helper = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+manifest: (marker != 0xBD).then_some(manifest.clone()),
+""",
+                "the restart regression must make BD the unique manifest-less restored Fetch case",
+            ),
+            (
+                """
+if !reserve_completion {
+    assert!(
+        runtime
+            .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+            .expect("persist terminal restored fetch-parent retirement")
+    );
+    assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+    assert!(
+        !runtime
+            .driver()
+            .producer_continuations
+            .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .durable_producer_continuations
+                .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .restored_dormant_producer_continuations
+                .contains(&restored_address),
+        "terminal fetch cancellation must remove its dormant stage-7 parent"
+    );
+    drop(runtime.into_driver());
+    let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("safety.wal"),
+        verified_genesis(context()),
+        Some(0),
+        reducer::Generation::new(3),
+        [0x11; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("reopen after terminal restored fetch cancellation");
+    assert!(restarted_again.producer_continuations.is_empty());
+    return;
+}
+""",
+                "pre-reservation restored Fetch cancellation must persist its dormant stage-7 parent before returning",
+            ),
+            (
+                """
+let retired = if materialize_before_retirement {
+    runtime
+        .commit_body_available(reservation)
+        .expect("materialize restored completion before pipeline retirement");
+    runtime
+        .retire_body_pipeline_completions(restarted_tag, round, body_subject)
+        .map(|retired| retired.body_available())
+} else {
+    runtime.retire_unpublished_body_available(restarted_tag, round, body_subject)
+};
+""",
+                "the restart regression must exercise unpublished and queued stage-7 retirement",
+            ),
+            (
+                """
+if let Some((path, bytes)) = sabotaged_snapshot {
+    assert!(
+        retired.is_err(),
+        "a failed durable release cannot publish volatile token retirement"
+    );
+    assert_eq!(
+        runtime.remaining_completion_capacity(),
+        capacity_before - 1,
+        "failed persistence retains the exact unpublished physical owner"
+    );
+    assert!(runtime.driver().fail_closed);
+    assert_eq!(
+        runtime
+            .driver()
+            .producer_continuations
+            .get(&restored_address),
+        runtime
+            .driver()
+            .durable_producer_continuations
+            .get(&restored_address),
+        "failed persistence restores both in-memory producer aliases"
+    );
+    assert!(
+        runtime
+            .driver()
+            .restored_dormant_producer_continuations
+            .contains(&restored_address)
+    );
+""",
+                "the injected persistence failure must retain the volatile token and restore every in-memory producer alias",
+            ),
+            (
+                """
+assert!(retired.expect("persist and retire the restored body completion"));
+assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+assert!(
+!runtime
+    .driver()
+    .producer_continuations
+    .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .restored_dormant_producer_continuations
+        .contains(&restored_address),
+    "terminal runtime retirement must persistently release the restored producer"
+);
+""",
+                "reserved stage-7 retirement must observe process, durable, dormant, and capacity release before reopening",
+            ),
+            (
+                """
+drop(runtime.into_driver());
+let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+    directory.path().join("safety.wal"),
+    verified_genesis(context()),
+    Some(0),
+    reducer::Generation::new(3),
+    [0x11; 32],
+    fingerprints(),
+    Box::new(TestAggregator),
+    deferred_admission_ordinals(),
+)
+.expect("reopen after terminal stage-7 retirement");
+assert!(
+    restarted_again.producer_continuations.is_empty()
+        && restarted_again.durable_producer_continuations.is_empty()
+        && restarted_again
+            .restored_dormant_producer_continuations
+            .is_empty(),
+""",
+                "the stage-7 retirement regression must perform a second restart from persisted state",
+            ),
+            (
+                """
+restarted_again.producer_continuations.is_empty()
+    && restarted_again.durable_producer_continuations.is_empty()
+    && restarted_again
+        .restored_dormant_producer_continuations
+        .is_empty()
+""",
+                "the second restart must prove that terminally retired stage-7 ownership cannot resurrect",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                persistent_retirement_helper,
+                sequence,
+                description,
+                errors,
+            )
+        _require_rust_token_sequence(
+            adapter_path,
+            persistent_retirement_helper,
+            """
+!runtime
+    .driver()
+    .producer_continuations
+    .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .restored_dormant_producer_continuations
+        .contains(&restored_address)
+""",
+            "the restart regression must observe both terminal-fetch and reserved-token process/durable/dormant removal cuts",
+            errors,
+            count=2,
+        )
+
+        persistent_retirement_regression = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "restored_body_available_terminal_retirement_is_persistent_before_token_release",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            persistent_retirement_regression,
+            """
+assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xB9, true, true, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBA, true, false, true);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
+""",
+            "the public regression must cover unpublished, materialized, failed, manifest-bound pre-reservation, and manifest-less pre-reservation stage-7 retirement",
+            errors,
+        )
+
+    drain = _require_rust_item(
+        effects_path,
+        source,
+        "drain_retained_effect_batch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        drain,
+        generic_executor_context,
+        "certified-request retained-effect retry method",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+let pending_work_producer = Self::pending_work_producer(&owned.effect);
+match self.consume_one(owned.effect, owned.ownership, services) {
+""",
+        "certified-request retry must classify and dispatch the exact retained owned effect",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+Err(
+    EffectExecutorError::PendingWorkCapacity { .. }
+    | EffectExecutorError::CertifiedRequestCapacity { .. },
+) => {
+    debug_assert!(pending_work_producer.is_some());
+    break;
+}
+Err(error) => return Err(error),
+""",
+        "both retained-effect capacity errors must preserve the exact FIFO head before fail-closed fallback",
+        errors,
+    )
+    if drain is not None:
+        certified_capacity_count = _token_sequence_count(
+            rust_code_tokens(drain.source),
+            rust_code_tokens("EffectExecutorError::CertifiedRequestCapacity"),
+        )
+        if certified_capacity_count != 1:
+            errors.append(
+                f"{effects_path}:{drain.line}: retained-effect dispatch must "
+                "retry CertifiedRequestCapacity exactly once beside "
+                f"PendingWorkCapacity; found {certified_capacity_count} arm(s)"
+            )
+
+    begin_fetch = _require_rust_item(
+        effects_path,
+        source,
+        "begin_fetch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        begin_fetch,
+        generic_executor_context,
+        "source-faithful certified-request capacity deferral method",
+        errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+} else if let Some(certificate) = certificate {
+    let plan = match self.plan_certified_fetch_request(
+        existing_id,
+        round,
+        subject,
+        certificate,
+        services,
+    ) {
+""",
+        "existing ordinary Fetch Q-capacity upgrade planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let request_plan = if let Some(certificate) = certificate {
+    match self.plan_certified_fetch_request(
+        work.id,
+        round,
+        subject,
+        certificate,
+        services
+    ) {
+""",
+        "genuinely new Fetch Q-capacity request planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
+    iroha_logger::debug!(
+        height = round.height,
+        view = round.view,
+        capacity,
+        "deferred certified Sumeragi v2 body-fetch authority upgrade at request capacity"
+    );
+    return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
+}
+Err(error) => return Err(error),
+""",
+        "an existing Fetch Q-capacity upgrade must retain and retry its exact lifecycle without partial authority installation",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
+    iroha_logger::debug!(
+        height = round.height,
+        view = round.view,
+        capacity,
+        "deferred certified Sumeragi v2 body fetch at request capacity"
+    );
+    return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
+}
+Err(error) => return Err(error),
+""",
+        "a new Fetch Q-capacity admission must retain and retry its exact lifecycle without partial authority installation",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let same_lifecycle = existing.task.ownership == ownership;
+if existing.task.tag != tag {
+    return Err(EffectExecutorError::Contract(
+        "conflicting retransmission for one body-fetch round/subject".to_owned(),
+    ));
+}
+if !same_lifecycle {
+    return Err(EffectExecutorError::Contract(
+        "body-fetch retry or authority upgrade changed its exact lifecycle owner"
+            .to_owned(),
+    ));
+}
+""",
+        "Fetch owner replacement must fail before request, refinement, or service planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let merged_ownership = existing
+    .task
+    .ownership
+    .rebind_same_adapter_effect(&merged_effect)
+    .map_err(EffectExecutorError::Contract)?;
+let merged = BodyFetchTask {
+    id: existing_id,
+    tag,
+    round,
+    subject,
+    manifest: merged_manifest,
+    sources: merged_sources,
+    certified_request: merged_request,
+    ownership: merged_ownership,
+};
+""",
+        "coalesced Fetch retries must rebind the concrete effect while retaining the incumbent owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+if merged == existing.task {
+    services.enqueue_body_fetch(merged).map_err(service_error)?;
+    return Ok(());
+}
+services
+    .enqueue_body_fetch(merged.clone())
+    .map_err(service_error)?;
+""",
+        "same-owner Fetch retries and upgrades must reach the idempotent service seam after the early owner gate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+services
+    .enqueue_body_fetch(merged.clone())
+    .map_err(service_error)?;
+if let Some(plan) = request_plan {
+    self.commit_certified_fetch_request(plan);
+}
+self.commit_body_pipeline_owner(owner_plan);
+let pending = self
+    .pending_fetches
+    .get_mut(&existing_id)
+    .expect("serialized body-fetch owner remains present after admission");
+pending.task = merged;
+pending.request_hash = request_hash;
+return Ok(());
+""",
+        "a successful same-owner Fetch authority upgrade must atomically install P/Q state and drain its retry",
+        errors,
+    )
+    if begin_fetch is not None:
+        _require_rust_item_token_sha256(
+            effects_path,
+            begin_fetch,
+            _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256["begin_fetch"],
+            "idempotent exact Fetch admission lifecycle",
+            errors,
+        )
+        begin_fetch_tokens = rust_code_tokens(begin_fetch.source)
+        owner_barrier_tokens = rust_code_tokens("if !same_lifecycle")
+        request_plan_tokens = rust_code_tokens("self.plan_certified_fetch_request(")
+        refinement_tokens = rust_code_tokens(
+            "existing.task.ownership.rebind_same_adapter_effect(&merged_effect)"
+        )
+        barrier_tokens = rust_code_tokens("if merged == existing.task")
+        retry_enqueue_tokens = rust_code_tokens(
+            "services.enqueue_body_fetch(merged).map_err(service_error)?"
+        )
+        upgrade_enqueue_tokens = rust_code_tokens(
+            "services.enqueue_body_fetch(merged.clone()).map_err(service_error)?"
+        )
+        barrier_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(barrier_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(barrier_tokens)]
+            == barrier_tokens
+        ]
+        retry_enqueue_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(retry_enqueue_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(retry_enqueue_tokens)]
+            == retry_enqueue_tokens
+        ]
+        upgrade_enqueue_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(upgrade_enqueue_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(upgrade_enqueue_tokens)]
+            == upgrade_enqueue_tokens
+        ]
+        owner_barrier_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(owner_barrier_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(owner_barrier_tokens)]
+            == owner_barrier_tokens
+        ]
+        request_plan_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(request_plan_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(request_plan_tokens)]
+            == request_plan_tokens
+        ]
+        refinement_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(refinement_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(refinement_tokens)]
+            == refinement_tokens
+        ]
+        if not (
+            len(owner_barrier_positions) == 1
+            and len(request_plan_positions) == 2
+            and len(refinement_positions) == 1
+            and owner_barrier_positions[0] < min(request_plan_positions)
+            and owner_barrier_positions[0] < refinement_positions[0]
+        ):
+            errors.append(
+                f"{effects_path}:{begin_fetch.line}: begin_fetch must reject "
+                "one foreign incumbent owner before either request planner "
+                "and before candidate refinement evidence"
+            )
+        if not (
+            len(barrier_positions) == 1
+            and len(retry_enqueue_positions) == 1
+            and len(upgrade_enqueue_positions) == 1
+            and barrier_positions[0] < retry_enqueue_positions[0]
+            and retry_enqueue_positions[0] < upgrade_enqueue_positions[0]
+        ):
+            errors.append(
+                f"{effects_path}:{begin_fetch.line}: begin_fetch must keep one "
+                "merged == existing.task barrier, one same-owner retry "
+                "enqueue inside it, and one later same-owner authority-upgrade enqueue"
+            )
+        for forbidden_source in (
+            "self.retained_effect_batch",
+            "self.retain_effect_batch",
+        ):
+            retained_count = _token_sequence_count(
+                begin_fetch_tokens,
+                rust_code_tokens(forbidden_source),
+            )
+            if retained_count != 0:
+                errors.append(
+                    f"{effects_path}:{begin_fetch.line}: Q-capacity deferrals "
+                    "must not mutate the outer executor's exact retained FIFO "
+                    "owner inside begin_fetch; "
+                    f"found {retained_count} occurrence(s) of {forbidden_source}"
+                )

@@ -1,4 +1,4 @@
-//! Fail-closed exact-12 privacy bootstrap artifacts for the Taira testnet.
+//! Fail-closed Exact12 governance activation templates for the Taira testnet.
 
 use std::{
     collections::BTreeSet,
@@ -31,9 +31,10 @@ use crate::{Outcome, RunArgs};
 
 mod release;
 
-const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-genesis-bootstrap.v1";
-const PROPOSED_AT_HEIGHT_V1: u64 = 1;
-const ACTIVATE_AT_HEIGHT_V1: u64 = 301;
+const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-governance-templates.v1";
+const NOTICE_INTERVAL_BLOCKS_V1: u64 = 300;
+const OBSERVATION_INTERVAL_BLOCKS_V1: u64 = 300;
+const WAVE_PROPOSED_AT_HEIGHTS_V1: [u64; 4] = [1, 602, 1_203, 1_804];
 const MAX_INSTRUCTIONS_JSON_BYTES_V1: u64 = 4 * 1024 * 1024;
 const MAX_REPORT_JSON_BYTES_V1: u64 = 8 * 1024 * 1024;
 
@@ -46,7 +47,7 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Emit all twelve compiled privacy activation registrations atomically.
+    /// Emit all twelve compiled governance activation templates atomically.
     #[command(name = "emit-taira-v1")]
     EmitTairaV1(EmitTairaV1Args),
     /// Validate an emitted exact-12 instruction set and its digest inventory.
@@ -59,7 +60,7 @@ enum Command {
 
 #[derive(Debug, ClapArgs)]
 struct EmitTairaV1Args {
-    /// New file receiving the canonical genesis instruction JSON array.
+    /// New file receiving the canonical governance-template instruction array.
     #[arg(long)]
     instructions_output: PathBuf,
     /// New file receiving base64 Norito instructions and deterministic digests.
@@ -136,6 +137,22 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 
+const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
+    match protocol {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+        | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => 0,
+        PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
+        | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+        | PrivacyProtocolIdV1::PqMaspStarkV0 => 1,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => 2,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
+    }
+}
+
 fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     let profiles = PrivacyProtocolIdV1::ALL
         .into_iter()
@@ -171,10 +188,6 @@ fn build_artifacts_from_profiles_v1(
     }
 
     let mut seen = BTreeSet::new();
-    let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-        proposed_at_height: PROPOSED_AT_HEIGHT_V1,
-        activate_at_height: ACTIVATE_AT_HEIGHT_V1,
-    });
     let mut instructions = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     let mut catalog_rows = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     for (index, (profile, expected_protocol)) in profiles
@@ -196,6 +209,12 @@ fn build_artifacts_from_profiles_v1(
                 profile.protocol_id.canonical_label()
             );
         }
+        let wave = rollout_wave_index_v1(profile.protocol_id);
+        let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[wave];
+        let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height,
+            activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
+        });
         let activation = profile.activation_record(lifecycle);
         activation.validate().map_err(|source| {
             eyre!(
@@ -250,13 +269,11 @@ fn render_artifacts_v1(
     let report = norito::json!({
         "schema": (REPORT_SCHEMA_V1),
         "schema_version": 1_u64,
-        "genesis_registration": {
-            "lifecycle": "Proposed",
-            "proposed_at_height": (PROPOSED_AT_HEIGHT_V1),
-            "activate_at_height": (ACTIVATE_AT_HEIGHT_V1),
-            "minimum_activation_delay_blocks": (ACTIVATE_AT_HEIGHT_V1 - PROPOSED_AT_HEIGHT_V1),
-            "assurance": "experimental",
-            "pending_protocol_limits_tightening": false,
+        "governance_activation_templates": {
+            "deployment_state": "not-executed",
+            "genesis_activation_forbidden": true,
+            "notice_interval_blocks": (NOTICE_INTERVAL_BLOCKS_V1),
+            "observation_interval_blocks": (OBSERVATION_INTERVAL_BLOCKS_V1),
             "instruction_wire_id": (RegisterPrivacyProtocolActivationV1::WIRE_ID),
             "instruction_encoding": "norito-instruction-box-base64",
             "protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
@@ -413,9 +430,11 @@ fn validate_report_inventory_v1(
     }
 
     let registration = fields
-        .get("genesis_registration")
+        .get("governance_activation_templates")
         .and_then(JsonValue::as_object)
-        .ok_or_else(|| eyre!("privacy bootstrap report genesis_registration must be an object"))?;
+        .ok_or_else(|| {
+            eyre!("privacy bootstrap report governance_activation_templates must be an object")
+        })?;
     let labels = report_string_array_v1(registration, "protocol_labels")?;
     let base64_values = report_string_array_v1(registration, "instruction_norito_base64")?;
     let hashes = report_string_array_v1(registration, "instruction_norito_sha256")?;
@@ -714,6 +733,18 @@ mod tests {
         let second = fixture_artifacts();
         assert_eq!(first.instructions_json, second.instructions_json);
         assert_eq!(first.report_json, second.report_json);
+        for (index, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+            let activation = privacy_activation_at_v1(&first.instructions[index], index)
+                .expect("governance activation template");
+            let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[rollout_wave_index_v1(protocol)];
+            assert_eq!(
+                activation.lifecycle,
+                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                    proposed_at_height,
+                    activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
+                })
+            );
+        }
         validate_artifacts_against_v1(&first.instructions_json, &first.report_json, &first)
             .expect("validate exact-12 fixture");
     }
@@ -814,14 +845,17 @@ mod tests {
                     activation.lifecycle =
                         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                             proposed_at_height: 2,
-                            activate_at_height: ACTIVATE_AT_HEIGHT_V1,
+                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                                + NOTICE_INTERVAL_BLOCKS_V1,
                         });
                 }
                 1 => {
                     activation.lifecycle =
                         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                            proposed_at_height: PROPOSED_AT_HEIGHT_V1,
-                            activate_at_height: ACTIVATE_AT_HEIGHT_V1 + 1,
+                            proposed_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
+                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                                + NOTICE_INTERVAL_BLOCKS_V1
+                                + 1,
                         });
                 }
                 2 => activation.proof_system_id = other.proof_system_id,
@@ -835,8 +869,9 @@ mod tests {
                 _ => {
                     activation.pending_protocol_limits_tightening =
                         Some(PrivacyProtocolLimitsTighteningV1 {
-                            scheduled_at_height: PROPOSED_AT_HEIGHT_V1,
-                            effective_at_height: ACTIVATE_AT_HEIGHT_V1,
+                            scheduled_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
+                            effective_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                                + NOTICE_INTERVAL_BLOCKS_V1,
                             next_limits: activation.protocol_limits,
                         });
                 }
@@ -923,7 +958,7 @@ mod tests {
             match needle {
                 "instruction_norito_sha256" => {
                     fields
-                        .get_mut("genesis_registration")
+                        .get_mut("governance_activation_templates")
                         .and_then(JsonValue::as_object_mut)
                         .expect("registration object")
                         .get_mut(needle)
@@ -932,7 +967,7 @@ mod tests {
                 }
                 "instruction_norito_base64" => {
                     fields
-                        .get_mut("genesis_registration")
+                        .get_mut("governance_activation_templates")
                         .and_then(JsonValue::as_object_mut)
                         .expect("registration object")
                         .get_mut(needle)
@@ -941,7 +976,7 @@ mod tests {
                 }
                 "protocol_labels" => {
                     fields
-                        .get_mut("genesis_registration")
+                        .get_mut("governance_activation_templates")
                         .and_then(JsonValue::as_object_mut)
                         .expect("registration object")
                         .get_mut(needle)

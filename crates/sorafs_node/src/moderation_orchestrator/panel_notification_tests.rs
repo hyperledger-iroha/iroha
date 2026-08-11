@@ -277,7 +277,7 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
     let first_artifact_bytes = archive.artifact(first.operation_id);
     let first_artifact = verify_panel_notification_archive_artifact(
         &bounds,
-        &orchestrator.chain_id,
+        &orchestrator.network_id,
         &first_artifact_bytes,
     )
     .expect("strict first archive artifact");
@@ -335,7 +335,7 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         .into_iter()
         .next()
         .expect("bootstrap epoch");
-    let chain_id = orchestrator.chain_id.clone();
+    let network_id = orchestrator.network_id;
     drop(orchestrator);
 
     let predecessor_key = SigningKey::from_bytes(&PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED);
@@ -356,10 +356,10 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         epoch_digest: [0; 32],
     };
     let authorization_message = proposed_epoch
-        .rotation_authorization_message(&chain_id)
+        .rotation_authorization_message(&network_id)
         .expect("canonical predecessor authorization message");
     let possession_message = proposed_epoch
-        .new_key_possession_message(&chain_id)
+        .new_key_possession_message(&network_id)
         .expect("canonical new-key possession message");
     let predecessor_authorization_signature =
         predecessor_key.sign(&authorization_message).to_bytes();
@@ -637,7 +637,7 @@ fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
     assert_eq!(
         validate_moderation_panel_notification_source_attestation_for_broker_v1(
             &fixture.source_attestation,
-            &fixture.chain_id,
+            &fixture.network_id,
             &fixture.checkpoint_handle,
             fixture.checkpoint_qualification,
             fixture.checkpoint_attestation_public_key,
@@ -697,7 +697,7 @@ fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
         assert_eq!(
             validate_moderation_panel_notification_source_attestation_for_broker_v1(
                 &substituted_source,
-                &fixture.chain_id,
+                &fixture.network_id,
                 &fixture.checkpoint_handle,
                 fixture.checkpoint_qualification,
                 fixture.checkpoint_attestation_public_key,

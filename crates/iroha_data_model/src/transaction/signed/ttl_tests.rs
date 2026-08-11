@@ -9,14 +9,14 @@ fn checked_random_keypair() -> iroha_crypto::KeyPair {
 
 #[test]
 fn zero_ttl_is_rejected_before_signing() {
-    let chain: ChainId = "test-chain".parse().unwrap();
+    let network_id = test_network_id(0x2A);
     let private_key: iroha_crypto::PrivateKey =
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .unwrap();
     let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
     let mut builder = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -32,7 +32,7 @@ fn builder_assigns_a_signature_bound_default_ttl() {
     let key_pair = checked_random_keypair();
     let authority = AccountId::new(key_pair.public_key().clone());
     let tx = TransactionBuilder::new(
-        "default-ttl-chain".parse().expect("chain id"),
+        test_network_id(0x33),
         authority,
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -46,7 +46,7 @@ fn signing_workflows_reject_payloads_without_ttl() {
     let key_pair = checked_random_keypair();
     let authority = AccountId::new(key_pair.public_key().clone());
     let mut payload = TransactionBuilder::new(
-        "missing-ttl-chain".parse().expect("chain id"),
+        test_network_id(0x34),
         authority,
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -70,7 +70,7 @@ fn signing_workflows_reject_payloads_without_ttl() {
 
 #[test]
 fn ingress_metadata_accessors_read_numeric_values() {
-    let chain: ChainId = "ingress-chain".parse().unwrap();
+    let network_id = test_network_id(0x2B);
     let keypair = checked_random_keypair();
     let _domain: crate::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::new(keypair.public_key().clone());
@@ -86,7 +86,7 @@ fn ingress_metadata_accessors_read_numeric_values() {
     );
 
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -99,7 +99,7 @@ fn ingress_metadata_accessors_read_numeric_values() {
 
 #[test]
 fn ingress_metadata_accessors_propagate_decode_error() {
-    let chain: ChainId = "ingress-chain-invalid".parse().unwrap();
+    let network_id = test_network_id(0x2C);
     let keypair = checked_random_keypair();
     let _domain: crate::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::new(keypair.public_key().clone());
@@ -111,7 +111,7 @@ fn ingress_metadata_accessors_propagate_decode_error() {
     );
 
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

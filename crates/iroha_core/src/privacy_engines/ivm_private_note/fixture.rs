@@ -3,6 +3,7 @@
 use std::str::FromStr as _;
 
 use iroha_data_model::{
+    NetworkId,
     asset::AssetDefinitionId,
     domain::DomainId,
     privacy::{
@@ -42,9 +43,11 @@ fn context_from_compiled_profile_v1(
     profile: &CompiledPrivacyProfileV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: "taira-private-note-release-v1"
-            .parse()
-            .expect("fixed release chain id is canonical"),
+        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xC1; 32])
+        )),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(bytes(0x31)),
         parameter_id: profile.parameter_id,

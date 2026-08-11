@@ -199,9 +199,8 @@ pub use ivm::encode_argument_record_from_json;
 pub fn validate_genesis_block(
     block: &iroha_data_model::block::SignedBlock,
     genesis_account: &iroha_data_model::account::AccountId,
-    expected_chain_id: &iroha_data_model::ChainId,
 ) -> Result<(), block::InvalidGenesisError> {
-    block::check_genesis_block(block, genesis_account, expected_chain_id)
+    block::check_genesis_block(block, genesis_account)
 }
 
 #[cfg(test)]
@@ -1000,7 +999,7 @@ mod tests {
     use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
     use iroha_data_model::transaction::TransactionBuilder;
-    use iroha_data_model::{ChainId, Level, isi::Log};
+    use iroha_data_model::{Level, NetworkId, isi::Log};
     use iroha_p2p::{
         ClassifyTopic,
         network::message::{SubscriberRoute, Topic as NetworkTopic},
@@ -1038,6 +1037,12 @@ mod tests {
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
     };
+
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
 
     fn checked_topic_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked network topic keypair")
@@ -1101,7 +1106,10 @@ mod tests {
 
     #[test]
     fn trust_gossip_classifies_to_trust_topic() {
-        let gossip = PeerTrustGossip { trust: Vec::new() };
+        let gossip = PeerTrustGossip {
+            network_id: test_network_id(b"trust-gossip-topic"),
+            trust: Vec::new(),
+        };
         let msg = NetworkMessage::PeerTrustGossip(Box::new(gossip));
 
         assert!(matches!(
@@ -1127,7 +1135,10 @@ mod tests {
                 SubscriberRoute::General,
             ),
             (
-                NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip { trust: Vec::new() })),
+                NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip {
+                    network_id: test_network_id(b"trust-gossip-wire-tag"),
+                    trust: Vec::new(),
+                })),
                 10,
                 NetworkTopic::TrustGossip,
                 SubscriberRoute::General,
@@ -1372,7 +1383,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"lane-drain-network-chain"),
+                network_id: test_network_id(b"lane-drain-network-genesis"),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"lane-drain-network-incarnation"),
@@ -1453,7 +1464,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"maximum-lane-drain-network-chain"),
+                network_id: test_network_id(b"maximum-lane-drain-network-genesis"),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"maximum-lane-drain-network-incarnation"),
@@ -1535,7 +1546,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"excess-lane-drain-network-chain"),
+                    network_id: test_network_id(b"excess-lane-drain-network-genesis"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"excess-lane-drain-network-incarnation"),
@@ -1627,7 +1638,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"oversized-lane-drain-network-chain"),
+                    network_id: test_network_id(b"oversized-lane-drain-network-genesis"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"oversized-lane-drain-network-incarnation"),
@@ -2098,7 +2109,7 @@ mod tests {
             .expect("generate BLS-normal Kura replica keeper key");
         let mut advert = KuraReplicaAdvertV1 {
             version: KURA_REPLICA_ADVERT_VERSION_V1,
-            chain_id: ChainId::from("network-kura-replica-advert-test"),
+            network_id: test_network_id(b"network-kura-replica-advert-test"),
             height: 9,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
             executed_block_wire_len: 2048,
@@ -2354,11 +2365,9 @@ mod tests {
     #[test]
     fn network_message_roundtrip_cached_transaction_gossip() {
         let (account, keypair) = gen_account_in("wonderland");
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = test_network_id(b"cached-transaction-gossip");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -2410,11 +2419,9 @@ mod tests {
     #[test]
     fn network_message_roundtrip_cached_transaction_gossip_is_context_free() {
         let (account, keypair) = gen_account_in("wonderland");
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = test_network_id(b"context-free-cached-transaction-gossip");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

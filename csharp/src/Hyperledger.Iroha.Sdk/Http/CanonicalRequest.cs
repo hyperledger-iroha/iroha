@@ -9,8 +9,10 @@ namespace Hyperledger.Iroha.Http;
 public static partial class CanonicalRequest
 {
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+    private static readonly byte[] NetworkDomain = Encoding.UTF8.GetBytes("iroha.app.request.network.v1\0");
 
     public static CanonicalRequestHeaders BuildHeaders(
+        NetworkId networkId,
         string accountId,
         ReadOnlySpan<byte> privateKeySeed,
         string method,
@@ -20,6 +22,7 @@ public static partial class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
+        ArgumentNullException.ThrowIfNull(networkId);
         var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
         var canonicalAccountId = RequireCanonicalAccountId(exactAccountId, nameof(accountId));
         var exactMethod = RequireHttpMethodToken(method, nameof(method));
@@ -31,7 +34,7 @@ public static partial class CanonicalRequest
         var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));
         effectiveNonce = RequireCanonicalNonce(effectiveNonce, nameof(nonce));
         EnsureAccountMatchesPrivateKey(canonicalAccountId, privateKeySeed, nameof(accountId));
-        var message = BuildSignatureMessage(exactMethod, exactPath, query, body, effectiveTimestamp, effectiveNonce);
+        var message = BuildSignatureMessage(networkId, exactMethod, exactPath, query, body, effectiveTimestamp, effectiveNonce);
         var signature = Ed25519Signer.Sign(message, privateKeySeed);
         return new CanonicalRequestHeaders(
             canonicalAccountId,
@@ -91,12 +94,22 @@ public static partial class CanonicalRequest
     {
         var checkedMethod = RequireHttpMethodToken(method, nameof(method));
         var checkedPath = RequireRootRelativePath(path, nameof(path));
+        return BuildMessageForExactPath(checkedMethod, checkedPath, query, body);
+    }
+
+    private static byte[] BuildMessageForExactPath(
+        string exactMethod,
+        string exactPath,
+        string? query,
+        ReadOnlySpan<byte> body)
+    {
         var bodyHash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
         var canonicalQuery = BuildCanonicalQueryString(query);
-        return Encoding.UTF8.GetBytes($"{checkedMethod.ToUpperInvariant()}\n{checkedPath}\n{canonicalQuery}\n{bodyHash}");
+        return Encoding.UTF8.GetBytes($"{exactMethod.ToUpperInvariant()}\n{exactPath}\n{canonicalQuery}\n{bodyHash}");
     }
 
     public static byte[] BuildSignatureMessage(
+        NetworkId networkId,
         string method,
         string path,
         string? query = null,
@@ -104,11 +117,43 @@ public static partial class CanonicalRequest
         long timestampMs = 0,
         string? nonce = null)
     {
+        ArgumentNullException.ThrowIfNull(networkId);
         var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));
         exactNonce = RequireCanonicalNonce(exactNonce, nameof(nonce));
         var exactTimestamp = RequirePositiveTimestamp(timestampMs, nameof(timestampMs));
-        var baseMessage = Encoding.UTF8.GetString(BuildMessage(method, path, query, body));
-        return Encoding.UTF8.GetBytes($"{baseMessage}\n{exactTimestamp}\n{exactNonce}");
+        var exactMethod = RequireHttpMethodToken(method, nameof(method));
+        var exactPath = RequireRootRelativePath(path, nameof(path));
+        return BuildSignatureMessageForExactPath(
+            networkId,
+            exactMethod,
+            exactPath,
+            query,
+            body,
+            exactTimestamp,
+            exactNonce);
+    }
+
+    internal static byte[] BuildSignatureMessageForExactPath(
+        NetworkId networkId,
+        string exactMethod,
+        string exactPath,
+        string? query,
+        ReadOnlySpan<byte> body,
+        long exactTimestamp,
+        string exactNonce)
+    {
+        var baseMessage = BuildMessageForExactPath(exactMethod, exactPath, query, body);
+        var suffix = Encoding.UTF8.GetBytes($"\n{exactTimestamp}\n{exactNonce}");
+        var message = new byte[checked(NetworkDomain.Length + NetworkId.ByteLength + baseMessage.Length + suffix.Length)];
+        var offset = 0;
+        NetworkDomain.CopyTo(message, offset);
+        offset += NetworkDomain.Length;
+        networkId.AsSpan().CopyTo(message.AsSpan(offset, NetworkId.ByteLength));
+        offset += NetworkId.ByteLength;
+        baseMessage.CopyTo(message, offset);
+        offset += baseMessage.Length;
+        suffix.CopyTo(message, offset);
+        return message;
     }
 
     internal static string RequireExactNonBlank(string? value, string paramName)

@@ -22,7 +22,7 @@ class DockerEntrypointTest(unittest.TestCase):
         self.temp_path = Path(self._tempdir.name)
         self.bin_dir = self.temp_path / "bin"
         self.bin_dir.mkdir()
-        self.irohad_path = self.bin_dir / "irohad"
+        self.irohad_path = self.bin_dir / "iroha3d"
         self.irohad_path.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$0\" \"$@\"\n",
@@ -43,7 +43,7 @@ class DockerEntrypointTest(unittest.TestCase):
             check=False,
         )
 
-    def test_defaults_to_plain_irohad_for_non_taira_profiles(self) -> None:
+    def test_defaults_to_plain_iroha3d_for_non_taira_profiles(self) -> None:
         result = self._run()
 
         self.assertEqual(result.returncode, 0)

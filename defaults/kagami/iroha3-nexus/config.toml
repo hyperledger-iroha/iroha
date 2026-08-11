@@ -1,9 +1,9 @@
 # Sample config for iroha3-nexus (generated via cargo xtask kagami-profiles)
 chain = "iroha3-nexus"
 public_key = "ea0130B48BDF428DF3CCCA7347BD63FB81812CA09315AF56E867117236984D8F80477F8D909C9B1771032F04009AC96536FAC0"
-private_key = "8926203055AFC84A56C6B5E2D96A7FD8C716D5EA602E01D3C08BB95FB829E234F66216"
+private_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-validator-private-key"
 soranet_transport_public_key = "ed01201F60DE7C82F77FF1EA9AA2DFC60166A0DF904A771DCBFF36186EFAE8AC8324D3"
-soranet_transport_private_key = "802620720B9507E31A382E02FF4523D0E22071E19D39974C9AE907492EEAE616F23E15"
+soranet_transport_private_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-soranet-private-key"
 
 trusted_peers = [
   "ea0130B48BDF428DF3CCCA7347BD63FB81812CA09315AF56E867117236984D8F80477F8D909C9B1771032F04009AC96536FAC0@127.0.0.1:1337",
@@ -28,7 +28,7 @@ max_content_len = 64_000_000
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
-identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
+identity_private_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-streaming-private-key"
 
 [nexus]
 enabled = true
@@ -36,4 +36,4 @@ lane_count = 3
 
 [genesis]
 public_key = "ed012065D3D00819052AB4D41FD6D168D1F59BE9CE384591383F7762F99C5F9C7A9B11"
-expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+expected_hash_file = "/run/iroha/genesis.expected_hash"

@@ -4,7 +4,7 @@ use std::fmt;
 
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     transaction::{SignedTransaction, TransactionEntrypoint},
@@ -27,52 +27,53 @@ pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
 /// Schema version for peer-to-peer publication of a certified QueuePlan admission.
 pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
 
-const QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2: &[u8] = b"iroha:torii:queue-plan-admission-chain:v2\0";
+const QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V2: &[u8] =
+    b"iroha:torii:queue-plan-admission-network:v2\0";
 const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
     b"iroha:torii:queue-plan-admission-binding:v2\0";
 const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2: &[u8] =
     b"iroha:torii:queue-plan-admission-attestation:v2\0";
 const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5: &str = "torii:proxy:queue-plan-synced:v5";
 
-/// Return the chain identity carried by every QueuePlan admission binding.
+/// Return the exact network identity carried by every QueuePlan admission binding.
 #[must_use]
-pub fn queue_plan_admission_chain_id_digest(chain_id: &ChainId) -> Hash {
+pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
     Hash::new_from_chunks(&[
-        QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2,
-        chain_id.as_str().as_bytes(),
+        QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V2,
+        network_id.as_bytes(),
     ])
 }
 
 /// Derive the deterministic QueuePlanSynced request identity shared by every ingress.
 ///
 /// This pure kernel deliberately excludes connection/session identity. Every responsive ingress
-/// therefore presents the same semantic request identity for one chain and entrypoint while
+/// therefore presents the same semantic request identity for one network and entrypoint while
 /// retaining its own process-local reply route.
 #[must_use]
 pub fn queue_plan_synced_request_id(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    queue_plan_synced_request_id_from_chain_digest(
-        queue_plan_admission_chain_id_digest(chain_id),
+    queue_plan_synced_request_id_from_network_digest(
+        queue_plan_admission_network_id_digest(network_id),
         entrypoint_hash,
     )
 }
 
 /// Derive the deterministic QueuePlanSynced request identity from its durable projection.
 ///
-/// Binding the request to the persisted chain digest lets journal replay and certificate
-/// validation recompute the same semantic identity without recovering or trusting a raw chain
-/// string. Delivery ordinals and connection tenures remain deliberately excluded.
+/// Binding the request to the persisted network digest lets journal replay and certificate
+/// validation recompute the same semantic identity without trusting a human-readable chain
+/// label. Delivery ordinals and connection tenures remain deliberately excluded.
 #[must_use]
-pub fn queue_plan_synced_request_id_from_chain_digest(
-    chain_id_digest: Hash,
+pub fn queue_plan_synced_request_id_from_network_digest(
+    network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
     Hash::new(
         norito::encode_canonical(&(
             QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash,
         ))
         .expect("deterministic QueuePlanSynced request identity must encode"),
@@ -84,8 +85,8 @@ pub fn queue_plan_synced_request_id_from_chain_digest(
 pub struct QueuePlanAdmissionRegistryKeyV2 {
     /// Registry-key layout version.
     pub version: u16,
-    /// Chain that owns the entrypoint.
-    pub chain_id_digest: Hash,
+    /// Exact network that owns the entrypoint.
+    pub network_id_digest: Hash,
     /// Typed canonical transaction-entrypoint identity.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
@@ -103,14 +104,14 @@ pub struct QueuePlanAdmissionRegistryValueV2 {
 ///
 /// The complete context carries ordered rosters for every coordinator/participant leg. The
 /// journal digest covers the exact transaction wire, routing plan, context, canonical ingress
-/// timestamp, chain digest, and deterministic request identity. Authorities never substitute a
+/// timestamp, network digest, and deterministic request identity. Authorities never substitute a
 /// locally sampled timestamp or independently reconstructed claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionBindingV2 {
     /// Binding layout version.
     pub version: u16,
-    /// Domain-separated chain identity.
-    pub chain_id_digest: Hash,
+    /// Domain-separated exact network identity.
+    pub network_id_digest: Hash,
     /// Deterministic QueuePlanSynced proxy request identity.
     pub request_id: Hash,
     /// Typed canonical transaction-entrypoint identity.
@@ -138,19 +139,19 @@ impl QueuePlanAdmissionBindingV2 {
     /// Returns an error when the supplied context is not canonical for the routing plan or the
     /// exact version-4 journal record cannot be encoded.
     pub fn new(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         transaction: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
         admission_context: crate::queue::QueuePlanAdmissionContextV2,
         enqueue_timestamp_ms: u64,
     ) -> Result<Self, String> {
         admission_context.validate_for_routing_plan(routing_plan)?;
-        let chain_id_digest = queue_plan_admission_chain_id_digest(chain_id);
+        let network_id_digest = queue_plan_admission_network_id_digest(network_id);
         let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
             version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-            chain_id_digest,
-            request_id: queue_plan_synced_request_id_from_chain_digest(
-                chain_id_digest,
+            network_id_digest,
+            request_id: queue_plan_synced_request_id_from_network_digest(
+                network_id_digest,
                 transaction.hash(),
             ),
         };
@@ -164,7 +165,7 @@ impl QueuePlanAdmissionBindingV2 {
         .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
         Ok(Self {
             version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest: global_admission_identity.chain_id_digest,
+            network_id_digest: global_admission_identity.network_id_digest,
             request_id: global_admission_identity.request_id,
             entrypoint_hash: transaction.hash(),
             signed_transaction_hash: signed_transaction_hash(transaction),
@@ -197,7 +198,7 @@ impl QueuePlanAdmissionBindingV2 {
         }
         let binding = Self {
             version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest: identity.chain_id_digest,
+            network_id_digest: identity.network_id_digest,
             request_id: identity.request_id,
             entrypoint_hash: durable.entrypoint_hash.clone(),
             signed_transaction_hash: durable.signed_transaction_hash.clone(),
@@ -217,7 +218,7 @@ impl QueuePlanAdmissionBindingV2 {
     pub fn global_admission_identity(&self) -> crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
         crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
             version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-            chain_id_digest: self.chain_id_digest,
+            network_id_digest: self.network_id_digest,
             request_id: self.request_id,
         }
     }
@@ -245,15 +246,15 @@ impl QueuePlanAdmissionBindingV2 {
         if self.version != QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2 {
             return Err("QueuePlan admission-binding version is unsupported".to_owned());
         }
-        if self.chain_id_digest == Hash::prehashed([0; Hash::LENGTH])
+        if self.network_id_digest == Hash::prehashed([0; Hash::LENGTH])
             || self.request_id == Hash::prehashed([0; Hash::LENGTH])
             || self.journal_record_digest == Hash::prehashed([0; Hash::LENGTH])
         {
             return Err("QueuePlan admission binding contains a zero identity hash".to_owned());
         }
         if self.request_id
-            != queue_plan_synced_request_id_from_chain_digest(
-                self.chain_id_digest,
+            != queue_plan_synced_request_id_from_network_digest(
+                self.network_id_digest,
                 self.entrypoint_hash.clone(),
             )
         {
@@ -277,18 +278,18 @@ impl QueuePlanAdmissionBindingV2 {
     /// Validate this binding against the exact request transaction and routing plan.
     ///
     /// # Errors
-    /// Returns an error when any typed transaction identity, plan/context field, chain identity,
+    /// Returns an error when any typed transaction identity, plan/context field, network identity,
     /// or canonical version-4 journal-record digest differs.
     pub fn validate_for_request(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         transaction: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
     ) -> Result<(), String> {
-        if self.chain_id_digest != queue_plan_admission_chain_id_digest(chain_id) {
-            return Err("QueuePlan admission binding belongs to another chain".to_owned());
+        if self.network_id_digest != queue_plan_admission_network_id_digest(network_id) {
+            return Err("QueuePlan admission binding belongs to another network".to_owned());
         }
-        if self.request_id != queue_plan_synced_request_id(chain_id, transaction.hash()) {
+        if self.request_id != queue_plan_synced_request_id(network_id, transaction.hash()) {
             return Err(
                 "QueuePlan admission binding has a noncanonical semantic request identity"
                     .to_owned(),
@@ -403,7 +404,7 @@ impl QueuePlanAdmissionBindingV2 {
     pub fn registry_key(&self) -> QueuePlanAdmissionRegistryKeyV2 {
         QueuePlanAdmissionRegistryKeyV2 {
             version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            chain_id_digest: self.chain_id_digest,
+            network_id_digest: self.network_id_digest,
             entrypoint_hash: self.entrypoint_hash.clone(),
         }
     }
@@ -519,29 +520,29 @@ pub fn queue_plan_admission_attestation_signing_bytes_v2(
 /// Validate one already-decoded QueuePlan admission certificate.
 ///
 /// # Errors
-/// Returns the first structural, chain, roster, threshold, ordering, or signature failure.
+/// Returns the first structural, network, roster, threshold, ordering, or signature failure.
 pub fn validate_queue_plan_admission_certificate_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     certificate: QueuePlanAdmissionCertificateV2,
     strength: QueuePlanAdmissionCertificateStrengthV2,
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
-    validate_queue_plan_admission_certificate_for_chain_digest_v2(
-        queue_plan_admission_chain_id_digest(chain_id),
+    validate_queue_plan_admission_certificate_for_network_digest_v2(
+        queue_plan_admission_network_id_digest(network_id),
         certificate,
         strength,
     )
 }
 
-/// Validate a QueuePlan certificate against a caller-authenticated chain digest.
+/// Validate a QueuePlan certificate against a caller-authenticated exact-network digest.
 ///
-/// Torii uses this after validating the request binding against its local chain and exact
+/// Torii uses this after validating the request binding against its local network and exact
 /// transaction. Consensus-facing callers should prefer
-/// [`validate_queue_plan_admission_certificate_v2`] with a trusted [`ChainId`].
+/// [`validate_queue_plan_admission_certificate_v2`] with a trusted [`NetworkId`].
 ///
 /// # Errors
-/// Returns the first structural, chain, roster, threshold, ordering, or signature failure.
-pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(
-    expected_chain_id_digest: Hash,
+/// Returns the first structural, network, roster, threshold, ordering, or signature failure.
+pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
+    expected_network_id_digest: Hash,
     certificate: QueuePlanAdmissionCertificateV2,
     strength: QueuePlanAdmissionCertificateStrengthV2,
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
@@ -549,8 +550,8 @@ pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(
         return Err("QueuePlan admission-certificate version is unsupported".to_owned());
     }
     certificate.binding.validate_structure()?;
-    if certificate.binding.chain_id_digest != expected_chain_id_digest {
-        return Err("QueuePlan admission certificate belongs to another chain".to_owned());
+    if certificate.binding.network_id_digest != expected_network_id_digest {
+        return Err("QueuePlan admission certificate belongs to another network".to_owned());
     }
     let routing_plan = certificate.binding.routing_plan()?;
     let coordinator = certificate
@@ -620,9 +621,9 @@ pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(
 ///
 /// # Errors
 /// Returns an error for an empty/oversized body, bounded-decode failure, noncanonical Norito
-/// bytes, or any structural, chain, quorum, roster, ordering, or signature mismatch.
+/// bytes, or any structural, network, quorum, roster, ordering, or signature mismatch.
 pub fn decode_and_validate_queue_plan_admission_certificate_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     bytes: &[u8],
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
     let max_bytes = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
@@ -642,7 +643,7 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v2(
     )
     .map_err(|error| format!("QueuePlan admission certificate cannot be decoded: {error}"))?;
     validate_queue_plan_admission_certificate_v2(
-        chain_id,
+        network_id,
         certificate,
         QueuePlanAdmissionCertificateStrengthV2::Quorum,
     )
@@ -1442,6 +1443,12 @@ mod tests {
 
     const LEGACY_TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
 
+    fn torii_proxy_test_network_id(seed: &[u8]) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
+        )
+    }
+
     /// Frozen test-only copy of the checked-in V2 Submit body.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     enum HistoricalToriiProxyRequestKindV1 {
@@ -1529,20 +1536,28 @@ mod tests {
     }
 
     #[test]
-    fn queue_plan_synced_request_identity_is_semantic_and_source_bound() {
-        let chain_a: ChainId = "queue-plan-request-chain-a".parse().expect("parse chain A");
-        let chain_b: ChainId = "queue-plan-request-chain-b".parse().expect("parse chain B");
+    fn queue_plan_synced_request_identity_is_semantic_and_exact_network_bound() {
+        let shared_chain_label = "queue-plan-request-chain";
+        let chain_a: iroha_data_model::ChainId = shared_chain_label
+            .parse()
+            .expect("parse shared chain label");
+        let chain_b: iroha_data_model::ChainId = shared_chain_label
+            .parse()
+            .expect("parse shared chain label");
+        assert_eq!(chain_a, chain_b);
+        let network_a = torii_proxy_test_network_id(b"queue-plan-genesis-a");
+        let network_b = torii_proxy_test_network_id(b"queue-plan-genesis-b");
         let entrypoint_a = HashOf::from_untyped_unchecked(Hash::new(b"queue-plan-entrypoint-a"));
         let entrypoint_b = HashOf::from_untyped_unchecked(Hash::new(b"queue-plan-entrypoint-b"));
-        let chain_a_digest = queue_plan_admission_chain_id_digest(&chain_a);
+        let network_a_digest = queue_plan_admission_network_id_digest(&network_a);
 
-        let request = queue_plan_synced_request_id(&chain_a, entrypoint_a.clone());
+        let request = queue_plan_synced_request_id(&network_a, entrypoint_a.clone());
         assert_eq!(
             request,
             Hash::new(
                 norito::encode_canonical(&(
                     "torii:proxy:queue-plan-synced:v5",
-                    chain_a_digest,
+                    network_a_digest,
                     entrypoint_a.clone(),
                 ))
                 .expect("encode frozen request projection")
@@ -1551,29 +1566,33 @@ mod tests {
         );
         assert_eq!(
             request,
-            queue_plan_synced_request_id_from_chain_digest(chain_a_digest, entrypoint_a.clone(),),
-            "the raw-chain wrapper and durable replay kernel must be identical"
+            queue_plan_synced_request_id_from_network_digest(
+                network_a_digest,
+                entrypoint_a.clone(),
+            ),
+            "the typed-network wrapper and durable replay kernel must be identical"
         );
         assert_eq!(
             request,
-            queue_plan_synced_request_id(&chain_a, entrypoint_a.clone()),
+            queue_plan_synced_request_id(&network_a, entrypoint_a.clone()),
             "connection tenure and delivery ordinal are intentionally absent"
         );
         assert_ne!(
             request,
-            queue_plan_synced_request_id(&chain_b, entrypoint_b.clone())
+            queue_plan_synced_request_id(&network_b, entrypoint_a.clone()),
+            "the same human chain label `{shared_chain_label}` must not collapse distinct genesis lineages"
         );
         assert_ne!(
             request,
-            queue_plan_synced_request_id(&chain_a, entrypoint_b)
+            queue_plan_synced_request_id(&network_a, entrypoint_b)
         );
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             assert_eq!(
-                queue_plan_synced_request_id_from_chain_digest(
-                    chain_a_digest,
+                queue_plan_synced_request_id_from_network_digest(
+                    network_a_digest,
                     entrypoint_a.clone()
                 ),
                 request,
@@ -1607,22 +1626,20 @@ mod tests {
     }
 
     fn single_route_admission_fixture() -> (
-        ChainId,
+        NetworkId,
         TransactionEntrypoint,
         RoutingPlan,
         QueuePlanAdmissionBindingV2,
         iroha_crypto::KeyPair,
     ) {
-        let chain_id: ChainId = "queue-plan-semantic-certificate"
-            .parse()
-            .expect("fixture chain id");
+        let network_id = torii_proxy_test_network_id(b"queue-plan-semantic-certificate");
         let transaction_signer =
             iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
         let validator =
             iroha_crypto::KeyPair::from_seed(vec![0x72; 32], iroha_crypto::Algorithm::Ed25519);
         let transaction = TransactionEntrypoint::External(
             iroha_data_model::transaction::TransactionBuilder::new(
-                chain_id.clone(),
+                torii_proxy_test_network_id(b"queue-plan-semantic-certificate"),
                 iroha_data_model::account::AccountId::new(transaction_signer.public_key().clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1649,14 +1666,14 @@ mod tests {
             }],
         };
         let binding =
-            QueuePlanAdmissionBindingV2::new(&chain_id, &transaction, &routing_plan, context, 73)
+            QueuePlanAdmissionBindingV2::new(&network_id, &transaction, &routing_plan, context, 73)
                 .expect("construct canonical admission binding");
-        (chain_id, transaction, routing_plan, binding, validator)
+        (network_id, transaction, routing_plan, binding, validator)
     }
 
     #[test]
     fn lane_reservation_commit_separates_admission_and_reservation_heights() {
-        let (chain_id, transaction, routing_plan, binding, _) = single_route_admission_fixture();
+        let (network_id, transaction, routing_plan, binding, _) = single_route_admission_fixture();
         let coordinator = binding
             .admission_context
             .route_incarnations
@@ -1714,7 +1731,7 @@ mod tests {
             Hash::new(b"height-one committed predecessor"),
         ));
         let height_two_binding = QueuePlanAdmissionBindingV2::new(
-            &chain_id,
+            &network_id,
             &transaction,
             &routing_plan,
             height_two_context,
@@ -1735,7 +1752,7 @@ mod tests {
 
     #[test]
     fn queue_plan_certificate_rejects_noncanonical_semantic_request_identity() {
-        let (chain_id, transaction, routing_plan, mut forged, validator) =
+        let (network_id, transaction, routing_plan, mut forged, validator) =
             single_route_admission_fixture();
         forged.request_id = Hash::new(b"forged self-consistent certificate request identity");
         forged.journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
@@ -1761,7 +1778,7 @@ mod tests {
         };
 
         let error = validate_queue_plan_admission_certificate_v2(
-            &chain_id,
+            &network_id,
             certificate,
             QueuePlanAdmissionCertificateStrengthV2::Quorum,
         )
@@ -1773,8 +1790,52 @@ mod tests {
     }
 
     #[test]
+    fn queue_plan_certificate_rejects_same_label_different_genesis() {
+        let shared_chain_label = "queue-plan-shared-label";
+        let chain_a: iroha_data_model::ChainId = shared_chain_label
+            .parse()
+            .expect("parse shared chain label");
+        let chain_b: iroha_data_model::ChainId = shared_chain_label
+            .parse()
+            .expect("parse shared chain label");
+        assert_eq!(chain_a, chain_b);
+        let (network_a, _, _, binding, validator) = single_route_admission_fixture();
+        let signing_bytes =
+            queue_plan_admission_attestation_signing_bytes_v2(binding.canonical_hash(), 0)
+                .expect("encode exact-network attestation preimage");
+        let certificate = QueuePlanAdmissionCertificateV2 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding,
+            attestations: vec![QueuePlanAdmissionAttestationV2 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                validator_index: 0,
+                signature: Signature::try_new(validator.private_key(), &signing_bytes)
+                    .expect("sign exact-network admission certificate"),
+            }],
+        };
+        validate_queue_plan_admission_certificate_v2(
+            &network_a,
+            certificate.clone(),
+            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        )
+        .expect("certificate validates on its exact genesis lineage");
+
+        let network_b = torii_proxy_test_network_id(b"queue-plan-different-genesis");
+        let error = validate_queue_plan_admission_certificate_v2(
+            &network_b,
+            certificate,
+            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        )
+        .expect_err("a same-label deployment with another genesis must be rejected");
+        assert!(
+            error.contains("another network"),
+            "shared label `{shared_chain_label}` did not weaken exact-network rejection: {error}"
+        );
+    }
+
+    #[test]
     fn queue_plan_certificate_boundary_is_canonical_and_ambient_independent() {
-        let (chain_id, _, _, binding, validator) = single_route_admission_fixture();
+        let (network_id, _, _, binding, validator) = single_route_admission_fixture();
         let binding_hash = binding.canonical_hash();
         let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
             .expect("encode canonical attestation preimage");
@@ -1790,8 +1851,10 @@ mod tests {
         };
         let canonical =
             norito::encode_canonical(&certificate).expect("encode canonical admission certificate");
-        decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &canonical)
-            .expect("canonical admission certificate validates");
+        let validated =
+            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &canonical)
+                .expect("canonical admission certificate validates");
+        assert_eq!(validated.certificate, certificate);
 
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -1804,7 +1867,8 @@ mod tests {
             "fixture must exercise a distinct non-canonical certificate layout"
         );
         assert!(
-            decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &alternate).is_err(),
+            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &alternate)
+                .is_err(),
             "alternate-layout certificate must fail closed"
         );
         {
@@ -1819,23 +1883,21 @@ mod tests {
                     .expect("encode attestation under alternate ambient layout"),
                 signing_bytes
             );
-            decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &canonical)
+            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &canonical)
                 .expect("canonical certificate must validate under alternate ambient layout");
         }
     }
 
     #[test]
     fn native_admission_binds_participants_but_uses_only_coordinator_quorum() {
-        let chain_id: ChainId = "queue-plan-native-coordinator-quorum"
-            .parse()
-            .expect("fixture chain id");
+        let network_id = torii_proxy_test_network_id(b"queue-plan-native-coordinator-quorum");
         let transaction_signer =
             iroha_crypto::KeyPair::from_seed(vec![0x81; 32], iroha_crypto::Algorithm::Ed25519);
         let authority =
             iroha_data_model::account::AccountId::new(transaction_signer.public_key().clone());
         let transaction = TransactionEntrypoint::External(
             iroha_data_model::transaction::TransactionBuilder::new(
-                chain_id.clone(),
+                torii_proxy_test_network_id(b"queue-plan-native-coordinator-quorum"),
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1892,7 +1954,7 @@ mod tests {
             ],
         };
         let binding =
-            QueuePlanAdmissionBindingV2::new(&chain_id, &transaction, &routing_plan, context, 42)
+            QueuePlanAdmissionBindingV2::new(&network_id, &transaction, &routing_plan, context, 42)
                 .expect("build Native admission binding");
         assert_eq!(
             binding.routing_plan().expect("bound Native routing plan"),
@@ -1921,7 +1983,7 @@ mod tests {
             ],
         };
         let validated = validate_queue_plan_admission_certificate_v2(
-            &chain_id,
+            &network_id,
             certificate,
             QueuePlanAdmissionCertificateStrengthV2::Quorum,
         )
@@ -1940,7 +2002,7 @@ mod tests {
         };
         assert!(
             validate_queue_plan_admission_certificate_v2(
-                &chain_id,
+                &network_id,
                 participant_certificate,
                 QueuePlanAdmissionCertificateStrengthV2::Quorum,
             )
@@ -1982,9 +2044,7 @@ mod tests {
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let mut transaction_builder =
             iroha_data_model::transaction::signed::TransactionBuilder::new(
-                "torii-proxy-historical-v2-fixture"
-                    .parse()
-                    .expect("fixture chain id"),
+                torii_proxy_test_network_id(b"torii-proxy-historical-v2-fixture"),
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );
@@ -2053,9 +2113,7 @@ mod tests {
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let mut transaction_builder =
             iroha_data_model::transaction::signed::TransactionBuilder::new(
-                "torii-proxy-legacy-v2-fixture"
-                    .parse()
-                    .expect("fixture chain id"),
+                torii_proxy_test_network_id(b"torii-proxy-legacy-v2-fixture"),
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );

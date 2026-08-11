@@ -91,6 +91,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
     "sumeragi_v2_proof_ledger_proof_token_contracts.py",
     "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_production_trace_contracts.py",
     "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
@@ -98,6 +99,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py",
     "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
     "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
+    "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
     "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
     "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
@@ -550,6 +552,11 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
+                "effective_statement",
+                "4f542c1949ad2238a13c599baca94a90b3335e50600f6768cf334e170476585c",
+                (("impl", "RuntimeBodyCompletionOwnershipPlan"),),
+            ),
+            (
                 "adopt_effect_ownership",
                 "03d9de88dcdb510052e797791d5f370165f9952bbaad534c95cc716d91ee1597",
                 (("impl", "RuntimeBodyCompletionOwnershipPlan"),),
@@ -557,26 +564,48 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             (
                 "resolve_body_pipeline_completion_owner",
                 "47191f99f15b1ea3bdbc648b8884f023f02d295f9e57b33190fbfe94944dcb33",
-                (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
+            ),
+            (
+                "prepare_body_pipeline_completion_refinements",
+                "1cf4f956048ad454f5cd84b1d2bc3141f48a1113c1a38c518ce62d569b02e691",
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
+            ),
+            (
+                "commit_prepared_body_pipeline_completion_refinements",
+                "0339237ec8560453ec59fdea44b59f5a87e91f5f91d8968d3c33b2d135ad6c50",
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
             ),
             (
                 "body_pipeline_candidate_terminal_ownership_plan",
                 "7f285b958484b7037ab2c0dc1cd30160b29a763bcf9faf7e327f531eb34252d6",
-                (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
             ),
             (
                 "plan_body_pipeline_candidate_terminal",
                 "12d5440c178b761624bccfdc447c70461b814870cc78a28a019b5ac8bd5fc9a3",
-                (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
             ),
             (
                 "commit_body_pipeline_candidate_terminals",
                 "28433a6147952cba9d1a73f8ab6898f44c0b9b8bfe1b1d776ff00bd4b13a2182",
-                (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
+                (
+                    ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+                ),
             ),
             (
                 "commit_body_pipeline_candidate_terminal",
-                "6c3a0f89f597d11398309326f54fc7eb986b31f98d7d8f809f3c5605b94e5538",
+                "0499de4c948e93a0d1b61a4ffefacc1a1ff0df2d8b9de34a18f4e5a6d6da7b2e",
                 (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
             ),
             (
@@ -848,7 +877,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "9f9d0352ea5921e9d081c0cc4775ed26676b0f213866870a681cf9d901d6aa98",
+    "effect_candidate_retain": "1e31788cecc9c7b9240ec50b1943f8db28ae206e2b5df3aca9aeefd054052695",
     "relay_retry": "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -863,8 +892,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "successor_retry": "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
     "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
-    # Refresh after atomic-reservation work stops touching v2_runner.rs.
-    "terminal_application": "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544",
+    "terminal_application": "be93d5b4fb78680ddab5a473fb2f54741dda8ef5d6a86e49003ec7e86e64cdc2",
 }
 
 
@@ -1257,6 +1285,36 @@ def _total_gate_call_sites(
                 token_consumptions=(
                     "let _authorized_application = checked_application.into_projection();",
                 ),
+                projection_bindings=((
+                    "let terminal_application = "
+                    "ProductionTerminalApplicationWithoutSuccessorActivationProjection {"
+                    "context_id: successor_context_refinement_projection(context.id()),"
+                    "context_height: context.height,"
+                    "receipt_context_id: successor_context_refinement_projection("
+                    "receipt.context_id()),"
+                    "receipt_height: receipt.height(),"
+                    "receipt_block_hash: successor_block_refinement_projection("
+                    "receipt.block_hash()),"
+                    "receipt_artifact_hash: CanonicalIdentityProjection::from_bytes("
+                    "IDENTITY_DOMAIN_DURABLE_ARTIFACT,"
+                    "IDENTITY_KIND_FINALITY_ARTIFACT,"
+                    "*receipt.artifact_hash().as_ref(),"
+                    "),"
+                    "artifact_context_id: successor_context_refinement_projection("
+                    "artifact.context_id()),"
+                    "artifact_height: artifact.height,"
+                    "artifact_block_hash: successor_block_refinement_projection("
+                    "artifact.block_hash),"
+                    "artifact_hash: CanonicalIdentityProjection::from_bytes("
+                    "IDENTITY_DOMAIN_DURABLE_ARTIFACT,"
+                    "IDENTITY_KIND_FINALITY_ARTIFACT,"
+                    "*artifact_hash.as_ref(),"
+                    "),"
+                    "predecessor: predecessor.refinement_projection(),"
+                    "pending_successor_activation_present: "
+                    "pending_successor_activation.is_some(),"
+                    "};"
+                ),),
                 mutation_boundaries=(
                     "let activation = PendingSuccessorConstruction::begin(predecessor)?;",
                 ),
@@ -2174,6 +2232,7 @@ _TLA_TOKEN_RE = re.compile(
 )
 
 _execute_checker_component("sumeragi_v2_proof_ledger_source_seal_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py")
 
 
 @lru_cache(maxsize=512)
@@ -2370,7 +2429,7 @@ def _adapter_step_has_synchronous_reducer_effect_dataflow(source: str) -> bool:
 
     tokens = rust_code_tokens(source)
     outcome = _token_sequence_positions(tokens, ("let", "outcome", "="))
-    reducer = _token_sequence_positions(tokens, rust_code_tokens("self.reducer.step(event)"))
+    reducer = _token_sequence_positions(tokens, rust_code_tokens("self.step_reducer(event)"))
     drive = _token_sequence_positions(
         tokens, rust_code_tokens("self.drive_effects(outcome.into_effects())")
     )
@@ -4258,6 +4317,20 @@ def _cross_tool_total_gate_promotion_contract_errors(
                     f"{call_site.source}!{call_site.item} must map every mutation "
                     "boundary to an exact checked-gate occurrence"
                 )
+            normalized_projection_bindings = tuple(
+                _normalized_rust_contract(expression)
+                for expression in call_site.projection_bindings
+            )
+            if (
+                any(not binding for binding in normalized_projection_bindings)
+                or len(set(normalized_projection_bindings))
+                != len(normalized_projection_bindings)
+            ):
+                errors.append(
+                    f"cross-tool claim {claim.constant} production call site "
+                    f"{call_site.source}!{call_site.item} has empty or duplicate "
+                    "projection bindings"
+                )
 
     for consumer in claim.linked_consumers:
         if (
@@ -5464,6 +5537,32 @@ def _rust_item_header_tokens(item: RustItem) -> tuple[str, ...]:
     return ()
 
 
+def _cross_tool_source_item_seal_document(
+    seal: CrossToolSourceItemSeal,
+    *,
+    item_token_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Return one source-item seal without adding empty optional fields."""
+
+    document: dict[str, Any] = {
+        "source": seal.source,
+        "item": seal.item,
+        "kind": seal.kind,
+        "brace_context": [list(header) for header in seal.brace_context],
+        "item_token_sha256": (
+            seal.item_token_sha256
+            if item_token_sha256 is None
+            else item_token_sha256
+        ),
+    }
+    if seal.required_expressions:
+        document["required_expressions"] = [
+            _normalized_rust_contract(expression)
+            for expression in seal.required_expressions
+        ]
+    return document
+
+
 def _cross_tool_claim_contract_document(
     claim: CrossToolClaimContract,
 ) -> dict[str, Any]:
@@ -5499,7 +5598,7 @@ def _cross_tool_claim_contract_document(
     def call_site_document(
         call_site: CrossToolProductionCallContract,
     ) -> dict[str, Any]:
-        return {
+        document = {
             "source": call_site.source,
             "item": call_site.item,
             "brace_context": [list(header) for header in call_site.brace_context],
@@ -5526,6 +5625,12 @@ def _cross_tool_claim_contract_document(
                 call_site.mutation_authorization_indices
             ),
         }
+        if call_site.projection_bindings:
+            document["projection_bindings"] = [
+                _normalized_rust_contract(expression)
+                for expression in call_site.projection_bindings
+            ]
+        return document
 
     return {
         "constant": claim.constant,
@@ -5614,13 +5719,7 @@ def _cross_tool_claim_contract_document(
             for kernel in claim.supplemental_kernels
         ],
         "source_item_seals": [
-            {
-                "source": seal.source,
-                "item": seal.item,
-                "kind": seal.kind,
-                "brace_context": [list(header) for header in seal.brace_context],
-                "item_token_sha256": seal.item_token_sha256,
-            }
+            _cross_tool_source_item_seal_document(seal)
             for seal in claim.source_item_seals
         ],
         "production_call_sites": [
@@ -5682,6 +5781,63 @@ def _verus_source_entry(
     return matching[0]
 
 
+def _validate_refinement_tag_value_macro(
+    source: str,
+    item: RustItem,
+    *,
+    path: Path,
+) -> None:
+    """Bind every numeric refinement-tag arm to its production constant."""
+
+    arm_matches = re.findall(
+        r"\(\s*([A-Z][A-Z0-9_]*)\s*\)\s*=>\s*"
+        r"\{\s*([0-9]+)u8\s*\}\s*;",
+        item.structural_source,
+    )
+    arm_names = tuple(name for name, _value in arm_matches)
+    if not arm_names or len(set(arm_names)) != len(arm_names):
+        raise ValueError(
+            f"cross-tool refinement-tag macro {path}!{item.name} must "
+            "contain one unique numeric arm per production tag"
+        )
+    structural = mask_rust_comments_and_literals(source)
+    constant_matches = re.findall(
+        r"(?m)^\s*(?:pub(?:\s*\(\s*crate\s*\))?\s+)?const\s+"
+        r"([A-Z][A-Z0-9_]*)\s*:\s*u8\s*=\s*([0-9]+)\s*;",
+        structural,
+    )
+    constants: dict[str, str] = {}
+    duplicate_constants: set[str] = set()
+    for name, value in constant_matches:
+        if name in constants:
+            duplicate_constants.add(name)
+        constants[name] = value
+    assertion_matches = re.findall(
+        r"assert_refinement_tag_values!\s*\((.*?)\)\s*;",
+        structural,
+        flags=re.DOTALL,
+    )
+    if len(assertion_matches) != 1:
+        raise ValueError(
+            f"cross-tool refinement-tag macro {path}!{item.name} must retain "
+            "one complete compile-time production-constant assertion"
+        )
+    asserted_names = tuple(
+        re.findall(r"\b[A-Z][A-Z0-9_]*\b", assertion_matches[0])
+    )
+    if asserted_names != arm_names:
+        raise ValueError(
+            f"cross-tool refinement-tag macro {path}!{item.name} arms must "
+            "exactly equal the ordered compile-time production-tag assertion"
+        )
+    for name, value in arm_matches:
+        if name in duplicate_constants or constants.get(name) != value:
+            raise ValueError(
+                f"cross-tool refinement-tag macro {path}!{item.name} arm "
+                f"{name} must equal its unique production u8 constant"
+            )
+
+
 def _shared_macro_payload(
     source: str,
     *,
@@ -5710,6 +5866,8 @@ def _shared_macro_payload(
                 f"cross-tool shared macro {path}!{name} may not be gated or "
                 "rewritten by attributes"
             )
+        if name == "refinement_tag_value":
+            _validate_refinement_tag_value_macro(source, item, path=path)
         observed_sha256 = _rust_item_token_sha256(item)
         if observed_sha256 != expected_sha256:
             raise ValueError(
@@ -5756,6 +5914,30 @@ def _cross_tool_source_item_seal_payload(
                 f"cross-tool source seal {seal.source}!{seal.item} is outside "
                 f"claim {claim.constant}'s declared source closure"
             )
+        normalized_required_expressions = tuple(
+            _normalized_rust_contract(expression)
+            for expression in seal.required_expressions
+        )
+        if seal.required_expressions and seal.kind != "item":
+            raise ValueError(
+                f"cross-tool source seal {seal.source}!{seal.item} may attach "
+                "required expressions only to a function item"
+            )
+        if any(
+            not rust_code_tokens(expression)
+            for expression in seal.required_expressions
+        ):
+            raise ValueError(
+                f"cross-tool source seal {seal.source}!{seal.item} has an "
+                "empty required expression"
+            )
+        if len(set(normalized_required_expressions)) != len(
+            normalized_required_expressions
+        ):
+            raise ValueError(
+                f"cross-tool source seal {seal.source}!{seal.item} repeats a "
+                "normalized required expression"
+            )
         path = root_dir / seal.source
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"cross-tool source seal is not a regular file: {path}")
@@ -5794,13 +5976,10 @@ def _cross_tool_source_item_seal_payload(
                     f"{observed_sha256}"
                 )
             payload.append(
-                {
-                    "source": seal.source,
-                    "item": seal.item,
-                    "kind": seal.kind,
-                    "brace_context": [],
-                    "item_token_sha256": observed_sha256,
-                }
+                _cross_tool_source_item_seal_document(
+                    seal,
+                    item_token_sha256=observed_sha256,
+                )
             )
             continue
         if seal.kind == "item":
@@ -5842,14 +6021,26 @@ def _cross_tool_source_item_seal_payload(
                 f"reviewed token seal {seal.item_token_sha256}; found "
                 f"{observed_sha256}"
             )
+        body_tokens = rust_code_tokens(item.body)
+        for expression, normalized in zip(
+            seal.required_expressions,
+            normalized_required_expressions,
+        ):
+            observed_count = _token_sequence_count(
+                body_tokens,
+                rust_code_tokens(expression),
+            )
+            if observed_count != 1:
+                raise ValueError(
+                    f"cross-tool source seal {seal.source}!{seal.item} must "
+                    "contain exact required expression "
+                    f"{normalized!r} once; found {observed_count}"
+                )
         payload.append(
-            {
-                "source": seal.source,
-                "item": seal.item,
-                "kind": seal.kind,
-                "brace_context": [list(header) for header in seal.brace_context],
-                "item_token_sha256": observed_sha256,
-            }
+            _cross_tool_source_item_seal_document(
+                seal,
+                item_token_sha256=observed_sha256,
+            )
         )
     return payload
 
@@ -6896,6 +7087,26 @@ def _cross_tool_total_call_site_payload(
             f"{call_site.item} must invoke {gate.name} exactly "
             f"{call_site.gate_call_count} time(s); found {generic_gate_count}"
         )
+    projection_binding_positions: list[int] = []
+    for expression in call_site.projection_bindings:
+        positions = _token_sequence_positions(
+            body_tokens, rust_code_tokens(expression)
+        )
+        if len(positions) != 1:
+            raise ValueError(
+                f"cross-tool total gate call site {call_site.source}!"
+                f"{call_site.item} must contain each exact projection binding "
+                f"once; {expression!r} occurred {len(positions)} time(s)"
+            )
+        projection_binding_positions.extend(positions)
+    if projection_binding_positions and any(
+        position >= gate_positions[0] for position in projection_binding_positions
+    ):
+        raise ValueError(
+            f"cross-tool total gate call site {call_site.source}!"
+            f"{call_site.item} must construct every reviewed projection binding "
+            "before acquiring checked authorization"
+        )
     direct_kernel_count = _token_sequence_count(
         body_tokens, (kernel_view.verified_kernel, "(")
     )
@@ -6984,7 +7195,7 @@ def _cross_tool_total_call_site_payload(
             "(item token seal) "
             f"{expected_seal}; found {observed_seal}"
         )
-    return {
+    payload = {
         "gate": gate.name,
         "source": call_site.source,
         "source_sha256": source_sha256,
@@ -7009,6 +7220,12 @@ def _cross_tool_total_call_site_payload(
         ],
         "mutation_authorization_indices": list(authorization_indices),
     }
+    if call_site.projection_bindings:
+        payload["projection_bindings"] = [
+            _normalized_rust_contract(expression)
+            for expression in call_site.projection_bindings
+        ]
+    return payload
 
 
 def _cross_tool_linked_consumer_payload(
@@ -15066,8 +15283,11 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"exactly {expected_count} uniquely named test functions; "
                 f"found {len(names)} functions and {len(set(names))} names"
             )
+        parsed_items: dict[str, list[RustItem]] = {}
+        for item in _rust_all_function_items(include_source):
+            parsed_items.setdefault(item.name, []).append(item)
         for name in names:
-            items = rust_items(include_source, name)
+            items = tuple(parsed_items.get(name, ()))
             if len(items) != 1:
                 errors.append(
                     f"{include_path}: included worker regression {name} must "
@@ -15351,7 +15571,19 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
             f"{path}: Serve ingress-ordinal production source must be a regular file"
         )
         return errors
+    path, authenticated_source = _read_reviewed_rust_source(
+        repo_root,
+        path.relative_to(repo_root).as_posix(),
+        errors,
+        "Serve ingress-ordinal production source",
+    )
+    if not authenticated_source:
+        return errors
+    # The authenticated closure above proves the exact parent/include graph.
+    # Parse production items from their owning provider so repeated item scans
+    # do not duplicate the complete expanded test corpus in memory.
     source = path.read_text(encoding="utf-8")
+    del authenticated_source
 
     for struct_name, expected_sha256 in (
         _SERVE_INGRESS_ORDINAL_STRUCT_SHA256.items()
@@ -15462,6 +15694,30 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
         errors,
     )
 
+    top_level_items = {
+        name: _require_rust_item(path, source, name, errors)
+        for name in (
+            "fair_v2_ingress_serve_selector_projection",
+            "fair_v2_ingress_leader_wire_selector_projection",
+            "fair_v2_ingress_queue_gate_verdict",
+        )
+    }
+    for name, item in top_level_items.items():
+        _require_rust_item_context(
+            path,
+            item,
+            (),
+            f"durable physical-carrier ingress projection {name}",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256[name],
+            f"durable physical-carrier ingress projection {name}",
+            errors,
+        )
+
     items = {
         name: _require_qualified_rust_item(
             path,
@@ -15484,6 +15740,10 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
                 "try_recv_if_at_checked_classified",
                 "durable physical-carrier ingress arbitration",
             ),
+            (
+                "dequeue_selected_locked",
+                "durable physical-carrier ingress retirement",
+            ),
         )
     }
     for name, item in items.items():
@@ -15498,6 +15758,9 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
                 "try_push_at": "atomic Serve ingress ordinal admission",
                 "try_recv_if_at_checked_classified": (
                     "durable physical-carrier ingress arbitration"
+                ),
+                "dequeue_selected_locked": (
+                    "durable physical-carrier ingress retirement"
                 ),
             }[name],
             errors,
@@ -15556,10 +15819,10 @@ let Some(carrier_admission_ordinal) = state.last_admission_ordinal.checked_add(1
         push,
         """
 state.last_admission_ordinal = admission_ordinal;
-inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(
-    occurrence,
-    leader_wire_token.clone(),
-));
+let ingress_ownership =
+    FairV2IngressOwnershipEvidence::new(occurrence, leader_wire_token.clone());
+let ownership_snapshot = Arc::new(ingress_ownership.clone());
+inbound.ingress_ownership = Some(ingress_ownership);
 """,
         "validated admission must commit the fresh physical carrier "
         "high-watermark exactly once while retaining logical leader identity",
@@ -15577,6 +15840,10 @@ lane.entries.push_back(FairV2IngressEntry {
     class,
     wire_key,
     leader_wire_token,
+    encoded_bytes: encoded,
+    encoded_len,
+    ownership_snapshot,
+});
 """,
         "the admitted queue occurrence must keep its fresh physical ordinal "
         "separate from the retained logical leader token",
@@ -15679,55 +15946,80 @@ gate.reserve(
                 "carrier position"
             )
 
+    serve_projection = top_level_items[
+        "fair_v2_ingress_serve_selector_projection"
+    ]
+    leader_projection = top_level_items[
+        "fair_v2_ingress_leader_wire_selector_projection"
+    ]
+    queue_gate = top_level_items["fair_v2_ingress_queue_gate_verdict"]
     receive = items["try_recv_if_at_checked_classified"]
+    dequeue = items["dequeue_selected_locked"]
+
     _require_rust_token_sequence(
         path,
-        receive,
+        serve_projection,
         """
-.filter(|entry| {
-    fair_v2_ingress_is_certified_body_request(&entry.inbound)
-        && (!state.requires_certified_serve_gate
-            || entry.certified_serve_reservation.is_some())
-})
-.map(|entry| entry.admission_ordinal)
-.min()
+let certified_body_request_cutoff = selected_barrier
+    .is_none()
+    .then(|| {
+        state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter(|entry| {
+                physical_cut.is_none_or(|cut| u128::from(entry.admission_ordinal) < cut)
+                    && fair_v2_ingress_is_certified_body_request(&entry.inbound)
+                    && (!state.requires_certified_serve_gate
+                        || entry.certified_serve_reservation.is_some())
+            })
+            .map(|entry| entry.admission_ordinal)
+            .min()
+    })
+    .flatten();
 """,
-        "the fallback selector must freeze the globally earliest eligible "
-        "Serve physical carrier",
+        "the Serve projection must freeze the globally earliest eligible "
+        "physical request below the supplied cut",
         errors,
     )
     _require_rust_token_sequence(
         path,
-        receive,
+        leader_projection,
         """
-let authenticated_certified_fence_escape = !matches!(
-    source,
-    FairV2IngressSource::Anonymous
-) && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
-let certified_fence_escape_dependency =
-    authenticated_certified_fence_escape
-        && leader_wire_barrier.as_ref().is_some_and(|owner| {
-            fair_v2_ingress_certified_fence_escape_advances_owner(
-                &owner.token,
-                &entry.inbound,
-            )
-        });
-let serve_fence_escape_dependency =
-    authenticated_certified_fence_escape
-        && (selected_serve_barrier.is_some()
-            || certified_body_request_cutoff.is_some());
-let timeout_vote_episode_dependency =
-    barrier_bypass
-        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(
-            source, entry,
-        )
-        && (leader_wire_barrier.as_ref().is_some_and(|owner| {
-            owner.token.identity.phase
-                == FairV2IngressLeaderWirePhase::CertifiedResponse
-        }) || (leader_wire_barrier.is_none()
-            && (selected_serve_barrier.is_some()
-                || certified_body_request_cutoff.is_some())));
+let (mut selected_barrier, selected_carrier_ordinal) = match active_carriers.first() {
+    Some((owner, carrier_ordinal)) => (Some(owner.clone()), Some(*carrier_ordinal)),
+    None => (None, None),
+};
+if selected_serve_barrier.is_some_and(|serve| {
+    selected_carrier_ordinal
+        .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
+}) {
+    selected_barrier = None;
+}
+""",
+        "Serve versus restored-leader arbitration must compare current "
+        "physical carrier ordinals rather than retained scheduler identities",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        queue_gate,
+        """
+let authenticated_certified_fence_escape = !matches!(source, FairV2IngressSource::Anonymous)
+    && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
+let certified_fence_escape_dependency = authenticated_certified_fence_escape
+    && leader_wire_barrier.is_some_and(|owner| {
+        fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
+    });
+let serve_fence_escape_dependency = authenticated_certified_fence_escape
+    && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some());
+let timeout_vote_episode_dependency = barrier_bypass
+    == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+    && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
+    && (leader_wire_barrier.is_some_and(|owner| {
+        owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
+    }) || (leader_wire_barrier.is_none()
+        && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some())));
 let dependency_bypass = !ingress_barrier_allows
     && (serve_fence_escape_dependency
         || timeout_vote_episode_dependency
@@ -15737,58 +16029,40 @@ let dependency_bypass = !ingress_barrier_allows
                 || timeout_control_dependency
                 || certified_fence_escape_dependency)));
 """,
-        "certified escape and the closed timeout-vote episode must remain distinct across retained Serve or leader-wire reservations without widening ordinary selection",
+        "certified escape and the closed timeout-vote episode must remain "
+        "distinct across retained Serve or leader-wire reservations without "
+        "widening ordinary selection",
         errors,
     )
     _require_rust_token_sequence(
         path,
-        receive,
+        queue_gate,
         """
-if selected_serve_barrier.is_some_and(|serve| {
-    leader_wire_carrier_ordinal
-        .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
-}) {
-    leader_wire_barrier = None;
-}
-""",
-        "Serve versus restored-leader arbitration must compare current "
-        "physical carrier ordinals rather than retained scheduler identities",
-        errors,
-    )
-    _require_rust_token_sequence(
-        path,
-        receive,
-        """
-entry.admission_ordinal < serve.carrier_ordinal()
+entry.admission_ordinal < selected.carrier_ordinal()
     || (selected_serve_predecessors_cleared
-        && entry.admission_ordinal == serve.carrier_ordinal()
+        && entry.admission_ordinal == selected.carrier_ordinal()
         && entry
             .certified_serve_reservation
             .as_ref()
-            .is_some_and(|reservation| {
-                reservation.matches_barrier(serve)
-            })
+            .is_some_and(|reservation| reservation.matches_barrier(selected))
         && matches!(
             entry.inbound.message(),
             BlockMessage::V2(ConsensusMessageV2 {
-                payload:
-                    ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                payload: ConsensusMessageV2Payload::CertifiedBodyRequest(_),
                 ..
-            }) if HashOf::new(request) == serve.request_hash()
+            })
         ))
 """,
-        "selected Serve equality must retain exact lifecycle, request, and "
-        "physical carrier identity",
+        "selected Serve equality must retain exact lifecycle, request shape, "
+        "and physical carrier identity without hashing under the queue lock",
         errors,
     )
     _require_rust_token_sequence(
         path,
-        receive,
+        queue_gate,
         """
 } else {
-    certified_body_request_cutoff.is_none_or(|cutoff| {
-        entry.admission_ordinal <= cutoff
-    })
+    certified_body_request_cutoff.is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
 };
 """,
         "ungated or not-yet-selected Serve fallback must retain the earliest "
@@ -15810,6 +16084,23 @@ let (ready_sources, candidates) = {
     _require_rust_token_sequence(
         path,
         receive,
+        """
+let serve_projection = fair_v2_ingress_serve_selector_projection(&state, None)?;
+let selected_serve_barrier = serve_projection.selected_barrier;
+let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
+    &state,
+    selected_serve_barrier,
+    retire_obsolete_leader_wire,
+    None,
+)?;
+""",
+        "one lock-held selector cut must bind exact Serve and leader-wire "
+        "projections before candidate publication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        dequeue,
         "reservation.publish_physical_drain()?;",
         "selected Serve physical retirement must publish before removing its "
         "fair-ingress carrier",
@@ -15817,7 +16108,7 @@ let (ready_sources, candidates) = {
     )
     _require_rust_token_sequence(
         path,
-        receive,
+        dequeue,
         """
 if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
     && admitted_index < *predecessors
@@ -15829,11 +16120,29 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
         "predecessor before carrier removal",
         errors,
     )
+    if serve_projection is not None:
+        cutoff_positions = _token_sequence_positions(
+            rust_code_tokens(serve_projection.body),
+            rust_code_tokens("let certified_body_request_cutoff ="),
+        )
+        if len(cutoff_positions) != 1:
+            errors.append(
+                f"{path}:{serve_projection.line}: exact physical Serve cutoff "
+                "must be frozen exactly once in the lock-held projection"
+            )
     if receive is not None:
         tokens = rust_code_tokens(receive.body)
-        cutoff_positions = _token_sequence_positions(
+        serve_projection_positions = _token_sequence_positions(
             tokens,
-            rust_code_tokens("let certified_body_request_cutoff ="),
+            rust_code_tokens(
+                "let serve_projection = fair_v2_ingress_serve_selector_projection"
+            ),
+        )
+        leader_projection_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                "let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection"
+            ),
         )
         candidate_positions = _token_sequence_positions(
             tokens,
@@ -15843,30 +16152,51 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             tokens,
             rust_code_tokens("predicate(inbound.as_ref())"),
         )
+        drop_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("drop(candidates)"),
+        )
         relock_positions = _token_sequence_positions(
             tokens,
             rust_code_tokens("let mut state = self.state.lock()"),
         )
+        dequeue_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("self.dequeue_selected_locked"),
+        )
         if (
-            len(cutoff_positions) != 1
+            len(serve_projection_positions) != 1
+            or len(leader_projection_positions) != 1
             or len(candidate_positions) != 1
             or len(predicate_positions) != 2
+            or len(drop_positions) != 1
             or len(relock_positions) != 2
+            or len(dequeue_positions) != 1
             or not (
-                cutoff_positions[0]
+                serve_projection_positions[0]
+                < leader_projection_positions[0]
                 < candidate_positions[0]
                 < min(predicate_positions)
                 <= max(predicate_positions)
+                < drop_positions[0]
                 < relock_positions[1]
+                < dequeue_positions[0]
             )
         ):
             errors.append(
-                f"{path}:{receive.line}: exact physical cutoff and barrier "
-                "authorization must be frozen once before the unlocked "
-                "predicate, then revalidated for removal under the state lock"
+                f"{path}:{receive.line}: exact physical projections and "
+                "barrier authorization must be frozen once before the unlocked "
+                "predicate, then committed by the sole lock-held dequeue tail"
             )
 
-    expected_test_context = (
+    test_path, test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/tests/"
+        "mod_authoritative_runtime_gate_03_admission_and_fairness.rs",
+        errors,
+        "Serve ingress-ordinal regression source",
+    )
+    inline_test_context = (
         (
             "#",
             "[",
@@ -15882,9 +16212,15 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
     for test_name, expected_sha256 in (
         _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256.items()
     ):
-        test_item = _require_rust_item(path, source, test_name, errors)
+        moved_to_component = test_name.startswith("restored_productive_retry_")
+        item_path = test_path if moved_to_component else path
+        item_source = test_source if moved_to_component else source
+        expected_test_context = () if moved_to_component else inline_test_context
+        test_item = _require_rust_item(
+            item_path, item_source, test_name, errors
+        )
         _require_rust_item_context(
-            path,
+            item_path,
             test_item,
             expected_test_context,
             f"Serve ingress-ordinal regression {test_name}",
@@ -15892,7 +16228,7 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            path,
+            item_path,
             test_item,
             expected_sha256,
             f"Serve ingress-ordinal regression {test_name}",
@@ -16250,7 +16586,7 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
 
     terminal_requirements = {
         "fully_authenticate_persisted_certified_serve_request": (
-            "verify_quorum_certificate_with_validator_pops(",
+            "authenticate_certified_body_request_with_validator_pops(",
         ),
         "validate_persisted_certified_serve_terminal_outcomes": (
             "for tombstone in &persisted.terminal_tombstones",
@@ -16605,34 +16941,25 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
                 f"occurrences={missing_or_repeated!r}, positions={positions!r}"
             )
 
-    expected_test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
+    lifecycle_test_path, lifecycle_test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/tests/"
+        "v2_worker_certified_serve_budget_cases.rs",
+        errors,
+        "Serve lifecycle regression source",
     )
+    expected_test_context: tuple[tuple[str, ...], ...] = ()
     for test_name, expected_sha256 in (
         _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256.items()
     ):
         test_item = _require_rust_item(
-            path,
-            source,
+            lifecycle_test_path,
+            lifecycle_test_source,
             test_name,
             errors,
         )
         _require_rust_item_context(
-            path,
+            lifecycle_test_path,
             test_item,
             expected_test_context,
             f"Serve lifecycle regression {test_name}",
@@ -16640,7 +16967,7 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            path,
+            lifecycle_test_path,
             test_item,
             expected_sha256,
             f"Serve lifecycle regression {test_name}",
@@ -16689,8 +17016,13 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
             f"{path}: authenticated TimeoutVote semantic-capacity source "
             "must be a regular file"
         ]
-    source = path.read_text(encoding="utf-8")
     errors: list[str] = []
+    _loaded_path, source = _read_reviewed_rust_source(
+        repo_root,
+        path.relative_to(repo_root).as_posix(),
+        errors,
+        "authenticated TimeoutVote semantic-capacity source and regressions",
+    )
 
     capacity = _require_rust_item(
         path,
@@ -17027,10 +17359,12 @@ if record.capacity_bypass {
         "capacity_bypass_records_follow_current_lock_and_timeout_view",
         "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
     }
+    regression_items: dict[str, RustItem | None] = {}
     for name, expected_sha256 in (
         _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
     ):
         item = _require_rust_item(path, source, name, errors)
+        regression_items[name] = item
         expected_attributes = (
             ("#[test]", "#[allow(clippy::too_many_lines)]")
             if name in long_tests
@@ -17052,6 +17386,37 @@ if record.capacity_bypass {
             errors,
         )
 
+    _require_rust_token_sequence(
+        path,
+        regression_items.get(
+            "capacity_bypass_records_follow_current_lock_and_timeout_view"
+        ),
+        """
+assert_eq!(
+    adapter
+        .ingress_equivocations
+        .values()
+        .filter(|record| record.capacity_bypass)
+        .count(),
+    roster_len * 3
+);
+""",
+        "capacity-bypass regression must realize exactly one lock plus current and adjacent TimeoutVote rosters",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        regression_items.get(
+            "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote"
+        ),
+        """
+assert_eq!(adapter.current_tag().view(), current_round.view + 1);
+assert!(adapter.deferred_progress_inputs.is_empty());
+""",
+        "certified-timeout regression must advance the hung signer exactly one view and drain its deferred progress fence",
+        errors,
+    )
+
     cross_view_name = (
         "busy_deferred_source_identity_coalesces_across_consumer_view_change"
     )
@@ -17069,6 +17434,17 @@ if record.capacity_bypass {
         cross_view,
         _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256[cross_view_name],
         "cross-view Busy-deferred semantic-owner regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        cross_view,
+        """
+assert_eq!(retagged_candidate.0, original_candidate.0);
+assert_eq!(retagged_candidate.0.source_view(), first_round.view);
+assert_eq!(retagged_candidate.1, adapter.current_tag().view());
+""",
+        "cross-view Busy-deferred regression must retain source identity while advancing only its consumer episode",
         errors,
     )
     return errors
@@ -17437,7 +17813,8 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
         "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
         "AsyncAllVars": (
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
-            "AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>"
+            "AsyncProducerVars, asyncFixedCorridorDeadlines, "
+            "asyncServeProducerEpisodeDue>>"
         ),
         "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
         "AsyncSpecAt": (
@@ -18347,6 +18724,10 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
         "SumeragiV2AsyncRecoveryVoteEpochProofs": (
             formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
         ),
+        "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs": (
+            formal_dir
+            / "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs.tla"
+        ),
         "SumeragiV2AsyncFairServiceProofs": (
             formal_dir / "SumeragiV2AsyncFairServiceProofs.tla"
         ),
@@ -18448,6 +18829,9 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
 
     network_module = "SumeragiV2AsyncNetwork"
     recovery_module = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    recovery_continuation_module = (
+        "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs"
+    )
     fair_module = "SumeragiV2AsyncFairServiceProofs"
     runner_module = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
     reset_module = "SumeragiV2HeightResetBoundaryClosureProofs"
@@ -18600,14 +18984,14 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
               => AsyncControlServiceStateTypeInvariant'
         """,
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncNextPreservesStrongTypeInvariant",
         ): r"""
             AsyncStrongTypeInvariant /\ AsyncNext
               => AsyncStrongTypeInvariant'
         """,
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncBracketNextPreservesStrongTypeInvariant",
         ): r"""
             AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
@@ -18752,13 +19136,13 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
             "AsyncNextPreservesSchedulerType",
         ),
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncNextPreservesStrongTypeInvariant",
         ): (
             "AsyncNextPreservesControlServiceStateTypeInvariant",
         ),
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncBracketNextPreservesStrongTypeInvariant",
         ): (
             "AsyncNextPreservesStrongTypeInvariant",
@@ -19650,6 +20034,15 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "/\\ AsyncRecoveryExecutionInvariant /\\ AsyncNext"
         )
         expected.update({
+            "AsyncInitEstablishesServeProducerEpisodeInvariants": (
+                "\\A initialContext: AsyncInitAt(initialContext) "
+                "=> /\\ AsyncServeProducerEpisodeTypeInvariant "
+                "/\\ AsyncServeProducerEpisodeOwnershipInvariant"
+            ),
+            "AsyncInitEstablishesTimeoutRecoveryCurrentBoundary": (
+                "\\A initialContext: AsyncInitAt(initialContext) "
+                "=> AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant"
+            ),
             "AsyncInitEstablishesServiceActivationPairInvariant": (
                 "\\A initialContext: AsyncInitAt(initialContext) "
                 "=> AsyncServiceActivationPairInvariant"
@@ -19677,6 +20070,33 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "AsyncNextPreservesCandidateLifecycleSchedulerCoverage": (
                 "/\\ AsyncStrongTypeInvariant /\\ AsyncNext "
                 "=> AsyncCandidateLifecycleSchedulerCoverageInvariant'"
+            ),
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+                "\\A node \\in ValidatorIds: /\\ AsyncTypeInvariant "
+                "/\\ asyncServeProducerEpisodeDue[node] "
+                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) = {} "
+                "/\\ AsyncNetworkStep => "
+                "AsyncServeIngressLifecycleOwnerIdentities(node)' = {}"
+            ),
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+                "\\A node \\in ValidatorIds: /\\ AsyncTypeInvariant "
+                "/\\ asyncServeProducerEpisodeDue[node] "
+                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) = {} "
+                "/\\ AsyncNext => "
+                "AsyncServeIngressLifecycleOwnerIdentities(node)' = {}"
+            ),
+            "AsyncNextPreservesServeProducerEpisodeTypeInvariant": (
+                "/\\ AsyncServeProducerEpisodeTypeInvariant /\\ AsyncNext "
+                "=> AsyncServeProducerEpisodeTypeInvariant'"
+            ),
+            "AsyncNextPreservesServeProducerEpisodeInvariants": (
+                "/\\ AsyncStrongTypeInvariant /\\ AsyncNext "
+                "=> /\\ AsyncServeProducerEpisodeTypeInvariant' "
+                "/\\ AsyncServeProducerEpisodeOwnershipInvariant'"
+            ),
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant": (
+                "ASSUME AsyncControlServiceStateTypeInvariant, AsyncNext "
+                "PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'"
             ),
             "AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType": (
                 "/\\ AsyncTypeInvariant "
@@ -20324,6 +20744,27 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
                     "must use the exact ordinary-ingress carrier init bridge"
                 )
+            required_producer_episode_init_bridge = (
+                "<2>3p. /\\ AsyncServeProducerEpisodeTypeInvariant "
+                "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+                "BY <1>1, "
+                "AsyncInitEstablishesServeProducerEpisodeInvariants"
+            )
+            if normalized.count(required_producer_episode_init_bridge) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
+                    "must use the exact finite Serve-producer episode init bridge"
+                )
+            required_timeout_recovery_init_bridge = (
+                "<2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+                "BY <1>1, "
+                "AsyncInitEstablishesTimeoutRecoveryCurrentBoundary"
+            )
+            if normalized.count(required_timeout_recovery_init_bridge) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
+                    "must use the exact timeout-recovery boundary init bridge"
+                )
             required_candidate_scheduler_init = (
                 "<2>3bb. AsyncCandidateLifecycleSchedulerCoverageInvariant "
                 "BY <1>1, Isa DEF AsyncInitAt, AsyncBaseInitAt, "
@@ -20346,15 +20787,68 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 )
             required_init_qed = (
                 "<2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, "
-                "<2>3d, <2>3e, <2>3f, <2>3g, <2>3h, <2>3i, <2>4, "
-                "<2>5, <2>6, <2>7 "
+                "<2>3d, <2>3e, <2>3f, <2>3p, <2>3t, <2>4, <2>5, "
+                "<2>6, <2>7 "
                 "DEF AsyncStrongTypeInvariant"
             )
             if normalized.count(required_init_qed) != 1:
                 errors.append(
                     f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant "
-                    "must retain the exact candidate/Serve/leader/ordinary "
-                    "scheduler-coverage QED dependency set"
+                    "must retain the exact candidate/Serve/producer/timeout/"
+                    "leader/ordinary scheduler-coverage QED dependency set"
+                )
+
+        strong_type_stutter = _top_level_theorem_body(
+            source,
+            "AsyncAllVarsStutterPreservesStrongTypeInvariant",
+            preserve_string_contents=True,
+        )
+        if strong_type_stutter is not None:
+            body, line = strong_type_stutter
+            normalized = " ".join(body.split())
+            required_stutter_producer_step = (
+                "<2>8p. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+                "/\\ AsyncServeProducerEpisodeOwnershipInvariant' "
+                "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, "
+                "AsyncServeProducerEpisodeTypeInvariant, "
+                "AsyncServeProducerEpisodeOwnershipInvariant, "
+                "AsyncServeIngressLifecycleOwnerIdentities, "
+                "AsyncServeIngressAdmissionIdentities, "
+                "AsyncServeOffQueueReservations, AsyncServeJobQueued, "
+                "AsyncIoServeIdentities"
+            )
+            if normalized.count(required_stutter_producer_step) != 1:
+                errors.append(
+                    f"{path}:{line}: "
+                    "AsyncAllVarsStutterPreservesStrongTypeInvariant must "
+                    "retain the exact Serve-producer episode stutter bridge"
+                )
+            required_stutter_timeout_step = (
+                "<2>8t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+                "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, vars, "
+                "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant, "
+                "AsyncTimeoutRecoveryEpisodes, "
+                "AsyncTimeoutRecoveryEpisodesIn, NodeHasDecision, "
+                "AsyncNodeHasDecisionIn"
+            )
+            if normalized.count(required_stutter_timeout_step) != 1:
+                errors.append(
+                    f"{path}:{line}: "
+                    "AsyncAllVarsStutterPreservesStrongTypeInvariant must "
+                    "retain the exact timeout-recovery boundary stutter bridge"
+                )
+            required_stutter_qed = (
+                "<2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, "
+                "<2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7, <2>8, <2>8p, "
+                "<2>8t "
+                "DEF AsyncStrongTypeInvariant"
+            )
+            if normalized.count(required_stutter_qed) != 1:
+                errors.append(
+                    f"{path}:{line}: "
+                    "AsyncAllVarsStutterPreservesStrongTypeInvariant must "
+                    "retain producer-episode and timeout-boundary prime steps "
+                    "as exact QED dependencies"
                 )
         errors.extend(_async_extended_strong_type_induction_errors(path, source))
     scheduler_gate_theorems_with_semantic_strings = {
@@ -20485,6 +20979,21 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1, "
                 "AsyncNextPreservesCandidateLifecycleSchedulerCoverage"
             )
+            expected_producer_episode_step = (
+                "<2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+                "/\\ AsyncServeProducerEpisodeOwnershipInvariant' "
+                "BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants"
+            )
+            expected_timeout_recovery_boundary_step = (
+                "<2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+                "BY <1>1, <2>2h, "
+                "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant"
+            )
+            expected_producer_type_step = (
+                "<2>4f. AsyncProducerTypeInvariant' "
+                "BY <1>1, <2>2, "
+                "AsyncProducerProjectionPreservesTypeInvariant DEF AsyncNext"
+            )
             expected_recovery_step = (
                 "<2>6. /\\ AsyncRecoveryTypeInvariant' "
                 "/\\ AsyncRestartAuthorityInvariant' "
@@ -20535,8 +21044,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             )
             expected_recovery_qed = (
                 "<2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, "
-                "<2>4c, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10, <2>11, "
-                "<2>12, <2>13, <2>14, <2>15, <2>16, <2>17 "
+                "<2>4c, <2>4d, <2>4e, <2>4f, <2>5, <2>6, <2>7, "
+                "<2>8, <2>9, <2>10, <2>11, <2>12, <2>13 "
                 "DEF AsyncStrongTypeInvariant"
             )
             normalized_body = " ".join(body.split())
@@ -20573,6 +21082,26 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                     "retain the exact candidate-lifecycle scheduler-coverage "
                     "prime step"
+                )
+            if normalized_body.count(expected_producer_episode_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant "
+                    "must retain the exact finite Serve-producer episode "
+                    "prime step"
+                )
+            if (
+                normalized_body.count(expected_timeout_recovery_boundary_step)
+                != 1
+            ):
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant "
+                    "must retain the exact timeout-recovery current-boundary "
+                    "prime step"
+                )
+            if normalized_body.count(expected_producer_type_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant "
+                    "must retain the exact producer-journal prime step"
                 )
             if normalized_body.count(expected_recovery_step) != 1:
                 errors.append(
@@ -20634,8 +21163,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "make the service-activation pair, control-service, every "
                     "recovery, historical-lock, serialized-busy, GST-recovery, "
                     "claim-ingress, leader-wire ingress, ordinary-ingress, and "
-                    "candidate-lifecycle scheduler-coverage prime step an exact "
-                    "QED dependency"
+                    "candidate-lifecycle, producer-episode, and timeout-boundary "
+                    "prime step an exact QED dependency"
                 )
     universally_quantified = re.compile(
         r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
@@ -30580,6 +31109,20 @@ def _transport_geometry_production_source_fidelity_errors(
         else:
             sources[role] = path.read_text(encoding="utf-8")
 
+    reviewed_core_path, authenticated_core_source = _read_reviewed_rust_source(
+        repo_root,
+        paths["core"].relative_to(repo_root).as_posix(),
+        errors,
+        "reviewed fair-ingress transport geometry source",
+    )
+    if authenticated_core_source:
+        paths["core"] = reviewed_core_path
+        # The closure authentication above binds the complete include graph.
+        # Production geometry items remain owned by the parent provider; parse
+        # that provider directly and load moved regression providers narrowly.
+        sources["core"] = reviewed_core_path.read_text(encoding="utf-8")
+        del authenticated_core_source
+
     core_path = paths["core"]
     core_source = sources["core"]
     for digest_inventory, expected_context in (
@@ -30782,6 +31325,7 @@ transport_completion_bytes: usize,
         core_source,
         """
 pub(crate) struct FairV2Ingress {
+    queue_identity: Arc<()>,
     capacity: usize,
     byte_capacity: usize,
     source_byte_capacity: usize,
@@ -30911,6 +31455,7 @@ let Some(evidence) = prior_evidence.merged(occurrence) else {
         FairV2IngressRejectReason::OwnershipEvidenceInvalid,
     ));
 };
+let ownership_snapshot = Arc::new(evidence.clone());
 let lane = state
     .lanes
     .get_mut(&owner_source)
@@ -30923,6 +31468,7 @@ let queued = lane
 let queued_inbound = Arc::make_mut(&mut queued.inbound);
 queued_inbound.reply_routes = routes_after;
 queued_inbound.ingress_ownership = Some(evidence);
+queued.ownership_snapshot = ownership_snapshot;
 return Ok(FairV2IngressPushDisposition::Coalesced);
 """,
         "validated ingress route shadow commits atomically beside its exact ownership evidence",
@@ -31057,8 +31603,36 @@ if uses_certified_fence_escape_reserve {
         "certified-fence admission atomically acquires its source count and byte owners",
         errors,
     )
+    ordinary_receive = _require_rust_item(
+        core_path, core_source, "try_recv_if_at_checked", errors
+    )
+    _require_rust_token_sequence(
+        core_path,
+        ordinary_receive,
+        """
+self.try_recv_if_at_checked_classified(
+    service_attempt_at,
+    false,
+    FairV2IngressBarrierBypass::None,
+    predicate,
+)
+""",
+        "ordinary timestamped ingress must delegate with no barrier bypass",
+        errors,
+    )
     receive = _require_rust_item(
         core_path, core_source, "try_recv_if_at_checked_classified", errors
+    )
+    queue_gate = _require_rust_item(
+        core_path, core_source, "fair_v2_ingress_queue_gate_verdict", errors
+    )
+    dequeue = _require_qualified_rust_item(
+        core_path,
+        core_source,
+        "FairV2Ingress",
+        "dequeue_selected_locked",
+        errors,
+        "serialized fair-ingress dequeue accounting",
     )
     same_control_slot = _require_rust_item(
         core_path, core_source, "fair_v2_ingress_same_control_slot", errors
@@ -31077,15 +31651,13 @@ left.sender() == right.sender()
     )
     _require_rust_token_sequence(
         core_path,
-        receive,
+        queue_gate,
         """
 let has_live_control_predecessor = lane
     .entries
     .iter()
     .take(index)
-    .any(|prior| {
-        fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound,)
-    });
+    .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
 """,
         "live control predecessor identity must be computed before carrier "
         "authorization",
@@ -31093,25 +31665,35 @@ let has_live_control_predecessor = lane
     )
     _require_rust_token_sequence(
         core_path,
-        receive,
+        queue_gate,
         """
-(!has_live_control_predecessor
-    && (ingress_barrier_allows || dependency_bypass))
+if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
+    FairV2IngressQueueGateVerdict::Blocked
+} else if dependency_bypass {
+    FairV2IngressQueueGateVerdict::Dependency
+} else {
+    FairV2IngressQueueGateVerdict::Strict
+}
 """,
         "live control predecessor blocks strict-newer carrier authorization "
         "before the unlocked predicate",
         errors,
     )
-    _loaded_core_path, reviewed_core_source = _read_reviewed_rust_source(
-        repo_root, core_path.relative_to(repo_root).as_posix(), errors,
-        "reviewed fair-ingress regression source",
+    control_regression_path, control_regression_source = (
+        _read_reviewed_rust_source(
+            repo_root,
+            "crates/iroha_core/src/sumeragi/tests/"
+            "mod_authoritative_runtime_gate_08_capacity_and_control.rs",
+            errors,
+            "reviewed fair-ingress control regression source",
+        )
     )
     control_regression = _require_rust_item(
-        core_path, reviewed_core_source,
+        control_regression_path, control_regression_source,
         "fair_v2_ingress_serializes_distinct_timeout_certificates_per_source", errors,
     )
     _require_rust_token_sequence(
-        core_path,
+        control_regression_path,
         control_regression,
         """
 assert!(
@@ -31221,7 +31803,16 @@ let ownership = RuntimeDeferredLifecycleOwnership::new(
     runtime_seal,
 )
 """,
-        "Busy deferral transfers rather than replaces the predecessor owner",
+        "Busy deferral must construct an exact sealed runtime owner from the "
+        "selected predecessor lifecycle and physical cut",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        accept_dispatch,
+        "retained.insert(ordinal, ownership);",
+        "Busy deferral transfers the predecessor into an exact sealed runtime "
+        "owner rather than replacing its lifecycle",
         errors,
     )
     minimum_active = _require_rust_item(
@@ -31333,8 +31924,35 @@ let (mut completion_ready, mut progress_ready, mut normal_ready) = if fifo_ready
         errors,
     )
     _require_rust_token_sequence(
+        runtime_path,
+        arbitration,
+        """
+if timers_enabled
+    && fifo_ready
+    && !self.deferred_lifecycle_ownership.is_empty()
+    && !self.driver.deferred_work_is_serviceable()
+    && self.ingress.ordinary_candidate_is_fence_blocked(|queued| {
+        self.driver
+            .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+            || self
+                .fence_retry_blocked_fifo_owners
+                .iter()
+                .any(|owner| owner.matches_queued(queue_source_identity, queued))
+    })?
+{
+    fifo_ready = false;
+    completion_ready = false;
+    progress_ready = false;
+    normal_ready = false;
+}
+""",
+        "scheduler arbitration may suppress FIFO readiness only for an exact "
+        "unserviceable fence-blocked physical occurrence while clocks remain enabled",
+        errors,
+    )
+    _require_rust_token_sequence(
         core_path,
-        receive,
+        dequeue,
         """
 if !matches!(source, FairV2IngressSource::Anonymous)
     && fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
@@ -31354,7 +31972,7 @@ if !matches!(source, FairV2IngressSource::Anonymous)
     )
     _require_rust_token_sequence(
         core_path,
-        receive,
+        dequeue,
         """
 if entry.class == FairV2IngressClass::TransportCompletion {
     lane.transport_completion_len = lane
@@ -31372,7 +31990,7 @@ if entry.class == FairV2IngressClass::TransportCompletion {
     )
     _require_rust_token_sequence(
         core_path,
-        receive,
+        dequeue,
         """
 if let Some(key) = &entry.wire_key {
     assert_eq!(
@@ -31387,7 +32005,7 @@ if let Some(key) = &entry.wire_key {
     )
     _require_rust_token_sequence(
         core_path,
-        receive,
+        dequeue,
         """
 if remains_ready {
     state.ready.push_back(source.clone());
@@ -31498,7 +32116,7 @@ let required_transport_completion_bytes =
     fair_v2_ingress_required_transport_completion_bytes(layout)
         .max(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
 let required_recovery_request_bytes =
-    fair_v2_ingress_required_recovery_request_bytes(chain_id, roster.len());
+    fair_v2_ingress_required_recovery_request_bytes(network_id, roster.len());
 let required_lane_progress_frame_bytes =
     fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
 """,
@@ -31537,6 +32155,17 @@ else {
         core_path,
         configure_context,
         """
+fair_v2_ingress_required_p2p_frame_bytes(required_recovery_request_bytes)
+    .max(required_lane_progress_frame_bytes)
+    .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
+""",
+        "consensus frame geometry must include the exact Kura replica-advert network ceiling",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
 BODY_ENVELOPE_HEADROOM_BYTES
     .max(required_control_message_bytes)
     .max(required_recovery_request_bytes)
@@ -31550,6 +32179,19 @@ required_block_sync_frame_bytes,
 required_outbound_high_frame_bytes,
 """,
         "disjoint ordinary/certified/completion and every progress-frame requirement hand-off",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
+BODY_ENVELOPE_HEADROOM_BYTES
+    .max(required_control_message_bytes)
+    .max(required_recovery_request_bytes)
+    .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES)
+    .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
+""",
+        "ordinary source geometry must include the exact Kura replica-advert network ceiling",
         errors,
     )
 
@@ -44208,15 +44850,14 @@ def _runtime_clock_reservation_source_fidelity_errors(
 
     errors: list[str] = []
     runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    if not runtime_path.is_file() or runtime_path.is_symlink():
-        return [
-            f"{runtime_path}: immutable clock-reservation runtime source "
-            "must be a regular file"
-        ]
-    try:
-        source = runtime_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [f"{runtime_path}: cannot read clock-reservation source: {error}"]
+    runtime_path, source = _read_reviewed_rust_source(
+        repo_root,
+        runtime_path.relative_to(repo_root).as_posix(),
+        errors,
+        "immutable clock-reservation runtime source",
+    )
+    if not source:
+        return errors
 
     runtime_context = (
         (
@@ -44240,7 +44881,7 @@ def _runtime_clock_reservation_source_fidelity_errors(
         ),
         (
             "clock_owner_reservation_blockers_occurrence",
-            "structured timeout/retransmit replay reservation predicate",
+            "paired immutable clock reservation blocker kernel",
         ),
         (
             "clock_owner_reservation_blocks_occurrence",
@@ -44278,25 +44919,61 @@ def _runtime_clock_reservation_source_fidelity_errors(
 
     _require_rust_token_sequence(
         runtime_path,
+        runtime_items.get("validate_clock_owner_physical_cuts"),
+        """
+let recovery_episode_is_valid = self
+    .timeout_recovery_episode
+    .as_ref()
+    .is_none_or(|episode| {
+        episode.validate_exact()
+            && episode.tag == self.round_tag
+            && episode.physical_cut <= self.ingress_physical_cut
+            && episode.timeout_vote_owner_universe
+                == self.driver.timeout_vote_owner_universe()
+    });
+if timeout_is_paired && retransmit_is_paired && cuts_are_valid && recovery_episode_is_valid
+""",
+        "clock-cut validation must bind the finite timeout-recovery episode to "
+        "the current round, receiver high-water mark, and frozen owner universe",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
         runtime_items.get("clock_owner_reservation_blockers_occurrence"),
         """
 u128::from(source_physical_ordinal) >= physical_cut
     && lifecycle_ordinal <= owner.lifecycle_ordinal()
 """,
-        "post-cut replay reservation must pair physical non-precedence with "
+        "paired clock blocker kernel must combine physical non-precedence with "
         "logical rank at or ahead of the frozen clock owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_items.get("clock_owner_reservation_blocks_occurrence"),
+        """
+self.clock_owner_reservation_blockers_occurrence(lifecycle_ordinal, source_physical_ordinal)
+    .map(RuntimeClockReservationBlockers::any)
+""",
+        "post-cut replay reservation predicate must project the exact paired "
+        "clock-blocker kernel",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
         runtime_items.get("enqueue_after_clock_reservation"),
         """
-let owner = command.lifecycle_owner()?;
-if self.clock_owner_reservation_blocks(&owner)? {
-    return Err(EnqueueError::Full);
+if command.lifecycle_ordinal.is_some() {
+    let owner = command.lifecycle_owner()?;
+    if self.clock_owner_reservation_blocks(&owner)? {
+        return Err(EnqueueError::Full);
+    }
+} else {
+    self.validate_clock_owner_physical_cuts()?;
 }
 """,
-        "post-cut replay gate must backpressure before publishing FIFO state",
+        "post-cut replay gate must backpressure inherited owners while fresh "
+        "owners validate the cut before atomic FIFO minting",
         errors,
     )
 
@@ -44935,11 +45612,18 @@ def _production_causal_fifo_source_fidelity_errors(
                 (("impl", "SumeragiV2Adapter"),),
                 "terminal deferred-service contract failure",
             ),
+            (
+                "step_reducer",
+                (("impl", "SumeragiV2Adapter"),),
+                "reducer-fence generation step wrapper",
+            ),
         )
+        observed_adapter_bound_items: dict[str, RustItem | None] = {}
         for item_name, context, description in adapter_bound_items:
             item = _require_rust_item(
                 adapter_path, adapter_source, item_name, errors
             )
+            observed_adapter_bound_items[item_name] = item
             expected_attributes = (
                 ("#[cfg(test)]",)
                 if item_name == "drain_deferred_with_evidence"
@@ -44965,6 +45649,24 @@ def _production_causal_fifo_source_fidelity_errors(
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_bound_items.get("budget"),
+            """
+match self {
+    Self::ProposalIntent => PersistenceMacroStepBudget::new(1, 1),
+    Self::PrepareIntent => PersistenceMacroStepBudget::new(2, 1),
+    Self::ObservePrepare => PersistenceMacroStepBudget::new(4, 1),
+    Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
+    Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
+    Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),
+    Self::Decision => PersistenceMacroStepBudget::new(2, 2),
+}
+""",
+            "persistence macro-step budgets must retain the exact reviewed "
+            "initial/continuation bounds for all seven WAL record classes",
+            errors,
+        )
         observed_adapter_fence_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
@@ -45234,11 +45936,25 @@ const _: () = assert!(
                     "contract, and complete control flow must match the exact "
                     f"reviewed token digest {expected_sha256}; found {observed_sha256}"
                 )
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_bound_items.get("step_reducer"),
+            """
+let before = self.reducer_fence_projection();
+let outcome = self.reducer.step(event)?;
+if self.reducer_fence_projection() != before {
+    self.advance_reducer_fence_generation()?;
+}
+Ok(outcome)
+""",
+            "the reducer step wrapper must advance its process-local fence generation exactly when the reducer fence changes",
+            errors,
+        )
         drive_contract = (
             "while let Some(effect) = pending.pop_front()",
             "self.wal.append(&payload)",
             "let persisted = reducer::Event::Persisted { tag, id };",
-            "let continuation = match self.reducer.step(persisted.clone())",
+            "let continuation = match self.step_reducer(persisted.clone())",
             "let continuation = continuation.into_effects();",
             "reducer::prepend_causal_continuation("
             "&mut pending, continuation);",
@@ -45301,11 +46017,11 @@ assert!(
 );
 let fetch_tag = match installed.as_slice() {
     [
-        AdapterEffect::EnterView {
-            tag: enter_tag,
-            protected_body: Some((protected_round, protected_subject)),
-            ..
-        },
+                AdapterEffect::EnterView {
+                    tag: enter_tag,
+                    protected_lock: Some(protected_lock),
+                    ..
+                },
         AdapterEffect::FetchBody {
             tag,
             round: fetched_round,
@@ -45313,10 +46029,9 @@ let fetch_tag = match installed.as_slice() {
             certificate: Some(certificate),
             ..
         },
-    ] if enter_tag == tag
-        && *protected_round == round
-        && *protected_subject == subject
-        && *fetched_round == round
+            ] if enter_tag == tag
+                && protected_lock == &prepare
+                && *fetched_round == round
         && *fetched_subject == subject
         && certificate.as_ref() == prepare.as_ref() =>
     {
@@ -45538,6 +46253,50 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 f"{deferred_trait_contract_count} reviewed contracts"
             )
 
+        runtime_driver_trait_context = (
+            ("pub", "(", "crate", ")", "trait", "RuntimeDriver"),
+        )
+        default_deferred_alias_items = tuple(
+            item
+            for item in rust_items(
+                runtime_source,
+                "command_matches_deferred_authenticated_owner",
+            )
+            if item.brace_context == runtime_driver_trait_context
+        )
+        if len(default_deferred_alias_items) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one closed RuntimeDriver "
+                "default for authenticated Busy-deferred aliases; found "
+                f"{len(default_deferred_alias_items)}"
+            )
+        else:
+            default_deferred_alias = default_deferred_alias_items[0]
+            _require_rust_item_token_sha256(
+                runtime_path,
+                default_deferred_alias,
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    "runtime_driver_default_command_matches_deferred_authenticated_owner"
+                ],
+                "closed RuntimeDriver authenticated Busy-deferred alias default",
+                errors,
+            )
+            _require_exact_rust_tokens(
+                runtime_path,
+                default_deferred_alias,
+                """
+fn command_matches_deferred_authenticated_owner(
+    &self,
+    _command: &Self::Command
+) -> bool {
+    false
+}
+""",
+                "synthetic runtime drivers must reject Busy-deferred "
+                "authenticated aliases by default",
+                errors,
+            )
+
         production_driver_context = (
             ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
         )
@@ -45562,6 +46321,11 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 "seal_deferred_runtime_ownership",
                 "runtime_driver_seal_deferred_runtime_ownership",
                 "production deferred runtime ownership sealing bridge",
+            ),
+            (
+                "command_matches_deferred_authenticated_owner",
+                "runtime_driver_command_matches_deferred_authenticated_owner",
+                "production exact Busy-deferred authenticated alias classifier",
             ),
         ):
             matching = tuple(
@@ -45592,6 +46356,29 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 description,
                 errors,
             )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_production_driver_items.get(
+                "command_matches_deferred_authenticated_owner"
+            ),
+            """
+match command {
+    AdapterCommand::Authenticated(authenticated) => self
+        .deferred_authenticated_message_owner(authenticated.wire_envelope())
+        .is_some(),
+    AdapterCommand::LocalProposalReady { .. }
+    | AdapterCommand::BodyAvailable { .. }
+    | AdapterCommand::BodyStored { .. }
+    | AdapterCommand::ValidationSucceeded { .. }
+    | AdapterCommand::ValidationFailed { .. }
+    | AdapterCommand::SignatureCompleted(_)
+    | AdapterCommand::ApplicationCompleted(_) => false,
+}
+""",
+            "production runtime driver must recognize only authenticated "
+            "commands whose exact Busy owner remains retained",
+            errors,
+        )
         require_runtime_item_order(
             observed_production_driver_items.get("dispatch"),
             (
@@ -46889,6 +47676,31 @@ if matches!(
             "CommitCertificateResponse progress-reservation regression",
             errors,
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            response_regression,
+            """
+assert_eq!(network_command_class(&commit_response), None);
+assert_eq!(
+    network_admission_class(&commit_response),
+    Some(CommandClass::Progress)
+);
+""",
+            "the CommitCertificateResponse regression must classify only through the protected Progress admission seam",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            response_regression,
+            """
+assert!(
+    runtime.can_admit_network_payload(&commit_response),
+    "a CommitQC recovery response owns the final physical certified-fence slot"
+);
+""",
+            "the CommitCertificateResponse regression must retain the final physical certified-fence reservation",
+            errors,
+        )
         causal_runtime_regressions: dict[str, RustItem | None] = {}
         runtime_test_context = (
             ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
@@ -46916,6 +47728,85 @@ if matches!(
                 item,
                 expected_sha256,
                 f"production causal-FIFO regression {name}",
+                errors,
+            )
+        busy_alias_regression_name = (
+            "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_"
+            "into_live_busy_producer"
+        )
+        busy_alias_regression = causal_runtime_regressions.get(
+            busy_alias_regression_name
+        )
+        for required, description in (
+            (
+                """
+let second = runtime
+    .try_step_pacemaker_escape(now)
+    .expect("duplicate pacemaker selection must not fail closed")
+    .expect("the prequeued duplicate owns one bounded retirement turn");
+""",
+                "the prequeued duplicate Busy alias must receive one bounded "
+                "pacemaker retirement turn",
+            ),
+            (
+                """
+assert_eq!(runtime.queued_commands(), 0);
+assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+""",
+                "duplicate retirement must remove only its FIFO occurrence and "
+                "retain the canonical Busy ingress and lifecycle owner",
+            ),
+            (
+                """
+assert_eq!(
+    runtime.leader_wire_runtime_receipts,
+    BTreeMap::from([(
+        first_receipt.owner().admission_ordinal(),
+        first_receipt.clone(),
+    )]),
+    "only the canonical Busy route remains active"
+);
+""",
+                "duplicate retirement must retain only the canonical route receipt",
+            ),
+            (
+                """
+let [LeaderWireRuntimeTerminal::Volatile(retired_second)] = second_terminals.as_slice()
+else {
+    panic!("the producer alias must retire only its outer route as volatile")
+};
+assert_eq!(retired_second, &second_receipt);
+""",
+                "the duplicate Busy alias must terminalize only its independent "
+                "volatile transport route",
+            ),
+            (
+                """
+runtime
+    .enqueue_network(timeout_certificate)
+    .expect("enqueue certified progress which opens the signing fence");
+let certified = runtime
+    .try_step_pacemaker_escape(now)
+""",
+                "certified progress must still open the canonical Busy owner's fence",
+            ),
+            (
+                """
+assert!(runtime.leader_wire_runtime_receipts.is_empty());
+assert!(runtime.deferred_ingress_ownership.is_empty());
+assert!(runtime.deferred_lifecycle_ownership.is_empty());
+assert_eq!(runtime.queued_commands(), 0);
+assert!(!runtime.fail_closed);
+""",
+                "the canonical Busy owner must terminalize once after its fence opens",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                busy_alias_regression,
+                required,
+                description,
                 errors,
             )
         retired_retransmit_fence_regression = (
@@ -47245,19 +48136,19 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
             ),
         )
         runtime_items = (
-            (
-                "validate_clock_owner_physical_cuts",
-                "validate_clock_owner_physical_cuts",
-                "paired immutable timeout and retransmit physical cuts",
-            ),
-            (
-                "clock_owner_reservation_blockers_occurrence",
-                "clock_owner_reservation_blockers_occurrence",
-                "structured timeout/retransmit replay reservation",
-            ),
-            (
-                "clock_owner_reservation_blocks_occurrence",
-                "clock_owner_reservation_blocks_occurrence",
+        (
+            "validate_clock_owner_physical_cuts",
+            "validate_clock_owner_physical_cuts",
+            "paired immutable timeout and retransmit physical cuts",
+        ),
+        (
+            "clock_owner_reservation_blockers_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
+            "paired timeout/retransmit physical blocker kernel",
+        ),
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blocks_occurrence",
                 "post-cut logical replay admission reservation",
             ),
             (
@@ -47515,6 +48406,9 @@ self.fence_retry_blocked_fifo_owners.push(owner);
                 "pop_pacemaker_progress_with_ownership",
                 "retry_blocked_admissions.contains(&ordinal)",
                 "driver.certified_progress_bypasses_signature_fence(&queued.command)",
+                "let deferred_alias = queued.class == CommandClass::Progress",
+                "driver.command_matches_deferred_authenticated_owner(&queued.command)",
+                "certified || deferred_alias",
                 "driver.command_is_blocked_by_deferred_fence(queued.tag, &queued.command)",
                 "driver.certified_progress_bypasses_signature_fence(command)",
                 "RuntimeQueueSelectionKind::PacemakerCertifiedProgress",
@@ -47530,7 +48424,8 @@ self.fence_retry_blocked_fifo_owners.push(owner);
                 "self.finish_dispatched_step(",
             ),
             "pacemaker FIFO escape must exclude exact prior retry occurrences, "
-            "distinguish certified fence escapes from unblocked Progress roots, "
+            "distinguish certified fence escapes, exact Busy aliases, and "
+            "unblocked Progress roots, "
             "restore retry ownership with one bounded fence marker, and retain "
             "exact selection evidence through shared completion",
         )
@@ -47708,9 +48603,39 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             "the monotone receiver high-watermark",
         )
         require_runtime_item_order(
-            observed_runtime_items.get(
-                "clock_owner_reservation_blockers_occurrence"
+            observed_runtime_items.get("freeze_due_clock_owners"),
+            (
+                "if raw_timeout_due && self.timeout_owner.is_none()",
+                "self.timeout_owner_physical_cut.is_some() "
+                "|| self.timeout_recovery_episode.is_some()",
+                """
+let owner = self.mint_fresh_lifecycle_owner(
+    self.round_tag,
+    CommandClass::Progress,
+    RuntimeFreshRootKind::Timeout,
+    b"begin-timeout",
+)?;
+""",
+                "let pre_frozen_retransmit = match (",
+                "let episode = RuntimeTimeoutRecoveryEpisode",
+                "timeout_owner: owner.clone()",
+                "physical_cut: self.ingress_physical_cut",
+                "pre_frozen_retransmit,",
+                "timeout_vote_owner_universe: "
+                "self.driver.timeout_vote_owner_universe()",
+                "admitted_timeout_vote_owners: BTreeMap::new()",
+                "if !episode.validate_exact()",
+                "self.timeout_owner_physical_cut = Some(self.ingress_physical_cut)",
+                "self.timeout_owner = Some(owner)",
+                "self.timeout_recovery_episode = Some(episode)",
+                "let raw_retransmit_due =",
             ),
+            "freezing an absolute timeout must atomically bind its physical cut, "
+            "captured earlier retransmit, frozen vote-owner universe, and empty "
+            "finite recovery episode before any retransmit replenishment",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("clock_owner_reservation_blockers_occurrence"),
             (
                 "if lifecycle_ordinal == 0 || source_physical_ordinal == 0",
                 "self.validate_clock_owner_physical_cuts()?;",
@@ -47721,6 +48646,15 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             ),
             "post-cut replay admission must compare physical position before "
             "allowing an old logical rank into FIFO",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("clock_owner_reservation_blocks_occurrence"),
+            (
+                "self.clock_owner_reservation_blockers_occurrence(",
+                ".map(RuntimeClockReservationBlockers::any)",
+            ),
+            "the boolean clock-reservation predicate must project the exact "
+            "paired blocker kernel",
         )
         require_runtime_item_order(
             observed_runtime_items.get("clock_owner_reservation_blocks"),
@@ -47776,6 +48710,20 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             "live scheduling must reconcile exact retry markers, freeze clock "
             "owners, honor absolute timeout preemption, service one exact fence "
             "dependency, then service ordinary adapter debt before arbitration",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step"),
+            (
+                "ScheduledWork::Timeout =>",
+                "if self.supersede_pre_timeout_retransmit(&owner).is_err()",
+                "self.timeout_owner = None",
+                "ScheduledWork::PeriodicTimer =>",
+                "if let Some(episode) = self.timeout_recovery_episode.as_mut()",
+                "episode.pre_frozen_retransmit = None",
+                "self.retransmit_owner = None",
+            ),
+            "clock dispatch must consume the captured pre-timeout retransmit "
+            "exactly once and clear each transferred clock owner in order",
         )
         require_runtime_item_order(
             observed_runtime_items.get("dispatch_one_fence_dependency"),
@@ -48611,8 +49559,9 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
+    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
-        "ffb3b7abab788acdf238fdec096ed6fb55f9843f4df66b42965d9ea3a1bcd2ab"
+        "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
     "schedule_local_proposal": (
         "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e"
@@ -49915,6 +50864,97 @@ def _adequate_leader_three_way_service_outcome_contract_errors(
     return errors
 
 
+_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER = {
+    "CommitImportCausalSuccessorRetainsExactLineage": (
+        "AsyncTimeoutRecoveryDefinedVoteCandidateOwnerIsMember",
+        "AsyncTimeoutRecoveryDefinedVoteCandidateHasEpisodeWitness",
+        "AsyncTimeoutRecoveryMatchedVoteCandidateBindsFrozenEpisode",
+    ),
+    "AsyncCandidateProducerContinuationRunnerSelectionIsPairwisePhysicalMinimum": (
+        "AsyncLeaderWireCarrierCannotBypassFrozenPrefix",
+        "AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier",
+        "AsyncCertifiedFenceEscapeCrossesMatchingLeaderWireBarrier",
+    ),
+    "RetireLeaderWireLifecycleRetainsTerminalTombstone": (
+        "RetireLeaderWireLifecycleRecoveryCutPrunesOnlyDormant",
+    ),
+    "AsyncGateOpenDueResponsivePacketReentersClockDeadline": (
+        "AsyncServeProducerEpisodeMeasureIsFinite",
+        "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+        "AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt",
+        "AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt",
+        "AsyncTimeoutRecoveryResetRetiresExactlyResetNodes",
+    ),
+    "AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal": (
+        "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode",
+        "AsyncTimeoutRecoveryNodeEpisodeSetIsSingleton",
+        "AsyncTimeoutRecoveryIncumbentsCollapseToMatchedEpisode",
+        "AsyncTimeoutRecoveryFirstAdmissionHasNoIncumbent",
+        "AsyncTimeoutRecoveryCoalescedRetryHasIncumbent",
+        "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+        "AsyncTimeoutRecoveryFirstAdmissionCandidateSlotIsRemaining",
+        "AsyncTimeoutRecoveryCoalescedRetryCandidateSlotIsAdmitted",
+        "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+        "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+        "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+        "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+        "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+        "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState",
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+    ),
+    "AsyncRetransmitCompletedEpisodeClearsActiveOwner": (
+        "AsyncTimeoutRecoverySupersedesOnlyExactPreTimeoutRetransmit",
+    ),
+    "AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix": (
+        "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
+    ),
+    "AsyncControlServiceTransitionPreservesSemanticHandoffCoverage": (
+        "AsyncCandidateProducerContinuationStatusTransitionIsMonotone",
+    ),
+    "LeaderWireRestartReopenRefinesLifecycleTransition": (
+        "AsyncTimeoutVoteFairIngressDrainLeavesCoreState",
+        "AsyncPostGstHasNoControlServiceReset",
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode",
+        "AsyncUnchangedCoreStatePreservesTimeoutBoundary",
+        "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary",
+        "AsyncUnchangedCoreStateExcludesPersistInstall",
+        "AsyncFairIngressDrainPreservesRetransmitTimerState",
+        "AsyncFairIngressDrainExcludesDirectRetransmit",
+        "AsyncTypedOutstandingTagRemovalChangesFunction",
+        "AsyncDeferredRetransmitRemovesOutstandingTag",
+        "AsyncFairIngressDrainExcludesDeferredRetransmit",
+        "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+        "AsyncIngressDrainFramesDeferredAndCausalQueues",
+        "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+        "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+        "AsyncSequenceSetAfterAppendAddsOnlyValue",
+        "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+        "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+        "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+        "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+        "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+        "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase",
+        "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+        "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase",
+        "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+        "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+        "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+        "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+        "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+    ),
+    "AsyncLeaderWireLifecycleRolloverInstanceStartsEmpty": (
+        "AsyncTimeoutRecoveryRolloverInstanceStartsEmpty",
+    ),
+}
+
+_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT = 419
+# The release tuple is dependency-layer ordered, so pin declaration order
+# separately while retaining an explicit reviewed name set below.
+_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256 = (
+    "71ec60c5d451f24f7b0abc0dd7c1a872a8fef454e2cb99eee3daf818cbb4e7af"
+)
+
+
 def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Reject async-model shortcuts that previously made progress circular."""
 
@@ -49974,6 +51014,101 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{line}: {symbol} must equal only its exact reviewed "
                 f"base asynchronous invariant body {expected_body!r}; found "
                 f"{normalized!r}"
+            )
+
+    producer_episode_operator_contracts = {
+        "AsyncServeProducerEpisodeTypeInvariant": r"""
+asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+""",
+        "AsyncServeProducerEpisodeOwnershipInvariant": r"""
+\A node \in ValidatorIds:
+  asyncServeProducerEpisodeDue[node]
+    => /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+       /\ AsyncServeOffQueueReservations(node) = {}
+""",
+        "AsyncServeProducerEpisodeRestartStep": r"""
+\/ ResetNodeSchedulerForRestart(node, <<>>)
+\/ ResetNodeSchedulerForRestart(
+     node, FreshRestartCandidateSequence(RestartReplay(node)))
+""",
+        "AsyncServeProducerEpisodeReceiverCloseStep": r"""
+\E reservation \in asyncServeReservations:
+  /\ reservation.node = node
+  /\ PreGstServeReceiverCloseRollback(
+       node, reservation.identity)
+""",
+        "AsyncServeProducerEpisodeFinalRetirementStep": r"""
+/\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+/\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+/\ AsyncServeOffQueueReservations(node)' = {}
+/\ \/ DrainFairIngressSelected(node)
+   \/ DrainHistoricalIngressSelected(node)
+   \/ DrainInterruptedTipRecoveryIngressSelected(node)
+""",
+        "AsyncServeProducerEpisodeActiveThisStep": r"""
+/\ asyncServeProducerEpisodeDue[node]
+/\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+/\ AsyncServeOffQueueReservations(node) = {}
+/\ \/ RunNodeWork(node)
+   \/ RunHistoricalServer(node)
+""",
+        "AsyncServeProducerEpisodeTransition": r"""
+asyncServeProducerEpisodeDue' =
+  [node \in ValidatorIds |->
+     IF AsyncServeProducerEpisodeRestartStep(node)
+          \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
+     THEN FALSE
+     ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
+          THEN TRUE
+          ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
+               THEN FALSE
+               ELSE asyncServeProducerEpisodeDue[node]]
+""",
+    }
+    for symbol, expected_body in producer_episode_operator_contracts.items():
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing exact Serve producer-episode contract {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        expected = " ".join(expected_body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact one-shot "
+                "producer-debt ownership, classifier, and transition "
+                f"semantics {expected!r}; found {normalized!r}"
+            )
+
+    producer_episode_admission_blockers = (
+        "ReserveExactServeCapacityVia",
+        "AdvanceExactServeCapacityVia",
+        "ExactServeTransportAdmissionCanAdvanceVia",
+    )
+    due_blocker = "/\\ ~asyncServeProducerEpisodeDue[node]"
+    for symbol in producer_episode_admission_blockers:
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing fresh Serve admission boundary {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized.count(due_blocker) != 1:
+            errors.append(
+                f"{path}:{line}: {symbol} must block fresh Serve admission "
+                "exactly once while the one-shot producer episode is due"
             )
     liveness_facade_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     if liveness_facade_path.is_file():
@@ -50124,6 +51259,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncProducerProjectionStep": (
             ("AsyncCoreOuterFrame", "operator"),
         ),
+        "AsyncServeProducerEpisodeTransition": (
+            ("AsyncCoreOuterFrame", "operator"),
+        ),
         "AsyncCoreOuterFrame": (
             ("AsyncNonCrashOuterFrame", "operator"),
             ("AsyncRecoveryOuterFrame", "operator"),
@@ -50206,10 +51344,19 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncSchedulerTypeInvariant": (
             ("AsyncStrongTypeInvariant", "operator"),
         ),
+        "AsyncServeProducerEpisodeTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncServeProducerEpisodeOwnershipInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
         "AsyncServiceActivationPairInvariant": (
             ("AsyncStrongTypeInvariant", "operator"),
         ),
         "AsyncControlServiceStateTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant": (
             ("AsyncStrongTypeInvariant", "operator"),
         ),
         "AsyncCandidateLifecycleSchedulerCoverageInvariant": (
@@ -50558,7 +51705,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"shortcut {retired_capacity_shortcut} is prohibited"
             )
 
-    reviewed_local_theorems = ASYNC_NETWORK_RELEASE_THEOREMS
+    reviewed_local_theorem_additions = tuple(
+        symbol
+        for additions in _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER.values()
+        for symbol in additions if symbol not in ASYNC_NETWORK_RELEASE_THEOREMS
+    )
+    reviewed_local_theorems = (
+        *ASYNC_NETWORK_RELEASE_THEOREMS,
+        *reviewed_local_theorem_additions,
+    )
+    reviewed_local_theorem_set = frozenset(reviewed_local_theorems)
     observed_local_theorems = tuple(
         re.findall(
             r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
@@ -50567,11 +51723,40 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             stripped,
         )
     )
-    if observed_local_theorems != reviewed_local_theorems:
+    observed_local_theorem_set = frozenset(observed_local_theorems)
+    observed_local_theorem_order_sha256 = hashlib.sha256(
+        "\n".join(observed_local_theorems).encode("utf-8")
+    ).hexdigest()
+    reviewed_inventory_is_exact = (
+        len(reviewed_local_theorems)
+        == len(reviewed_local_theorem_set)
+        == _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT
+    )
+    if (
+        not reviewed_inventory_is_exact
+        or len(observed_local_theorems)
+        != _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT
+        or observed_local_theorem_set != reviewed_local_theorem_set
+        or observed_local_theorem_order_sha256
+        != _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256
+    ):
+        missing_local_theorems = sorted(
+            reviewed_local_theorem_set - observed_local_theorem_set
+        )
+        extra_local_theorems = sorted(
+            observed_local_theorem_set - reviewed_local_theorem_set
+        )
         errors.append(
             f"{path}: SumeragiV2AsyncNetwork must declare exactly the "
-            "reviewed local theorem inventory "
-            f"{reviewed_local_theorems!r}; found {observed_local_theorems!r}"
+            "reviewed local theorem inventory and declaration order; "
+            f"reviewed_inventory_is_exact={reviewed_inventory_is_exact!r}, "
+            f"missing={missing_local_theorems!r}, "
+            f"extra={extra_local_theorems!r}, expected_count="
+            f"{_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT}, "
+            f"found_count={len(observed_local_theorems)}, expected_order_sha256="
+            f"{_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256}, "
+            f"found_order_sha256={observed_local_theorem_order_sha256}; "
+            f"found {observed_local_theorems!r}"
         )
 
     fairness_proof_path = (
@@ -52628,6 +53813,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "CommitCertificateResponseAuthorized": (
             '/\\ item.kind = "CommitCertificateResponse" '
             "/\\ item.source \\in AsyncIngressSources "
+            "/\\ item.source = item.envelope.request.envelope.recipient "
             "/\\ item.envelope.request \\in asyncActiveRequests "
             "/\\ CommitCertificateRequestAuthorized("
             "item.envelope.request) "
@@ -53309,6 +54495,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ candidate.evidence \\in asyncSentItems "
                 "/\\ candidate.evidence.kind = "
                 '"CommitCertificateResponse" '
+                "/\\ candidate.evidence.source = "
+                "candidate.evidence.envelope.request.envelope.recipient "
                 "/\\ candidate.evidence.envelope.recipient = candidate.node "
                 "/\\ candidate.evidence.envelope.qc = qc "
                 "/\\ CommitCertificateRequestAuthorized( "
@@ -55372,6 +56560,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncItemTyped": (
             'item.kind = "TimeoutCertificate"',
             "AsyncTcEnvelopeTyped(item.envelope)",
+            'item.kind = "CommitCertificateResponse"',
+            "AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)",
+            "item.source = item.envelope.request.envelope.recipient",
             'item.kind \\notin {"Noise", "Chunk", "CertifiedResponse", "CommitCertificateResponse"}',
             "item.source \\in ValidatorIds",
         ),
@@ -56288,7 +57479,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             if drain_start < 0 or drain_end < 0
             else runner_source[drain_start:drain_end]
         )
-        turn_loop = drain_body.find("for turn in outer_ingress_turns(limit)")
+        turn_loop = drain_body.find(
+            "for turn in outer_ingress_turns(limit, executor.context().id(), "
+            "executor.context().height)"
+        )
         runtime_turn = drain_body.find(
             "if turn == OuterIngressTurn::Runtime", turn_loop
         )
@@ -58183,7 +59377,7 @@ self.server_streams
         "V2LaneWorkAdapter",
         "accept_certified_merge_sidecar_request",
         errors,
-        "frozen-roster sidecar Request admission",
+        "current-or-immediate-predecessor sidecar Request admission",
     )
     frozen_roster_contains = _require_qualified_rust_item(
         lane_path,
@@ -58211,12 +59405,46 @@ fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
         lane_path,
         lane_request,
         """
-if !self.frozen_roster_contains(&sender) {
-    return Ok(V2LaneIngressOutcome::Rejected);
-}
 let Some(reply_route) = reply_route else {
     return Ok(V2LaneIngressOutcome::Rejected);
 };
+if !reply_route.is_active() || reply_route.semantic_target() != &sender {
+    return Ok(V2LaneIngressOutcome::Rejected);
+}
+let sender_is_current = self.frozen_roster_contains(&sender);
+if !sender_is_current {
+    if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+        || request.requester != sender
+        || request.responder != self.local_peer
+        || request.closed_through >= request.semantic_sequence.get()
+        || request.request_id != request.canonical_request_id()
+        || request.encoded_len == 0
+        || request.encoded_len
+            > u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)
+        || !self
+            .immediate_predecessor_sidecar_requesters()
+            .is_some_and(|requesters| requesters.contains(&sender))
+    {
+        return Ok(V2LaneIngressOutcome::Rejected);
+    }
+    if self
+        .merge_sidecars
+        .would_allocate_current_server_stream(&sender, request.service_generation)
+    {
+        let historical_streams =
+            self.merge_sidecars
+                .server_stream_count_matching(|requester| {
+                    !self
+                        .context
+                        .roster
+                        .iter()
+                        .any(|entry| &entry.validator == requester)
+                });
+        if historical_streams >= wire::MAX_VALIDATORS_PER_HEIGHT {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
+    }
+}
 let now = Instant::now();
 let admission = match self.merge_sidecars.admit_server_request(
     &sender,
@@ -58226,14 +59454,14 @@ let admission = match self.merge_sidecars.admit_server_request(
     now,
 ) {
 """,
-        "a sidecar Request semantic sender must belong to the frozen HeightContext roster before route or transport allocation",
+        "a sidecar Request must bind an active exact route and admit only a current sender or a structurally valid bounded immediate predecessor before transport allocation",
         errors,
     )
     _require_rust_token_sequence(
         lane_path,
         lane_request,
         "self.frozen_roster_contains",
-        "Request admission must check only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
+        "Request admission must classify only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
         errors,
         count=1,
     )
@@ -58243,13 +59471,17 @@ let admission = match self.merge_sidecars.admit_server_request(
         "V2LaneWorkAdapter",
         "accept_certified_merge_sidecar_close",
         errors,
-        "frozen-roster sidecar Close admission",
+        "current-or-owned-predecessor sidecar Close admission",
     )
     _require_rust_token_sequence(
         lane_path,
         lane_close,
         """
-if !self.frozen_roster_contains(&sender) {
+if !self.frozen_roster_contains(&sender)
+    && !self
+        .merge_sidecars
+        .owns_current_server_stream(&sender, close.service_generation)
+{
     return Ok(V2LaneIngressOutcome::Rejected);
 }
 let Some(reply_route) = reply_route else {
@@ -58265,14 +59497,14 @@ let ack = match self.merge_sidecars.admit_server_close(
     &self.local_peer,
 ) {
 """,
-        "a sidecar Close semantic sender must belong to the frozen HeightContext roster before route or stream allocation",
+        "a sidecar Close must come from the frozen HeightContext roster or an already-owned current predecessor stream before route or stream mutation",
         errors,
     )
     _require_rust_token_sequence(
         lane_path,
         lane_close,
         "self.frozen_roster_contains",
-        "Close admission must check only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
+        "Close admission must classify only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
         errors,
         count=1,
     )
@@ -58616,6 +59848,26 @@ fn require_peeked_lane_work_effect(
         "every successful lane-work peek must fail stop if its exclusive drain becomes empty",
         errors,
         count=3,
+    )
+    run_inner = _require_rust_item(
+        runner_path,
+        runner_source,
+        "run_inner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        """
+services.drain_exact_serve_runtime_predecessor(
+    &mut executor,
+    serve_barrier.scheduler_ordinal(),
+)?
+""",
+        "the runner must drain exactly one strict completion only inside the "
+        "successfully claimed selected-Serve predecessor episode",
+        errors,
+        count=1,
     )
 
     chunk_network_floor = _require_rust_item(
@@ -58967,7 +60219,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     durable_kernel = _require_rust_item(
         binding_path,
         binding_source,
-        "queue_plan_synced_request_id_from_chain_digest",
+        "queue_plan_synced_request_id_from_network_digest",
         errors,
     )
     _require_rust_item_context(
@@ -58982,25 +60234,25 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
         binding_path,
         durable_kernel,
         """
-pub fn queue_plan_synced_request_id_from_chain_digest(
-    chain_id_digest: Hash,
+pub fn queue_plan_synced_request_id_from_network_digest(
+    network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
     Hash::new(
         norito::encode_canonical(&(
             QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash,
         ))
         .expect("deterministic QueuePlanSynced request identity must encode"),
     )
 }
 """,
-        "the QueuePlan semantic-request kernel must retain its exact nonconstant chain-digest and entrypoint projection",
+        "the QueuePlan semantic-request kernel must retain its exact nonconstant network-digest and entrypoint projection",
         errors,
     )
 
-    chain_wrapper = _require_rust_item(
+    network_wrapper = _require_rust_item(
         binding_path,
         binding_source,
         "queue_plan_synced_request_id",
@@ -59008,27 +60260,27 @@ pub fn queue_plan_synced_request_id_from_chain_digest(
     )
     _require_rust_item_context(
         binding_path,
-        chain_wrapper,
+        network_wrapper,
         (),
-        "the raw-chain QueuePlan semantic-request wrapper",
+        "the exact-network QueuePlan semantic-request wrapper",
         errors,
         expected_attributes=("#[must_use]",),
     )
     _require_exact_rust_tokens(
         binding_path,
-        chain_wrapper,
+        network_wrapper,
         """
 pub fn queue_plan_synced_request_id(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    queue_plan_synced_request_id_from_chain_digest(
-        queue_plan_admission_chain_id_digest(chain_id),
+    queue_plan_synced_request_id_from_network_digest(
+        queue_plan_admission_network_id_digest(network_id),
         entrypoint_hash,
     )
 }
 """,
-        "the raw-chain QueuePlan request wrapper must delegate the exact durable projection once",
+        "the exact-network QueuePlan request wrapper must delegate the exact durable projection once",
         errors,
     )
 
@@ -59052,7 +60304,7 @@ pub fn queue_plan_synced_request_id(
         binding_items["new"],
         """
 pub fn new(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &TransactionEntrypoint,
     routing_plan: &crate::queue::RoutingPlan,
     admission_context: crate::queue::QueuePlanAdmissionContextV2,
@@ -59066,12 +60318,12 @@ pub fn new(
         binding_path,
         binding_items["new"],
         """
-let chain_id_digest = queue_plan_admission_chain_id_digest(chain_id);
+let network_id_digest = queue_plan_admission_network_id_digest(network_id);
 let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
     version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-    chain_id_digest,
-    request_id: queue_plan_synced_request_id_from_chain_digest(
-        chain_id_digest,
+    network_id_digest,
+    request_id: queue_plan_synced_request_id_from_network_digest(
+        network_id_digest,
         transaction.hash(),
     ),
 };
@@ -59093,8 +60345,8 @@ binding.validate_structure()?;
         binding_items["validate_structure"],
         """
 if self.request_id
-    != queue_plan_synced_request_id_from_chain_digest(
-        self.chain_id_digest,
+    != queue_plan_synced_request_id_from_network_digest(
+        self.network_id_digest,
         self.entrypoint_hash.clone(),
     )
 {
@@ -59112,7 +60364,7 @@ if self.request_id
         binding_items["validate_for_request"],
         """
 if self.request_id
-    != queue_plan_synced_request_id(chain_id, transaction.hash())
+    != queue_plan_synced_request_id(network_id, transaction.hash())
 {
     return Err(
         "QueuePlan admission binding has a noncanonical semantic request identity"
@@ -59128,7 +60380,7 @@ self.validate_for_transaction_and_plan(transaction, routing_plan)
     certificate_validator = _require_rust_item(
         binding_path,
         binding_source,
-        "validate_queue_plan_admission_certificate_for_chain_digest_v2",
+        "validate_queue_plan_admission_certificate_for_network_digest_v2",
         errors,
     )
     _require_rust_token_sequence(
@@ -59153,7 +60405,7 @@ certificate.binding.validate_structure()?;
         """
 if let Some(binding) = expected_admission_binding
     && let Err(reason) =
-        binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)
+        binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)
 {
     return Err(Failure {
         tx: tx.into(),
@@ -59201,7 +60453,10 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)
+    iroha_core::torii_proxy::queue_plan_synced_request_id(
+        app.state.network_id_ref(),
+        entrypoint_hash,
+    )
 }
 """,
         "Torii must delegate QueuePlan semantic identity to the shared core kernel without a local projection",
@@ -59233,7 +60488,7 @@ let request_id =
         torii_execute,
         """
 match QueuePlanAdmissionBindingV2::new(
-    app.chain_id.as_ref(),
+    app.state.network_id_ref(),
     &transaction,
     &routing_plan,
     context,
@@ -59248,7 +60503,7 @@ match QueuePlanAdmissionBindingV2::new(
         torii_execute,
         """
 if let Err(error) =
-    binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)
+    binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)
 """,
         "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         errors,
@@ -59932,9 +61187,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its nine reviewed uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its ten reviewed uses and no additional mutation surface",
         errors,
-        count=9,
+        count=10,
     )
     for expected, description in (
         (
@@ -61344,10 +62599,10 @@ if self.pending_server_closures.is_empty() {
                 f"lane sidecar ACK bridge {item_name} production item",
                 expected_attributes=("#[allow(clippy::too_many_arguments)]",)
                 if item_name
-                in (
+                in {
                     "new_with_output_guard_and_transport",
                     "new_with_output_guard_and_transport_inner",
-                )
+                }
                 else (),
             )
         )
@@ -65681,7 +66936,7 @@ Self {
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get(
-            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"
         ),
         """
 let context = verified_context.context().clone();
@@ -66723,6 +67978,33 @@ self.collect_committed_lane_sessions();
     )
     _require_rust_token_sequence(
         lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
+        """
+let autonomous_anchor =
+    self.canonical_autonomous_anchor_matches_kura(&session.proposal);
+let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
+    &session.prepare_qc,
+    autonomous_anchor,
+)?;
+""",
+        "anchored lane persistence must derive autonomous execution authority from the checked PrepareQC role",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
+        """
+if autonomous_certificate {
+    persisted = persisted.saturating_add(1);
+    continue;
+}
+""",
+        "both durable and freshly persisted lane branches must use only checked autonomous certificate authority",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
         """
 if self.lane_sessions.len() >= hydration_capacity
@@ -67286,7 +68568,7 @@ self.finality_artifact_hash == HashOf::new(artifact)
     && self.predecessor_context_hash == HashOf::new(&artifact.height_context)
     && self.predecessor_context_id == artifact.context_id()
     && self.predecessor_height == artifact.height
-    && self.predecessor_chain_id == artifact.height_context.chain_id
+    && self.predecessor_network_id == artifact.height_context.network_id
     && self.finality_commit_qc == artifact.commit_qc
 """,
         "durable exact-output handoff receipt must bind the full predecessor context and exact finality artifact",
@@ -67299,7 +68581,7 @@ self.finality_artifact_hash == HashOf::new(artifact)
         ),
         """
 self.predecessor_height.checked_add(1) == Some(successor.height)
-    && self.predecessor_chain_id == successor.chain_id
+    && self.predecessor_network_id == successor.network_id
     && successor.parent_commit_qc.as_ref() == Some(&self.finality_commit_qc)
     && self.finality_commit_qc.round.context_id == self.predecessor_context_id
     && self.finality_commit_qc.round.height == self.predecessor_height
@@ -68768,7 +70050,7 @@ let source = kura
     .ok_or_else(|| {
         "durable CommitQC response lost its Kura finality source".to_owned()
     })?;
-if &source.height_context.chain_id != source_chain_id
+if &source.height_context.network_id != source_network_id
     || source.context_id() != *source_context_id
     || response.certificate != source.commit_qc
     || &response.responder != claimed_responder
@@ -68935,7 +70217,7 @@ let handoff = DurableExactOutputHandoffReceipt {
     predecessor_context_hash: HashOf::new(&self.context),
     predecessor_context_id: self.context.id(),
     predecessor_height: self.context.height,
-    predecessor_chain_id: self.context.chain_id.clone(),
+    predecessor_network_id: self.context.network_id,
     finality_artifact_hash: HashOf::new(artifact),
     finality_commit_qc: artifact.commit_qc.clone(),
 };
@@ -68989,7 +70271,7 @@ rollover_claim.validate_fanout(&messages, &peers)?;
 durable_history_source_covers(
     &messages,
     &rollover_claim,
-    &self.context.chain_id,
+    &self.context.network_id,
     self.context.height,
     self.kura.as_ref(),
 )?;
@@ -69457,41 +70739,85 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         errors,
     )
 
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: production exact-output rollover source must be a "
+            "regular file"
+        )
+        return errors
+    runner_parent_source = runner_path.read_text(encoding="utf-8")
+    runner_test_path, runner_test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
+        errors,
+        "production runner regression source",
+    )
+    runner_test_module_declaration = (
+        '#[cfg(test)]\n#[path = "v2_runner_tests.rs"]\nmod tests;'
+    )
+    if runner_parent_source.count(runner_test_module_declaration) != 1:
+        errors.append(
+            f"{runner_path}: production runner must compile exactly one "
+            "reviewed split test module"
+        )
+    height_ingress_path = (
+        runner_path.parent / "v2_runner" / "height_ingress_bindings.rs"
+    )
+    if not height_ingress_path.is_file() or height_ingress_path.is_symlink():
+        errors.append(
+            f"{height_ingress_path}: production joint height-ingress source must "
+            "be a regular file"
+        )
+        return errors
+    height_ingress_source = height_ingress_path.read_text(encoding="utf-8")
     height_ingress_binding_items: dict[str, RustItem | None] = {}
-    for owner, methods in (
-        ("LeaderWireIngressBinding", ("bind", "retire")),
-        ("HeightIngressBindings", ("new", "retire")),
+    for owner, methods, source_path, source in (
+        (
+            "LeaderWireIngressBinding",
+            ("bind", "retire"),
+            runner_path,
+            runner_source,
+        ),
+        (
+            "HeightIngressBindings",
+            ("new", "retire"),
+            height_ingress_path,
+            height_ingress_source,
+        ),
     ):
         for item_name in methods:
             qualified_name = f"runner::{owner}::{item_name}"
             height_ingress_binding_items[qualified_name] = (
                 _require_qualified_rust_item(
-                    runner_path,
-                    runner_source,
+                    source_path,
+                    source,
                     owner,
                     item_name,
                     errors,
                     f"joint height-ingress owner {owner}::{item_name}",
                 )
             )
-    for owner in ("LeaderWireIngressBinding", "HeightIngressBindings"):
+    for owner, source_path, source in (
+        ("LeaderWireIngressBinding", runner_path, runner_source),
+        ("HeightIngressBindings", height_ingress_path, height_ingress_source),
+    ):
         matches = [
             item
-            for item in rust_items(runner_source, "drop")
+            for item in rust_items(source, "drop")
             if item.brace_context == (("impl", "Drop", "for", owner),)
         ]
         qualified_name = f"runner::{owner}::drop"
         item = matches[0] if len(matches) == 1 else None
         if item is None:
             errors.append(
-                f"{runner_path}: require exactly one real {owner}::drop item; "
+                f"{source_path}: require exactly one real {owner}::drop item; "
                 f"found {len(matches)}"
             )
         height_ingress_binding_items[qualified_name] = item
     height_ingress_binding_items["runner::close_ingress_for_rollover"] = (
         _require_rust_item(
-            runner_path,
-            runner_source,
+            height_ingress_path,
+            height_ingress_source,
             "close_ingress_for_rollover",
             errors,
         )
@@ -69535,7 +70861,14 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     for qualified_name, expected_sha256 in (
         _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256.items()
     ):
-        path = ingress_path if qualified_name.startswith("ingress::") else runner_path
+        if qualified_name.startswith("ingress::"):
+            path = ingress_path
+        elif qualified_name.startswith("runner::HeightIngressBindings::") or qualified_name == (
+            "runner::close_ingress_for_rollover"
+        ):
+            path = height_ingress_path
+        else:
+            path = runner_path
         _require_rust_item_token_sha256(
             path,
             height_ingress_binding_items.get(qualified_name),
@@ -69598,7 +70931,7 @@ if let Err(error) = self.retire() {
         errors,
     )
     _require_exact_rust_tokens(
-        runner_path,
+        height_ingress_path,
         height_ingress_binding_items["runner::HeightIngressBindings::new"],
         """
 fn new(
@@ -69615,7 +70948,7 @@ fn new(
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
+        height_ingress_path,
         height_ingress_binding_items["runner::HeightIngressBindings::retire"],
         """
 match (
@@ -69667,7 +71000,7 @@ Ok(())
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
+        height_ingress_path,
         height_ingress_binding_items["runner::HeightIngressBindings::drop"],
         """
 if let Err(error) = self.retire() {
@@ -69687,7 +71020,7 @@ if let Err(error) = self.retire() {
         errors,
     )
     _require_exact_rust_tokens(
-        runner_path,
+        height_ingress_path,
         height_ingress_binding_items["runner::close_ingress_for_rollover"],
         """
 fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
@@ -69848,10 +71181,10 @@ Ok(())
             height_ingress_test_items[qualified_name] = None
             continue
         owner, test_name = qualification
-        test_path = runner_path if owner == "runner" else worker_path
-        test_source = runner_source if owner == "runner" else worker_source
+        test_path = runner_test_path if owner == "runner" else worker_path
+        test_source = runner_test_source if owner == "runner" else worker_source
         expected_context = (
-            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+            ()
             if owner == "runner"
             else (
                 (
@@ -69887,7 +71220,7 @@ Ok(())
         "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut"
     )
     _require_rust_token_sequence(
-        runner_path,
+        runner_test_path,
         runner_success,
         """
 bindings
@@ -69916,7 +71249,7 @@ bindings
         "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership"
     )
     _require_rust_token_sequence(
-        runner_path,
+        runner_test_path,
         runner_failure,
         """
 bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
@@ -70170,6 +71503,22 @@ if let Err(error) = self.retire() {
         "every abnormal binding drop must attempt the same ordered ingress retirement",
         errors,
     )
+    expected_exact_output_runner_items = {
+        "run_inner",
+        "drain_v2_ingress",
+        "rollover_finalized_height_outputs",
+        "dispatch_lane_work_effects",
+        "dispatch_lane_work_effect",
+    }
+    observed_exact_output_runner_items = set(
+        _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256
+    )
+    if observed_exact_output_runner_items != expected_exact_output_runner_items:
+        errors.append(
+            "exact-output runner source-seal inventory must be exact; "
+            f"missing={sorted(expected_exact_output_runner_items - observed_exact_output_runner_items)}, "
+            f"extra={sorted(observed_exact_output_runner_items - expected_exact_output_runner_items)}"
+        )
     runner_items: dict[str, RustItem | None] = {}
     for item_name, expected_sha256 in (
         _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256.items()
@@ -70546,6 +71895,57 @@ match services.prepare_certified_request(authenticated_via, authenticated) {
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
+if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+    admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+    continue;
+}
+""",
+        "KuraReplicaAdvert ingress must bypass both consensus reducers through its exact durable admission seam",
+        errors,
+    )
+    drain_item = runner_items.get("drain_v2_ingress")
+    if drain_item is not None:
+        drain_tokens = rust_code_tokens(drain_item.body)
+        kura_terminal_positions = _token_sequence_positions(
+            drain_tokens,
+            rust_code_tokens(
+                """
+if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+    admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+    continue;
+}
+"""
+            ),
+        )
+        lane_local_positions = _token_sequence_positions(
+            drain_tokens,
+            rust_code_tokens("if inbound.message().is_lane_local()"),
+        )
+        consensus_owner_positions = _token_sequence_positions(
+            drain_tokens,
+            rust_code_tokens(
+                "let mut ingress_ownership = inbound.take_ingress_ownership()"
+            ),
+        )
+        if (
+            len(kura_terminal_positions) != 1
+            or len(lane_local_positions) != 1
+            or len(consensus_owner_positions) != 1
+            or not (
+                kura_terminal_positions[0]
+                < lane_local_positions[0]
+                < consensus_owner_positions[0]
+            )
+        ):
+            errors.append(
+                f"{runner_path}:{drain_item.line}: KuraReplicaAdvert ingress "
+                "must bypass both consensus reducers through its exact durable "
+                "admission seam before lane-local or leader-wire dispatch"
+            )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
 let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
     V2RunnerError::Service(
         "global Sumeragi v2 ingress lost its fair ownership carrier".to_owned(),
@@ -70787,2119 +72187,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     return errors
 
 
-def _leader_wire_physical_ingress_production_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Seal logical lifecycle identity apart from fresh physical queue order.
-
-    Restart-dormant productive wire retains its durable logical token, but an
-    exact replay owns a newly admitted physical carrier and the source prefix
-    which existed immediately before that carrier.  The shared selector must
-    therefore validate the complete durable logical owner set while choosing
-    the live turn exclusively by physical carrier ordinal.
-    """
-
-    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
-    ingress_path = base / "mod.rs"
-    store_path = base / "serviced_candidate_store.rs"
-    errors: list[str] = []
-    for path, description in (
-        (ingress_path, "fair leader-wire physical ingress implementation"),
-        (store_path, "durable leader-wire logical lifecycle implementation"),
-    ):
-        if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: {description} must be a regular file")
-    if errors:
-        return errors
-
-    ingress_source = ingress_path.read_text(encoding="utf-8")
-    store_source = store_path.read_text(encoding="utf-8")
-
-    gate_set = _require_rust_item(
-        store_path,
-        store_source,
-        "ingress_scheduler_ordinals",
-        errors,
-    )
-    _require_rust_item_context(
-        store_path,
-        gate_set,
-        (("impl", "LeaderWireLifecycleStoreGate"),),
-        "durable leader-wire active logical owner-set projection",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        store_path,
-        gate_set,
-        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
-            "ingress_scheduler_ordinals"
-        ],
-        "durable leader-wire active logical owner-set projection",
-        errors,
-    )
-    _require_rust_token_sequence(
-        store_path,
-        gate_set,
-        """
-state
-    .records
-    .values()
-    .filter(|record| record.status == LeaderWireLifecycleStatus::Ingress)
-    .map(|record| record.token.scheduler_ordinal)
-    .collect()
-""",
-        "durable validation must expose every active logical scheduler owner",
-        errors,
-    )
-
-    gate_bind = _require_rust_item(
-        ingress_path,
-        ingress_source,
-        "bind_leader_wire_lifecycle_gate",
-        errors,
-    )
-    _require_rust_item_context(
-        ingress_path,
-        gate_bind,
-        (("impl", "FairV2Ingress"),),
-        "restart-restored leader-wire physical high-water binding",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        ingress_path,
-        gate_bind,
-        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
-            "bind_leader_wire_lifecycle_gate"
-        ],
-        "restart-restored leader-wire physical high-water binding",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        gate_bind,
-        """
-!token.validate_exact(
-    context_id,
-    height,
-    &state.roster,
-    state.leader_wire_max_chunk_count,
-) || token.admission_ordinal > restore.last_admission_ordinal()
-""",
-        "every restored durable token must remain at or below the restored "
-        "physical admission high-watermark",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        gate_bind,
-        """
-state.last_admission_ordinal = state
-    .last_admission_ordinal
-    .max(restore.last_admission_ordinal());
-""",
-        "restart binding must preserve the durable physical admission "
-        "high-watermark before any fresh carrier allocation",
-        errors,
-    )
-    if gate_bind is not None:
-        gate_bind_tokens = rust_code_tokens(gate_bind.body)
-        gate_bind_sequences = (
-            "token.admission_ordinal > restore.last_admission_ordinal()",
-            "lifecycle_ordinals.advance_past(restore.scheduler_ordinal_high_watermark())?;",
-            """
-state.last_admission_ordinal = state
-    .last_admission_ordinal
-    .max(restore.last_admission_ordinal());
-""",
-            "state.leader_wire_lifecycles = records;",
-        )
-        gate_bind_positions = [
-            _token_sequence_positions(
-                gate_bind_tokens,
-                rust_code_tokens(sequence),
-            )
-            for sequence in gate_bind_sequences
-        ]
-        if any(len(found) != 1 for found in gate_bind_positions) or any(
-            left[0] >= right[0]
-            for left, right in zip(
-                gate_bind_positions,
-                gate_bind_positions[1:],
-            )
-            if left and right
-        ):
-            errors.append(
-                f"{ingress_path}:{gate_bind.line}: restart binding must "
-                "validate every durable token before publishing the restored "
-                "physical high-watermark and lifecycle map in the exact "
-                "reviewed order"
-            )
-
-    dormant_admission = _require_rust_item(
-        ingress_path,
-        ingress_source,
-        "fair_v2_ingress_admit_leader_wire",
-        errors,
-    )
-    _require_rust_item_context(
-        ingress_path,
-        dormant_admission,
-        (),
-        "atomic leader-wire lifecycle admission",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        ingress_path,
-        dormant_admission,
-        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
-            "fair_v2_ingress_admit_leader_wire"
-        ],
-        "atomic leader-wire lifecycle admission",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        dormant_admission,
-        """
-if incumbent_status == FairV2IngressLeaderWireStatus::Dormant && publish_ingress {
-    let ingress_predecessors = state
-        .lanes
-        .iter()
-        .map(|(source, lane)| (source.clone(), lane.entries.len()))
-        .collect();
-    let receipt = gate
-        .admit_ingress(incumbent_token.clone())
-""",
-        "Dormant replay must freeze the complete current physical source prefix "
-        "before durable reactivation",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        dormant_admission,
-        """
-let admission_ordinal = state
-    .last_admission_ordinal
-    .checked_add(1)
-    .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;
-""",
-        "fresh leader-wire lifecycle admission must use the next physical "
-        "high-watermark ordinal",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        dormant_admission,
-        """
-let token = FairV2IngressLeaderWireToken {
-    source_class: identity.phase.source_class(),
-    identity,
-    slot: slot.clone(),
-    admission_ordinal,
-    scheduler_ordinal,
-};
-""",
-        "fresh leader-wire tokens must retain the exact next physical "
-        "admission ordinal separately from their scheduler ordinal",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        dormant_admission,
-        """
-incumbent.status = FairV2IngressLeaderWireStatus::Ingress;
-incumbent.ingress_predecessors = ingress_predecessors;
-""",
-        "Dormant replay must install its freshly frozen physical prefix",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        dormant_admission,
-        """
-let ingress_predecessors = state
-    .lanes
-    .iter()
-    .map(|(source, lane)| {
-        (
-            source.clone(),
-            lane.entries
-                .iter()
-                .filter(|entry| entry.admission_ordinal < admission_ordinal)
-                .count(),
-        )
-    })
-    .collect();
-""",
-        "fresh leader-wire admission must freeze every earlier physical source owner",
-        errors,
-    )
-
-    selector = _require_rust_item(
-        ingress_path,
-        ingress_source,
-        "try_recv_if_at_checked_classified",
-        errors,
-    )
-    _require_rust_item_context(
-        ingress_path,
-        selector,
-        (("impl", "FairV2Ingress"),),
-        "shared physical fair-ingress selector",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        ingress_path,
-        selector,
-        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
-            "try_recv_if_at_checked_classified"
-        ],
-        "shared physical fair-ingress selector",
-        errors,
-    )
-    for sequence, description in (
-        (
-            """
-let gate = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
-    "leader-wire selector crossed an unbound durable gate".to_owned()
-})?;
-let durable_ordinals = gate.ingress_scheduler_ordinals()?;
-let active_ordinals = active_leader_wire_owners
-    .iter()
-    .map(|record| record.token.scheduler_ordinal)
-    .collect::<BTreeSet<_>>();
-if durable_ordinals != active_ordinals {
-""",
-            "the selector must compare the complete durable and in-memory "
-            "logical Ingress owner sets",
-        ),
-        (
-            """
-for entry in state
-    .lanes
-    .values()
-    .flat_map(|lane| lane.entries.iter())
-{
-    let Some(token) = entry.leader_wire_token.as_ref() else {
-        continue;
-    };
-    if leader_wire_carrier_ordinals
-        .insert(token.clone(), entry.admission_ordinal)
-        .is_some()
-""",
-            "every physical leader-wire carrier must inject into one token owner",
-        ),
-        (
-            """
-let carrier_ordinal = leader_wire_carrier_ordinals
-    .remove(&owner.token)
-    .ok_or_else(|| {
-        "leader-wire selector lost its exact fair-ingress carrier".to_owned()
-    })?;
-active_leader_wire_carriers.push((owner, carrier_ordinal));
-""",
-            "every active logical Ingress owner must consume its one exact "
-            "physical carrier",
-        ),
-        (
-            """
-if !leader_wire_carrier_ordinals.is_empty() {
-    return Err("leader-wire carrier has no matching active lifecycle owner".to_owned());
-}
-active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);
-""",
-            "carrier correspondence must be total before ordering by physical ordinal",
-        ),
-        (
-            """
-match active_leader_wire_carriers.into_iter().next() {
-    Some((owner, carrier_ordinal)) => (Some(owner), Some(carrier_ordinal)),
-    None => (None, None),
-}
-""",
-            "the active leader-wire turn must be the minimum physical carrier",
-        ),
-        (
-            """
-leader_wire_carrier_ordinal
-    .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
-""",
-            "Serve-versus-leader arbitration must compare physical carrier ordinals",
-        ),
-        (
-            """
-index
-    < owner
-        .ingress_predecessors
-        .get(source)
-        .copied()
-        .unwrap_or(0)
-    || (owner
-        .ingress_predecessors
-        .values()
-        .all(|count| *count == 0)
-        && entry.leader_wire_token.as_ref() == Some(&owner.token))
-""",
-            "the restored leader-wire self-carrier must remain behind every frozen source-prefix predecessor",
-        ),
-    ):
-        _require_rust_token_sequence(
-            ingress_path,
-            selector,
-            sequence,
-            description,
-            errors,
-        )
-    if selector is not None and _token_sequence_count(
-        rust_code_tokens(selector.source),
-        rust_code_tokens(
-            ".min_by_key(|record| record.token.scheduler_ordinal)"
-        ),
-    ):
-        errors.append(
-            f"{ingress_path}:{selector.line}: shared leader-wire ingress may "
-            "not select by retained logical scheduler ordinal"
-        )
-
-    test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "mod",
-            "authoritative_runtime_gate_tests",
-        ),
-    )
-    regression_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(ingress_path, ingress_source, name, errors)
-        regression_items[name] = item
-        _require_rust_item_context(
-            ingress_path,
-            item,
-            test_context,
-            f"leader-wire physical-ingress regression {name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            ingress_path,
-            item,
-            expected_sha256,
-            f"leader-wire physical-ingress regression {name}",
-            errors,
-        )
-
-    restored_retry = regression_items.get(
-        "restored_productive_retry_freezes_the_current_physical_source_prefix"
-    )
-    for sequence, description in (
-        (
-            """
-let earlier = v2_commit_certificate_request(0, &fixture.validator);
-assert!(matches!(
-    fixture.ingress.try_push(InboundBlockMessage::new(
-        earlier,
-        Some(fixture.validator.clone()),
-    )),
-    Ok(super::FairV2IngressPushDisposition::Enqueued)
-));
-let earlier_ordinal = fixture
-    .ingress
-    .state
-    .lock()
-    .lanes
-    .values()
-    .flat_map(|lane| lane.entries.iter())
-    .find(|entry| entry.leader_wire_token.is_none())
-    .expect("ordinary traffic owns its physical occurrence")
-    .admission_ordinal;
-assert!(matches!(
-    fixture.ingress.try_push(InboundBlockMessage::new(
-        fixture.message.clone(),
-        Some(fixture.validator.clone()),
-    )),
-    Ok(super::FairV2IngressPushDisposition::Enqueued)
-));
-let retry_ordinal = fixture
-    .ingress
-    .state
-    .lock()
-    .lanes
-    .values()
-    .flat_map(|lane| lane.entries.iter())
-    .find(|entry| entry.leader_wire_token.as_ref() == Some(&fixture.token))
-    .expect("restored lifecycle acquired one fresh carrier")
-    .admission_ordinal;
-assert!(earlier_ordinal < retry_ordinal);
-""",
-            "the restart regression must admit an ordinary physical predecessor "
-            "before the restored lifecycle's fresh carrier",
-        ),
-        (
-            """
-fixture
-    .ingress
-    .try_recv_if(|inbound| {
-        inbound
-            .ingress_ownership()
-            .is_some_and(|ownership| ownership.leader_wire_token().is_some())
-    })
-    .is_none()
-""",
-            "the restart regression must reject target-only selection while its "
-            "frozen physical predecessor remains",
-        ),
-        (
-            """
-let first = fixture
-    .ingress
-    .try_recv_if(|_| true)
-    .expect("the replay-frozen physical predecessor drains first");
-assert!(matches!(
-    first.message(),
-    BlockMessage::V2(wire::ConsensusMessageV2 {
-        payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(_),
-        ..
-    })
-));
-""",
-            "the restart regression must drain and identify the frozen ordinary "
-            "predecessor before the replay",
-        ),
-        (
-            """
-let replay = fixture
-    .ingress
-    .try_recv_if(|_| true)
-    .expect("the exact replay drains after its frozen source prefix");
-assert!(
-    replay
-        .ingress_ownership()
-        .is_some_and(|ownership| {
-            ownership.leader_wire_token() == Some(&fixture.token)
-        })
-);
-""",
-            "the restart regression must drain the exact restored owner only "
-            "after its frozen physical prefix",
-        ),
-    ):
-        _require_rust_token_sequence(
-            ingress_path,
-            restored_retry,
-            sequence,
-            description,
-            errors,
-        )
-
-    return errors
-
-
-def _exact_serve_runtime_episode_production_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Seal the finite exact-Serve predecessor episode in production Rust.
-
-    The formal ingress rank relies on one immutable ticket ordinal, one
-    selected strictly older lifecycle owner per bounded turn, and a mandatory
-    full owner-set recheck before the ticket can enter target-only service.
-    This source contract keeps those facts distinct from the trusted host
-    scheduling/termination boundary.
-    """
-
-    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
-    worker_path = base / "v2_worker.rs"
-    runner_path = base / "v2_runner.rs"
-    effects_path = base / "v2_effects.rs"
-    runtime_path = base / "v2_runtime.rs"
-    errors: list[str] = []
-    for path, description in (
-        (worker_path, "exact-Serve queue/service implementation"),
-        (runner_path, "exact-Serve serialized-runner implementation"),
-        (effects_path, "exact-Serve executor owner publication"),
-        (runtime_path, "exact-Serve complete runtime owner comparison"),
-    ):
-        if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: {description} must be a regular file")
-    if errors:
-        return errors
-
-    _loaded_path, worker_source = _read_reviewed_rust_source(
-        repo_root,
-        worker_path.relative_to(repo_root).as_posix(),
-        errors,
-        "exact-Serve queue/service implementation",
-    )
-    _loaded_path, runner_source = _read_reviewed_rust_source(
-        repo_root,
-        runner_path.relative_to(repo_root).as_posix(),
-        errors,
-        "exact-Serve serialized-runner implementation",
-    )
-    effects_source = effects_path.read_text(encoding="utf-8")
-    _loaded_path, runtime_source = _read_reviewed_rust_source(
-        repo_root,
-        runtime_path.relative_to(repo_root).as_posix(),
-        errors,
-        "exact-Serve complete runtime owner comparison",
-    )
-
-    struct_items: dict[str, RustItem | None] = {}
-    for struct_name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256.items()
-    ):
-        matches = rust_struct_items(worker_source, struct_name)
-        if len(matches) != 1:
-            errors.append(
-                f"{worker_path}: require exactly one real exact-Serve state "
-                f"carrier named {struct_name}; found {len(matches)}"
-            )
-            continue
-        item = matches[0]
-        struct_items[struct_name] = item
-        _require_rust_item_context(
-            worker_path,
-            item,
-            (),
-            f"exact-Serve state carrier {struct_name}",
-            errors,
-            expected_attributes={
-                "V2IoCertifiedServeIngressReservation": ("#[derive(Debug)]",),
-                "CertifiedServeProducerEpisode": ("#[must_use]",),
-                "V2IoCommandQueueState": (),
-            }[struct_name],
-        )
-        _require_rust_item_token_sha256(
-            worker_path,
-            item,
-            expected_sha256,
-            f"exact-Serve state carrier {struct_name}",
-            errors,
-        )
-
-    reservation_state = struct_items.get("V2IoCertifiedServeIngressReservation")
-    _require_rust_token_sequence(
-        worker_path,
-        reservation_state,
-        """
-struct V2IoCertifiedServeIngressReservation {
-    id: CertifiedServeIngressReservationId,
-    lifecycle_id: CertifiedServeLifecycleId,
-    projection: CertifiedServeIngressProjection,
-    request: wire::CertifiedBodyRequest,
-    state: CertifiedServeIngressReservationState,
-    handed_off: Option<Arc<AtomicBool>>,
-    carrier_ordinal: Option<u64>,
-    runtime_episode: CertifiedServeRuntimeEpisodeState,
-}
-""",
-        "the exact-Serve reservation must keep its physical scheduler ticket, "
-        "logical lifecycle, payload, carrier, and bounded runtime episode in "
-        "their distinct reviewed field roles",
-        errors,
-    )
-    queue_state = struct_items.get("V2IoCommandQueueState")
-    _require_rust_token_sequence(
-        worker_path,
-        queue_state,
-        """
-producer_episode_due: bool,
-producer_episode_active: bool,
-sender_open: bool,
-receiver_open: bool,
-""",
-        "the queue state must retain distinct one-shot due and finite active "
-        "producer-episode fields before endpoint liveness",
-        errors,
-    )
-
-    _require_rust_source_token_sequence(
-        worker_path,
-        worker_source,
-        """
-enum CertifiedServeRuntimeEpisodeState {
-    Ready,
-    Claimed {
-        predecessor_ordinal: Option<u128>,
-    },
-    Complete,
-}
-""",
-        "exact-Serve episode must retain distinct ready, one-owner claimed, "
-        "and irreversible complete states",
-        errors,
-    )
-
-    reservation_items: dict[str, RustItem | None] = {}
-    reservation_context = (("impl", "V2IoCertifiedServeIngressReservation"),)
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256.items()
-    ):
-        matching = [
-            item
-            for item in rust_items(worker_source, name)
-            if item.brace_context == reservation_context
-        ]
-        item = matching[0] if len(matching) == 1 else None
-        if item is None:
-            errors.append(
-                f"{worker_path}: require exactly one real exact-Serve ingress "
-                f"reservation method named {name}; found {len(matching)}"
-            )
-        reservation_items[name] = item
-        _require_rust_item_context(
-            worker_path,
-            item,
-            reservation_context,
-            f"exact-Serve ingress reservation identity seam {name}",
-            errors,
-        )
-        _require_rust_item_token_sha256(
-            worker_path,
-            item,
-            expected_sha256,
-            f"exact-Serve ingress reservation identity seam {name}",
-            errors,
-        )
-
-    reservation_barrier = reservation_items.get("barrier")
-    for sequence, description in (
-        (
-            "if self.handed_off.is_none()",
-            "an exact-Serve barrier must retain its live fair-ingress carrier",
-        ),
-        (
-            "let carrier_ordinal = self.carrier_ordinal.ok_or_else",
-            "an exact-Serve barrier must retain its fresh physical carrier ordinal",
-        ),
-        (
-            "if self.id.0 == 0 || carrier_ordinal == 0",
-            "logical and physical exact-Serve ordinals must both remain nonzero",
-        ),
-        (
-            """
-CertifiedServeBarrier {
-    request_hash: self.projection.request_hash,
-    scheduler_ordinal: self.id.0,
-    lifecycle_id: self.lifecycle_id,
-    carrier_ordinal,
-}
-""",
-            "the runner barrier must project the exact request, physical scheduler "
-            "ticket, logical lifecycle, and carrier",
-        ),
-    ):
-        _require_rust_token_sequence(
-            worker_path,
-            reservation_barrier,
-            sequence,
-            description,
-            errors,
-        )
-
-    reservation_match = reservation_items.get("matches_barrier")
-    for sequence, description in (
-        (
-            "self.id.0 == barrier.scheduler_ordinal",
-            "episode claims must retain the exact physical Serve scheduler ticket",
-        ),
-        (
-            "self.lifecycle_id == barrier.lifecycle_id",
-            "episode claims must retain the exact logical Serve lifecycle",
-        ),
-        (
-            "self.projection.request_hash == barrier.request_hash",
-            "episode claims must retain the exact Serve request hash",
-        ),
-        (
-            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
-            "episode claims must retain the selected physical carrier occurrence",
-        ),
-        (
-            "self.handed_off.is_some()",
-            "episode claims must retain the live fair-ingress handoff",
-        ),
-    ):
-        _require_rust_token_sequence(
-            worker_path,
-            reservation_match,
-            sequence,
-            description,
-            errors,
-        )
-
-    worker_items: dict[str, RustItem | None] = {}
-    for owner, name, description in (
-        (
-            "V2IoCommandQueue",
-            "reserve_serve_ingress",
-            "immutable exact-Serve ticket admission",
-        ),
-        (
-            "V2IoCommandQueue",
-            "retire_selected_serve_ingress_occurrence",
-            "atomic final-Serve to producer-episode handoff",
-        ),
-        (
-            "V2IoCommandQueue",
-            "try_begin_producer_episode",
-            "queue-atomic ordinary producer exclusion",
-        ),
-        (
-            "V2IoCommandQueue",
-            "suspend_materialized_serve_barrier_for_runtime_predecessor",
-            "physical target-unit transfer to one older owner",
-        ),
-        (
-            "V2IoCommandQueue",
-            "serve_barrier",
-            "exact-Serve runner barrier projection",
-        ),
-        (
-            "V2IoCommandQueue",
-            "claim_serve_runtime_episode",
-            "one-turn exact-Serve episode claim",
-        ),
-        (
-            "V2IoCommandQueue",
-            "serve_runtime_predecessor_capacity_available",
-            "exact-Serve predecessor capacity preflight",
-        ),
-        (
-            "V2IoCommandQueue",
-            "finish_serve_runtime_episode_turn",
-            "mandatory exact-Serve post-turn settlement",
-        ),
-        (
-            "V2IoCommandQueue",
-            "try_send_as",
-            "strict older-owner I/O admission",
-        ),
-        (
-            "ProductionV2Services",
-            "certified_serve_barrier",
-            "production exact-Serve barrier projection",
-        ),
-        (
-            "ProductionV2Services",
-            "claim_certified_serve_runtime_episode",
-            "production exact-Serve episode claim",
-        ),
-        (
-            "ProductionV2Services",
-            "certified_serve_runtime_predecessor_capacity_available",
-            "production exact-Serve predecessor capacity preflight",
-        ),
-        (
-            "ProductionV2Services",
-            "finish_certified_serve_runtime_episode_turn",
-            "production exact-Serve post-turn settlement",
-        ),
-        (
-            "ProductionV2Services",
-            "try_begin_certified_serve_producer_episode",
-            "production ordinary producer exclusion",
-        ),
-        (
-            "ProductionV2Services",
-            "take_exact_serve_predecessor_completion",
-            "strict older completed-owner selection",
-        ),
-        (
-            "ProductionV2Services",
-            "take_lifecycle_prefix_completion",
-            "shared strict/inclusive completed-owner selection",
-        ),
-        (
-            "ProductionV2Services",
-            "drain_exact_serve_runtime_predecessor",
-            "one-completion exact-Serve predecessor drain",
-        ),
-        (
-            "ProductionV2Services",
-            "drain_completions_inner",
-            "policy-bounded completion drain",
-        ),
-    ):
-        key = f"{owner}::{name}"
-        worker_items[key] = _require_qualified_rust_item(
-            worker_path,
-            worker_source,
-            owner,
-            name,
-            errors,
-            description,
-        )
-
-    drop_matches = [
-        item
-        for item in rust_items(worker_source, "drop")
-        if item.brace_context
-        == (("impl", "Drop", "for", "CertifiedServeProducerEpisode"),)
-    ]
-    producer_drop = drop_matches[0] if len(drop_matches) == 1 else None
-    if producer_drop is None:
-        errors.append(
-            f"{worker_path}: require exactly one real "
-            "CertifiedServeProducerEpisode::drop item; "
-            f"found {len(drop_matches)}"
-        )
-    else:
-        _require_rust_item_context(
-            worker_path,
-            producer_drop,
-            (("impl", "Drop", "for", "CertifiedServeProducerEpisode"),),
-            "finite ordinary producer-episode retirement",
-            errors,
-        )
-    worker_items["CertifiedServeProducerEpisode::drop"] = producer_drop
-
-    for key, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256.items()
-    ):
-        _require_rust_item_token_sha256(
-            worker_path,
-            worker_items.get(key),
-            expected_sha256,
-            f"exact-Serve production seam {key}",
-            errors,
-        )
-
-    reserve = worker_items.get("V2IoCommandQueue::reserve_serve_ingress")
-    _require_rust_token_sequence(
-        worker_path,
-        reserve,
-        """
-let ordinal = match self.lifecycle_ordinals.reserve_one() {
-    Ok(ordinal) if ordinal > state.next_serve_ingress_reservation_ordinal => ordinal,
-""",
-        "exact-Serve tickets must use a fresh actor-global monotone ordinal",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        reserve,
-        "runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,",
-        "each fresh physical exact-Serve occurrence must start one ready episode",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        reserve,
-        """
-if state.producer_episode_due || state.producer_episode_active {
-    return Err(CertifiedServeIngressReserveError::Busy);
-}
-""",
-        "fresh Serve admission must not cross a due or active producer episode",
-        errors,
-    )
-
-    retire = worker_items.get(
-        "V2IoCommandQueue::retire_selected_serve_ingress_occurrence"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        retire,
-        """
-let promoted = Self::promote_next_serve_ingress_waiter(state);
-if !promoted
-    && state.serve_ingress_reservation.is_none()
-    && state.serve_ingress_waiters.is_empty()
-    && state.serve_barrier.is_none()
-    && state.sender_open
-    && state.receiver_open
-{
-    state.producer_episode_due = true;
-}
-promoted
-""",
-        "final frozen Serve retirement must atomically arm exactly one producer episode after every admitted waiter is exhausted",
-        errors,
-    )
-
-    producer_start = worker_items.get(
-        "V2IoCommandQueue::try_begin_producer_episode"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        producer_start,
-        """
-if state.serve_ingress_reservation.is_some()
-    || !state.serve_ingress_waiters.is_empty()
-    || state.serve_barrier.is_some()
-{
-    return Ok(None);
-}
-if state.producer_episode_active {
-    return Err("Sumeragi v2 runner nested an I/O producer episode".to_owned());
-}
-state.producer_episode_due = false;
-state.producer_episode_active = true;
-""",
-        "ordinary producers must consume the one-shot handoff and acquire one "
-        "queue-atomic episode only when no exact target exists",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        producer_drop,
-        """
-let mut state = self.queue.lock();
-if !state.producer_episode_active {
-    return;
-}
-state.producer_episode_active = false;
-""",
-        "ordinary producer episodes must retire under the same queue lock",
-        errors,
-    )
-
-    claim = worker_items.get("V2IoCommandQueue::claim_serve_runtime_episode")
-    _require_rust_token_sequence(
-        worker_path,
-        claim,
-        """
-CertifiedServeRuntimeEpisodeState::Ready => {
-    reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Claimed {
-        predecessor_ordinal: None,
-    };
-    Ok(true)
-}
-CertifiedServeRuntimeEpisodeState::Claimed { .. }
-| CertifiedServeRuntimeEpisodeState::Complete => Ok(false),
-""",
-        "one exact occurrence may claim only one unsettled predecessor turn",
-        errors,
-    )
-
-    capacity = worker_items.get(
-        "V2IoCommandQueue::serve_runtime_predecessor_capacity_available"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        capacity,
-        """
-Ok(transferable_target_slot
-    || (state.commands.len() < self.capacity
-        && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))
-""",
-        "an older causal owner may run only with a free consensus unit or the "
-        "atomically transferable target unit",
-        errors,
-    )
-
-    finish = worker_items.get(
-        "V2IoCommandQueue::finish_serve_runtime_episode_turn"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        finish,
-        """
-reservation.runtime_episode = if older_predecessor_remains {
-    CertifiedServeRuntimeEpisodeState::Ready
-} else {
-    CertifiedServeRuntimeEpisodeState::Complete
-};
-""",
-        "the mandatory full recheck must either reopen one bounded turn or "
-        "irreversibly complete the occurrence",
-        errors,
-    )
-
-    suspend = worker_items.get(
-        "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        suspend,
-        """
-assert_eq!(index + 1, state.commands.len(),
-    "later I/O work cannot appear behind an uncommitted Serve barrier");
-""",
-        "only the physical FIFO-tail target unit may transfer to an older owner",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        suspend,
-        """
-.state = V2IoServeState::PendingCapacity;
-assert!(state.pending_serve_requests.insert(lifecycle_id, request).is_none(),
-    "materialized Serve barrier cannot already own a pending request");
-self.admission.release();
-""",
-        "target-unit transfer must retain the logical request and dematerialize "
-        "only its physical placeholder",
-        errors,
-    )
-
-    serve_barrier = worker_items.get("V2IoCommandQueue::serve_barrier")
-    _require_rust_token_sequence(
-        worker_path,
-        serve_barrier,
-        """
-if let Some(reservation) = ingress
-    && (state
-        .serve_by_request
-        .get(&reservation.projection.request_hash)
-        != Some(&reservation.lifecycle_id)
-        || !state.serves.contains_key(&reservation.lifecycle_id))
-{
-    return Err("Sumeragi v2 Serve barrier lost its raw-admission lifecycle".to_owned());
-}
-""",
-        "a raw exact-Serve barrier must remain indexed by its immutable logical lifecycle",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        serve_barrier,
-        """
-let barrier = reservation.barrier()?;
-if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != lifecycle_id
-{
-    return Err("Sumeragi v2 Serve barrier changed its lifecycle request".to_owned());
-}
-""",
-        "a materialized exact-Serve barrier must validate both request and logical lifecycle",
-        errors,
-    )
-
-    enqueue = worker_items.get("V2IoCommandQueue::try_send_as")
-    _require_rust_token_sequence(
-        worker_path,
-        enqueue,
-        """
-if command_ordinal >= reservation.id.0 {
-    return None;
-}
-""",
-        "equal or later causal work must not enter an exact ticket's frozen prefix",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        enqueue,
-        """
-CertifiedServeRuntimeEpisodeState::Claimed {
-    predecessor_ordinal: Some(existing),
-} if existing == command_ordinal => Some(command_ordinal),
-""",
-        "one claimed turn may admit fanout only for its already-selected owner",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        enqueue,
-        """
-let exact_target_active = state.serve_ingress_reservation.is_some()
-    || !state.serve_ingress_waiters.is_empty()
-    || state.serve_barrier.is_some();
-if exact_target_active && exact_predecessor_ordinal.is_none() {
-    return Err(V2IoTrySendError::Full(command));
-}
-""",
-        "later causal, Control, Completion, and priority work must be blocked "
-        "while the selected target, any admitted waiter, or its materialized "
-        "barrier owns the next position",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        enqueue,
-        """
-if suspended_target {
-    assert!(self.materialize_serve_barrier(&mut state),
-        "failed predecessor admission must restore its exact Serve placeholder");
-}
-""",
-        "failed older-owner admission must restore the exact target atomically",
-        errors,
-    )
-
-    _require_exact_rust_tokens(
-        worker_path,
-        worker_items.get("ProductionV2Services::certified_serve_barrier"),
-        """
-pub(crate) fn certified_serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
-    self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)
-}
-""",
-        "the production exact-Serve barrier wrapper must project only through the attached I/O owner",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        worker_items.get(
-            "ProductionV2Services::claim_certified_serve_runtime_episode"
-        ),
-        """
-pub(crate) fn claim_certified_serve_runtime_episode(
-    &self,
-    barrier: CertifiedServeBarrier,
-) -> Result<bool, String> {
-    self.io
-        .as_ref()
-        .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-        .claim_serve_runtime_episode(barrier)
-}
-""",
-        "the production exact-Serve claim wrapper must fail closed and forward the exact barrier",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        worker_items.get(
-            "ProductionV2Services::certified_serve_runtime_predecessor_capacity_available"
-        ),
-        """
-pub(crate) fn certified_serve_runtime_predecessor_capacity_available(
-    &self,
-    barrier: CertifiedServeBarrier,
-) -> Result<bool, String> {
-    self.io
-        .as_ref()
-        .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-        .serve_runtime_predecessor_capacity_available(barrier)
-}
-""",
-        "the production exact-Serve capacity wrapper must fail closed and forward the exact barrier",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        worker_items.get(
-            "ProductionV2Services::finish_certified_serve_runtime_episode_turn"
-        ),
-        """
-pub(crate) fn finish_certified_serve_runtime_episode_turn(
-    &self,
-    barrier: CertifiedServeBarrier,
-    older_predecessor_remains: bool,
-) -> Result<(), String> {
-    self.io
-        .as_ref()
-        .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-        .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
-}
-""",
-        "the production exact-Serve settlement wrapper must fail closed and forward the barrier and recheck result",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        worker_path,
-        worker_items.get(
-            "ProductionV2Services::try_begin_certified_serve_producer_episode"
-        ),
-        """
-pub(crate) fn try_begin_certified_serve_producer_episode(
-    &self,
-) -> Result<Option<CertifiedServeProducerEpisode>, String> {
-    self.io
-        .as_ref()
-        .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-        .try_begin_producer_episode()
-}
-""",
-        "the production producer-episode wrapper must fail closed and delegate to the queue-atomic gate",
-        errors,
-    )
-
-    completed = worker_items.get(
-        "ProductionV2Services::take_exact_serve_predecessor_completion"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        completed,
-        """
-self.take_lifecycle_prefix_completion(
-    runtime_capacity_available,
-    serve_lifecycle_ordinal,
-    false,
-)
-""",
-        "the exact-Serve selector must route to the shared helper with a strict lifecycle cut",
-        errors,
-    )
-
-    lifecycle_prefix = worker_items.get(
-        "ProductionV2Services::take_lifecycle_prefix_completion"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        lifecycle_prefix,
-        """
-let within_cut = |ordinal: u128| {
-    if inclusive {
-        ordinal <= lifecycle_cut
-    } else {
-        ordinal < lifecycle_cut
-    }
-};
-""",
-        "the shared completion selector must distinguish inclusive timeout "
-        "ownership from strict exact-Serve predecessors",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        lifecycle_prefix,
-        """
-owned.runtime_lifecycle_ordinal.is_some_and(|ordinal| {
-    within_cut(ordinal)
-        && (runtime_capacity_available || !owned.requires_runtime_capacity)
-})
-""",
-        "I/O completion selection must apply the reviewed lifecycle cut and runtime-capacity gate",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        lifecycle_prefix,
-        """
-.filter(|completion| within_cut(completion.runtime_lifecycle_ordinal()))
-.min_by_key(|completion| completion.runtime_lifecycle_ordinal())
-""",
-        "local completion selection must apply the same lifecycle cut and choose the least immutable ordinal",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        lifecycle_prefix,
-        """
-(Some(io), Some(local)) if io < local => Some(CompletionSource::Io),
-(Some(io), Some(local)) if local < io => Some(CompletionSource::Local),
-(Some(_), Some(_)) => Some(self.next_completion_source),
-""",
-        "completion selection must choose the least owner and retain finite fair tie-breaking",
-        errors,
-    )
-
-    exact_drain = worker_items.get(
-        "ProductionV2Services::drain_exact_serve_runtime_predecessor"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        exact_drain,
-        """
-self.drain_completions_inner(
-    executor,
-    1,
-    CompletionDrainPolicy::ExactServePredecessor {
-        serve_lifecycle_ordinal,
-    },
-)
-""",
-        "each exact-Serve predecessor turn may admit at most one completed owner",
-        errors,
-    )
-    completion_inner = worker_items.get(
-        "ProductionV2Services::drain_completions_inner"
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        completion_inner,
-        "while attempts < limit {",
-        "every completion policy must retain its caller-supplied finite bound",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        completion_inner,
-        """
-CompletionDrainPolicy::ExactServePredecessor {
-    serve_lifecycle_ordinal,
-} => self.take_exact_serve_predecessor_completion(
-    runtime_capacity_available,
-    serve_lifecycle_ordinal,
-),
-""",
-        "the exact policy must use only the strict ticket-indexed selector",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        completion_inner,
-        """
-CompletionDrainPolicy::TimeoutRecoveryPrefix {
-    inclusive_lifecycle_cut,
-} => self.take_timeout_recovery_prefix_completion(
-    runtime_capacity_available,
-    inclusive_lifecycle_cut,
-),
-""",
-        "the finite completion drain must retain the separately inclusive timeout-recovery selector",
-        errors,
-    )
-
-    runner_item = _require_rust_item(
-        runner_path,
-        runner_source,
-        "advance_executor_once_before_exact_serve",
-        errors,
-    )
-    _require_rust_item_context(
-        runner_path,
-        runner_item,
-        (),
-        "one-step exact-Serve serialized transition",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        runner_path,
-        runner_item,
-        _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256[
-            "advance_executor_once_before_exact_serve"
-        ],
-        "one-step exact-Serve serialized transition",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_item,
-        """
-executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-let _ = executor.step(Instant::now(), services)?;
-""",
-        "one exact-Serve turn must execute at most one serialized transition",
-        errors,
-    )
-
-    effect_items: dict[str, RustItem | None] = {}
-    effect_contexts = {
-        "publish_external_lifecycle_owners": (
-            ("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),
-        ),
-        "older_runtime_lifecycle_predates_exact_serve": (
-            ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
-        ),
-    }
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256.items()
-    ):
-        item = _require_rust_item(effects_path, effects_source, name, errors)
-        effect_items[name] = item
-        _require_rust_item_context(
-            effects_path,
-            item,
-            effect_contexts[name],
-            f"exact-Serve executor seam {name}",
-            errors,
-        )
-        _require_rust_item_token_sha256(
-            effects_path,
-            item,
-            expected_sha256,
-            f"exact-Serve executor seam {name}",
-            errors,
-        )
-    _require_exact_rust_tokens(
-        effects_path,
-        effect_items.get("publish_external_lifecycle_owners"),
-        """
-fn publish_external_lifecycle_owners(&mut self) -> Result<(), EffectExecutorError> {
-    let owners = self.external_lifecycle_owners()?;
-    self.runtime
-        .set_external_lifecycle_owners(owners)
-        .map_err(EffectExecutorError::Runtime)
-}
-""",
-        "exact-Serve owner publication must snapshot every executor-retained owner and preserve the runtime error boundary",
-        errors,
-    )
-    _require_rust_token_sequence(
-        effects_path,
-        effect_items.get("older_runtime_lifecycle_predates_exact_serve"),
-        """
-self.publish_external_lifecycle_owners()?;
-self.runtime
-    .older_lifecycle_predates_exact_serve(now, serve_lifecycle_ordinal)
-""",
-        "executor-retained owners must publish before the runtime freezes and "
-        "deeply validates the complete owner set before comparing runnable predecessors",
-        errors,
-    )
-
-    runtime_context = (
-        ("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),
-    )
-    runtime_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256.items()
-    ):
-        item = _require_rust_item(runtime_path, runtime_source, name, errors)
-        runtime_items[name] = item
-        _require_rust_item_context(
-            runtime_path,
-            item,
-            runtime_context,
-            f"exact-Serve runtime seam {name}",
-            errors,
-        )
-        _require_rust_item_token_sha256(
-            runtime_path,
-            item,
-            expected_sha256,
-            f"exact-Serve runtime seam {name}",
-            errors,
-        )
-    runtime_minimum = runtime_items.get("minimum_active_lifecycle_ordinal")
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_minimum,
-        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
-        "the exact-Serve runtime minimum must exclude no active owner",
-        errors,
-    )
-    runtime_minimum_excluding = runtime_items.get(
-        "minimum_active_lifecycle_ordinal_excluding"
-    )
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_minimum_excluding,
-        "let _ = self.ingress.oldest_active_lifecycle_ordinal()?;",
-        "the exact-Serve runtime minimum must deeply validate every FIFO and "
-        "latent Local FIFO owner",
-        errors,
-    )
-    runtime_runnable = runtime_items.get("minimum_runnable_lifecycle_ordinal")
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_runnable,
-        """
-let _ = self.minimum_active_lifecycle_ordinal()?;
-let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;
-""",
-        "exact-Serve predecessor selection must deeply validate all owners before projecting runnable FIFO work",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_runnable,
-        """
-if self.driver.deferred_work_is_serviceable() {
-    for admission_ordinal in self.eligible_deferred_admission_ordinals()? {
-""",
-        "serviceable deferred work must participate in the runnable exact-Serve predecessor minimum",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_minimum_excluding,
-        """
-let mut minimum = self
-    .ingress
-    .dormant_local_fifo_reservations
-    .iter()
-    .map(|reservation| reservation.admission_ordinal)
-    .min();
-""",
-        "the exact-Serve runtime minimum must retain latent Local FIFO "
-        "reservations as unconditional predecessors",
-        errors,
-    )
-    runtime_uses = runtime_items.get("active_lifecycle_uses_ordinal")
-    _require_rust_token_sequence(
-        runtime_path,
-        runtime_uses,
-        """
-if self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)? {
-    return Ok(true);
-}
-""",
-        "exact-Serve collision checks must include bounded-ingress and dormant owners",
-        errors,
-    )
-
-    ingress_context = (
-        (
-            "impl",
-            "<",
-            "C",
-            ":",
-            "ExactRuntimeCommandIdentity",
-            ">",
-            "BoundedIngress",
-            "<",
-            "C",
-            ">",
-        ),
-    )
-    ingress_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256.items()
-    ):
-        matching = [
-            item
-            for item in rust_items(runtime_source, name)
-            if item.brace_context == ingress_context
-        ]
-        item = matching[0] if len(matching) == 1 else None
-        if item is None:
-            errors.append(
-                f"{runtime_path}: require exactly one real bounded-ingress "
-                f"exact-Serve ownership method named {name}; found {len(matching)}"
-            )
-        ingress_items[name] = item
-        _require_rust_item_context(
-            runtime_path,
-            item,
-            ingress_context,
-            f"exact-Serve bounded-ingress ownership seam {name}",
-            errors,
-        )
-        _require_rust_item_token_sha256(
-            runtime_path,
-            item,
-            expected_sha256,
-            f"exact-Serve bounded-ingress ownership seam {name}",
-            errors,
-        )
-    _require_rust_token_sequence(
-        runtime_path,
-        ingress_items.get("oldest_active_lifecycle_ordinal"),
-        """
-for reservation in &self.dormant_local_fifo_reservations {
-    if reservation.admission_ordinal == 0
-        || !self
-            .lifecycle_ordinals
-            .recognizes_minted(reservation.admission_ordinal)
-            .map_err(|_| EnqueueError::FailClosed)?
-    {
-        return Err(EnqueueError::FailClosed);
-    }
-}
-Ok(command_minimum)
-""",
-        "latent Local FIFO reservations must retain exact minted identity but "
-        "remain passive until a runnable occurrence materializes",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runtime_path,
-        ingress_items.get("uses_lifecycle_ordinal"),
-        """
-if self
-    .dormant_local_fifo_reservations
-    .iter()
-    .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)
-{
-    return Ok(true);
-}
-""",
-        "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
-        errors,
-    )
-    runtime_compare = runtime_items.get(
-        "older_lifecycle_predates_exact_serve"
-    )
-    for sequence, description in (
-        (
-            "self.ingress.lifecycle_ordinals.recognizes_minted(serve_lifecycle_ordinal)",
-            "the exact ticket ordinal must come from the shared actor-global source",
-        ),
-        (
-            "self.freeze_due_clock_owners(now)",
-            "due clocks must acquire immutable ownership before comparison",
-        ),
-        (
-            "self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal)",
-            "ticket/runtime ordinal collisions must fail closed",
-        ),
-        (
-            "self.minimum_runnable_lifecycle_ordinal(now)",
-            "exact-Serve comparison must use only owners runnable by one serialized turn",
-        ),
-        (
-            "minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal)",
-            "the runnable owner minimum must be strictly older than the ticket",
-        ),
-    ):
-        _require_rust_token_sequence(
-            runtime_path,
-            runtime_compare,
-            sequence,
-            description,
-            errors,
-        )
-
-    run_inner = _require_rust_item(
-        runner_path,
-        runner_source,
-        "run_inner",
-        errors,
-    )
-    for sequence, description in (
-        (
-            """
-let claimed_older_runtime_episode = services
-    .claim_certified_serve_runtime_episode(serve_barrier)
-    .map_err(V2RunnerError::Service)?;
-if claimed_older_runtime_episode {
-    services.drain_exact_serve_runtime_predecessor(
-        &mut executor,
-        serve_barrier.scheduler_ordinal(),
-    )?;
-""",
-            "an exact target turn must claim before selecting one completed predecessor",
-        ),
-        (
-            """
-if executor.older_runtime_lifecycle_predates_exact_serve(
-    Instant::now(),
-    serve_barrier.scheduler_ordinal(),
-)? && services
-    .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
-    .map_err(V2RunnerError::Service)?
-{
-""",
-            "the serialized predecessor step must require both an older owner and "
-            "physical capacity",
-        ),
-        (
-            """
-older_predecessor_remains = executor
-    .older_runtime_lifecycle_predates_exact_serve(
-        Instant::now(),
-        serve_barrier.scheduler_ordinal(),
-    )?;
-services
-    .finish_certified_serve_runtime_episode_turn(
-        serve_barrier,
-        older_predecessor_remains,
-    )
-""",
-            "every claimed turn must re-publish/recheck the full owner set before "
-            "settlement",
-        ),
-        (
-            """
-let Some(_certified_serve_producer_episode) = services
-    .try_begin_certified_serve_producer_episode()
-    .map_err(V2RunnerError::Service)?
-else {
-    let _ = wake_rx.recv_timeout(IDLE_POLL);
-    continue;
-};
-""",
-            "the queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
-        ),
-    ):
-        _require_rust_token_sequence(
-            runner_path,
-            run_inner,
-            sequence,
-            description,
-            errors,
-        )
-
-    expected_test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
-    )
-    worker_regression_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(worker_path, worker_source, name, errors)
-        worker_regression_items[name] = item
-        _require_rust_item_context(
-            worker_path,
-            item,
-            expected_test_context,
-            f"exact-Serve runtime-episode regression {name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            worker_path,
-            item,
-            expected_sha256,
-            f"exact-Serve runtime-episode regression {name}",
-            errors,
-        )
-
-    for name, sequence, description, count in (
-        (
-            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
-            "for fresh_ticket_ordinal in first_ticket_ordinal..=later_ordinal",
-            "the strict exact-Serve regression must exclude an equal-or-later completion through every non-newer ticket",
-            1,
-        ),
-        (
-            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
-            "service.take_exact_serve_predecessor_completion(true, later_ordinal + 1)",
-            "the strict exact-Serve regression must release the later completion only after a strictly newer ticket",
-            1,
-        ),
-        (
-            "repeated_exact_serve_claims_close_all_older_sources_before_later_io",
-            """
-service
-    .finish_certified_serve_runtime_episode_turn(barrier, false)
-    .expect("later-rank I/O cannot keep the older-owner episode open");
-assert!(
-    !service
-        .claim_certified_serve_runtime_episode(barrier)
-        .expect("completed episode cannot be reclaimed")
-);
-""",
-            "repeated exact-Serve claims must become irreversible after the complete older-owner set is exhausted",
-            1,
-        ),
-        (
-            "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
-            """
-assert!(
-    !command_tx
-        .serve_runtime_predecessor_capacity_available(barrier)
-        .expect("inspect the full frozen prefix"),
-    "the runner must wait instead of dispatching a retained effect into a full queue"
-);
-""",
-            "a full Control prefix must deny predecessor capacity until its sole physical slot drains",
-            1,
-        ),
-        (
-            "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
-            """
-command_tx.try_send(sign(2)),
-Err(V2IoTrySendError::Full(_))
-""",
-            "an equal-ticket causal owner must remain outside both the frozen and transferred exact-Serve prefix",
-            2,
-        ),
-        (
-            "worker_completion_is_retained_behind_a_full_runtime_fifo",
-            """
-for expected_debt in 1..=3 {
-    assert!(
-        io.record_completion_service_attempt(0),
-        "the full runtime FIFO must retain the oldest worker completion"
-    );
-""",
-            "a full runtime FIFO must retain the oldest worker completion and accrue bounded service debt",
-            1,
-        ),
-        (
-            "worker_completion_is_retained_behind_a_full_runtime_fifo",
-            """
-let snapshot = io.completion_snapshot(snapshot_at);
-assert_eq!(snapshot.depth, 1);
-""",
-            "a full runtime FIFO must retain the exact oldest worker completion while service debt grows",
-            1,
-        ),
-        (
-            "production_drain_publishes_worker_completion_behind_full_runtime_fifo",
-            """
-service.retire_held_io_completion();
-let drained = service
-    .io
-    .as_ref()
-    .expect("attached completion owner")
-    .completion_snapshot(Instant::now());
-assert_eq!(drained.depth, 1);
-assert!(
-    !command_rx.queue.lock().work.contains_key(&work_id),
-    "retiring the consumed held result acknowledges exact work ownership"
-);
-""",
-            "production completion drain must explicitly acknowledge the exact held worker result",
-            1,
-        ),
-        (
-            "production_drain_publishes_worker_completion_behind_full_runtime_fifo",
-            """
-let second = service
-    .last_status
-    .as_ref()
-    .expect("repeated backpressure republishes effect status");
-assert_eq!(second.effect_completion_queue.depth, 2);
-assert_eq!(second.effect_completion_queue.max_service_debt, 2);
-""",
-            "production completion drain must retain and republish the full worker prefix under repeated runtime backpressure",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            """
-gate.reserve(request.request(), &via, true, 2),
-Err(CertifiedServeIngressReserveError::Busy)
-""",
-            "a drained exact retransmission must wait for the owed producer episode before reserving a new carrier",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            """
-command_tx
-    .queue
-    .lifecycle_ordinals
-    .next_ordinal_for_test(),
-scheduler_before_retry,
-""",
-            "a blocked exact retransmission must not mint an actor-global ordinal",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            """
-let post_drain_producer_episode = command_tx
-    .try_begin_producer_episode()
-    .expect("consume the post-drain producer handoff")
-    .expect("final Serve retirement owes one producer episode");
-drop(post_drain_producer_episode);
-""",
-            "a drained exact retransmission must consume the atomic producer handoff before readmission",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            "retry_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal()",
-            "a drained exact retransmission must receive a fresh scheduler ordinal",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            """
-retry_barrier.lifecycle_id(),
-first_barrier.lifecycle_id(),
-""",
-            "a drained exact retransmission must retain its immutable logical lifecycle",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            "retry_barrier.carrier_ordinal() > first_barrier.carrier_ordinal()",
-            "a drained exact retransmission must receive a fresh physical carrier ordinal",
-            1,
-        ),
-        (
-            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-            "assert!(matches!(retry_commit, CertifiedServeCommit::Coalesced));",
-            "a drained exact retransmission must resolve through its retained logical lifecycle",
-            1,
-        ),
-        (
-            "certified_serve_future_slot_blocks_control_and_consensus_replenishment",
-            """
-for class in [V2IoAdmissionClass::Consensus, V2IoAdmissionClass::Control] {
-""",
-            "a reserved future Serve slot must block both later Consensus and Control replenishment",
-            1,
-        ),
-    ):
-        _require_rust_token_sequence(
-            worker_path,
-            worker_regression_items.get(name),
-            sequence,
-            description,
-            errors,
-            count=count,
-        )
-
-    producer_handoff_regression = _require_rust_item(
-        worker_path,
-        worker_source,
-        "final_serve_retirement_yields_one_producer_episode_before_replenishment",
-        errors,
-    )
-    for sequence, description, count in (
-        (
-            """
-assert!(state.producer_episode_due);
-assert!(!state.producer_episode_active);
-assert!(state.serve_ingress_reservation.is_none());
-assert!(state.serve_ingress_waiters.is_empty());
-""",
-            "the handoff regression must observe due only after the complete frozen Serve batch retires",
-            1,
-        ),
-        (
-            """
-gate.reserve(replenishment.request(), &via, true, 3),
-Err(CertifiedServeIngressReserveError::Busy)
-""",
-            "the handoff regression must reject replenishment both before and during the producer episode",
-            2,
-        ),
-        (
-            """
-command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-actor_ordinal_before,
-""",
-            "the handoff regression must preserve the actor-global ordinal while replenishment is blocked",
-            1,
-        ),
-        (
-            """
-command_tx.queue.lock().next_serve_admission_ordinal,
-lifecycle_ordinal_before,
-""",
-            "the handoff regression must preserve the logical lifecycle high-watermark while replenishment is blocked",
-            1,
-        ),
-        (
-            """
-let producer_episode = command_tx
-    .try_begin_producer_episode()
-    .expect("consume the atomic post-Serve handoff")
-    .expect("the final frozen Serve batch owes one producer episode");
-""",
-            "the handoff regression must consume the owed producer episode through the production queue gate",
-            1,
-        ),
-        (
-            """
-drop(producer_episode);
-{
-    let state = command_tx.queue.lock();
-    assert!(!state.producer_episode_due);
-    assert!(!state.producer_episode_active);
-}
-
-assert!(matches!(
-    ingress.try_push(certified_serve_inbound_with_route(
-        replenishment.request(),
-        via,
-        replenishment_route,
-    )),
-    Ok(FairV2IngressPushDisposition::Enqueued)
-));
-""",
-            "the handoff regression must reopen Serve admission only after the bounded producer lease retires",
-            1,
-        ),
-    ):
-        _require_rust_token_sequence(
-            worker_path,
-            producer_handoff_regression,
-            sequence,
-            description,
-            errors,
-            count=count,
-        )
-
-    runtime_test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "mod",
-            "tests",
-        ),
-    )
-    runtime_regression_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(runtime_path, runtime_source, name, errors)
-        runtime_regression_items[name] = item
-        _require_rust_item_context(
-            runtime_path,
-            item,
-            runtime_test_context,
-            f"exact-Serve latent-replay regression {name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            runtime_path,
-            item,
-            expected_sha256,
-            f"exact-Serve latent-replay regression {name}",
-            errors,
-        )
-
-    dormant_replay = runtime_regression_items.get(
-        "restart_dormant_local_fifo_reservation_survives_full_class_churn"
-    )
-    for sequence, description, count in (
-        (
-            """
-runtime.minimum_active_lifecycle_ordinal(),
-Ok(Some(1)),
-""",
-            "restart-dormant ownership must remain in the complete active lifecycle inventory before and after materialization",
-            2,
-        ),
-        (
-            """
-!runtime
-    .older_lifecycle_predates_exact_serve(started_at, later_serve)
-    .expect("inspect passive dormant ownership at the Serve cut")
-""",
-            "restart-dormant ownership must remain passive until its runnable occurrence materializes",
-            1,
-        ),
-        (
-            "assert!(runtime.ingress.dormant_local_fifo_reservations.is_empty());",
-            "an exact full-capacity replay must atomically consume its dormant reservation",
-            1,
-        ),
-        (
-            "assert_eq!(selected.selected, RuntimeSelectedOwnerKind::Fifo);",
-            "the materialized restart-dormant owner must dispatch as the oldest runnable FIFO owner",
-            1,
-        ),
-        (
-            """
-runtime.driver.delivered,
-vec![(owner_tag, 9)],
-""",
-            "the restored restart-dormant owner must dispatch before every younger physical command",
-            1,
-        ),
-        (
-            """
-Err(EnqueueError::FailClosed),
-"ReuseDormant after latent-slot removal cannot recreate the drained stage"
-""",
-            "a drained restart-dormant lifecycle must not resurrect after its latent slot is consumed",
-            1,
-        ),
-        (
-            "assert!(runtime.fail_closed);",
-            "a rejected restart-dormant resurrection must latch the runtime fail closed",
-            1,
-        ),
-    ):
-        _require_rust_token_sequence(
-            runtime_path,
-            dormant_replay,
-            sequence,
-            description,
-            errors,
-            count=count,
-        )
-
-    return errors
+_execute_checker_component("sumeragi_v2_proof_ledger_runtime_ingress_contracts.py")
 
 
 def _local_runner_service_contract_source_fidelity_errors(
@@ -73021,7 +72309,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         liveness_path,
         liveness_source,
         "LocalRunnerServiceContractDebt",
-        "IF node \\in LocalRunnerServiceOwners "
+        "IF node \\in AsyncTimedServiceNodes "
         "/\\ asyncNodeServiceDeadlines[node] <= asyncNow "
         "THEN 1 ELSE 0",
     )
@@ -73029,7 +72317,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         liveness_path,
         liveness_source,
         "LocalRunnerServiceContractDecreaseStep",
-        "\\E node \\in LocalRunnerServiceOwners: "
+        "\\E node \\in AsyncTimedServiceNodes: "
         "LocalRunnerServiceContractDebt(node)' "
         "< LocalRunnerServiceContractDebt(node)",
     )
@@ -73138,11 +72426,26 @@ def _local_runner_service_contract_source_fidelity_errors(
         if runner_path.is_file() and not runner_path.is_symlink()
         else ""
     )
-    worker_source = (
-        worker_path.read_text(encoding="utf-8")
-        if worker_path.is_file() and not worker_path.is_symlink()
-        else ""
+    _loaded_worker_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        errors,
+        "local-runner service worker and reviewed test components",
     )
+    runner_test_path, runner_test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
+        errors,
+        "selected-Serve runner regression source",
+    )
+    runner_test_module_declaration = (
+        '#[cfg(test)]\n#[path = "v2_runner_tests.rs"]\nmod tests;'
+    )
+    if runner_source.count(runner_test_module_declaration) != 1:
+        errors.append(
+            f"{runner_path}: local runner must compile exactly one reviewed "
+            "split test module"
+        )
 
     _require_rust_source_token_sequence(
         runner_path,
@@ -73207,9 +72510,14 @@ def _local_runner_service_contract_source_fidelity_errors(
     selected_serve_regression_seal_keys = {
         "runner::CertifiedServeBarrierLivenessAction",
         "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+        "worker::SelectedServeTimeoutRecoveryMode",
+        "worker::SelectedServeLatePassiveFetch",
         "worker::SelectedServeTimeoutRecoveryFixture",
         "worker::SelectedServeTimeoutRecoveryFixture::new",
+        "worker::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch",
+        "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
         "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+        "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
         "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode",
         "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix",
         "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker",
@@ -73343,33 +72651,21 @@ fn service_certified_serve_barrier_liveness_turn<E>(
         errors,
     )
     selected_serve_regression = _require_rust_item(
-        runner_path,
-        runner_source,
+        runner_test_path,
+        runner_test_source,
         "complete_certified_serve_episode_cannot_veto_pacemaker",
         errors,
     )
     _require_rust_item_context(
-        runner_path,
+        runner_test_path,
         selected_serve_regression,
-        (
-            (
-                "#",
-                "[",
-                "cfg",
-                "(",
-                "test",
-                ")",
-                "]",
-                "mod",
-                "tests",
-            ),
-        ),
+        (),
         "selected-Serve composed timeout-recovery regression",
         errors,
         expected_attributes=("#[test]", "#[allow(clippy::too_many_lines)]"),
     )
     _require_rust_item_token_sha256(
-        runner_path,
+        runner_test_path,
         selected_serve_regression,
         _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
             "runner::complete_certified_serve_episode_cannot_veto_pacemaker"
@@ -73444,13 +72740,20 @@ for _ in 0..16 {
     }
 }
 recovery.assert_complete();
-}
 """,
             "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
         ),
+        (
+            """
+let mut late_passive_fetch =
+    super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch();
+late_passive_fetch.assert_late_passive_fetch_completion_reopens_selected_serve();
+""",
+            "selected-Serve regression must execute the real late-passive-Fetch completion, target release, and producer handoff",
+        ),
     ):
         _require_rust_token_sequence(
-            runner_path,
+            runner_test_path,
             selected_serve_regression,
             sequence,
             description,
@@ -73508,6 +72811,97 @@ recovery.assert_complete();
     fixture_structs = rust_struct_items(
         worker_source, "SelectedServeTimeoutRecoveryFixture"
     )
+    fixture_mode_enums = tuple(
+        item
+        for item in rust_enum_items(
+            worker_source, "SelectedServeTimeoutRecoveryMode"
+        )
+        if item.brace_context == worker_test_context
+    )
+    if len(fixture_mode_enums) != 1:
+        errors.append(
+            f"{worker_path}: require exactly one closed selected-Serve fixture "
+            f"mode enum; found {len(fixture_mode_enums)}"
+        )
+    else:
+        fixture_mode_enum = fixture_mode_enums[0]
+        _require_rust_item_context(
+            worker_path,
+            fixture_mode_enum,
+            worker_test_context,
+            "selected-Serve fixture mode vocabulary",
+            errors,
+            expected_attributes=(
+                "#[cfg(feature = \"bls\")]",
+                "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
+            ),
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            fixture_mode_enum,
+            _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
+                "worker::SelectedServeTimeoutRecoveryMode"
+            ],
+            "selected-Serve fixture mode vocabulary",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            worker_path,
+            fixture_mode_enum,
+            """
+enum SelectedServeTimeoutRecoveryMode {
+    TimeoutRecovery,
+    LatePassiveFetch,
+}
+""",
+            "selected-Serve fixture mode vocabulary must remain closed",
+            errors,
+        )
+
+    late_fetch_structs = tuple(
+        item
+        for item in rust_struct_items(worker_source, "SelectedServeLatePassiveFetch")
+        if item.brace_context == worker_test_context
+    )
+    if len(late_fetch_structs) != 1:
+        errors.append(
+            f"{worker_path}: require exactly one retained late-passive-Fetch "
+            f"fixture carrier; found {len(late_fetch_structs)}"
+        )
+    else:
+        late_fetch_struct = late_fetch_structs[0]
+        _require_rust_item_context(
+            worker_path,
+            late_fetch_struct,
+            worker_test_context,
+            "retained late-passive-Fetch fixture carrier",
+            errors,
+            expected_attributes=("#[cfg(feature = \"bls\")]",),
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            late_fetch_struct,
+            _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
+                "worker::SelectedServeLatePassiveFetch"
+            ],
+            "retained late-passive-Fetch fixture carrier",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            worker_path,
+            late_fetch_struct,
+            """
+struct SelectedServeLatePassiveFetch {
+    body_store: V2BodyStore,
+    task: BodyFetchTask,
+    manifest: wire::PayloadManifest,
+    body: Vec<u8>,
+}
+""",
+            "late-passive-Fetch fixture must retain the exact body store, immutable task owner, manifest, and body",
+            errors,
+        )
+
     if len(fixture_structs) != 1:
         errors.append(
             f"{worker_path}: require exactly one real production-shaped "
@@ -73543,7 +72937,9 @@ pub(in crate::sumeragi) struct SelectedServeTimeoutRecoveryFixture {
     _leader_wire_directory: TempDir,
     ingress: Arc<FairV2Ingress>,
     serve_gate: CertifiedServeIngressGate,
+    missing_proposal_request: AuthenticatedCertifiedBodyRequest,
     missing_proposal_request_hash: HashOf<wire::CertifiedBodyRequest>,
+    late_passive_fetch: Option<SelectedServeLatePassiveFetch>,
     executor: V2EffectExecutor<SerializedV2Runtime>,
     services: ProductionV2Services,
     command_rx: V2IoCommandReceiver,
@@ -73608,11 +73004,20 @@ pub(in crate::sumeragi) struct SelectedServeTimeoutRecoveryFixture {
         return item
 
     selected_serve_fixture_methods = {
-        "new": bind_selected_serve_worker_method(
-            "new", expected_attributes=("#[allow(clippy::too_many_lines)]",)
+        "new": bind_selected_serve_worker_method("new"),
+        "new_late_passive_fetch": bind_selected_serve_worker_method(
+            "new_late_passive_fetch"
+        ),
+        "new_for_mode": bind_selected_serve_worker_method(
+            "new_for_mode",
+            expected_attributes=("#[allow(clippy::too_many_lines)]",),
         ),
         "service_exact_serve_runtime_prefix": bind_selected_serve_worker_method(
             "service_exact_serve_runtime_prefix"
+        ),
+        "assert_late_passive_fetch_completion_reopens_selected_serve": bind_selected_serve_worker_method(
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            expected_attributes=("#[allow(clippy::too_many_lines)]",),
         ),
         "service_timeout_vote_episode": bind_selected_serve_worker_method(
             "service_timeout_vote_episode"
@@ -73630,6 +73035,29 @@ pub(in crate::sumeragi) struct SelectedServeTimeoutRecoveryFixture {
         ),
         "drop": bind_selected_serve_worker_method("drop", drop_impl=True),
     }
+
+    _require_exact_rust_tokens(
+        worker_path,
+        selected_serve_fixture_methods["new"],
+        """
+pub(in crate::sumeragi) fn new() -> Self {
+    Self::new_for_mode(SelectedServeTimeoutRecoveryMode::TimeoutRecovery)
+}
+""",
+        "the timeout-recovery fixture constructor must select only its exact closed mode",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        worker_path,
+        selected_serve_fixture_methods["new_late_passive_fetch"],
+        """
+pub(in crate::sumeragi) fn new_late_passive_fetch() -> Self {
+    Self::new_for_mode(SelectedServeTimeoutRecoveryMode::LatePassiveFetch)
+}
+""",
+        "the late-passive-Fetch fixture constructor must select only its exact closed mode",
+        errors,
+    )
 
     for sequence, description in (
         (
@@ -73757,43 +73185,226 @@ let mut executor = V2EffectExecutor::with_runtime(
     EffectQueueConfig::default(),
 )
 .expect("construct selected-Serve effect executor");
-executor
-    .arm_live_clocks(started_at)
-    .expect("arm selected-Serve timeout clocks");
-let timeout_owner = executor
-    .freeze_due_timeout_owner_for_test(Instant::now())
-    .expect("freeze the height-start timeout before later Serve ingress");
-assert_eq!(
-    timeout_owner.lifecycle_ordinal(),
-    1,
-    "the height-start timeout owns the first actor-global scheduler position"
-);
-let consensus_observations = install_consensus_route_observer(&mut services);
+let late_passive_fetch = match mode {
+    SelectedServeTimeoutRecoveryMode::TimeoutRecovery => {
+        executor
+            .arm_live_clocks(started_at)
+            .expect("arm selected-Serve timeout clocks");
+        let timeout_owner = executor
+            .freeze_due_timeout_owner_for_test(Instant::now())
+            .expect("freeze the height-start timeout before later Serve ingress");
+        assert_eq!(
+            timeout_owner.lifecycle_ordinal(),
+            1,
+            "the height-start timeout owns the first actor-global scheduler position"
+        );
+        None
+    }
 """,
             "selected-Serve fixture must freeze the height-start timeout at actor-global ordinal one",
         ),
     ):
         _require_rust_token_sequence(
             worker_path,
-            selected_serve_fixture_methods["new"],
+            selected_serve_fixture_methods["new_for_mode"],
             sequence,
             description,
             errors,
         )
 
-    selected_serve_new = selected_serve_fixture_methods["new"]
-    if selected_serve_new is not None:
-        new_tokens = rust_code_tokens(selected_serve_new.source)
+    for sequence, description in (
+        (
+            """
+let (mut services, keys) = fixture();
+if mode == SelectedServeTimeoutRecoveryMode::LatePassiveFetch {
+    allow_fixture_block_payload(&mut services.context);
+    services.leader_wire_recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+        services.context.id(),
+        services.context.height,
+        [0xF4; 32],
+        services.active_tag.view(),
+        false,
+    );
+}
+let context = services.context.clone();
+""",
+            "late-passive-Fetch mode must widen the exact context and rebuild its recovery authority before cloning any context-bound service",
+        ),
+        (
+            """
+let runtime_directory =
+    TempDir::new().expect("temporary selected-Serve runtime directory");
+if mode == SelectedServeTimeoutRecoveryMode::LatePassiveFetch {
+    services.chunk_root = runtime_directory.path().join("chunks");
+}
+let (adapter, startup_effects) = SumeragiV2Adapter::open(
+""",
+            "late-passive-Fetch mode must retain an isolated chunk root before dispatching body work",
+        ),
+        (
+            """
+let round_timeout = match mode {
+    SelectedServeTimeoutRecoveryMode::TimeoutRecovery => Duration::from_millis(1),
+    SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {
+        Duration::from_secs(24 * 60 * 60)
+    }
+};
+""",
+            "selected-Serve fixture must keep only timeout recovery due while the late-Fetch pipeline owns one long non-due clock",
+        ),
+        (
+            """
+SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {
+    let late_dispatch_at = Instant::now();
+    executor
+        .arm_live_clocks(late_dispatch_at)
+        .expect("arm non-due late-passive-Fetch clocks");
+    let (body, payload, mut proposal) = proposal_body_and_payload(&context, &keys);
+    let proposer_index = usize::try_from(proposal.proposer)
+        .expect("fixture proposal index fits usize");
+    proposal.signature = Signature::new(
+        keys[proposer_index].private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    executor
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal),
+        ))
+        .expect("enqueue the signed late-passive-Fetch proposal");
+    assert!(matches!(
+        executor
+            .step(late_dispatch_at, &mut services)
+            .expect("dispatch the signed proposal into passive Fetch work"),
+        EffectExecutorStep::Advanced { .. }
+    ));
+    assert_eq!(
+        executor.status().pending_fetches,
+        1,
+        "the signed Proposal must establish reducer body-work ownership"
+    );
+    assert_eq!(
+        services.fetches.len(),
+        1,
+        "the passive Fetch must cross the production service boundary"
+    );
+""",
+            "late-passive-Fetch mode must arm and reuse one non-due instant for a real signed Proposal and one serialized production step establishing exactly one passive Fetch owner",
+        ),
+        (
+            """
+let task = services
+    .fetches
+    .values()
+    .next()
+    .expect("one production passive Fetch remains live")
+    .task
+    .clone();
+assert_eq!(task.manifest(), Some(payload.manifest()));
+let body_store =
+    V2BodyStore::open(runtime_directory.path().join("bodies"), context.clone())
+        .expect("open the retained late-passive-Fetch body store");
+Some(SelectedServeLatePassiveFetch {
+    body_store,
+    task,
+    manifest: payload.manifest().clone(),
+    body,
+})
+""",
+            "late-passive-Fetch mode must retain the exact dispatched task, manifest, body, and isolated durable store",
+        ),
+        (
+            """
+if let Some(late_passive_fetch) = &late_passive_fetch {
+    let barrier = serve_gate
+        .selected_barrier()
+        .expect("inspect late-passive-Fetch Serve barrier")
+        .expect("late-passive-Fetch Serve remains selected");
+    assert_eq!(
+        barrier.scheduler_ordinal(),
+        late_passive_fetch
+            .task
+            .lifecycle_ordinal()
+            .checked_add(1)
+            .expect("late passive Fetch ordinal has a successor"),
+        "Serve admission must take the next shared actor-global ordinal"
+    );
+}
+""",
+            "selected Serve must take exactly the next shared actor-global ordinal after the passive Fetch",
+        ),
+        (
+            """
+if mode == SelectedServeTimeoutRecoveryMode::TimeoutRecovery {
+    let remote_signers = (0..keys.len())
+        .filter(|index| *index != local_index)
+        .take(2)
+        .collect::<Vec<_>>();
+""",
+            "only timeout-recovery mode may enqueue the two remote TimeoutVote owners",
+        ),
+        (
+            """
+missing_proposal_request: missing_request,
+missing_proposal_request_hash,
+late_passive_fetch,
+executor,
+services,
+""",
+            "the selected-Serve fixture must retain the authenticated target and complete late-Fetch state with the live executor and services",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            selected_serve_fixture_methods["new_for_mode"],
+            sequence,
+            description,
+            errors,
+        )
+
+    selected_serve_new_for_mode = selected_serve_fixture_methods["new_for_mode"]
+    if selected_serve_new_for_mode is not None:
+        new_tokens = rust_code_tokens(selected_serve_new_for_mode.source)
+        timeout_arm_positions = _token_sequence_positions(
+            new_tokens,
+            rust_code_tokens("executor.arm_live_clocks(started_at)"),
+        )
+        late_arm_positions = _token_sequence_positions(
+            new_tokens,
+            rust_code_tokens("executor.arm_live_clocks(late_dispatch_at)"),
+        )
+        all_arm_positions = _token_sequence_positions(
+            new_tokens,
+            rust_code_tokens("executor.arm_live_clocks"),
+        )
         freeze_positions = _token_sequence_positions(
             new_tokens,
             rust_code_tokens(
                 "executor.freeze_due_timeout_owner_for_test(Instant::now())"
             ),
         )
+        timeout_mode_positions = _token_sequence_positions(
+            new_tokens,
+            rust_code_tokens(
+                "SelectedServeTimeoutRecoveryMode::TimeoutRecovery => {"
+            ),
+        )
+        late_mode_positions = _token_sequence_positions(
+            new_tokens,
+            rust_code_tokens(
+                "SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {"
+            ),
+        )
         serve_ingress_positions = _token_sequence_positions(
             new_tokens,
             rust_code_tokens(
-                "ingress.try_push(certified_serve_inbound(missing_request.request(), authenticated_via,))"
+                """
+ingress.try_push(certified_serve_inbound(
+    missing_request.request(),
+    authenticated_via,
+))
+"""
             ),
         )
         if (
@@ -73802,8 +73413,25 @@ let consensus_observations = install_consensus_route_observer(&mut services);
             or freeze_positions[0] >= serve_ingress_positions[0]
         ):
             errors.append(
-                f"{worker_path}:{selected_serve_new.line}: selected-Serve fixture "
+                f"{worker_path}:{selected_serve_new_for_mode.line}: selected-Serve fixture "
                 "height-start timeout owner must freeze before Serve ingress"
+            )
+        if (
+            len(timeout_arm_positions) != 1
+            or len(late_arm_positions) != 1
+            or len(all_arm_positions) != 2
+            or len(timeout_mode_positions) != 1
+            or len(late_mode_positions) != 1
+            or not (
+                timeout_mode_positions[0]
+                < timeout_arm_positions[0]
+                < late_mode_positions[0]
+                < late_arm_positions[0]
+            )
+        ):
+            errors.append(
+                f"{worker_path}:{selected_serve_new_for_mode.line}: selected-Serve fixture "
+                "late-passive-Fetch mode must arm exactly one fresh non-due clock"
             )
 
     _require_exact_rust_tokens(
@@ -73817,6 +73445,25 @@ pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
         .services
         .certified_serve_barrier()?
         .ok_or_else(|| "selected-Serve fixture lost its exact barrier".to_owned())?;
+    let completion_evidence = self
+        .services
+        .certified_serve_predecessor_completion_evidence(
+            self.executor.remaining_completion_capacity() != 0,
+            barrier.scheduler_ordinal(),
+        )?;
+    if let Some(witness) = self
+        .executor
+        .exact_serve_predecessor_episode_witness(
+            Instant::now(),
+            barrier.scheduler_ordinal(),
+            completion_evidence,
+        )
+        .map_err(|error| error.to_string())?
+    {
+        let _ = self
+            .services
+            .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
+    }
     let claimed = self
         .services
         .claim_certified_serve_runtime_episode(barrier)?;
@@ -73831,13 +73478,26 @@ pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
             barrier.scheduler_ordinal(),
         )
         .map_err(|error| error.to_string())?;
-    if self
+    let completion_evidence = self
+        .services
+        .certified_serve_predecessor_completion_evidence(
+            self.executor.remaining_completion_capacity() != 0,
+            barrier.scheduler_ordinal(),
+        )?;
+    let predecessor_witness = self
         .executor
-        .older_runtime_lifecycle_predates_exact_serve(
+        .exact_serve_predecessor_episode_witness(
             Instant::now(),
             barrier.scheduler_ordinal(),
+            completion_evidence,
         )
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    if let Some(witness) = predecessor_witness {
+        let _ = self
+            .services
+            .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
+    }
+    if predecessor_witness.is_some()
         && self
             .services
             .certified_serve_runtime_predecessor_capacity_available(barrier)?
@@ -73850,22 +73510,290 @@ pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
             .step(Instant::now(), &mut self.services)
             .map_err(|error| error.to_string())?;
     }
-    let older_predecessor_remains = self
+    let completion_evidence = self
+        .services
+        .certified_serve_predecessor_completion_evidence(
+            self.executor.remaining_completion_capacity() != 0,
+            barrier.scheduler_ordinal(),
+        )?;
+    let predecessor_witness = self
         .executor
-        .older_runtime_lifecycle_predates_exact_serve(
+        .exact_serve_predecessor_episode_witness(
             Instant::now(),
             barrier.scheduler_ordinal(),
+            completion_evidence,
         )
         .map_err(|error| error.to_string())?;
+    if let Some(witness) = predecessor_witness {
+        let _ = self
+            .services
+            .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
+    }
+    let older_predecessor_remains = predecessor_witness.is_some();
     self.services
         .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;
     self.assert_missing_proposal_serve_selected();
     Ok(true)
 }
 """,
-        "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        "selected-Serve exact runtime prefix must observe before claim, drain "
+        "the strict completion, service at most one witnessed capacity-gated "
+        "predecessor, then re-observe and finish using fresh non-consuming evidence",
         errors,
     )
+
+    late_fetch_completion = selected_serve_fixture_methods[
+        "assert_late_passive_fetch_completion_reopens_selected_serve"
+    ]
+    late_fetch_sequences = (
+        (
+            """
+let mut late = self
+    .late_passive_fetch
+    .take()
+    .expect("fixture owns one late passive Fetch");
+let fetch_ordinal = late.task.lifecycle_ordinal();
+assert!(
+    self.service_exact_serve_runtime_prefix()
+        .expect("complete the initially selected Serve predecessor episode")
+);
+assert!(
+    !self
+        .service_exact_serve_runtime_prefix()
+        .expect("the passive Fetch alone cannot reopen the completed episode"),
+    "transport-passive Fetch work is not runnable reducer progress"
+);
+""",
+            "the integrated late-Fetch regression must first seal a real selected-Serve episode Complete while passive Fetch work remains non-runnable",
+        ),
+        (
+            """
+assert_eq!(
+    self.executor
+        .complete_body_reconstruction(
+            &late.task,
+            late.manifest.clone(),
+            late.body.clone(),
+            &mut self.services,
+        )
+        .expect("complete the exact passive body reconstruction"),
+    CompletionDisposition::Accepted
+);
+assert!(
+    self.service_exact_serve_runtime_prefix()
+        .expect("the late BodyAvailable successor reopens the Serve episode")
+);
+""",
+            "a real accepted BodyAvailable completion must reopen the previously Complete selected-Serve episode",
+        ),
+        (
+            """
+let store_task = match self.command_rx.try_recv() {
+    Ok(V2IoCommand::Store(task)) => task,
+    Ok(_) => panic!("late passive Fetch queued a non-Store command"),
+    Err(error) => panic!("late passive Fetch omitted its Store command: {error}"),
+};
+assert_eq!(
+    store_task.lifecycle_ordinal(),
+    fetch_ordinal,
+    "Store must retain the original passive Fetch owner"
+);
+assert!(
+    !self
+        .service_exact_serve_runtime_prefix()
+        .expect("an incomplete Store cannot reopen the completed episode"),
+    "active Store work remains passive until its tracked completion exists"
+);
+let stored = late
+    .body_store
+    .execute_store_task(&store_task)
+    .expect("durably store the late reconstructed body");
+self.command_rx.complete_work(store_task.id());
+try_send_tracked_completion_with_lifecycle_ordinal(
+    &self.completion_tx,
+    &self.completion_admission,
+    V2IoCompletion::Stored(stored),
+    Some(fetch_ordinal),
+)
+.expect("deliver the exact tracked Store completion");
+""",
+            "the reopened body pipeline must execute Store and publish its "
+            "tracked completion under the immutable original Fetch owner only "
+            "after proving incomplete Store remains passive",
+        ),
+        (
+            """
+assert!(
+    self.service_exact_serve_runtime_prefix()
+        .expect("the stored-body completion reopens and queues validation")
+);
+let validation_task = match self.command_rx.try_recv() {
+    Ok(V2IoCommand::Validate(task)) => task,
+    Ok(_) => panic!("late passive Fetch queued a non-Validate command"),
+    Err(error) => {
+        panic!("late passive Fetch omitted its Validate command: {error}")
+    }
+};
+assert_eq!(
+    validation_task.lifecycle_ordinal(),
+    fetch_ordinal,
+    "Validate must retain the original passive Fetch owner"
+);
+assert!(
+    !self
+        .service_exact_serve_runtime_prefix()
+        .expect("an incomplete Validate cannot reopen the completed episode"),
+    "active Validate work remains passive until its tracked completion exists"
+);
+""",
+            "Stored must causally re-fanout exactly one Validate command under "
+            "the same immutable Fetch owner while incomplete validation remains passive",
+        ),
+        (
+            """
+let validated = late
+    .body_store
+    .execute_validation_task(&validation_task, |_| {
+        Err::<wire::ExecutionCommitment, String>(
+            "deterministic late-passive-Fetch rejection".to_owned(),
+        )
+    })
+    .expect("execute deterministic late-body validation");
+assert!(matches!(
+    &validated,
+    BodyValidationCompletion::Rejected { work_id, reason }
+        if *work_id == validation_task.id()
+            && reason == "deterministic late-passive-Fetch rejection"
+));
+self.command_rx.complete_work(validation_task.id());
+try_send_tracked_completion_with_lifecycle_ordinal(
+    &self.completion_tx,
+    &self.completion_admission,
+    V2IoCompletion::Validated(validated),
+    Some(fetch_ordinal),
+)
+.expect("deliver the exact tracked validation completion");
+""",
+            "Validate must terminate deterministically through an exact tracked rejection completion rather than opening an unbounded Sign suffix",
+        ),
+        (
+            """
+try_send_tracked_completion_with_lifecycle_ordinal(
+    &self.completion_tx,
+    &self.completion_admission,
+    V2IoCompletion::Validated(validated),
+    Some(fetch_ordinal),
+)
+.expect("deliver the exact tracked validation completion");
+assert!(
+    self.service_exact_serve_runtime_prefix()
+        .expect("the rejected validation retires its ValidationFailed successor")
+);
+assert!(
+    !self
+        .service_exact_serve_runtime_prefix()
+        .expect("the retired body pipeline leaves no older predecessor"),
+    "the rejected late body pipeline must terminate before Serve"
+);
+""",
+            "the ValidationFailed terminal must drain the original owner and leave the selected-Serve predecessor episode Complete again",
+        ),
+        (
+            """
+let requester = self.missing_proposal_request.request().requester.clone();
+let (admission, committed) = drain_and_commit_gated_serve(
+    &self.ingress,
+    &self
+        .services
+        .io
+        .as_ref()
+        .expect("late-passive-Fetch fixture retains its I/O service")
+        .command_tx,
+    CertifiedServeOwnerKey::Roster(requester),
+    &self.missing_proposal_request,
+);
+assert!(matches!(committed, CertifiedServeCommit::Queued));
+assert!(matches!(
+    self.command_rx.try_recv(),
+    Ok(V2IoCommand::Serve {
+        lifecycle_id,
+        request,
+    }) if lifecycle_id == admission.lifecycle_id
+        && request.request_hash() == self.missing_proposal_request_hash
+));
+""",
+            "after the older owner retires, the exact selected Serve must commit and materialize only its authenticated retained request",
+        ),
+        (
+            """
+let producer_episode = self
+    .services
+    .try_begin_certified_serve_producer_episode()
+    .expect("inspect producer ownership after exact Serve drain")
+    .expect("the exact Serve completion must reopen one producer episode");
+assert!(
+    self.services
+        .try_begin_certified_serve_producer_episode()
+        .is_err(),
+    "one live producer lease must reject a nested ownership claim"
+);
+drop(producer_episode);
+""",
+            "final Serve retirement must yield the ordinary producer handoff while its live lease rejects duplicate ownership",
+        ),
+    )
+    for sequence, description in late_fetch_sequences:
+        _require_rust_token_sequence(
+            worker_path,
+            late_fetch_completion,
+            sequence,
+            description,
+            errors,
+        )
+
+    if late_fetch_completion is not None:
+        late_fetch_tokens = rust_code_tokens(late_fetch_completion.source)
+        ordered_positions = []
+        ordered_chain_exact = True
+        for sequence, _ in late_fetch_sequences:
+            positions = _token_sequence_positions(
+                late_fetch_tokens,
+                rust_code_tokens(sequence),
+            )
+            if len(positions) != 1:
+                ordered_chain_exact = False
+                break
+            ordered_positions.append(positions[0])
+        if not ordered_chain_exact or ordered_positions != sorted(ordered_positions):
+            errors.append(
+                f"{worker_path}:{late_fetch_completion.line}: integrated late-Fetch "
+                "completion must seal Complete before reconstruction, acknowledge Store "
+                "and Validate in order, retire the owner, drain Serve, and only then hand "
+                "off producer ownership"
+            )
+        producer_claim_positions = _token_sequence_positions(
+            late_fetch_tokens,
+            rust_code_tokens(
+                "self.services.try_begin_certified_serve_producer_episode()"
+            ),
+        )
+        producer_drop_positions = _token_sequence_positions(
+            late_fetch_tokens,
+            rust_code_tokens("drop(producer_episode)"),
+        )
+        if (
+            len(producer_claim_positions) != 2
+            or len(producer_drop_positions) != 1
+            or any(
+                position > producer_drop_positions[0]
+                for position in producer_claim_positions
+            )
+        ):
+            errors.append(
+                f"{worker_path}:{late_fetch_completion.line}: integrated late-Fetch "
+                "producer handoff must make exactly one claim and one nested rejection "
+                "before dropping the live lease, with no post-drop claim"
+            )
 
     for method_name, sequence, description in (
         (
@@ -74098,6 +74026,27 @@ fn service_certified_serve_barrier_pacemaker_turn<E>(
     )
     run_inner = runner_items.get("run_inner")
     if run_inner is not None:
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner,
+            """
+services
+    .finish_certified_serve_runtime_episode_turn(
+        serve_barrier,
+        older_predecessor_remains,
+    )
+    .map_err(V2RunnerError::Service)?;
+}
+service_certified_serve_barrier_liveness_turn(
+    recovering_interrupted_tip,
+    claimed_older_runtime_episode,
+    |action| match action {
+""",
+            "selected Serve must keep certificate escape inside the one-shot "
+            "claim and dispatch the complete timeout-recovery suffix through "
+            "the reviewed liveness service outside that claim",
+            errors,
+        )
         escape_tokens = rust_code_tokens(
             "V2IngressDrainMode::CertifiedFenceEscape"
         )
@@ -74245,19 +74194,119 @@ else {
         "tip-recovery runtime service must be a finite configured turn",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_exact_rust_tokens(
         runner_path,
         runner_items.get("outer_ingress_turns"),
         """
-(0..limit.max(1)).flat_map(|_| {
-    [
-        OuterIngressTurn::Completion,
-        OuterIngressTurn::Runtime,
-        OuterIngressTurn::Ingress,
-    ]
-})
+fn outer_ingress_turns(
+    limit: usize,
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+) -> OuterIngressTurns {
+    OuterIngressTurns::new(limit, context_id, height)
+}
+""",
+        "ordinary ingress turn construction must delegate to the context-bound finite cursor",
+        errors,
+    )
+    outer_new_context = (("impl", "OuterIngressTurns"),)
+    outer_new_items = tuple(
+        item
+        for item in rust_items(runner_source, "new")
+        if item.brace_context == outer_new_context
+    )
+    if len(outer_new_items) != 1:
+        errors.append(
+            f"{runner_path}: require exactly one context-bound outer-ingress cursor constructor; found {len(outer_new_items)}"
+        )
+        outer_new = None
+    else:
+        outer_new = outer_new_items[0]
+        _require_rust_item_context(
+            runner_path,
+            outer_new,
+            outer_new_context,
+            "context-bound outer-ingress cursor constructor",
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runner_path,
+        outer_new,
+        """
+fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) -> Self {
+    Self {
+        context_id,
+        height,
+        cycles_remaining: limit.max(1),
+        next_turn: OuterIngressTurn::Completion,
+    }
+}
+""",
+        "outer-ingress cursor must freeze its height context and start at Completion with a positive finite cycle bound",
+        errors,
+    )
+    outer_next_context = (("impl", "Iterator", "for", "OuterIngressTurns"),)
+    outer_next_items = tuple(
+        item
+        for item in rust_items(runner_source, "next")
+        if item.brace_context == outer_next_context
+    )
+    if len(outer_next_items) != 1:
+        errors.append(
+            f"{runner_path}: require exactly one outer-ingress cursor Iterator::next implementation; found {len(outer_next_items)}"
+        )
+        outer_next = None
+    else:
+        outer_next = outer_next_items[0]
+        _require_rust_item_context(
+            runner_path,
+            outer_next,
+            outer_next_context,
+            "finite outer-ingress cursor alternation",
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runner_path,
+        outer_next,
+        """
+fn next(&mut self) -> Option<Self::Item> {
+    if self.cycles_remaining == 0 {
+        return None;
+    }
+    let turn = self.next_turn;
+    self.next_turn = match turn {
+        OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
+        OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
+        OuterIngressTurn::Ingress => {
+            self.cycles_remaining -= 1;
+            OuterIngressTurn::Completion
+        }
+    };
+    Some(turn)
+}
 """,
         "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
+        errors,
+    )
+    outer_turn_index = _require_rust_item(
+        runner_path,
+        runner_source,
+        "outer_ingress_turn_index",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        outer_turn_index,
+        """
+const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
+    match turn {
+        OuterIngressTurn::Completion => 0,
+        OuterIngressTurn::Runtime => 1,
+        OuterIngressTurn::Ingress => 2,
+    }
+}
+""",
+        "outer-ingress cursor rank must use the same Completion, Runtime, and Ingress order",
         errors,
     )
     _require_rust_token_sequence(
@@ -75425,8 +75474,6 @@ if confirmed_snapshot != artifact_snapshot
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_chain_inventory_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts.py")
-
-
 
 
 

@@ -727,7 +727,13 @@ mod tests {
     use crate::block::consensus_v2::{
         ConsensusRound, DataAvailabilityLayout, PayloadEncoding, ValidatorIndex,
     };
-    use crate::{ChainId, peer::PeerId};
+    use crate::{NetworkId, peer::PeerId};
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
 
     fn roster() -> Vec<ValidatorPower> {
         let mut peers = (1_u8..=4)
@@ -759,7 +765,7 @@ mod tests {
             leader_seed: [0xC3; 32],
         };
         HeightContext {
-            chain_id: ChainId::from("v2-finality-test"),
+            network_id: network_id(0xA1),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,

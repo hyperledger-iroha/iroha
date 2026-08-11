@@ -852,12 +852,13 @@ impl_decode_musubi_instruction!(AssertMusubiReleaseDigestV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{
         account::{MultisigMember, MultisigPolicy},
+        block::BlockHeader,
         musubi::{
             ArchiveId, MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_REGISTRY_VERSION_V1,
             MusubiAbiBindingV1, MusubiContentDigestV1, MusubiKotodamaEditionV1,
@@ -896,8 +897,9 @@ mod tests {
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("provider keypair");
         let owner = AccountId::new(keypair.public_key().clone());
         let binding = MusubiProviderBundleVerificationBindingV1 {
-            chain_id: "musubi-isi-test".into(),
-            genesis_block_hash: [0x52; 32],
+            network_id: crate::NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([0x52; 32])),
+            ),
             provider_id: ProviderId::new([0x53; 32]),
             completed_by: owner.clone(),
             completion_authority: ProviderIngestCompletionAuthorityV1::new(

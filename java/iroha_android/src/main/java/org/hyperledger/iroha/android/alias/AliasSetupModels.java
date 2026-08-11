@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Supporting immutable DTOs shared by alias setup instructions and transaction plans. */
 public final class AliasSetupModels {
@@ -817,7 +818,7 @@ public final class AliasSetupModels {
 
     private final int version;
     private final String authority;
-    private final String chainId;
+    private final NetworkId networkId;
     private final AliasPlanAnchorV1 anchor;
     private final List<AliasPlanResourceV1> resources;
     private final List<AliasFramedInstructionV1> instructions;
@@ -830,7 +831,7 @@ public final class AliasSetupModels {
     public AliasTransactionPlanBodyV1(
         final int version,
         final String authority,
-        final String chainId,
+        final NetworkId networkId,
         final AliasPlanAnchorV1 anchor,
         final List<AliasPlanResourceV1> resources,
         final List<AliasFramedInstructionV1> instructions,
@@ -844,7 +845,8 @@ public final class AliasSetupModels {
       }
       this.version = version;
       this.authority = AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
-      this.chainId = requireText(chainId, "chainId");
+      if (networkId == null) throw new IllegalArgumentException("networkId must not be null");
+      this.networkId = networkId;
       this.anchor = anchor;
       this.resources = immutableCopy(resources, "resources");
       this.instructions = immutableCopy(instructions, "instructions");
@@ -860,8 +862,8 @@ public final class AliasSetupModels {
     /** Returns transaction authority and lease payer. */
     public String authority() { return authority; }
 
-    /** Returns the target chain. */
-    public String chainId() { return chainId; }
+    /** Returns the exact genesis-derived target network. */
+    public NetworkId networkId() { return networkId; }
 
     /** Returns the world-state anchor. */
     public AliasPlanAnchorV1 anchor() { return anchor; }
@@ -889,7 +891,7 @@ public final class AliasSetupModels {
       final Map<String, Object> map = new LinkedHashMap<>();
       map.put("version", version);
       map.put("authority", authority);
-      map.put("chain_id", chainId);
+      map.put("network_id", networkId.literal());
       map.put("anchor", anchor.toJsonMap());
       map.put("resources", maps(resources));
       map.put("instructions", maps(instructions));

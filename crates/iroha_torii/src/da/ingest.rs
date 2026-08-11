@@ -11,7 +11,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Extension, Path as AxumPath, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::Response,
 };
@@ -26,6 +26,7 @@ use iroha_crypto::{
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
 };
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
     da::{
         commitment::{DaCommitmentRecord, DaProofScheme},
@@ -156,7 +157,7 @@ fn compute_da_manifest_artifacts(
     rent_policy: &DaRentPolicyV1,
     chunking_observer: Option<&dyn Fn(Duration)>,
 ) -> Result<DaManifestComputeArtifacts, (StatusCode, String)> {
-    request.verify_signature().map_err(|_| {
+    request.verify_signatures().map_err(|_| {
         (
             StatusCode::UNAUTHORIZED,
             "DA ingest request signature is invalid".to_owned(),
@@ -164,7 +165,7 @@ fn compute_da_manifest_artifacts(
     })?;
     let proof_scheme = lane_proof_scheme(nexus, request.lane_id, committed_height)?;
     let canonical = normalize_payload(request)?;
-    validate_request(request, canonical.len())
+    validate_request(request, canonical.as_slice())
         .map_err(|(status, message)| (status, message.to_owned()))?;
 
     let mut metadata = encrypt_governance_metadata(
@@ -229,9 +230,18 @@ fn compute_da_manifest_artifacts(
 /// HTTP handler for `/v1/da/ingest`.
 pub async fn handler_post_da_ingest(
     State(app): State<SharedAppState>,
+    Extension(verified_principal): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: HeaderMap,
     utils::extractors::JsonOnly(request): utils::extractors::JsonOnly<DaIngestRequest>,
 ) -> Result<Response, ResponseError> {
+    let format = utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
+        .map_err(ResponseError::from)?;
+    let authenticated_owner =
+        authenticate_da_ingest_request(&request, &verified_principal, app.state.network_id_ref())
+            .map_err(|(status, message)| {
+            ResponseError::from(build_error_response(status, message, format))
+        })?;
+
     let telemetry = app.telemetry_handle();
     let cluster_label = app
         .da_ingest
@@ -239,8 +249,6 @@ pub async fn handler_post_da_ingest(
         .as_deref()
         .unwrap_or("default");
     let nexus = app.state.nexus_snapshot();
-    let format = utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
-        .map_err(ResponseError::from)?;
 
     if !nexus.enabled {
         return Err(ResponseError::from(build_error_response(
@@ -539,19 +547,16 @@ pub async fn handler_post_da_ingest(
                 registry_alias_from_metadata(&request.metadata).map_err(|(status, message)| {
                     ResponseError::from(build_error_response(status, &message, format))
                 })?;
-            let pin_owner =
-                registry_owner_from_metadata(&request.metadata).map_err(|(status, message)| {
-                    ResponseError::from(build_error_response(status, &message, format))
-                })?;
             let mut pin_intent = DaPinIntent::new(
                 request.lane_id,
                 request.epoch,
                 request.sequence,
                 manifest.storage_ticket,
                 ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+                request.authorization(),
             );
             pin_intent.alias = pin_alias;
-            pin_intent.owner = pin_owner;
+            debug_assert_eq!(request.owner, authenticated_owner);
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let pin_intent = pin_intent.clone();
@@ -1295,18 +1300,75 @@ fn verify_decompressed_len(
 
 fn validate_request(
     request: &DaIngestRequest,
-    canonical_payload_len: usize,
+    canonical_payload: &[u8],
 ) -> Result<(), (StatusCode, &'static str)> {
     validate_request_shape(request)?;
 
-    if request.total_size != canonical_payload_len as u64 {
+    if request.total_size != canonical_payload.len() as u64 {
         return Err((
             StatusCode::BAD_REQUEST,
             "payload length does not match total_size",
         ));
     }
+    if request.payload_hash != BlobDigest::from_hash(blake3_hash(canonical_payload)) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "canonical payload hash does not match payload_hash",
+        ));
+    }
 
     Ok(())
+}
+
+fn authenticate_da_ingest_request(
+    request: &DaIngestRequest,
+    principal: &crate::app_auth::VerifiedCanonicalRequest,
+    expected_network_id: &NetworkId,
+) -> Result<AccountId, (StatusCode, &'static str)> {
+    if &request.network_id != expected_network_id {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "DA ingest request targets a different network",
+        ));
+    }
+    if request.owner != principal.account {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "DA ingest quota owner does not match the authenticated account",
+        ));
+    }
+    if request.signatures.iter().any(|witness| {
+        !principal
+            .verified_signers
+            .iter()
+            .any(|signer| signer == &witness.signer)
+    }) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "DA ingest authorization includes a signer outside the authenticated account witness",
+        ));
+    }
+
+    request.verify_signatures().map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "DA ingest request signatures are invalid",
+        )
+    })?;
+
+    if request
+        .metadata
+        .items
+        .iter()
+        .any(|entry| entry.key == META_DA_REGISTRY_OWNER)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "metadata entry `da.registry.owner` is retired; pin ownership comes from the authenticated account",
+        ));
+    }
+
+    Ok(principal.account.clone())
 }
 
 fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, &'static str)> {
@@ -2196,37 +2258,6 @@ fn registry_alias_from_metadata(
         ));
     }
     Ok(Some(value.to_owned()))
-}
-
-fn registry_owner_from_metadata(
-    metadata: &ExtraMetadata,
-) -> Result<Option<AccountId>, (StatusCode, String)> {
-    let Some(entry) = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == META_DA_REGISTRY_OWNER)
-    else {
-        return Ok(None);
-    };
-    validate_public_metadata_entry(entry, META_DA_REGISTRY_OWNER)?;
-    let value = std::str::from_utf8(&entry.value)
-        .map_err(|_| da_metadata_error(META_DA_REGISTRY_OWNER, "value must be valid UTF-8"))?
-        .trim();
-    if value.is_empty() {
-        return Err(da_metadata_error(
-            META_DA_REGISTRY_OWNER,
-            "owner must not be empty",
-        ));
-    }
-    let owner = AccountId::parse_encoded(value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            da_metadata_error(
-                META_DA_REGISTRY_OWNER,
-                format!("invalid AccountId `{value}`: {err}"),
-            )
-        })?;
-    Ok(Some(owner))
 }
 
 #[allow(clippy::too_many_arguments)]

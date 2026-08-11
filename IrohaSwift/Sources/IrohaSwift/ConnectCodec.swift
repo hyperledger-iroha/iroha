@@ -24,7 +24,21 @@ public enum ConnectCodec {
         guard NoritoNativeBridge.shared.isConnectCodecAvailable else {
             throw ConnectCodecError.bridgeUnavailable
         }
-        guard let native = NoritoNativeBridge.shared.encodeConnectFrame(frame) else {
+        guard let native = NoritoNativeBridge.shared.encodeConnectFrame(frame, launchNonce: nil) else {
+            throw ConnectCodecError.encodeFailed
+        }
+        return native
+    }
+
+    /// Encodes a launch-bound `Open`; the nonce is required to rederive and authenticate its SID.
+    public static func encode(_ frame: ConnectFrame, launchNonce: Data) throws -> Data {
+        guard NoritoNativeBridge.shared.isConnectCodecAvailable else {
+            throw ConnectCodecError.bridgeUnavailable
+        }
+        guard let native = NoritoNativeBridge.shared.encodeConnectFrame(
+            frame,
+            launchNonce: launchNonce
+        ) else {
             throw ConnectCodecError.encodeFailed
         }
         return native
@@ -124,13 +138,13 @@ extension ConnectCodec {
 
     static func encodeProofJSON(_ proof: ConnectSignInProof?) -> Data? {
         guard let proof else { return nil }
-        var json: [String: Any] = [:]
-        if let domain = proof.domain { json["domain"] = domain }
-        if let uri = proof.uri { json["uri"] = uri }
-        if let statement = proof.statement { json["statement"] = statement }
-        if let issuedAt = proof.issuedAt { json["issued_at"] = issuedAt }
-        if let nonce = proof.nonce { json["nonce"] = nonce }
-        guard !json.isEmpty else { return nil }
+        let json: [String: Any] = [
+            "domain": proof.domain,
+            "uri": proof.uri,
+            "statement": proof.statement,
+            "issued_at": proof.issuedAt,
+            "nonce": proof.nonce,
+        ]
         return try? JSONSerialization.data(withJSONObject: json, options: [])
     }
 
@@ -143,12 +157,13 @@ extension ConnectCodec {
         for key in object.keys where !allowedKeys.contains(key) {
             throw ConnectCodecError.decodeFailed
         }
-        let domain = try decodeOptionalExactProofString(object["domain"])
-        let uri = try decodeOptionalExactProofString(object["uri"])
-        let statement = try decodeOptionalExactProofString(object["statement"])
-        let issuedAt = try decodeOptionalExactProofString(object["issued_at"])
-        let nonce = try decodeOptionalExactProofString(object["nonce"])
-        guard domain != nil || uri != nil || statement != nil || issuedAt != nil || nonce != nil else { return nil }
+        guard let domain = try decodeOptionalExactProofString(object["domain"]),
+              let uri = try decodeOptionalExactProofString(object["uri"]),
+              let statement = try decodeOptionalExactProofString(object["statement"]),
+              let issuedAt = try decodeOptionalExactProofString(object["issued_at"]),
+              let nonce = try decodeOptionalExactProofString(object["nonce"]) else {
+            throw ConnectCodecError.decodeFailed
+        }
         return ConnectSignInProof(domain: domain,
                                   uri: uri,
                                   statement: statement,

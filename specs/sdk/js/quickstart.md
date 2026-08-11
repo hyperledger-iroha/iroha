@@ -500,14 +500,16 @@ wires deterministic SID/URI generation together with the Torii registration API:
 
 ```js
 import {
+  NetworkId,
   ToriiClient,
   bootstrapConnectPreviewSession,
   ConnectQueueError,
 } from "@iroha/iroha-js";
 
 const torii = new ToriiClient("https://torii.nexus.example");
+const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 const { preview, session, tokens } = await bootstrapConnectPreviewSession(torii, {
-  chainId: "sora-mainnet",
+  networkId,
   node: "https://torii.nexus.example",
   // optional: override the Torii node used for registration
   sessionOptions: { node: "https://torii.backup.example" },
@@ -580,7 +582,12 @@ import WebSocket from "ws";
 import { ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.IROHA_TORII_URL);
-const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
+const session = await torii.createConnectSession({
+  sid: preview.sidBase64Url,
+  networkId: preview.networkId,
+  appPublicKey: preview.appKeyPair.publicKey,
+  nonce: preview.nonce,
+});
 
 const socket = torii.openConnectWebSocket({
   sid: session.sid,
@@ -624,13 +631,15 @@ telemetry stays deterministic.
 
 ```js
 import {
+  NetworkId,
   bootstrapConnectPreviewSession,
   ConnectQueueError,
 } from "@iroha/iroha-js";
 
 async function dialWithTelemetry(client) {
   try {
-    const { session } = await bootstrapConnectPreviewSession(client, { chainId: "sora-mainnet" });
+    const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
+    const { session } = await bootstrapConnectPreviewSession(client, { networkId });
     queueDepthGauge.record(session.queue_depth ?? 0);
     // …open the WebSocket here…
   } catch (error) {

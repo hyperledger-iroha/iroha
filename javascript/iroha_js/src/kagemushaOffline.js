@@ -1,11 +1,11 @@
-/** Transport-only ABI-21/manifest-V4 Kagemusha projections.
+/** Transport-only ABI-22/manifest-V4 Kagemusha projections.
  *
  * This module deliberately has no native prover or artifact-install surface.
  * Top-up and redemption methods accept canonical Norito archives produced by
  * a supported wallet/prover implementation.
  */
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
@@ -113,7 +113,7 @@ export function normalizeOfflineStatus(payload) {
       maximum: 0xffff_ffff,
     }) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION
   ) {
-    throw new TypeError(`${context}.required_bridge_abi_version must be 21`);
+    throw new TypeError(`${context}.required_bridge_abi_version must be 22`);
   }
   if (
     safeUnsigned(item.max_hops, `${context}.max_hops`, {

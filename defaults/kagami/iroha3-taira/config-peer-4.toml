@@ -2,9 +2,9 @@
 chain = "iroha3-taira"
 chain_discriminant = 369
 public_key = "ea013093594AD979F8D743275F33F9A59C3F9086BE5C72968C6C9D74FF4D43C6F4499B72212E93A3E57D7BF6DF7292ED2414DB"
-private_key = "89262044000C04BEC5155CB0551DF4EA271A6C235CFB375305CEFD95EAA0C500856908"
+private_key_file = "/run/secrets/iroha/iroha3-taira-peer-4-validator-private-key"
 soranet_transport_public_key = "ed0120A86CDD768C387AAD89AA1C7410A3B1B2E4FC7E20E6C8C3883BFBF72CB139527C"
-soranet_transport_private_key = "8026206CFD1B849AE1756BE158388BCAA15F74046CF8D25FD14076E4E4AA41FAF6B499"
+soranet_transport_private_key_file = "/run/secrets/iroha/iroha3-taira-peer-4-soranet-private-key"
 
 trusted_peers = [
   "ea0130A281E64EED12B1A0CD3114DB7F3F33F4C923532CB0550ABB6A64911CA72EEAA1866CF77C84AD3B2C6406B0595E21FE3D@172.28.0.10:1337",
@@ -58,7 +58,7 @@ allow_tool_prefixes = ["iroha."]
 
 [streaming]
 identity_public_key = "ed01202F32C124F18CDD7D20ED5F60ABF286DE1436B2C808F97381CF4D46DC31A40061"
-identity_private_key = "802620AE487A14C2A9A47A06F1DFCE84FD1315DC772BECBF26E2B38F528C3058260875"
+identity_private_key_file = "/run/secrets/iroha/iroha3-taira-peer-4-streaming-private-key"
 
 [sorafs.gateway.site_bindings]
 path = "/config/sorafs_sites.json"

@@ -27,7 +27,10 @@ pub(super) const OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 =
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1: u16 = 25;
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1: u16 = 26;
 pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1: u16 = 27;
-pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1: u16 = 28;
+// Operation 28 carried the retired two-field pre-release source request. It is
+// deliberately not accepted: V2 adds the optional Musubi archive commitment
+// without silently reinterpreting the old canonical wire layout.
+pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2: u16 = 29;
 pub(super) const OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1: u16 = 30;
 pub(super) const OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1: u16 = 31;
 pub(super) const OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1: u16 = 40;

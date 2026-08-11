@@ -11,7 +11,7 @@ use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::{AssetDefinitionId, ChainId, account::AccountId, asset::AssetBalanceScope};
+use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
 
 pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
@@ -38,6 +38,12 @@ pub const PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1: &str = "iroha.privacy.proof-env
 /// Permanent Norito schema identity for local compiled-profile build metadata.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1: &str =
     "iroha.privacy.compiled-profile-catalog.v1";
+/// Permanent Norito schema identity for the public Exact12 capability manifest.
+pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.exact12-capability-manifest.v1";
+/// Domain separator for the self-authenticating Exact12 capability manifest digest.
+pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:exact12-capability-manifest:v1";
 /// Permanent Norito schema identity for the concrete ZK-ACE authorization statement.
 pub const ZK_ACE_AUTHORIZATION_STATEMENT_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.authorization-statement.v1";
@@ -585,6 +591,10 @@ define_privacy_digest!(
     PrivacyEngineManifestDigestV1
 );
 define_privacy_digest!(
+    /// Self-digest of one canonical committed Exact12 capability manifest.
+    PrivacyExact12CapabilityManifestDigestV1
+);
+define_privacy_digest!(
     /// Digest of a canonical protocol-specific public statement.
     PrivacyStatementDigestV1
 );
@@ -854,6 +864,8 @@ define_ristretto255_encoding!(
 // Keep the implementation in this public module: textual includes improve
 // navigation without changing path-derived Norito identities.
 include!("privacy/protocol.rs");
+mod capability_manifest;
+pub use capability_manifest::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");
@@ -861,6 +873,7 @@ include!("privacy/proofs.rs");
 #[cfg(test)]
 mod tests {
     include!("privacy/tests/protocol_and_proofs.rs");
+    include!("privacy/tests/capability_manifest.rs");
     include!("privacy/tests/namespaces_and_governance.rs");
     include!("privacy/tests/adversarial.rs");
 }

@@ -163,8 +163,11 @@ pub mod prelude {
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, ManifestRootCidError, ManifestRootCidErrorKind,
-            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinManifestRecord,
-            PinPolicy, PinStatus, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            PIN_MANIFEST_QUERY_MAX_ITEMS_V1, PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1,
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1, PinLineageSummaryV1,
+            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinManifestPageV1,
+            PinManifestRecord, PinManifestSummaryV1, PinPolicy, PinResourceUsage, PinStatus,
+            PinStatusKindV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         pop_registry::{

@@ -1,3 +1,5 @@
+//! Iroha node executable, startup wiring, and command-line interface.
+
 /// Feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
@@ -1223,7 +1225,7 @@ pub struct StartupArgs {
 /// Complete command-line arguments for the Iroha server.
 #[derive(Parser, Debug)]
 #[command(
-    name = "irohad",
+    name = "iroha3d",
     version = env!("CARGO_PKG_VERSION"),
     author
 )]
@@ -1378,6 +1380,11 @@ pub struct Iroha {
     sorafs_provider_ingest_finalized_query: Option<
         Arc<sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1>,
     >,
+    /// Inert take-once tenure joining the exact prepared signed capture reader
+    /// to the embedded SoraFS storage/outbox incarnation.
+    #[allow(dead_code)]
+    sorafs_provider_ingest_completed_musubi_capture:
+        Option<sorafs_node::ProviderIngestCompletedMusubiCaptureCoordinatorV1>,
 }
 
 include!("main/runtime_deps.rs");
@@ -5451,7 +5458,7 @@ mod network_relay_tests {
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         block::{
             BlockHeader,
             consensus_v2::{
@@ -6064,7 +6071,9 @@ mod network_relay_tests {
         let keeper = PeerId::new(KeyPair::random().public_key().clone());
         BlockMessage::KuraReplicaAdvert(KuraReplicaAdvertV1 {
             version: KURA_REPLICA_ADVERT_VERSION_V1,
-            chain_id: ChainId::from("relay-kura-advert-test"),
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"relay-kura-advert-test")),
+            ),
             height: 11,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"advert-block")),
             executed_block_wire_len: 1024,
@@ -6171,7 +6180,7 @@ mod network_relay_tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"irohad-lane-drain-chain"),
+                network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
@@ -6372,9 +6381,11 @@ mod network_relay_tests {
         BlockMessage::V2(ConsensusMessageV2::new(
             ConsensusMessageV2Payload::CommitCertificateRequest(CommitCertificateRequest {
                 protocol_version: PROTOCOL_VERSION,
-                chain_id: "00000000-0000-0000-0000-000000000000"
-                    .parse()
-                    .expect("valid chain id"),
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"irohad-v2-context-genesis",
+                    )),
+                ),
                 context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                     b"irohad-v2-context",
                 ))),
@@ -6439,7 +6450,7 @@ mod network_relay_tests {
         let producer = origin_proposal.descriptor.validator_set[0].clone();
         LaneExecutablePayloadV1 {
             version: 2,
-            chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
+            network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
             epoch: 3,
             origin_proposal,
             entrypoint_hashes: Vec::new(),
@@ -6458,7 +6469,7 @@ mod network_relay_tests {
         let descriptor = &proposal.descriptor;
         LaneBlockNewViewBodyV1 {
             version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-new-view-chain"),
+            network_id: NetworkId::from_genesis_hash(dummy_block_hash(0xA1)),
             epoch: 3,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -7261,12 +7272,12 @@ fn snapshot_failure_allows_empty_state_fallback(
 
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     configured_lane_catalog: &iroha_data_model::nexus::LaneCatalog,
 ) -> ReportResult<(), StartError> {
     State::preflight_configured_primary_geometry_replay(
         kura,
-        chain_id,
+        network_id,
         configured_lane_catalog,
     )
     .map_err(|error| Report::new(error).change_context(StartError::InitKura))
@@ -7283,7 +7294,7 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
 ) -> bool {
     match error {
         TryReadSnapshotError::IO(_, _)
-        | TryReadSnapshotError::ChainIdMismatch { .. }
+        | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
         TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
         _ => true,
@@ -7492,9 +7503,9 @@ mod snapshot_read_error_tests {
         ));
 
         assert!(!snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::ChainIdMismatch {
-                expected: ChainId::from("expected-chain"),
-                actual: ChainId::from("actual-chain"),
+            &TryReadSnapshotError::NetworkIdMismatch {
+                expected: NetworkId::from_genesis_hash(dummy_block_hash(1)),
+                actual: NetworkId::from_genesis_hash(dummy_block_hash(2)),
             }
         ));
 
@@ -7657,7 +7668,7 @@ mod snapshot_read_error_tests {
         let kura = Kura::blank_kura_for_testing();
         let error = preflight_empty_state_snapshot_fallback(
             kura.as_ref(),
-            &ChainId::from("fallback-preflight-test"),
+            &NetworkId::from_genesis_hash(dummy_block_hash(0x33)),
             &iroha_data_model::nexus::LaneCatalog::default(),
         )
         .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
@@ -8154,6 +8165,22 @@ fn validate_provider_ingest_archive_presence(
     }
 }
 
+fn validate_provider_attestation_journal_activation(
+    journal_configured: bool,
+) -> Result<(), &'static str> {
+    // TODO: Replace this gate with the supervised capture child only after its
+    // scanner is sealed to the concrete finalized archive and the local store
+    // initialization, durable time, approval-signer, and authenticated
+    // inventory boundaries are activation-qualified.
+    if journal_configured {
+        Err(
+            "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it",
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
     required: bool,
@@ -8335,6 +8362,15 @@ impl Iroha {
         ),
         StartError,
     > {
+        validate_provider_attestation_journal_activation(
+            config
+                .torii
+                .sorafs_storage
+                .provider_ingest_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.provider_attestation_journal.is_some()),
+        )
+        .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         validate_sorafs_native_signer_provider_presence(&config, &runtime_deps).map_err(
             |error| {
                 Report::new(StartError::StartTorii).attach(format!(
@@ -8617,8 +8653,9 @@ impl Iroha {
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
                 config.snapshot.max_payload_bytes,
+                config.snapshot.resources,
                 verification_key,
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 &config.zk,
                 &config.snapshot.bootstrap,
                 #[cfg(feature = "telemetry")]
@@ -8646,7 +8683,7 @@ impl Iroha {
             Err(TryReadSnapshotError::NotFound) if !provisional_imported_prefix => {
                 preflight_empty_state_snapshot_fallback(
                     kura.as_ref(),
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     &config.nexus.configured_lane_catalog,
                 )?;
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
@@ -8663,11 +8700,12 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::try_new_with_chain(
+                State::try_new_with_chain_and_network_id(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     config.common.chain.clone(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -8685,7 +8723,7 @@ impl Iroha {
                 );
                 preflight_empty_state_snapshot_fallback(
                     kura.as_ref(),
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     &config.nexus.configured_lane_catalog,
                 )?;
                 iroha_logger::warn!(
@@ -8704,11 +8742,12 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::try_new_with_chain(
+                State::try_new_with_chain_and_network_id(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     config.common.chain.clone(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -8722,7 +8761,14 @@ impl Iroha {
         {
             kura.attach_telemetry(state.telemetry.clone());
         }
-        // Thread chain id into state for VRF prehash binding.
+        let expected_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        if state.network_id != expected_network_id {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "restored state network id {} differs from genesis.expected_hash-derived id {}",
+                state.network_id, expected_network_id
+            )));
+        }
+        // Thread the display/configuration label into state for legacy VRF prehash binding.
         state.chain_id = config.common.chain.clone();
         install_configured_kagemusha_release_catalog(&mut state, &config)
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -8835,7 +8881,7 @@ impl Iroha {
                         ))
                     })?;
                     let context = &artifact.height_context;
-                    if context.chain_id != config.common.chain
+                    if context.network_id != expected_network_id
                         || context.height != 1
                         || context.mode != signed_consensus_mode
                         || context.da_layout != signed_v2_genesis_context.da_layout
@@ -9181,7 +9227,6 @@ impl Iroha {
             } else {
                 consensus_caps_from_genesis(
                         effective_genesis.expect("normal startup has signed genesis metadata"),
-                        &config.common.chain,
                         &config_caps,
                         &config.sumeragi,
                     )
@@ -9314,7 +9359,7 @@ impl Iroha {
         let (network, child) = IrohaNetwork::start_with_crypto_and_initial_authorities(
             p2p_identity_keys,
             config.network.clone(),
-            config.common.chain.clone(),
+            expected_network_id,
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
@@ -9345,17 +9390,12 @@ impl Iroha {
                 );
             } else {
                 let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
-                    consensus_caps_from_genesis(
-                        genesis_block,
-                        &config.common.chain,
-                        &config_caps,
-                        &config.sumeragi,
-                    )
-                    .ok_or_else(|| {
-                        Report::new(StartError::InitKura).attach(
+                    consensus_caps_from_genesis(genesis_block, &config_caps, &config.sumeragi)
+                        .ok_or_else(|| {
+                            Report::new(StartError::InitKura).attach(
                         "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
                     )
-                    })?;
+                        })?;
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
                         "fresh signed genesis cadence differs from the handshake opened for bootstrap",
@@ -9378,11 +9418,9 @@ impl Iroha {
                     ));
                 }
                 let genesis_account = AccountId::new(effective_genesis_public_key.clone());
-                if let Err(err) = iroha_core::validate_genesis_block(
-                    &genesis_block.0,
-                    &genesis_account,
-                    &config.common.chain,
-                ) {
+                if let Err(err) =
+                    iroha_core::validate_genesis_block(&genesis_block.0, &genesis_account)
+                {
                     let err_display = err.to_string();
                     iroha_logger::error!(
                         error = %err,
@@ -9414,7 +9452,6 @@ impl Iroha {
                 let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
                     genesis_block.0.clone(),
                     &topology,
-                    &config.common.chain,
                     &genesis_account,
                     &time_source,
                     &state,
@@ -9738,6 +9775,7 @@ impl Iroha {
 
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
+            expected_network_id,
             config.common.trusted_peers.value().clone(),
             configured_validator_dial_roster,
             config.common.key_pair.clone(),
@@ -9774,7 +9812,7 @@ impl Iroha {
             }
         };
 
-        let prepared_sorafs_provider_ingest_archive = if let Some(provider_ingest_config) =
+        let mut prepared_sorafs_provider_ingest_archive = if let Some(provider_ingest_config) =
             config.torii.sorafs_storage.provider_ingest_runtime.as_ref()
         {
             let provider_id = config
@@ -9789,7 +9827,7 @@ impl Iroha {
             let prepared =
                     sorafs_provider_ingest_finalized_query::prepare_provider_ingest_finalized_archive_v1(
                         &provider_ingest_config.finalized_archive,
-                        &config.common.chain,
+                        NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         provider_id,
                         &config.kura.store_dir.resolve_relative_path(),
                         &state,
@@ -9904,7 +9942,7 @@ impl Iroha {
             let prepared =
                     sorafs_reputation_finalized_query::prepare_reputation_finalized_archive_v1(
                         reputation_config,
-                        &config.common.chain,
+                        &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         &state,
                         &kura,
                         &v2_replay_plan,
@@ -10048,7 +10086,6 @@ impl Iroha {
             .unwrap_or_else(|| self_peer_id.clone());
 
         let (tx_gossiper, child) = TransactionGossiper::from_config(
-            config.common.chain.clone(),
             config.transaction_gossiper,
             &config.network,
             self_peer_id,
@@ -10279,6 +10316,30 @@ impl Iroha {
                 "failed to initialise embedded SoraFS runtime: {err}"
             ))
         })?;
+        let sorafs_provider_ingest_completed_musubi_capture = match (
+            prepared_sorafs_provider_ingest_archive.as_mut(),
+            sorafs_provider_ingest_config.as_ref(),
+        ) {
+            (Some(prepared), Some(provider_ingest_config)) => Some(
+                sorafs_provider_ingest_runtime::compose_inert_completed_musubi_capture_coordinator_v1(
+                    &sorafs_node,
+                    prepared,
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
+                    provider_ingest_config.max_page_rows,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to reserve the inert completed-Musubi capture coordinator: {error:#}"
+                    ))
+                })?,
+            ),
+            (None, None) => None,
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "provider-ingest archive and runtime configuration diverged before inert completed-Musubi capture composition",
+                ));
+            }
+        };
         if let Some((view, providers)) = sorafs_governance_dag_service_launch {
             let runner = sorafs_node::prepare_governance_dag_service_from_view(view, providers)
                 .await
@@ -10312,7 +10373,6 @@ impl Iroha {
             .map_err(Report::new)
             .change_context(StartError::StartTorii)?;
 
-        let chain_id = Arc::new(config.common.chain.clone());
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {
@@ -10324,7 +10384,7 @@ impl Iroha {
             let (handle, child) = sorafs_provider_ingest_runtime::start(
                 provider_ingest_config,
                 sorafs_provider_ingest_runtime::ProviderIngestRuntimeStartArgsV1::new(
-                    config.common.chain.clone(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     Arc::clone(&state),
                     Arc::clone(&queue),
                     sorafs_node.clone(),
@@ -10376,7 +10436,7 @@ impl Iroha {
             let query_qualification =
                 sorafs_reputation_runtime::finalized_query_qualification_v1(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                 )
                 .map_err(|error| {
@@ -10431,7 +10491,7 @@ impl Iroha {
             let (handle, child) = if reputation_archive_active {
                 sorafs_reputation_runtime::start(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                     dependencies,
                     supervisor.shutdown_signal(),
@@ -10445,7 +10505,7 @@ impl Iroha {
                     });
                 sorafs_reputation_runtime::start_deferred(
                     reputation_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     trust_policy.as_ref(),
                     dependencies,
                     activation_probe,
@@ -10461,7 +10521,7 @@ impl Iroha {
             if let Some(scanner_config) = sorafs_reserve_transparency_config.as_ref() {
                 let child = sorafs_reserve_transparency_runtime::start(
                     scanner_config,
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     query_qualification,
                     finalized_query,
                     Arc::clone(&state),
@@ -10528,7 +10588,7 @@ impl Iroha {
         });
         let sorafs_stream_token_admission_capture =
             sorafs_stream_token_gateway_runtime::prepare_capture(
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 &config.torii.sorafs_storage.stream_tokens,
                 config
                     .torii
@@ -10600,7 +10660,7 @@ impl Iroha {
                 })?;
             let (handle, child) = sorafs_hedging_billing_runtime::start(
                 hedging_billing_config,
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 service_policy,
                 &feed_policy,
                 dependencies,
@@ -10635,7 +10695,6 @@ impl Iroha {
                 config.nexus.relay_worker.clone(),
                 nexus_fee_relay_worker::NexusFeeRelayWorkerContext {
                     storage_root: relay_worker_storage_root,
-                    chain_id: Arc::clone(&chain_id),
                     queue: Arc::clone(&queue),
                     state: Arc::clone(&state),
                     sumeragi: sumeragi.clone(),
@@ -10682,7 +10741,6 @@ impl Iroha {
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
             let runtime_mutation_sink = Arc::new(
                 QueuedSoracloudRuntimeMutationSink::new(
-                    Arc::clone(&chain_id),
                     Arc::clone(&queue),
                     Arc::clone(&state),
                     signer,
@@ -10794,8 +10852,7 @@ impl Iroha {
         };
         let musubi_publication_context =
             musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
-                config.common.chain.clone(),
-                *config.genesis.expected_hash.as_ref(),
+                NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 Arc::clone(&state),
                 Arc::clone(&queue),
                 sorafs_node.clone(),
@@ -10977,6 +11034,7 @@ impl Iroha {
         }
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
+            NetworkId::from_genesis_hash(config.genesis.expected_hash),
             kiso.clone(),
             config.torii,
             queue,
@@ -11088,6 +11146,7 @@ impl Iroha {
                 sorafs_hedging_billing_runtime,
                 sorafs_provider_ingest_runtime,
                 sorafs_provider_ingest_finalized_query,
+                sorafs_provider_ingest_completed_musubi_capture,
             },
             async move {
                 supervisor.start().await?;
@@ -11954,13 +12013,13 @@ impl core::fmt::Display for ConfigError {
             Self::SoraProfileRequired => {
                 write!(
                     f,
-                    "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
+                    "Sora Nexus features require `iroha3d --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
             #[cfg(not(feature = "embedded-soracloud-runtime"))]
             Self::SoracloudRuntimeFeatureRequired => write!(
                 f,
-                "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+            "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
             ),
             Self::SorafsStorageComplianceRequired => write!(
                 f,
@@ -13276,15 +13335,15 @@ metadata = {}
     #[test]
     fn build_line_env_override_takes_precedence() {
         assert_eq!(
-            resolve_build_line_from_env(Some("iroha2".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("iroha2".to_owned()), "iroha3d"),
             BuildLine::Iroha2
         );
         assert_eq!(
-            resolve_build_line_from_env(Some("iroha3".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("iroha3".to_owned()), "iroha3d"),
             BuildLine::Iroha3
         );
         assert_eq!(
-            resolve_build_line_from_env(Some("unknown".to_owned()), "irohad"),
+            resolve_build_line_from_env(Some("unknown".to_owned()), "iroha3d"),
             BuildLine::Iroha3
         );
     }
@@ -13526,7 +13585,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--sora",
             "--config",
             config_file
@@ -13582,7 +13641,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--sora",
             "--config",
             config_file
@@ -13614,7 +13673,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--config",
             config_file
                 .path()
@@ -13643,7 +13702,7 @@ metadata = {}
             .expect("write config");
 
         let args = parse_args_from([
-            "irohad",
+            "iroha3d",
             "--config",
             config_file
                 .path()
@@ -14263,13 +14322,13 @@ pub fn run_with_runtime_provider_registry(
 
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
-/// The caller supplies a one-shot factory that assembles the private HTTPS runner from the exact
-/// live finalized state, transaction queue, and SoraFS handles established after trusted startup
-/// replay. The factory builds the complete runner, including its durable clock and journal,
-/// receipt signer, and admitted SoraFS backends. The launcher transfers it into the daemon
-/// supervisor without requiring an unrelated runtime-provider registry; it never exposes the
-/// private routes through Torii or reads service credentials from argv or node configuration. An
-/// unexpected private-runner exit is fatal to the same supervisor that owns the node.
+/// The caller supplies a one-shot factory which receives the exact daemon-owned finalized-state,
+/// transaction-queue, and SoraFS handles only after trusted startup replay. The factory must
+/// assemble the complete private HTTPS runner, including its durable clock and journal, receipt
+/// signer, and admitted SoraFS backends. The launcher transfers that opaque factory into the
+/// daemon supervisor without requiring an unrelated runtime-provider registry. It never exposes
+/// the private routes through Torii or reads service credentials from argv or node configuration.
+/// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -14288,13 +14347,13 @@ pub fn run_with_musubi_publication(
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
 ///
-/// The caller supplies a one-shot factory that assembles the private HTTPS runner from the exact
-/// live finalized state, transaction queue, and SoraFS handles established after trusted startup
-/// replay. The factory builds the complete runner, including its durable clock and journal,
-/// receipt signer, and admitted SoraFS backends. The launcher transfers it into the daemon
-/// supervisor; it never exposes the private routes through Torii or reads service credentials
-/// from argv or node configuration. An unexpected private-runner exit is fatal to the same
-/// supervisor that owns the node.
+/// The one-shot factory receives the exact daemon-owned finalized-state, transaction-queue, and
+/// SoraFS handles only after trusted startup replay. It must assemble the complete private HTTPS
+/// runner, including its durable clock and journal, receipt signer, and admitted SoraFS backends,
+/// while retaining every credential inside deployment-owned adapters. The launcher only transfers
+/// that opaque factory into the daemon supervisor; it never exposes the private routes through
+/// Torii or reads service credentials from argv or node configuration. An unexpected private-runner
+/// exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -14342,7 +14401,7 @@ where
     if let Some(binary) = iter.next() {
         filtered.push(binary);
     } else {
-        filtered.push(OsString::from("irohad"));
+        filtered.push(OsString::from("iroha3d"));
     }
     filtered.extend(iter.filter_map(|arg| {
         let display = arg.to_string_lossy();
@@ -15490,7 +15549,7 @@ fn validate_config_for_check(
     }
 
     let genesis_account = AccountId::new(embedded_key);
-    iroha_core::validate_genesis_block(&genesis.0, &genesis_account, &config.common.chain)
+    iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
 
@@ -15498,17 +15557,12 @@ fn validate_config_for_check(
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
-    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms) = consensus_caps_from_genesis(
-        genesis,
-        &config.common.chain,
-        &config_caps,
-        &config.sumeragi,
-    )
-    .ok_or_else(|| {
-        Report::new(MainError::Config).attach(
-            "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
-        )
-    })?;
+    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms) =
+        consensus_caps_from_genesis(genesis, &config_caps, &config.sumeragi).ok_or_else(|| {
+            Report::new(MainError::Config).attach(
+                "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
+            )
+        })?;
     verify_genesis_metadata(
         genesis,
         config,
@@ -15705,11 +15759,12 @@ fn validate_genesis_execution_offline(
         &genesis.0,
         &config.nexus.dataspace_catalog,
     );
-    let mut state = State::try_new_with_chain(
+    let mut state = State::try_new_with_chain_and_network_id(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         config.common.chain.clone(),
+        NetworkId::from_genesis_hash(config.genesis.expected_hash),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
     )
@@ -15743,7 +15798,6 @@ fn validate_genesis_execution_offline(
     let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         genesis.0.clone(),
         &topology,
-        &config.common.chain,
         genesis_authority,
         &TimeSource::new_system(),
         &state,
@@ -15887,7 +15941,6 @@ fn build_consensus_config_caps(
 
 fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
-    chain_id: &ChainId,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
 ) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps, u64)> {
@@ -15932,7 +15985,7 @@ fn consensus_caps_from_genesis(
     params.sumeragi.block_cadence_ms = entry.block_cadence_ms;
 
     let (mode_tag, consensus_params, computed_fingerprint) =
-        consensus_entry_caps(chain_id, entry, &params).ok()?;
+        consensus_entry_caps(entry, &params).ok()?;
     if entry.consensus_fingerprint.into_bytes() != computed_fingerprint {
         return None;
     }
@@ -16017,7 +16070,6 @@ fn signed_v2_genesis_context_metadata(
 }
 
 fn consensus_entry_caps(
-    chain_id: &ChainId,
     entry: &ConsensusHandshakeMeta,
     params: &iroha_data_model::parameter::Parameters,
 ) -> EyreResult<(
@@ -16045,8 +16097,7 @@ fn consensus_entry_caps(
         )
         .map_err(|error| eyre::eyre!(error))?;
 
-    let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
-        chain_id,
+    let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
         &consensus_params,
     )
     .map_err(|error| eyre::eyre!(error))?;
@@ -16065,7 +16116,6 @@ fn compute_consensus_handshake_caps(
     iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
         world,
         height,
-        &config.common,
         &config.sumeragi,
         config_caps,
         frozen_mode,
@@ -16226,8 +16276,7 @@ fn verify_genesis_metadata(
             matched_meta.sumeragi_v2,
         )
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
-    let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
-        &config.common.chain,
+    let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
         &consensus_params,
     )
     .map_err(|error| Report::new(MainError::Config).attach(error))?;
@@ -16923,6 +16972,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_attestation_journal_remains_fail_closed_until_activation_is_qualified() {
+        assert!(validate_provider_attestation_journal_activation(false).is_ok());
+        assert_eq!(
+            validate_provider_attestation_journal_activation(true),
+            Err(
+                "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it"
+            )
+        );
+
+        let startup = include_str!("main.rs")
+            .split_once("pub(crate) async fn start_with_runtime_deps")
+            .expect("runtime-dependency startup entry")
+            .1;
+        let activation_gate = startup
+            .find("validate_provider_attestation_journal_activation")
+            .expect("provider-attestation activation gate");
+        let supervisor = startup
+            .find("let mut supervisor = Supervisor::new()")
+            .expect("supervisor construction");
+        assert!(
+            activation_gate < supervisor,
+            "an unqualified capture request must fail before any supervised child starts"
+        );
+    }
+
+    #[test]
     fn provider_ingest_archive_is_qualified_and_installed_before_runtime_startup() {
         let source = include_str!("main.rs");
         let adapter_preflight = source
@@ -17205,7 +17280,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_musubi_private_factory_is_threaded_and_supervised_fail_closed() {
+    fn explicit_musubi_private_factory_is_late_bound_and_supervised_fail_closed() {
         let compact_source: String = include_str!("main.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
@@ -17235,6 +17310,17 @@ mod tests {
             .split_once("fnvalidate_membership_snapshot_against_live_peers(")
             .expect("start_with_runtime_deps source boundary")
             .0;
+        let sorafs_node_ready = startup_source
+            .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+            .expect("SoraFS node construction");
+        let publication_context = startup_source
+            .find(
+                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node.clone())",
+            )
+            .expect("private publication context construction");
+        let torii_runtime_deps = startup_source
+            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)")
+            .expect("Torii runtime dependency construction");
         let signal_setup = startup_source
             .find("supervisor.setup_shutdown_on_os_signals()")
             .expect("OS signal setup");
@@ -17250,10 +17336,13 @@ mod tests {
             .find("supervisor.shutdown_on_external_signal(shutdown_signal)")
             .expect("external shutdown signal hookup");
         assert!(
-            signal_setup < publication_start
+            sorafs_node_ready < publication_context
+                && publication_context < torii_runtime_deps
+                && torii_runtime_deps < signal_setup
+                && signal_setup < publication_start
                 && publication_start < publication_monitor
                 && publication_monitor < external_signal,
-            "the factory-built private runner must start only after fallible signal setup and join the node supervisor"
+            "the private factory must receive ready daemon handles after replay, start only after fallible signal setup, and join the node supervisor"
         );
     }
 
@@ -19639,7 +19728,7 @@ mod tests {
         #[test]
         fn whitespace_only_arguments_are_ignored() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from(" "),
                 OsString::from("--trace-config"),
             ]);
@@ -19650,7 +19739,7 @@ mod tests {
         #[test]
         fn surrounding_whitespace_is_trimmed() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from("   --trace-config  "),
             ]);
 
@@ -19660,7 +19749,7 @@ mod tests {
         #[test]
         fn meaningful_arguments_are_preserved() {
             let parsed = parse_args_from(vec![
-                OsString::from("irohad"),
+                OsString::from("iroha3d"),
                 OsString::from("--config"),
                 OsString::from("config.toml"),
             ]);
@@ -19861,7 +19950,6 @@ mod tests {
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 provisional.0,
                 &topology,
-                &config.common.chain,
                 &authority,
                 &TimeSource::new_system(),
                 &state,
@@ -20048,8 +20136,7 @@ mod tests {
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
-            let tx = TransactionBuilder::new(
-                chain_id.clone(),
+            let tx = TransactionBuilder::new_genesis(
                 genesis_account_id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -20108,7 +20195,6 @@ mod tests {
             let result = ValidBlock::validate_keep_voting_block(
                 block,
                 &topology,
-                &chain_id,
                 &genesis_account_id,
                 &time_source,
                 &state,
@@ -20186,7 +20272,6 @@ mod tests {
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis.0.clone(),
                 &topology,
-                &chain_id,
                 &authority_id,
                 &TimeSource::new_system(),
                 &state,
@@ -20282,13 +20367,9 @@ mod tests {
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
-            let (_, _, _, cadence_ms) = consensus_caps_from_genesis(
-                &genesis,
-                &config.common.chain,
-                &config_caps,
-                &config.sumeragi,
-            )
-            .expect("canonical genesis consensus metadata");
+            let (_, _, _, cadence_ms) =
+                consensus_caps_from_genesis(&genesis, &config_caps, &config.sumeragi)
+                    .expect("canonical genesis consensus metadata");
             OfflineSemanticGenesisFixture {
                 config,
                 genesis,
@@ -20630,13 +20711,9 @@ mod tests {
 
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let (mode_tag, _bls_domain, consensus_caps, _) = consensus_caps_from_genesis(
-                &permissioned_genesis,
-                &chain,
-                &config_caps,
-                &config.sumeragi,
-            )
-            .expect("permissioned signed genesis must produce canonical v2 caps");
+            let (mode_tag, _bls_domain, consensus_caps, _) =
+                consensus_caps_from_genesis(&permissioned_genesis, &config_caps, &config.sumeragi)
+                    .expect("permissioned signed genesis must produce canonical v2 caps");
 
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =

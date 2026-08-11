@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Canonical body committed by an alias lifecycle transaction plan hash. */
 public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
@@ -14,7 +15,7 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
 
   private final int version;
   private final String authority;
-  private final String chainId;
+  private final NetworkId networkId;
   private final AliasSetupModels.AliasPlanAnchorV1 anchor;
   private final AliasLifecycleOperationV1 operation;
   private final AliasLifecyclePlanDispositionV1 disposition;
@@ -29,7 +30,7 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
   public AliasLifecycleTransactionPlanBodyV1(
       final int version,
       final String authority,
-      final String chainId,
+      final NetworkId networkId,
       final AliasSetupModels.AliasPlanAnchorV1 anchor,
       final AliasLifecycleOperationV1 operation,
       final AliasLifecyclePlanDispositionV1 disposition,
@@ -43,12 +44,10 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
     if (anchor == null || operation == null || disposition == null) {
       throw new IllegalArgumentException("anchor, operation, and disposition must not be null");
     }
-    if (chainId == null || chainId.trim().isEmpty() || !chainId.equals(chainId.trim())) {
-      throw new IllegalArgumentException("chainId must be non-blank without surrounding whitespace");
-    }
+    if (networkId == null) throw new IllegalArgumentException("networkId must not be null");
     this.version = version;
     this.authority = AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
-    this.chainId = chainId;
+    this.networkId = networkId;
     this.anchor = anchor;
     this.operation = operation;
     this.disposition = disposition;
@@ -62,7 +61,7 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
 
   public int version() { return version; }
   public String authority() { return authority; }
-  public String chainId() { return chainId; }
+  public NetworkId networkId() { return networkId; }
   public AliasSetupModels.AliasPlanAnchorV1 anchor() { return anchor; }
   public AliasLifecycleOperationV1 operation() { return operation; }
   public AliasLifecyclePlanDispositionV1 disposition() { return disposition; }
@@ -78,7 +77,7 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("version", version);
     map.put("authority", authority);
-    map.put("chain_id", chainId);
+    map.put("network_id", networkId.literal());
     map.put("anchor", anchor.toJsonMap());
     map.put("operation", operation.toJsonMap());
     map.put("disposition", disposition.toJsonMap());

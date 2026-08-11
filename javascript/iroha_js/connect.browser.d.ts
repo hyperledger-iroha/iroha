@@ -1,4 +1,5 @@
 import type { CanonicalJsonRequestSignerInput } from "./canonical-request.js";
+import type { NetworkId } from "./index.js";
 
 /** Wallet policy domain for exact Torii canonical-request message bytes. */
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG: "iroha:torii:canonical-request:v1";
@@ -22,7 +23,7 @@ export type BrowserConnectBinaryLike =
   | string;
 
 export interface BrowserConnectSessionPreviewOptions {
-  chainId: string;
+  networkId: NetworkId;
   node?: string | null;
   nonce?: BrowserConnectBinaryLike | null;
   appKeyPair?: {
@@ -32,7 +33,7 @@ export interface BrowserConnectSessionPreviewOptions {
 }
 
 export interface BrowserConnectSessionPreview {
-  chainId: string;
+  networkId: NetworkId;
   node: string | null;
   sidBytes: Uint8Array;
   sidBase64Url: string;
@@ -46,6 +47,9 @@ export interface BrowserConnectSessionPreview {
 
 export interface BrowserConnectSessionResponse {
   sid: string;
+  network_id: string;
+  app_pk: string;
+  nonce: string;
   wallet_uri: string;
   app_uri: string;
   token_app: string;
@@ -151,7 +155,7 @@ export function createConnectSessionPreview(
 ): BrowserConnectSessionPreview;
 export function registerConnectSession(
   baseUrl: string,
-  sid: string,
+  preview: BrowserConnectSessionPreview,
   options?: BrowserConnectRegisterOptions,
 ): Promise<BrowserConnectSessionResponse>;
 export function deleteConnectSession(

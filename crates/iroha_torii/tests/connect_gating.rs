@@ -28,6 +28,25 @@ fn request_with_loopback_connect_info(
     request
 }
 
+fn connect_session_request_body(seed: u8) -> (String, String) {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let app_pk = [seed; 32];
+    let nonce = [seed.wrapping_add(1); 16];
+    let sid = iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
+    let sid_b64 = B64.encode(sid);
+    let body = norito::json::to_json(&iroha_torii::json_object(vec![
+        ("sid", Some(sid_b64.clone())),
+        ("network_id", Some(network_id.to_string())),
+        ("app_pk", Some(B64.encode(app_pk))),
+        ("nonce", Some(B64.encode(nonce))),
+        ("node", Option::<String>::None),
+    ]))
+    .expect("Connect session JSON serialization");
+    (sid_b64, body)
+}
+
 #[cfg(feature = "ws_integration_tests")]
 fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
     tokio::spawn(async move {
@@ -444,6 +463,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            zk_ivm_prove_job_max_entries_per_owner:
+                iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+            zk_ivm_prove_job_max_retained_bytes_per_owner:
+                iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
             transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect,
@@ -530,6 +553,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
             max_payload_bytes:
                 iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
+            resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,
             bootstrap: Default::default(),
@@ -827,6 +851,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
@@ -1030,6 +1056,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
@@ -1114,6 +1142,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
 
     iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -1567,12 +1596,7 @@ async fn connect_session_delete_endpoint_removes_tokens() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x24u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x24);
     let create_resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1658,12 +1682,7 @@ async fn connect_session_status_requires_management_token() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x34u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x34);
     let create_resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1756,12 +1775,7 @@ async fn connect_session_delete_rejects_ws_attach() {
     // Use a second router handle for in-process REST calls.
     let app2 = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x44u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x44);
     let create_resp = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1856,12 +1870,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     // Create a session via in-process router call to obtain tokens and sid
     let app2 = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x52u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x52);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1926,12 +1935,7 @@ async fn connect_ws_accepts_protocol_token() {
 
     let app2 = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x62u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x62);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1999,12 +2003,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
 
     let app2 = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0x92u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0x92);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -2161,12 +2160,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
 
     let app2 = torii.api_router_for_tests();
 
-    let sid_fixed = B64.encode([0xA3u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0xA3);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -2360,12 +2354,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
-    let sid_fixed = B64.encode([0xB4u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0xB4);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -2539,12 +2528,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
-    let sid_fixed = B64.encode([0xC5u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0xC5);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -2684,12 +2668,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
-    let sid_fixed = B64.encode([0xD6u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0xD6);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -2858,12 +2837,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
-    let sid_fixed = B64.encode([0xE7u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
+    let (sid_fixed, req_body) = connect_session_request_body(0xE7);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(

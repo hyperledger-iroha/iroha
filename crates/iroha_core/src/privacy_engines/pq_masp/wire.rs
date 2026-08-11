@@ -775,7 +775,11 @@ mod tests {
     fn statement_shell() -> PqMaspStarkStatementV1 {
         PqMaspStarkStatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: "pq-masp-wire-test".parse().expect("chain id"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([0xC2; 32]),
+                )),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
                 parameter_id: PrivacyParameterIdV1::new(raw(2)),

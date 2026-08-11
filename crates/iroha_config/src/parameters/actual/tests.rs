@@ -312,6 +312,14 @@ mod tests {
         assert_changed("governance execution policy", changed);
 
         let mut changed = baseline.clone();
+        changed.gov.sorafs_pin_policy.max_global_manifests = changed
+            .gov
+            .sorafs_pin_policy
+            .max_global_manifests
+            .saturating_add(1);
+        assert_changed("SoraFS pin resource policy", changed);
+
+        let mut changed = baseline.clone();
         changed.content.max_files = changed.content.max_files.saturating_add(1);
         assert_changed("content admission policy", changed);
 
@@ -1334,6 +1342,12 @@ mod tests {
         changed.da.q_in_slot_total = NonZeroU32::new(changed.da.q_in_slot_total.get() + 1)
             .expect("incremented DA budget stays non-zero");
         assert_nexus_change("DA sampling policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.da.ingest_quota_window_blocks =
+            NonZeroU64::new(changed.da.ingest_quota_window_blocks.get() + 1)
+                .expect("incremented DA quota window stays non-zero");
+        assert_nexus_change("DA ingest quota policy", changed);
 
         let mut changed = nexus.clone();
         changed.da.audit.interval += Duration::from_nanos(1);

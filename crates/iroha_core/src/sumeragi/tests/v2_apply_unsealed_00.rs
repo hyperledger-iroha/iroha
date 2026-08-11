@@ -407,7 +407,7 @@ impl ApplyFixture {
             })
             .collect::<Vec<_>>();
         let mut context = wire::HeightContext {
-            chain_id: chain_id.clone(),
+            network_id: crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -488,7 +488,6 @@ impl ApplyFixture {
             Arc::clone(&kura),
             None,
             None,
-            chain_id.clone(),
             block_cadence,
             transaction_authority.clone(),
             events_sender,
@@ -577,7 +576,7 @@ impl ApplyFixture {
         };
         let body = if include_lane_payload {
             let transaction = TransactionBuilder::new(
-                chain_id.clone(),
+                context.network_id,
                 transaction_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -610,7 +609,7 @@ impl ApplyFixture {
             build_genesis_body(transaction, Some(execution_context))
         } else {
             let transaction = TransactionBuilder::new(
-                chain_id.clone(),
+                context.network_id,
                 transaction_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -742,7 +741,7 @@ impl ApplyFixture {
             world,
             Arc::clone(&self.kura),
             LiveQueryStore::start_test(),
-            self.service.chain_id.clone(),
+            self.service.state.chain_id.clone(),
         ));
         install_fixture_validator_authority(
             &state,
@@ -763,7 +762,6 @@ impl ApplyFixture {
             Arc::clone(&self.kura),
             self.service.provider_ingest_finalized_archive.clone(),
             self.service.reputation_finalized_archive.clone(),
-            self.service.chain_id.clone(),
             self.service.block_cadence,
             authority,
             events_sender,
@@ -1012,7 +1010,7 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
     };
 
     let transaction = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         fixture.service.genesis_account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1488,7 +1486,9 @@ fn pending_merge_entry(
             context.epoch,
             context.height,
             HashOf::from_untyped_unchecked(Hash::new(b"v2 apply decided-sidecar parent")),
-            Hash::new(b"v2 apply decided-sidecar chain"),
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"v2 apply decided-sidecar chain"),
+            )),
             VALIDATOR_SET_HASH_VERSION_V1,
             HashOf::new(&validator_set),
             validator_set,
@@ -1644,9 +1644,9 @@ fn merge_entry_with_reservations(
         .iter()
         .find(|keypair| keypair.public_key() == producer.public_key())
         .expect("reservation fixture retains the deterministic producer key");
-    let chain_id_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let network_id = context.network_id;
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         context.epoch,
         proposal.clone(),
         entrypoints.clone(),
@@ -1682,7 +1682,7 @@ fn merge_entry_with_reservations(
     let availability_body = crate::lane_consensus::lane_payload_availability_body(
         &payload,
         &proposal,
-        chain_id_hash,
+        network_id,
         context.epoch,
     )
     .expect("reservation fixture availability body");
@@ -1772,7 +1772,7 @@ fn merge_entry_with_reservations(
         },
         certified: certified.clone(),
     };
-    crate::kura::Kura::validate_autonomous_lane_merge_bundle(&bundle, chain_id_hash, context.epoch)
+    crate::kura::Kura::validate_autonomous_lane_merge_bundle(&bundle, network_id, context.epoch)
         .expect("validate authenticated reservation fixture bundle");
     let source_bundle = bundle
         .encode_framed()
@@ -1813,7 +1813,7 @@ fn merge_entry_with_reservations(
                 }
             })
             .collect(),
-        autonomous_chain_id_hash: chain_id_hash,
+        autonomous_network_id: network_id,
         autonomous_epoch: context.epoch,
         autonomous_payload_hash: payload.payload_hash,
         entrypoint_hashes,
@@ -1939,7 +1939,7 @@ fn reserve_transaction_for_lane_test_with_identity(
         coordinator.lane_incarnation
     };
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        state.chain_id_ref(),
+        state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
         admission_context,
@@ -2102,7 +2102,7 @@ fn reserve_autonomous_crash_batch(
     let transactions = (0_u8..4)
         .map(|index| {
             TransactionBuilder::new(
-                fixture.context.chain_id.clone(),
+                fixture.context.network_id,
                 fixture.service.genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -2171,7 +2171,7 @@ fn reserve_autonomous_crash_batch(
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture autonomous crash admission context");
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            fixture.state.chain_id_ref(),
+            fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
             admission_context,
@@ -2222,13 +2222,13 @@ fn reserve_autonomous_crash_batch(
         .iter()
         .map(|reserved| reserved.routing_plan().clone())
         .collect::<Vec<_>>();
-    let chain_id_hash = Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes());
+    let network_id = fixture.context.network_id;
     let epoch = {
         let world = fixture.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(&world, proposal.descriptor.proposal_height)
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         entrypoints,
@@ -2397,7 +2397,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     let mut transactions = (0..count)
         .map(|index| {
             let mut builder = TransactionBuilder::new(
-                context.chain_id.clone(),
+                context.network_id,
                 fixture.service.genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -2443,7 +2443,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture canonical autonomous admission context");
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            fixture.state.chain_id_ref(),
+            fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
             admission_context,
@@ -2501,10 +2501,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     assert!(lane_plan.unavailable_indices.is_empty());
     assert_eq!(lane_plan.proposals.len(), 1);
     let proposal = lane_plan.proposals[0].clone();
-    let chain_id_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let network_id = context.network_id;
     let (reservation_owner_hash, proposal_identity_hash) =
         super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-            chain_id_hash,
+            network_id,
             context.id(),
             context.epoch,
             &proposal,
@@ -2554,7 +2554,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
         Some(builder) => builder(
             fixture,
             context,
-            chain_id_hash,
+            network_id,
             &proposal,
             &entrypoints,
             &reservation_keys,
@@ -2563,7 +2563,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
         None => vec![None; count],
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         context.epoch,
         proposal,
         entrypoints,
@@ -2737,7 +2737,7 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         )
         .expect("install absent sibling reservation journal");
     let second_transaction = TransactionBuilder::new(
-        fixture.context.chain_id.clone(),
+        fixture.context.network_id,
         fixture.service.genesis_account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2794,7 +2794,7 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .map(|execution| {
             Kura::decode_autonomous_lane_merge_bundle(
                 &execution.source_bundle,
-                execution.autonomous_chain_id_hash,
+                execution.autonomous_network_id,
                 execution.autonomous_epoch,
             )
             .expect("decode deferred carrier autonomous source")
@@ -2812,14 +2812,13 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .kura
         .bind_local_peer_id(local_peer.clone())
         .expect("bind deferred carrier local peer");
-    let chain_hash = Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes());
+    let network_id = fixture.context.network_id;
     let generation = fixture
         .kura
-        .claim_autonomous_lifecycle_process_generation(chain_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim deferred carrier process generation");
-    let runtime_lanes = RuntimeLaneConfig::from_catalog(
-        &fixture.state.nexus_snapshot().lane_catalog,
-    );
+    let runtime_lanes =
+        RuntimeLaneConfig::from_catalog(&fixture.state.nexus_snapshot().lane_catalog);
     let mut groups = Vec::new();
     let mut outcome_paths = Vec::new();
     for payload in &payloads {
@@ -2836,7 +2835,7 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
             .expect("install deferred carrier lane marker");
         fixture
             .kura
-            .persist_lane_executable_payload(payload, payload.chain_id_hash, payload.epoch)
+            .persist_lane_executable_payload(payload, payload.network_id, payload.epoch)
             .expect("persist deferred carrier executable payload");
         groups.push(install_live_lifecycle_cursor_for_apply_test(
             fixture.kura.as_ref(),

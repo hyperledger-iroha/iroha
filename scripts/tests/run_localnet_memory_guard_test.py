@@ -178,7 +178,7 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
             MODULE.ExistingIrohadProcess(
                 pid=456,
                 rss_bytes=2048,
-                command="/tmp/irohad --config /tmp/other/peer0.toml",
+                command="/tmp/iroha3d --config /tmp/other/peer0.toml",
             )
         ],
         load_runs=2,
@@ -293,7 +293,7 @@ def test_capture_peer_diagnostics_writes_tool_outputs(tmp_path, monkeypatch):
             MODULE.PeerProcess(
                 pid=123,
                 config_path=tmp_path / "peer0.toml",
-                command=f"irohad --config {tmp_path / 'peer0.toml'}",
+                command=f"iroha3d --config {tmp_path / 'peer0.toml'}",
             )
         ],
         phase="final",
@@ -314,7 +314,7 @@ def test_capture_peer_diagnostics_records_missing_tools(tmp_path, monkeypatch):
 
     artifacts = MODULE.capture_peer_diagnostics(
         tmp_path,
-        [MODULE.PeerProcess(pid=123, config_path=tmp_path / "peer0.toml", command="irohad")],
+        [MODULE.PeerProcess(pid=123, config_path=tmp_path / "peer0.toml", command="iroha3d")],
         phase="final",
         run_index=1,
         timeout_seconds=5.0,
@@ -328,14 +328,14 @@ def test_capture_peer_diagnostics_records_missing_tools(tmp_path, monkeypatch):
 
 def test_command_ownership_requires_matching_config_path(tmp_path):
     config = tmp_path / "peer0.toml"
-    assert MODULE.command_owns_peer(f"/bin/irohad --config {config}", config)
-    assert MODULE.command_owns_peer(f"/bin/irohad --config={config}", config)
+    assert MODULE.command_owns_peer(f"/bin/iroha3d --config {config}", config)
+    assert MODULE.command_owns_peer(f"/bin/iroha3d --config={config}", config)
     spaced_config = tmp_path / "run with spaces" / "peer0.toml"
-    assert MODULE.command_owns_peer(f"/bin/irohad --config '{spaced_config}'", spaced_config)
-    assert not MODULE.command_owns_peer("/bin/irohad --config /tmp/other/peer0.toml", config)
-    assert not MODULE.command_owns_peer(f"/bin/irohad --config {config}.bak", config)
+    assert MODULE.command_owns_peer(f"/bin/iroha3d --config '{spaced_config}'", spaced_config)
+    assert not MODULE.command_owns_peer("/bin/iroha3d --config /tmp/other/peer0.toml", config)
+    assert not MODULE.command_owns_peer(f"/bin/iroha3d --config {config}.bak", config)
     assert not MODULE.command_owns_peer(
-        f"/bin/irohad --config {tmp_path / 'peer0.toml.old' / 'peer0.toml'}",
+        f"/bin/iroha3d --config {tmp_path / 'peer0.toml.old' / 'peer0.toml'}",
         config,
     )
     assert not MODULE.command_owns_peer("", config)
@@ -345,9 +345,9 @@ def test_irohad_process_discovery_reads_ps_rows(monkeypatch):
     def fake_ps_output(args):
         assert args == ["-axo", "pid=,rss=,command="]
         return (
-            "101 2048 /tmp/irohad --config /tmp/a/peer0.toml\n"
-            "102 512 /tmp/not-irohad --config /tmp/a/peer1.toml\n"
-            "bad 1 /tmp/irohad --config /tmp/a/peer2.toml\n"
+            "101 2048 /tmp/iroha3d --config /tmp/a/peer0.toml\n"
+            "102 512 /tmp/not-iroha3d --config /tmp/a/peer1.toml\n"
+            "bad 1 /tmp/iroha3d --config /tmp/a/peer2.toml\n"
         )
 
     monkeypatch.setattr(MODULE, "ps_output", fake_ps_output)
@@ -358,7 +358,7 @@ def test_irohad_process_discovery_reads_ps_rows(monkeypatch):
         MODULE.ExistingIrohadProcess(
             pid=101,
             rss_bytes=2048 * 1024,
-            command="/tmp/irohad --config /tmp/a/peer0.toml",
+            command="/tmp/iroha3d --config /tmp/a/peer0.toml",
         )
     ]
 
@@ -371,11 +371,11 @@ def test_unrelated_irohad_processes_excludes_owned_out_dir_peers(tmp_path, monke
 
     def fake_ps_output(args):
         if args == ["-o", "command=", "-p", "101"]:
-            return f"/tmp/irohad --config {config}"
+            return f"/tmp/iroha3d --config {config}"
         if args == ["-axo", "pid=,rss=,command="]:
             return (
-                f"101 2048 /tmp/irohad --config {config}\n"
-                "202 4096 /tmp/irohad --config /tmp/other/peer0.toml\n"
+                f"101 2048 /tmp/iroha3d --config {config}\n"
+                "202 4096 /tmp/iroha3d --config /tmp/other/peer0.toml\n"
             )
         raise AssertionError(f"unexpected ps args: {args}")
 
@@ -387,7 +387,7 @@ def test_unrelated_irohad_processes_excludes_owned_out_dir_peers(tmp_path, monke
         MODULE.ExistingIrohadProcess(
             pid=202,
             rss_bytes=4096 * 1024,
-            command="/tmp/irohad --config /tmp/other/peer0.toml",
+            command="/tmp/iroha3d --config /tmp/other/peer0.toml",
         )
     ]
 
@@ -402,9 +402,9 @@ def test_unrelated_irohad_processes_treats_config_prefix_collision_as_unowned(
 
     def fake_ps_output(args):
         if args == ["-o", "command=", "-p", "101"]:
-            return f"/tmp/irohad --config {config}.bak"
+            return f"/tmp/iroha3d --config {config}.bak"
         if args == ["-axo", "pid=,rss=,command="]:
-            return f"101 2048 /tmp/irohad --config {config}.bak\n"
+            return f"101 2048 /tmp/iroha3d --config {config}.bak\n"
         raise AssertionError(f"unexpected ps args: {args}")
 
     monkeypatch.setattr(MODULE, "ps_output", fake_ps_output)
@@ -415,7 +415,7 @@ def test_unrelated_irohad_processes_treats_config_prefix_collision_as_unowned(
         MODULE.ExistingIrohadProcess(
             pid=101,
             rss_bytes=2048 * 1024,
-            command=f"/tmp/irohad --config {config}.bak",
+            command=f"/tmp/iroha3d --config {config}.bak",
         )
     ]
 
@@ -431,7 +431,7 @@ def test_existing_irohad_preflight_writes_report_and_blocks(tmp_path, monkeypatc
             MODULE.ExistingIrohadProcess(
                 pid=303,
                 rss_bytes=8192,
-                command="/tmp/irohad --config /tmp/old/peer0.toml",
+                command="/tmp/iroha3d --config /tmp/old/peer0.toml",
             )
         ],
     )
@@ -480,7 +480,7 @@ def test_allow_existing_irohad_allows_deploy_and_records_processes(tmp_path, mon
             MODULE.ExistingIrohadProcess(
                 pid=404,
                 rss_bytes=16384,
-                command="/tmp/irohad --config /tmp/old/peer0.toml",
+                command="/tmp/iroha3d --config /tmp/old/peer0.toml",
             )
         ],
     )

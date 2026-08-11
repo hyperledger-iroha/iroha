@@ -9535,15 +9535,14 @@ fn register_sorafs_pin_manifest_and_wait(
     wait_for_sorafs_pin_manifest(client, manifest_digest_hex, description, timeout_secs)
 }
 
-fn sorafs_pin_epoch_window() -> Result<(u64, u64)> {
-    let submitted_epoch = SystemTime::now()
+fn sorafs_pin_retention_epoch() -> Result<u64> {
+    let current_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before the Unix epoch")?
         .as_secs();
-    let retention_epoch = submitted_epoch
+    current_epoch
         .checked_add(SORAFS_DEFAULT_PIN_RETENTION_EPOCHS)
-        .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))?;
-    Ok((submitted_epoch, retention_epoch))
+        .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))
 }
 
 fn publish_public_service_discovery(
@@ -9623,7 +9622,7 @@ fn publish_public_service_discovery(
         .ok_or_else(|| eyre!("public discovery CAR planning produced no root CID"))?;
     let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
+    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -9664,7 +9663,6 @@ fn publish_public_service_discovery(
         &client,
         iroha::client::SorafsPinRegisterArgs {
             manifest_payload: &manifest_bytes,
-            submitted_epoch,
             alias: None,
             successor_of: None,
         },
@@ -9786,7 +9784,7 @@ fn publish_app_static_site(
         .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
     let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
+    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -9827,7 +9825,6 @@ fn publish_app_static_site(
         &client,
         iroha::client::SorafsPinRegisterArgs {
             manifest_payload: &manifest_bytes,
-            submitted_epoch,
             alias: None,
             successor_of: None,
         },
@@ -9999,7 +9996,7 @@ fn publish_sorafs_directory_artifact(
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
     let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
+    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -10040,7 +10037,6 @@ fn publish_sorafs_directory_artifact(
         &client,
         iroha::client::SorafsPinRegisterArgs {
             manifest_payload: &manifest_bytes,
-            submitted_epoch,
             alias: None,
             successor_of: None,
         },
@@ -10098,7 +10094,7 @@ fn publish_sorafs_file_artifact(
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
     let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
+    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -10140,7 +10136,6 @@ fn publish_sorafs_file_artifact(
         &client,
         iroha::client::SorafsPinRegisterArgs {
             manifest_payload: &manifest_bytes,
-            submitted_epoch,
             alias: None,
             successor_of: None,
         },
@@ -12352,18 +12347,42 @@ fn canonical_request_message(method: &str, endpoint: &reqwest::Url, body: &[u8])
     .into_bytes()
 }
 
-fn canonical_request_hash(method: &str, endpoint: &reqwest::Url, body: &[u8]) -> Hash {
-    Hash::new(canonical_request_message(method, endpoint, body))
+fn canonical_network_request_message(
+    network_id: &iroha::data_model::NetworkId,
+    method: &str,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+) -> Vec<u8> {
+    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
+    let request = canonical_request_message(method, endpoint, body);
+    let mut message =
+        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
+    message.extend_from_slice(DOMAIN);
+    message.extend_from_slice(network_id.as_bytes());
+    message.extend_from_slice(&request);
+    message
 }
 
-fn canonical_request_signature_message(
+fn canonical_network_request_hash(
+    network_id: &iroha::data_model::NetworkId,
+    method: &str,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+) -> Hash {
+    Hash::new(canonical_network_request_message(
+        network_id, method, endpoint, body,
+    ))
+}
+
+fn canonical_network_request_signature_message(
+    network_id: &iroha::data_model::NetworkId,
     method: &str,
     endpoint: &reqwest::Url,
     body: &[u8],
     timestamp_ms: u64,
     nonce: &str,
 ) -> Vec<u8> {
-    let mut message = canonical_request_message(method, endpoint, body);
+    let mut message = canonical_network_request_message(network_id, method, endpoint, body);
     message.push(b'\n');
     message.extend_from_slice(timestamp_ms.to_string().as_bytes());
     message.push(b'\n');
@@ -12413,7 +12432,8 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
                 submission_config.account
             ));
         }
-        let expected_hash = canonical_request_hash("POST", endpoint, body);
+        let expected_hash =
+            canonical_network_request_hash(&submission_config.network_id, "POST", endpoint, body);
         if witness.canonical_request_hash != expected_hash {
             return Err(eyre!(
                 "Soracloud witness canonical_request_hash does not match the POST {} request",
@@ -12440,7 +12460,14 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
     rng.try_fill_bytes(&mut nonce_bytes)
         .map_err(|error| eyre!("Soracloud mutation signature nonce OS RNG failed: {error}"))?;
     let nonce = hex::encode(nonce_bytes);
-    let message = canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &submission_config.network_id,
+        "POST",
+        endpoint,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature = sign_soracloud_payload(&submission_config.key_pair, &message)?;
 
     Ok(vec![
@@ -19148,7 +19175,6 @@ export CHUNK_DIGEST=$(jq -r '.chunk_digest_sha3_256' ../sorafs/site_pack_report.
 iroha app sorafs pin register \
   --manifest ../sorafs/site_manifest.to \
   --chunk-digest "$CHUNK_DIGEST" \
-  --submitted-epoch 123 \
   --alias-namespace soradns \
   --alias-name {dns_host} \
   --alias-proof ../sorafs/{service_name}_alias_proof.bin
@@ -20888,7 +20914,6 @@ mod tests {
             .try_build_transaction_from_items(
                 [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
                     manifest_bytes.clone(),
-                    42,
                     None,
                     None,
                 )],
@@ -24764,82 +24789,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert!(err.to_string().contains("invalid --torii-url"));
     }
 
-    #[test]
-    fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
-        let config = crate::fallback_config();
-        let endpoint =
-            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
-        let headers =
-            build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
-                .expect("single-sig headers");
-        let header_map: BTreeMap<_, _> = headers.into_iter().collect();
-
-        assert_eq!(
-            header_map.get(HEADER_IROHA_ACCOUNT),
-            Some(&config.account.to_string())
-        );
-        assert!(header_map.contains_key(HEADER_IROHA_SIGNATURE));
-        assert!(header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
-        assert!(header_map.contains_key(HEADER_IROHA_NONCE));
-        assert!(!header_map.contains_key(HEADER_IROHA_WITNESS));
-    }
-
-    #[test]
-    fn build_soracloud_mutation_auth_headers_reports_nonce_rng_failure() {
-        let config = crate::fallback_config();
-        let endpoint =
-            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
-        let mut rng = FailingSoracloudSignatureNonceRng;
-
-        let error = build_soracloud_mutation_auth_headers_with_rng(
-            &config,
-            &endpoint,
-            br#"{"noop":true}"#,
-            &mut rng,
-        )
-        .expect_err("signature nonce RNG failure");
-        let message = format!("{error:?}");
-
-        assert!(message.contains("Soracloud mutation signature nonce OS RNG failed"));
-        assert!(message.contains("failing Soracloud signature nonce RNG"));
-    }
-
-    #[test]
-    fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
-        let mut config = crate::fallback_config();
-        let endpoint =
-            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
-        let body = br#"{"noop":true}"#;
-        let witness = CanonicalRequestWitnessV1 {
-            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
-            subject_account: config.account.clone(),
-            timestamp_ms: 42,
-            nonce: "fixture-witness".to_owned(),
-            canonical_request_hash: canonical_request_hash("POST", &endpoint, body),
-            signatures: Vec::new(),
-        };
-        let dir = temp_dir("witness_headers");
-        let witness_path = dir.join("witness.json");
-        fs::write(
-            &witness_path,
-            json::to_vec(&witness).expect("encode witness json"),
-        )
-        .expect("write witness file");
-        config.soracloud_http_witness_file = Some(witness_path);
-
-        let headers =
-            build_soracloud_mutation_auth_headers(&config, &endpoint, body).expect("headers");
-        let header_map: BTreeMap<_, _> = headers.into_iter().collect();
-
-        assert_eq!(
-            header_map.get(HEADER_IROHA_ACCOUNT),
-            Some(&config.account.to_string())
-        );
-        assert!(header_map.contains_key(HEADER_IROHA_WITNESS));
-        assert!(!header_map.contains_key(HEADER_IROHA_SIGNATURE));
-        assert!(!header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
-        assert!(!header_map.contains_key(HEADER_IROHA_NONCE));
-    }
+    include!("soracloud/network_auth_tests.rs");
 
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
@@ -24853,7 +24803,12 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             subject_account: other_account,
             timestamp_ms: 42,
             nonce: "fixture-witness".to_owned(),
-            canonical_request_hash: canonical_request_hash("POST", &endpoint, body),
+            canonical_request_hash: canonical_network_request_hash(
+                &config.network_id,
+                "POST",
+                &endpoint,
+                body,
+            ),
             signatures: Vec::new(),
         };
         let dir = temp_dir("witness_account_mismatch");

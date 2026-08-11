@@ -14,6 +14,7 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -22,7 +23,7 @@ import org.hyperledger.iroha.android.tx.TransactionBuilder;
 /** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 public final class RegisterOfflineDeviceAttestation {
 
-  private final String chainId;
+  private final NetworkId networkId;
   private final String authority;
   private final DeviceAttestationRegistration registration;
   private final long creationTimeMs;
@@ -32,7 +33,7 @@ public final class RegisterOfflineDeviceAttestation {
   private final Map<String, JsonValue> metadata;
 
   public RegisterOfflineDeviceAttestation(
-      final String chainId,
+      final NetworkId networkId,
       final String authority,
       final DeviceAttestationRegistration registration,
       final long creationTimeMs,
@@ -40,7 +41,7 @@ public final class RegisterOfflineDeviceAttestation {
       final Long nonce,
       final FeePaymentIntent feePayment,
       final Map<String, JsonValue> metadata) {
-    this.chainId = requireExactText(chainId, "chainId");
+    this.networkId = Objects.requireNonNull(networkId, "networkId");
     this.authority = requireExactText(authority, "authority");
     this.registration = Objects.requireNonNull(registration, "registration");
     if (creationTimeMs < 0) {
@@ -87,7 +88,7 @@ public final class RegisterOfflineDeviceAttestation {
   /** Build a payload containing exactly one registration instruction. */
   public TransactionPayload transactionPayload() {
     return TransactionPayload.builder()
-        .setChainId(chainId)
+        .setNetworkId(networkId)
         .setAuthority(authority)
         .setCreationTimeMs(creationTimeMs)
         .setExecutable(Executable.instructions(List.of(instruction())))
@@ -104,7 +105,7 @@ public final class RegisterOfflineDeviceAttestation {
   public void validateExactPayload(final TransactionPayload payload) {
     final TransactionPayload expected = transactionPayload();
     Objects.requireNonNull(payload, "payload");
-    if (!payload.chainId().equals(expected.chainId())
+    if (!payload.networkId().equals(expected.networkId())
         || !payload.authority().equals(expected.authority())
         || payload.creationTimeMs() != expected.creationTimeMs()
         || !payload.timeToLiveMs().equals(expected.timeToLiveMs())

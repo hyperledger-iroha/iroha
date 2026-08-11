@@ -325,9 +325,11 @@ Additional caps (value length, error-rate thresholds) are carried in
 
 ## Evidence Bundles and SoraFS (OR-7/OR-13)
 
-- On-chain events keep raw payloads off-ledger: `FeedEventRecord` stores only
-  `evidence_hashes`, leaving connector responses/observations in SoraFS or
-  operator storage.
+- On-chain events keep raw payloads off-ledger: `FeedEventRecord` stores the
+  canonical aggregate event, its consensus `recorded_at_ms`, and only hashes
+  of external evidence, leaving connector responses/observations in SoraFS or
+  operator storage. The consensus timestamp is the freshness anchor for
+  protocol consumers such as native FX settlement.
 - The CLI bundler `iroha soracles bundle --events <feed_events.json> --output <dir> [--observations <dir>] [--reports <dir>] [--responses <dir>] [--disputes <dir>] [--telemetry <path>]`
   copies provided evidence into `artifacts/<HASH>.*`, deduplicates by
   Blake2b-256 hash, and emits `bundle.json` listing feed events, bundled paths,

@@ -23,7 +23,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         BlockHeader, SignedBlock,
         consensus_v2::{
@@ -44,7 +44,7 @@ use tower::ServiceExt as _;
 
 struct EndpointFixture {
     app: Router,
-    chain_id: ChainId,
+    network_id: NetworkId,
     block: Arc<SignedBlock>,
     artifact: V2FinalityArtifact,
     kura: Arc<Kura>,
@@ -66,7 +66,7 @@ fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
     assert_eq!(algorithm, Algorithm::BlsNormal);
 }
 
-fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact) {
+fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtifact) {
     let mut keys = (0..4)
         .map(|_| checked_bls_validator_fixture())
         .collect::<Vec<_>>();
@@ -96,7 +96,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
             .build_with_signature(0, block_key.private_key()),
     );
     let context = HeightContext {
-        chain_id,
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
@@ -186,7 +186,8 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
 fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     let cfg = test_utils::mk_minimal_root_cfg();
     let chain_id = cfg.common.chain.clone();
-    let (block, artifact) = exact_v2_fixture(chain_id.clone());
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let (block, artifact) = exact_v2_fixture(network_id);
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(Arc::clone(&block))
         .expect("store canonical endpoint block");
@@ -198,11 +199,12 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
         assert_eq!(receipt.block_hash(), artifact.block_hash);
     }
 
-    let state = Arc::new(State::new_with_chain_for_testing(
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         chain_id.clone(),
+        network_id,
     ));
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
@@ -210,6 +212,7 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     drop(peers_tx);
     let torii = Torii::new_with_handle(
         chain_id.clone(),
+        network_id,
         KisoHandle::mock(&cfg),
         cfg.torii.clone(),
         queue,
@@ -224,7 +227,7 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     );
     EndpointFixture {
         app: torii.api_router_for_tests(),
-        chain_id,
+        network_id,
         block,
         artifact,
         kura,
@@ -267,15 +270,13 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     assert_eq!(proof.block_header, fixture.block.header());
     assert_eq!(proof.finality_artifact, fixture.artifact);
 
-    let mut missing_anchor = BridgeFinalityVerifier::new(fixture.chain_id.clone());
+    let mut missing_anchor = BridgeFinalityVerifier::new(fixture.network_id);
     assert_eq!(
         missing_anchor.verify(&proof),
         Err(BridgeFinalityVerifyError::MissingContextAnchor)
     );
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        fixture.chain_id.clone(),
-        fixture.artifact.context_id(),
-    );
+    let mut verifier =
+        BridgeFinalityVerifier::with_context(fixture.network_id, fixture.artifact.context_id());
     verifier
         .verify(&proof)
         .expect("trusted verifier accepts exact endpoint proof");
@@ -290,7 +291,7 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     let bundle: BridgeFinalityBundle =
         norito::decode_from_bytes(&bytes).expect("decode exact bridge finality bundle");
     assert_eq!(bundle.finality_proof, proof);
-    assert_eq!(bundle.commitment.chain_id, fixture.chain_id);
+    assert_eq!(bundle.commitment.network_id, fixture.network_id);
     assert_eq!(bundle.commitment.block_height, 1);
     assert_eq!(bundle.commitment.block_hash, fixture.block.hash());
     assert_eq!(
@@ -298,7 +299,7 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
         fixture.artifact.context_id()
     );
     let mut bundle_verifier =
-        BridgeFinalityVerifier::with_context(fixture.chain_id, fixture.artifact.context_id());
+        BridgeFinalityVerifier::with_context(fixture.network_id, fixture.artifact.context_id());
     bundle_verifier
         .verify_bundle(&bundle)
         .expect("trusted verifier accepts exact endpoint bundle");

@@ -3754,7 +3754,7 @@ mod test_support;
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         asset::AssetDefinitionId,
         domain::DomainId,
         offline::{

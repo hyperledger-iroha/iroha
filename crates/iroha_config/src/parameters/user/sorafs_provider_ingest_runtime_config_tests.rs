@@ -42,6 +42,22 @@ fn valid_config() -> SorafsProviderIngestRuntimeConfig {
     }
 }
 
+fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfig) {
+    config.enabled = true;
+    config.clock_seal_handle =
+        Some("sealed://sorafs/provider-attestation/clock-primary".to_owned());
+    config.clock_seal_revision = Some(11);
+    config.clock_seal_policy_digest_hex = Some("c1".repeat(32));
+    config.approval_signer_handle =
+        Some("hsm://sorafs/provider-attestation/approval-primary".to_owned());
+    config.approval_signer_revision = Some(12);
+    config.approval_signer_policy_digest_hex = Some("c2".repeat(32));
+    config.inventory_handle =
+        Some("coordinator://sorafs/provider-attestation/inventory-primary".to_owned());
+    config.inventory_revision = Some(13);
+    config.inventory_policy_digest_hex = Some("c3".repeat(32));
+}
+
 fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
     use defaults::sorafs::storage::provider_ingest_runtime::outbox;
 
@@ -56,12 +72,20 @@ fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
 
 #[test]
 fn disabled_default_is_inert() {
+    let config = SorafsProviderIngestRuntimeConfig::default();
+    let journal = &config.provider_attestation_journal;
+    assert!(!journal.enabled);
+    assert!(journal.clock_seal_handle.is_none());
+    assert!(journal.clock_seal_revision.is_none());
+    assert!(journal.clock_seal_policy_digest_hex.is_none());
+    assert!(journal.approval_signer_handle.is_none());
+    assert!(journal.approval_signer_revision.is_none());
+    assert!(journal.approval_signer_policy_digest_hex.is_none());
+    assert!(journal.inventory_handle.is_none());
+    assert!(journal.inventory_revision.is_none());
+    assert!(journal.inventory_policy_digest_hex.is_none());
     let mut emitter = Emitter::new();
-    assert!(
-        SorafsProviderIngestRuntimeConfig::default()
-            .parse(false, None, &mut emitter)
-            .is_none()
-    );
+    assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_ok());
 }
 
@@ -117,6 +141,275 @@ fn enabled_policy_parses_without_credentials() {
     assert_eq!(parsed.outbox.max_active_entries, 128);
     assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 160 * 1024 * 1024);
     assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
+    assert!(parsed.provider_attestation_journal.is_none());
+}
+
+#[test]
+fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
+    use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+    let mut config = valid_config();
+    enable_attestation_journal(&mut config.provider_attestation_journal);
+    let mut emitter = Emitter::new();
+    let parsed = config
+        .parse(true, Some(&provider_id()), &mut emitter)
+        .expect("enabled provider-ingest policy with capture journal");
+    assert!(emitter.into_result().is_ok());
+    assert_eq!(
+        parsed.provider_attestation_journal,
+        Some(actual::SorafsProviderAttestationJournal {
+            clock_seal: actual::SorafsProviderAttestationRuntimeBinding {
+                handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
+                revision: 11,
+                policy_digest: [0xC1; 32],
+            },
+            approval_signer: actual::SorafsProviderAttestationRuntimeBinding {
+                handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
+                revision: 12,
+                policy_digest: [0xC2; 32],
+            },
+            inventory: actual::SorafsProviderAttestationRuntimeBinding {
+                handle: "coordinator://sorafs/provider-attestation/inventory-primary".to_owned(),
+                revision: 13,
+                policy_digest: [0xC3; 32],
+            },
+            max_entries: journal::MAX_ENTRIES,
+            max_attempts: journal::MAX_ATTEMPTS,
+            lease_ttl_ms: journal::LEASE_TTL_MS,
+            approval_timeout_ms: journal::APPROVAL_TIMEOUT_MS,
+            handoff_timeout_ms: journal::HANDOFF_TIMEOUT_MS,
+            retry_delay_ms: journal::RETRY_DELAY_MS,
+            checkpoint_max_bytes: usize::try_from(journal::CHECKPOINT_MAX_BYTES.0)
+                .expect("default checkpoint bound fits usize"),
+            max_cas_retries: journal::MAX_CAS_RETRIES,
+        })
+    );
+}
+
+#[test]
+fn disabled_attestation_journal_rejects_every_binding_field() {
+    let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 9] = [
+        |config| config.clock_seal_handle = Some("sealed://clock/primary".to_owned()),
+        |config| config.clock_seal_revision = Some(1),
+        |config| config.clock_seal_policy_digest_hex = Some("c1".repeat(32)),
+        |config| config.approval_signer_handle = Some("hsm://approval/primary".to_owned()),
+        |config| config.approval_signer_revision = Some(1),
+        |config| config.approval_signer_policy_digest_hex = Some("c2".repeat(32)),
+        |config| config.inventory_handle = Some("coordinator://inventory/primary".to_owned()),
+        |config| config.inventory_revision = Some(1),
+        |config| config.inventory_policy_digest_hex = Some("c3".repeat(32)),
+    ];
+
+    for mutate in mutations {
+        let mut config = SorafsProviderIngestRuntimeConfig::default();
+        mutate(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn enabled_attestation_journal_requires_all_three_binding_roles() {
+    for present_roles in 0_u8..0b111 {
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        if present_roles & 0b001 == 0 {
+            config.provider_attestation_journal.clock_seal_handle = None;
+            config.provider_attestation_journal.clock_seal_revision = None;
+            config
+                .provider_attestation_journal
+                .clock_seal_policy_digest_hex = None;
+        }
+        if present_roles & 0b010 == 0 {
+            config.provider_attestation_journal.approval_signer_handle = None;
+            config.provider_attestation_journal.approval_signer_revision = None;
+            config
+                .provider_attestation_journal
+                .approval_signer_policy_digest_hex = None;
+        }
+        if present_roles & 0b100 == 0 {
+            config.provider_attestation_journal.inventory_handle = None;
+            config.provider_attestation_journal.inventory_revision = None;
+            config
+                .provider_attestation_journal
+                .inventory_policy_digest_hex = None;
+        }
+
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id()), &mut emitter)
+                .is_none(),
+            "role mask {present_roles:03b} must fail closed"
+        );
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn enabled_attestation_journal_rejects_partial_binding_triplets() {
+    for present_fields in 0b001_u8..0b111 {
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        config.provider_attestation_journal.clock_seal_handle =
+            (present_fields & 0b001 != 0).then(|| "sealed://clock/primary".to_owned());
+        config.provider_attestation_journal.clock_seal_revision =
+            (present_fields & 0b010 != 0).then_some(11);
+        config
+            .provider_attestation_journal
+            .clock_seal_policy_digest_hex = (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
+
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id()), &mut emitter)
+                .is_none(),
+            "field mask {present_fields:03b} must fail closed"
+        );
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn enabled_attestation_journal_rejects_unqualified_bindings() {
+    let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
+        |config| config.clock_seal_handle = Some("sealed://clock/test".to_owned()),
+        |config| config.approval_signer_handle = Some("hsm://approval/dev".to_owned()),
+        |config| config.inventory_handle = Some("coordinator://inventory/mock".to_owned()),
+        |config| config.clock_seal_revision = Some(0),
+        |config| config.approval_signer_revision = Some(0),
+        |config| config.inventory_revision = Some(0),
+        |config| config.clock_seal_policy_digest_hex = Some("00".repeat(32)),
+        |config| config.approval_signer_policy_digest_hex = Some("00".repeat(32)),
+        |config| config.inventory_policy_digest_hex = Some("00".repeat(32)),
+        |config| config.clock_seal_policy_digest_hex = Some("C1".repeat(32)),
+        |config| config.approval_signer_policy_digest_hex = Some("gg".repeat(32)),
+        |config| config.inventory_policy_digest_hex = Some("c3".repeat(31)),
+    ];
+
+    for mutate in mutations {
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        mutate(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id()), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn attestation_journal_requires_enabled_provider_ingest_parent() {
+    let mut config = SorafsProviderIngestRuntimeConfig::default();
+    enable_attestation_journal(&mut config.provider_attestation_journal);
+    let mut emitter = Emitter::new();
+    assert!(config.parse(false, None, &mut emitter).is_none());
+    let error = format!("{:?}", emitter.into_result().expect_err("parent gate"));
+    assert!(
+        error.contains(
+            "provider_attestation_journal.enabled requires provider_ingest_runtime.enabled"
+        ),
+        "unexpected diagnostic: {error}"
+    );
+}
+
+#[test]
+fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
+    use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+    let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 17] = [
+        |config| config.max_entries = 0,
+        |config| config.max_entries = journal::MAX_ENTRIES_LIMIT + 1,
+        |config| config.max_attempts = 0,
+        |config| config.max_attempts = journal::MAX_ATTEMPTS_LIMIT + 1,
+        |config| config.lease_ttl_ms = 0,
+        |config| config.lease_ttl_ms = journal::LEASE_TTL_MAX_MS + 1,
+        |config| config.approval_timeout_ms = 0,
+        |config| config.approval_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
+        |config| config.handoff_timeout_ms = 0,
+        |config| config.handoff_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
+        |config| config.retry_delay_ms = 0,
+        |config| config.retry_delay_ms = journal::RETRY_DELAY_MAX_MS + 1,
+        |config| config.checkpoint_max_bytes = Bytes(0),
+        |config| {
+            config.checkpoint_max_bytes = Bytes(
+                u64::try_from(journal::CHECKPOINT_MIN_BYTES).expect("checkpoint minimum fits u64")
+                    - 1,
+            );
+        },
+        |config| {
+            config.checkpoint_max_bytes = Bytes(
+                u64::try_from(journal::CHECKPOINT_MAX_BYTES_LIMIT)
+                    .expect("checkpoint limit fits u64")
+                    + 1,
+            );
+        },
+        |config| config.max_cas_retries = 0,
+        |config| config.max_cas_retries = journal::MAX_CAS_RETRIES_LIMIT + 1,
+    ];
+
+    for mutate in mutations {
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        mutate(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id()), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn attestation_journal_accepts_exact_checkpoint_minimum() {
+    use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+    let mut config = valid_config();
+    enable_attestation_journal(&mut config.provider_attestation_journal);
+    config.provider_attestation_journal.checkpoint_max_bytes =
+        Bytes(u64::try_from(journal::CHECKPOINT_MIN_BYTES).expect("checkpoint minimum fits u64"));
+    let mut emitter = Emitter::new();
+    let parsed = config
+        .parse(true, Some(&provider_id()), &mut emitter)
+        .expect("exact checkpoint minimum is valid");
+    assert!(emitter.into_result().is_ok());
+    assert_eq!(
+        parsed
+            .provider_attestation_journal
+            .expect("enabled journal")
+            .checkpoint_max_bytes,
+        journal::CHECKPOINT_MIN_BYTES
+    );
+}
+
+#[test]
+fn attestation_journal_stage_timeouts_must_fit_the_claim_lease() {
+    let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 2] = [
+        |config: &mut SorafsProviderAttestationJournalConfig| {
+            config.approval_timeout_ms = config.lease_ttl_ms;
+        },
+        |config: &mut SorafsProviderAttestationJournalConfig| {
+            config.handoff_timeout_ms = config.lease_ttl_ms;
+        },
+    ];
+    for select_timeout in mutations {
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        select_timeout(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id()), &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+    }
 }
 
 #[test]

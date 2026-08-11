@@ -8,7 +8,7 @@ use super::{
     exact12_fixture::{
         account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy, commitment,
         context, encrypted_output, envelope, fcmp_input, fcmp_output, jindo_commitment,
-        jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point, proof_for,
+        jindo_field, network_id, nullifier, orchard_action, p256_ciphertext, p256_point, proof_for,
         proof_variant_name, raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy,
         sample_statements, sorted_fcmp_outputs, statement_for, statement_variant_name,
         zk_ace_allowlist, zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement,
@@ -282,6 +282,11 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1,
         hex!("f3addcc8d28f55b9119e6cc22e5e5b57"),
     );
+    assert_stable_schema_wire(
+        &exact12_capability_manifest(),
+        PRIVACY_EXACT12_CAPABILITY_MANIFEST_SCHEMA_NAME_V1,
+        hex!("5b9d88f68fd595c78e84f1693bbb0dcb"),
+    );
 }
 
 fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRecordV1 {
@@ -351,6 +356,18 @@ fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
             })
             .collect(),
     }
+}
+
+fn exact12_capability_manifest() -> PrivacyExact12CapabilityManifestV1 {
+    capability_snapshot()
+        .exact12_capability_manifest_v1()
+        .expect("project valid committed snapshot")
+}
+
+fn redigest_exact12_capability_manifest(manifest: &mut PrivacyExact12CapabilityManifestV1) {
+    manifest.manifest_digest = manifest
+        .computed_manifest_digest()
+        .expect("recompute canonical manifest digest");
 }
 
 fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
@@ -939,6 +956,9 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
         "consensus_policy",
         "activation",
         "lifecycle",
+        "readiness",
+        "activation_state",
+        "manifest_digest",
     ] {
         assert!(
             !json.contains(governance_field),
@@ -1124,7 +1144,7 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
 fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     use PrivacyCapabilityArchiveValidationStatusV1 as Status;
 
-    assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 21);
+    assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 22);
     assert_eq!(PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, 256 * 1024);
     assert_eq!(Status::Valid.code(), 0);
     assert_eq!(Status::NullPointer.code(), 1);
@@ -1134,10 +1154,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     assert_eq!(Status::SchemaMismatch.code(), 5);
     assert_eq!(Status::NonCanonical.code(), 6);
     assert_eq!(Status::MalformedArchive.code(), 7);
-    assert_eq!(Status::InvalidSnapshot.code(), 8);
+    assert_eq!(Status::InvalidManifest.code(), 8);
 
-    let snapshot = capability_snapshot();
-    let archive = norito::encode_canonical(&snapshot).expect("canonical capability archive");
+    let manifest = exact12_capability_manifest();
+    let archive = norito::encode_canonical(&manifest).expect("canonical capability archive");
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),
         Status::Valid
@@ -1164,7 +1184,7 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     );
 
     // Preserve a valid CRC over a one-byte payload while substituting the
-    // expected snapshot schema. Header-only validation used to accept this
+    // expected manifest schema. Header-only validation used to accept this
     // exact adversary; the typed decoder must reject it.
     let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("canonical one-byte value");
     one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
@@ -1173,16 +1193,24 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         Status::MalformedArchive
     );
 
-    let mut reordered = snapshot.clone();
-    reordered.protocols.swap(0, 1);
-    let reordered =
-        norito::encode_canonical(&reordered).expect("canonical reordered snapshot bytes");
+    let legacy_snapshot =
+        norito::encode_canonical(&capability_snapshot()).expect("canonical legacy snapshot");
     assert_eq!(
-        validate_privacy_capability_archive_v1(&reordered),
-        Status::InvalidSnapshot
+        validate_privacy_capability_archive_v1(&legacy_snapshot),
+        Status::SchemaMismatch,
+        "the manifest validator must reject the old snapshot schema outright"
     );
 
-    let mut profile_mutation = snapshot.clone();
+    let mut reordered = manifest.clone();
+    reordered.protocols.swap(0, 1);
+    let reordered =
+        norito::encode_canonical(&reordered).expect("canonical reordered manifest bytes");
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&reordered),
+        Status::InvalidManifest
+    );
+
+    let mut profile_mutation = manifest.clone();
     let PrivacyCompiledProfileResultV1::Available(profile) =
         &mut profile_mutation.protocols[1].compiled_profile
     else {
@@ -1193,10 +1221,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         norito::encode_canonical(&profile_mutation).expect("canonical invalid-profile bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&profile_mutation),
-        Status::InvalidSnapshot
+        Status::InvalidManifest
     );
 
-    let mut activation_mutation = snapshot.clone();
+    let mut activation_mutation = manifest.clone();
     activation_mutation.protocols[1]
         .activation
         .as_mut()
@@ -1206,10 +1234,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         .expect("canonical activation-mismatch bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&activation_mutation),
-        Status::InvalidSnapshot
+        Status::InvalidManifest
     );
 
-    let mut excessive_rows = snapshot;
+    let mut excessive_rows = manifest;
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
     let excessive_rows =
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
@@ -1538,6 +1566,11 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
 
     let encoded =
         include_str!("../../../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64");
+    assert_eq!(
+        encoded.bytes().filter(|byte| *byte == b'\n').count(),
+        1,
+        "exact12 base64 fixture must contain exactly one terminal LF",
+    );
     let payload = encoded
         .strip_suffix('\n')
         .expect("exact12 base64 fixture must end with exactly one LF");
@@ -1967,25 +2000,14 @@ fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
 }
 
 #[test]
-fn context_rejects_unusable_chain_ids_and_action_indexes() {
+fn context_rejects_zero_network_id_and_invalid_action_indexes() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    assert_eq!(
-        usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1).expect("privacy chain-id bound fits usize"),
-        crate::id::MAX_CHAIN_ID_BYTES,
-        "privacy transcripts and canonical ChainId admission must share one byte bound"
-    );
-    assert!("".parse::<ChainId>().is_err());
-    assert!(
-        "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
-            .parse::<ChainId>()
-            .is_err()
-    );
     let mut value = context();
-    value.chain_id = "x"
-        .repeat(crate::id::MAX_CHAIN_ID_BYTES)
-        .parse()
-        .expect("maximum-length chain id");
-    value.validate(&limits).expect("maximum-length chain id");
+    value.network_id = network_id(0);
+    assert_eq!(
+        value.validate(&limits),
+        Err(PrivacyStatementValidationError::ZeroNetworkId)
+    );
 
     value = context();
     value.action_index = 1;
@@ -2077,8 +2099,8 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
     let mut mutations = Vec::new();
 
     let mut mutated = binding.clone();
-    mutated.chain_id = ChainId::from("another-privacy-chain");
-    mutations.push(("chain_id", mutated));
+    mutated.network_id = network_id(201);
+    mutations.push(("network_id", mutated));
 
     let mut mutated = binding.clone();
     mutated.genesis_hash = raw(201);
@@ -2122,26 +2144,17 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
 }
 
 #[test]
-fn native_consensus_binding_rejects_zero_genesis_and_unusable_chain_ids() {
+fn native_consensus_binding_rejects_zero_or_mismatched_network_identity() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     assert_eq!(
         PrivacyNativeConsensusBindingV1::new(&context(), [0; 32], &limits),
         Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
     );
 
-    assert!("".parse::<ChainId>().is_err());
-    assert!(
-        "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
-            .parse::<ChainId>()
-            .is_err()
+    assert_eq!(
+        PrivacyNativeConsensusBindingV1::new(&context(), raw(201), &limits),
+        Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
     );
-    let mut boundary_context = context();
-    boundary_context.chain_id = "x"
-        .repeat(crate::id::MAX_CHAIN_ID_BYTES)
-        .parse()
-        .expect("maximum-length chain id");
-    PrivacyNativeConsensusBindingV1::new(&boundary_context, raw(200), &limits)
-        .expect("maximum-length chain id remains canonical");
 }
 
 #[test]
@@ -2154,11 +2167,11 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
     let mut substitutions = Vec::new();
 
     let mut substituted = base_context.clone();
-    substituted.chain_id = ChainId::from("substituted-chain");
+    substituted.network_id = network_id(201);
     substitutions.push((
-        "chain_id",
+        "network_id",
         substituted,
-        PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch,
+        PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
     ));
 
     let mut substituted = base_context.clone();

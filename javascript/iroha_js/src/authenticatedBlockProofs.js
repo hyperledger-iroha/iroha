@@ -9,7 +9,7 @@ export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1 = 16 * 1024 * 1024;
 
 const INPUT_KEYS = new Set([
   "version",
-  "chainId",
+  "networkId",
   "trustedContextId",
   "expectedEntryHash",
   "previousFinalityProofNorito",
@@ -19,14 +19,13 @@ const INPUT_KEYS = new Set([
 ]);
 const REQUIRED_INPUT_KEYS = [
   "version",
-  "chainId",
+  "networkId",
   "trustedContextId",
   "expectedEntryHash",
   "finalityProofNorito",
   "executedBlockWire",
   "blockProofsNorito",
 ];
-const CHAIN_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u;
 const LOWER_HEX_32_PATTERN = /^[0-9a-f]{64}$/u;
 const POSITIVE_DECIMAL_PATTERN = /^[1-9][0-9]*$/u;
 const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
@@ -187,12 +186,13 @@ function normalizeInput(input) {
       `authenticated BlockProofs version must be ${AUTHENTICATED_BLOCK_PROOFS_VERSION_V1}`,
     );
   }
-  if (
-    typeof input.chainId !== "string" ||
-    input.chainId.length > 128 ||
-    !CHAIN_ID_PATTERN.test(input.chainId)
-  ) {
-    throw new TypeError("authenticated BlockProofs chainId is not canonical");
+  if (typeof input.networkId !== "string" || !LOWER_HEX_32_PATTERN.test(input.networkId)) {
+    throw new TypeError("authenticated BlockProofs networkId is not canonical lowercase hex32");
+  }
+  if ((Number.parseInt(input.networkId.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(
+      "authenticated BlockProofs networkId must carry the Iroha hash marker bit",
+    );
   }
   const trustedContextId = copyBoundedBytes(
     input.trustedContextId,
@@ -227,7 +227,7 @@ function normalizeInput(input) {
         );
   return {
     version: input.version,
-    chainId: input.chainId,
+    networkId: input.networkId,
     trustedContextId,
     expectedEntryHash,
     previousFinalityProofNorito,
@@ -304,7 +304,7 @@ function normalizeVerdict(value, expectedEntryHash) {
 /**
  * Verify canonical Torii `BlockProofs` through native Sumeragi-v2 finality.
  *
- * The caller must pin `chainId` and `trustedContextId` outside the Torii
+ * The caller must pin `networkId` and `trustedContextId` outside the Torii
  * response and provide the originally requested `expectedEntryHash`, never a
  * hash copied from `BlockProofs`. Supplying `previousFinalityProofNorito`
  * advances exactly one cryptographically linked height; omitting it verifies

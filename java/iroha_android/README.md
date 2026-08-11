@@ -288,8 +288,14 @@ shared fixture parity, Kotlin dependency wiring, manifest contract, and Android
 adapters:
 
 ```bash
+export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
 ./gradlew :core:check :android:testDebugUnitTest
 ```
+
+The parity runner requires that single explicit executable and never invokes
+Cargo. A relative path is resolved from the Iroha repository root; unset,
+blank, missing, non-file, and non-executable values fail before a fixture
+process starts.
 
 For a fast portable peer-only iteration, use:
 
@@ -402,7 +408,7 @@ network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
 native signer method; confidential movement uses the typed Kagemusha lifecycle.
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
+requires native bridge ABI 22, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
 `buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
@@ -607,14 +613,16 @@ signature to the transaction payload and use the standard transaction ingress.
 The `ClientConfig` used by the transport must include an immutable
 `LocalSigningContext`; read-only clients may omit it, but draft-producing
 mutation routes fail before network I/O when it is absent. The draft parser
-rejects non-canonical Norito, another chain or authority, extra/substituted
+binds the exact canonical genesis-derived `NetworkId` and rejects
+non-canonical Norito, another network or authority, extra/substituted
 instructions, any mismatch in the complete verifying-key record, and signing
 messages that do not match the payload prehash:
 
 ```java
+NetworkId networkId = NetworkId.parse("<canonical_network_id_hash_literal>");
 ClientConfig config =
     ClientConfig.builder()
-        .setLocalSigningContext(new LocalSigningContext("production-chain"))
+        .setLocalSigningContext(new LocalSigningContext(networkId))
         // Configure the Torii endpoint and other client policy here.
         .build();
 HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
@@ -816,6 +824,10 @@ override for allowing JVM transports in an Android release.
 - Consumers can supply a custom `OkHttpClient` via `OkHttpTransportExecutorFactory` on Android (the
   default factory uses the shared client provider); JVM callers can opt into
   `JavaHttpExecutorFactory` when `java.net.http` is available on the module path.
+- Custom executors must honor `TransportRequest.replayPolicy()`. `ONE_SHOT` requests permit one
+  network dispatch and no redirect, authentication follow-up, connection retry, or status retry.
+  The Android executor enforces this even when an injected OkHttp client enables redirects/retries;
+  the JVM executor rejects a redirect-following `HttpClient` before dispatch.
 - When using a custom `OkHttpClient` (for example with certificate pinning) and you need to release
   resources, call `HttpClientTransport.invalidateAndCancel()` (or
   `HttpTransportExecutor.invalidateAndCancel()`) to cancel in-flight requests and clean up the
@@ -995,12 +1007,11 @@ checklist.
 > canonical Norito-framed instruction payloads without inventing a Java-side
 > schema.
 
-`ClientConfig` now exposes request-scoped instrumentation, static header support,
-and deterministic retry policies. Applications can attach `ClientObserver`
+`ClientConfig` exposes request-scoped instrumentation, static header support,
+and a retry-policy utility for caller-managed replay-safe reads. Applications can attach `ClientObserver`
 implementations to capture metrics or send tracing data, register default headers
-(for example, API tokens or `User-Agent` values), and configure `RetryPolicy`
-instances to automatically retry transient network failures or 5xx responses with
-predictable backoff.
+(for example, API tokens or `User-Agent` values). Signed, nonce-bearing, or body-carrying requests
+never consume `RetryPolicy` and are never automatically retried.
 
 ### Crash telemetry
 
@@ -1216,14 +1227,19 @@ HTTP requests:
 ```java
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
+NetworkId networkId = NetworkId.parse("<genesis-derived checksummed hash literal>");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders(networkId, "get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
-Signatures cover the canonical method/path/query/body layout plus freshness
-metadata, matching the Rust verifier Torii uses on app-facing endpoints.
+Signatures cover the exact genesis-derived `NetworkId`, canonical
+method/path/query/body layout, and freshness metadata. Labels and legacy chain
+identifiers are never accepted as a signing domain.
+Raw `witness_base64` body authentication is not exposed; multisig writes must
+use a canonical signed transaction or a closed typed signed intent.
 
 ### Sora VPN native lease flow
 
@@ -1268,8 +1284,18 @@ the operator.
 hash for every signed transaction via `SignedTransactionHasher` and surfaces it
 through `ClientResponse.hashHex()`. Callers can forward the returned hash to
 `waitForTransactionStatus(...)` (or other Torii polling helpers) without
-reimplementing the hashing logic, and the same canonical value is preserved when
-pending transactions are replayed from `PendingTransactionQueue`.
+reimplementing the hashing logic. If no authoritative admission outcome arrives,
+`submitTransaction(...)` fails with `AmbiguousTransactionSubmissionException`; call
+`reconcileWith(client)` or query its `hashHex()` before constructing and signing a replacement.
+The SDK never resends the same signed bytes.
+
+Public pipeline status contains only the canonical transaction hash, closed status kind,
+optional committed height, read scope, and resolution source. The Java mirror rejects
+rejection text, diagnostics, trigger completions, batch outcomes, unknown kinds, and
+noncanonical metadata. Detailed transaction reads require an involved account or operator to
+send a one-shot canonical signed `FindTransactions` query bound to the exact genesis-derived
+`NetworkId`; the Java mirror intentionally exposes no details helper until its signed-query
+surface supports that contract.
 
 The first-release ID commits to the canonical signed `TransactionPayload`
 inside `TransactionEntrypoint::External`, not to the surrounding authorization
@@ -1475,15 +1501,14 @@ mismatches or tampering are rejected.
 surface the same functionality through the manager so applications do not need
 direct access to the underlying `SoftwareKeyProvider` during recovery flows.
 
-### Pending Transaction Queue
+### Explicit Transaction Staging Queue
 
 Applications can provide a `PendingTransactionQueue` (the default implementation
 `FilePendingTransactionQueue` persists base64-encoded canonical pending-transaction
-records via
-`ClientConfig`. When Torii submissions exhaust their retry budget, the
-transport persists the signed payloads for later replay and automatically
-drains the queue before sending new transactions. This keeps the mobile client
-resilient to intermittent connectivity without losing deterministic ordering.
+records) via `ClientConfig`. This is explicit local staging only:
+`HttpClientTransport` neither enqueues failed submissions nor drains stored signed bytes.
+Before deciding whether to replace a staged transaction, reconcile its canonical hash against
+Torii. Do not replay a transaction whose earlier dispatch has an ambiguous outcome.
 ### Norito RPC Helper
 
 Use `NoritoRpcClient` when you need to call Torii's Norito RPC endpoints
@@ -1556,8 +1581,8 @@ or compatibility-only payload in the Java resource directory.
 registry surface without reflection, Android framework dependencies, or legacy
 wire aliases. The signer-free client exposes all twelve typed
 `/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
-immutable namespace bindings, SemVer requirement ASTs, chain/genesis lock
-identity, finalized cursors, and authoritative archive commitments. Unknown
+immutable namespace bindings, SemVer requirement ASTs, one exact genesis-derived
+`NetworkId`, finalized cursors, and authoritative archive commitments. Unknown
 fields, unsupported versions, and duplicate parent-local dependency aliases
 fail closed.
 

@@ -4,6 +4,50 @@
 mod tests {
     use super::*;
 
+    #[test]
+    fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
+        let route = mcp_transport::JSON_RPC;
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::TargetRoute);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::NestedRouteAuthentication
+        );
+        assert_eq!(RouteCatalog::new(mcp_transport::ROUTES).validate(), Ok(()));
+    }
+
+    #[test]
+    fn nested_route_authentication_rejects_mismatched_admission_or_surface() {
+        let missing_auth = RouteDescriptor::new(
+            "test.target_route_without_nested_auth",
+            HttpMethod::Post,
+            "/v1/tests/target-route-without-nested-auth",
+            ApiSurface::Protocol,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::TargetRoute,
+        );
+        let wrong_surface = RouteDescriptor::new(
+            "test.nested_auth_on_public_surface",
+            HttpMethod::Post,
+            "/v1/tests/nested-auth-on-public-surface",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::TargetRoute,
+        )
+        .with_authentication(AuthenticationPolicy::NestedRouteAuthentication);
+        let errors = validate_catalog(&[missing_auth, wrong_surface]).expect_err("invalid pairs");
+        assert!(errors.iter().any(|error| {
+            error.kind
+                == CatalogValidationErrorKind::TargetRouteAdmissionRequiresNestedAuthentication
+        }));
+        assert!(errors.iter().any(|error| {
+            error.kind
+                == CatalogValidationErrorKind::NestedAuthenticationRequiresProtocolTargetRoute
+        }));
+    }
+
     const FEATURED_ROUTES: &[RouteDescriptor] = &[
         RouteDescriptor::new(
             "test.always",
@@ -11,6 +55,8 @@ mod tests {
             "/v1/tests/always",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL),
         RouteDescriptor::new(
@@ -19,6 +65,8 @@ mod tests {
             "/v1/tests/featured",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK),
@@ -28,6 +76,8 @@ mod tests {
             "/v1/tests/diagnostic",
             ApiSurface::Diagnostic,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         ),
     ];
 
@@ -48,6 +98,11 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
+    }
+
+    #[test]
+    fn canonical_catalog_satisfies_closed_security_axes() {
+        assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
 
     #[test]
@@ -247,6 +302,8 @@ mod tests {
             "/v1/tests/identity-bound-operator",
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
         let errors = validate_catalog(&[generic_identity_bound_operator])
@@ -374,7 +431,208 @@ mod tests {
         );
     }
 
-    include!("authentication_routes_test.rs");
+    #[test]
+    fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
+        let catalog = RouteCatalog::new(CATALOGED_ROUTES);
+        assert_eq!(catalog.validate(), Ok(()));
+
+        for expected in soracloud_gateway::ROUTES
+            .iter()
+            .chain(content_directory::ROUTES)
+        {
+            assert!(
+                catalog.routes().iter().any(|route| route == expected),
+                "missing canonical route {}",
+                expected.stable_route_id()
+            );
+        }
+        assert!(
+            catalog
+                .routes()
+                .iter()
+                .all(|route| route.path() != "/soradns/{fqdn}/"),
+            "the first-release gateway must not expose a trailing-slash alias"
+        );
+    }
+
+    #[test]
+    fn public_runtime_gateway_authentication_is_exactly_scoped() {
+        let catalog_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.stable_route_id().starts_with("protocol.soracloud."))
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
+        assert_eq!(soracloud_gateway::ROUTES.len(), 4);
+
+        for route in soracloud_gateway::ROUTES {
+            assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
+            assert_eq!(route.surface(), ApiSurface::Protocol);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+        }
+    }
+
+    #[test]
+    fn dedicated_onboarding_authentication_is_exactly_scoped() {
+        for route in [
+            application_api::ACCOUNTS_ONBOARD_PLAN_POST,
+            application_api::ACCOUNTS_ONBOARD_POST,
+            application_api::ACCOUNTS_ONBOARDING_READINESS_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OnboardingToken,
+                "{} must advertise its dedicated credential",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| { route.authentication() == AuthenticationPolicy::OnboardingToken })
+                .count(),
+            3,
+            "no unrelated route may inherit the onboarding credential policy"
+        );
+    }
+
+    #[test]
+    fn required_api_token_authentication_is_exactly_scoped() {
+        let required_routes = [
+            sorafs::STORAGE_TOKEN,
+            application_api::WEBHOOKS_GET,
+            application_api::WEBHOOKS_POST,
+            application_api::WEBHOOKS_BY_ID_DELETE,
+        ];
+        for route in &required_routes {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::RequiredApiToken,
+                "{} must advertise its unconditional API credential",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| {
+                    route.authentication() == AuthenticationPolicy::RequiredApiToken
+                })
+                .count(),
+            required_routes.len(),
+            "no unrelated route may inherit the unconditional API-token policy"
+        );
+    }
+
+    #[test]
+    fn iso20022_routes_require_fresh_operator_signatures() {
+        for route in iso20022::ROUTES {
+            assert_eq!(route.admission(), AdmissionPolicy::Operator);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OperatorSignature
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
+        for route in [
+            core::VPN_QUOTE_CREATE,
+            core::VPN_SESSION_CREATE,
+            core::VPN_RECEIPTS,
+            core::VPN_RECEIPT_SUBMIT,
+            core::VPN_SESSION,
+            core::VPN_SESSION_DELETE,
+            application_api::NOTIFY_DEVICES_POST,
+            application_api::NOTIFY_DEVICES_DELETE,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must advertise its body-bound account signature",
+                route.stable_route_id()
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
+        let routes = [
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
+        ];
+        let catalog = RouteCatalog::new(&routes);
+        assert_eq!(catalog.validate(), Ok(()));
+        for route in routes {
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert!(!route.cors_options());
+        }
+        let enabled = EnabledFeatures::new(&["app_api"]);
+        assert!(
+            catalog
+                .project(CatalogProjection::OpenApi, enabled)
+                .is_empty()
+        );
+        assert!(catalog.project(CatalogProjection::Sdk, enabled).is_empty());
+        assert!(catalog.project(CatalogProjection::Mcp, enabled).is_empty());
+    }
+
+    #[test]
+    fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
+        for route in [
+            aliases::RESOLVE,
+            aliases::RESOLVE_INDEX,
+            aliases::BY_ACCOUNT,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ToriiDefault,
+                "{} conditionally authenticates restricted dataspace reads in its handler",
+                route.stable_route_id()
+            );
+        }
+
+        for route in [
+            aliases::SETUP_PLAN,
+            aliases::LEASE_RENEW_PLAN,
+            aliases::AUTO_RENEW_PLAN,
+            aliases::RETAIL_RECIPIENT_LOOKUP,
+            aliases::RETAIL_RECIPIENT_ROUTE,
+            fees::QUOTE,
+            fees::SPONSOR_PROGRAM_BY_ID,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must require canonical account authentication",
+                route.stable_route_id()
+            );
+        }
+
+        assert_eq!(
+            aliases::ASSET_RESOLVE.authentication(),
+            AuthenticationPolicy::ToriiDefault,
+            "public asset aliases do not expose an account binding"
+        );
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+            contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
+            runtime_governance::GOV_CONTRACT_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} exposes contract identity and must require a canonical account signature",
+                route.stable_route_id()
+            );
+        }
+    }
 
     #[test]
     fn sorafs_catalog_has_one_strict_first_release_path_per_operation() {
@@ -392,31 +650,6 @@ mod tests {
                 PathNormalization::Strict,
                 "SoraFS route must reject normalization aliases: {}",
                 expected.stable_route_id()
-            );
-        }
-
-        for publication_path in [
-            "/v1/sorafs/appeals/finance/reports",
-            "/v1/sorafs/appeals/finance/weekly-rollups",
-        ] {
-            assert!(
-                sorafs::ROUTES.iter().any(|route| {
-                    route.path() == publication_path && route.method() == HttpMethod::Get
-                }),
-                "appeal-finance publication readback route is missing: {publication_path}"
-            );
-            let post = sorafs::ROUTES
-                .iter()
-                .find(|route| {
-                    route.path() == publication_path && route.method() == HttpMethod::Post
-                })
-                .unwrap_or_else(|| {
-                    panic!("appeal-finance publication route is missing: {publication_path}")
-                });
-            assert_eq!(
-                post.authentication(),
-                AuthenticationPolicy::CanonicalAccountSignature,
-                "appeal-finance publication must require canonical account authentication: {publication_path}"
             );
         }
 
@@ -465,6 +698,8 @@ mod tests {
                 invalid_path,
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true);
             assert!(
@@ -479,6 +714,8 @@ mod tests {
             "/sorafs/cid/{cid}/",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "adversarial trailing-slash test",
@@ -513,6 +750,41 @@ mod tests {
             assert!(
                 route.cors_options(),
                 "{} must expose the cataloged CORS preflight",
+                route.stable_route_id()
+            );
+        }
+    }
+
+    #[test]
+    fn sorafs_pop_routes_declare_their_authenticated_protocol_effects() {
+        let routes = [
+            (sorafs::POP_ENROLLMENT, RouteEffect::Mutation),
+            (sorafs::POP_ENROLLMENT_STATUS, RouteEffect::ReadOnly),
+            (sorafs::POP_APPROVAL, RouteEffect::Mutation),
+            (sorafs::POP_ISSUE, RouteEffect::Mutation),
+            (sorafs::POP_REVOCATION, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_SUBMIT, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_RECONCILE, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_PROJECTION, RouteEffect::ReadOnly),
+            (sorafs::POP_WALLET_DELIVERY, RouteEffect::ReadOnly),
+            (sorafs::POP_WALLET_IMPORT, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_ACKNOWLEDGE, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_SYNCHRONIZE, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_PROVE, RouteEffect::ExpensiveCompute),
+            (sorafs::POP_VERIFY, RouteEffect::Mutation),
+        ];
+        for (route, effect) in routes {
+            assert_eq!(route.effect(), effect, "{} effect", route.stable_route_id());
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal,
+                "{} admission",
+                route.stable_route_id()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ProtocolHandshake,
+                "{} authentication",
                 route.stable_route_id()
             );
         }
@@ -690,6 +962,123 @@ mod tests {
     }
 
     #[test]
+    fn contract_post_routes_close_effect_admission_and_authentication_axes() {
+        for route in contracts_and_verification_keys::ROUTES {
+            if matches!(
+                route.effect(),
+                RouteEffect::Mutation | RouteEffect::ExpensiveCompute
+            ) {
+                assert_ne!(
+                    route.admission(),
+                    AdmissionPolicy::Public,
+                    "{} exposes protected work through public admission",
+                    route.stable_route_id()
+                );
+                assert!(
+                    !matches!(
+                        route.authentication(),
+                        AuthenticationPolicy::ToriiDefault
+                            | AuthenticationPolicy::RequiredApiToken
+                            | AuthenticationPolicy::Unauthenticated
+                    ),
+                    "{} relies on an open or API-token-only authentication policy",
+                    route.stable_route_id()
+                );
+            }
+        }
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
+            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+        }
+
+        for route in [
+            contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalSignedBody
+            );
+        }
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
+            contracts_and_verification_keys::ZK_VK_REGISTER_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+        }
+
+        let public_posts = contracts_and_verification_keys::ROUTES
+            .iter()
+            .filter(|route| {
+                route.method() == HttpMethod::Post && route.admission() == AdmissionPolicy::Public
+            })
+            .map(RouteDescriptor::stable_route_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            public_posts,
+            vec![
+                "contracts.sorafs_appeals_pricing_quote_post",
+                "contracts.sorafs_appeals_finance_settle_post",
+                "contracts.sorafs_appeals_finance_disburse_post",
+            ]
+        );
+        for route in [
+            contracts_and_verification_keys::SORAFS_APPEALS_PRICING_QUOTE_POST,
+            contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_SETTLE_POST,
+            contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DISBURSE_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        }
+    }
+
+    #[test]
+    fn pin_registration_is_a_closed_signed_body_mutation() {
+        assert_eq!(sorafs::PIN_REGISTER.effect(), RouteEffect::Mutation);
+        assert_eq!(
+            sorafs::PIN_REGISTER.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            sorafs::PIN_REGISTER.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+    }
+
+    #[test]
+    fn app_api_post_dispatch_is_an_authenticated_compute_boundary() {
+        for route in [
+            application_api::APP_API_CID_BY_CID_BY_PATH_POST,
+            application_api::APP_API_ACTIVE_BY_PATH_POST,
+            application_api::API_CID_BY_CID_BY_PATH_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert_eq!(route.route_match(), RouteMatch::Wildcard);
+        }
+    }
+
+    #[test]
     fn contract_and_application_route_projections_are_explicit() {
         for route in [
             contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -772,6 +1161,17 @@ mod tests {
         assert!(sumeragi::STATUS.projections().mcp());
         assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
+        for route in [
+            telemetry::SORANET_PRIVACY_EVENT,
+            telemetry::SORANET_PRIVACY_SHARE,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::Operator);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::SoranetCollectorCredential
+            );
+        }
 
         let catalog = RouteCatalog::new(&routes);
         let without_features = catalog.project(CatalogProjection::Mounted, EnabledFeatures::none());
@@ -864,6 +1264,8 @@ mod tests {
             "/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -921,6 +1323,8 @@ mod tests {
                 "/v1/tests/one",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.duplicate",
@@ -928,6 +1332,8 @@ mod tests {
                 "/v1/tests/two",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_path",
@@ -935,6 +1341,8 @@ mod tests {
                 "/v1/tests/one",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_shape_one",
@@ -942,6 +1350,8 @@ mod tests {
                 "/v1/tests/shapes/{first_id}",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_shape_two",
@@ -949,6 +1359,8 @@ mod tests {
                 "/v1/tests/shapes/{second_id}",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ];
 
@@ -995,6 +1407,8 @@ mod tests {
                 path,
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             );
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
@@ -1012,6 +1426,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_get_post",
@@ -1019,6 +1435,8 @@ mod tests {
                 "/v1/tests/resources/get",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_list_get",
@@ -1026,6 +1444,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_list_post",
@@ -1033,6 +1453,8 @@ mod tests {
                 "/v1/tests/resources/list/details",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_query_post",
@@ -1040,6 +1462,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ] {
             assert_eq!(
@@ -1055,6 +1479,8 @@ mod tests {
                 "/v1/tests/resources/json",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_sse_post",
@@ -1062,6 +1488,8 @@ mod tests {
                 "/v1/tests/resources/sse",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ] {
             assert_eq!(
@@ -1079,6 +1507,8 @@ mod tests {
             "/v1/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_implicit_head(true);
@@ -1088,6 +1518,8 @@ mod tests {
             "/health",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "orchestrator health-probe convention",
@@ -1101,6 +1533,8 @@ mod tests {
             "/v1/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         );
         assert!(validate_catalog(&[implicit_wildcard]).is_err());
     }
@@ -1114,6 +1548,8 @@ mod tests {
                 "/v1/tests/diagnostic-sdk",
                 ApiSurface::Diagnostic,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_projections(RouteProjections::SDK),
             RouteDescriptor::new(
@@ -1122,6 +1558,8 @@ mod tests {
                 "/v1/tests/protocol-handshake",
                 ApiSurface::Protocol,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_authentication(AuthenticationPolicy::ProtocolHandshake)
             .with_projections(RouteProjections::MCP),
@@ -1131,6 +1569,8 @@ mod tests {
                 "/v1/tests/operator-without-signature",
                 ApiSurface::Operator,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Operator,
             )
             .with_projections(RouteProjections::MCP),
             RouteDescriptor::new(
@@ -1139,6 +1579,8 @@ mod tests {
                 "/v1/tests/head-on-post",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true),
             RouteDescriptor::new(
@@ -1147,6 +1589,8 @@ mod tests {
                 "/v1/tests/public-credential-exchange",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_authentication(AuthenticationPolicy::OperatorCredentialExchange),
         ];
@@ -1173,6 +1617,146 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_unsafe_effect_and_principal_combinations() {
+        let routes = [
+            RouteDescriptor::new(
+                "test.public_mutation",
+                HttpMethod::Post,
+                "/v1/tests/public-mutation",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::Public,
+            ),
+            RouteDescriptor::new(
+                "test.public_expensive_compute",
+                HttpMethod::Post,
+                "/v1/tests/public-expensive-compute",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::ExpensiveCompute,
+                AdmissionPolicy::Public,
+            ),
+            RouteDescriptor::new(
+                "test.account_without_account_auth",
+                HttpMethod::Post,
+                "/v1/tests/account-without-account-auth",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::AuthenticatedAccount,
+            )
+            .with_authentication(AuthenticationPolicy::IdentityBoundSignature),
+            RouteDescriptor::new(
+                "test.validator_without_roster_auth",
+                HttpMethod::Post,
+                "/v1/tests/validator-without-roster-auth",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::ValidatorRosterMember,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
+            RouteDescriptor::new(
+                "test.protocol_principal_without_handshake",
+                HttpMethod::Post,
+                "/v1/tests/protocol-principal-without-handshake",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::AuthenticatedProtocolPrincipal,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
+            RouteDescriptor::new(
+                "test.post_stream",
+                HttpMethod::Post,
+                "/v1/tests/post-stream",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::LongLivedStream,
+                AdmissionPolicy::ValidatorRosterMember,
+            )
+            .with_authentication(AuthenticationPolicy::ProtocolHandshake),
+        ];
+
+        let errors = validate_catalog(&routes).expect_err("unsafe admission metadata must fail");
+        for expected in [
+            CatalogValidationErrorKind::PublicMutation,
+            CatalogValidationErrorKind::PublicExpensiveCompute,
+            CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
+            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
+            CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
+            CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
+        ] {
+            assert!(
+                errors.iter().any(|error| error.kind == expected),
+                "missing catalog validation error: {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn critical_routes_expose_closed_effect_and_admission_axes() {
+        for route in [
+            pipeline::TRANSACTION,
+            pipeline::TRANSACTION_ENTRYPOINT,
+            pipeline::TRANSACTIONS_BATCH,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalSignedBody
+            );
+        }
+        assert_eq!(pipeline::QUERY.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(
+            pipeline::QUERY.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            pipeline::QUERY.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+        assert_eq!(pipeline::TRANSACTION_STATUS.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            pipeline::TRANSACTION_STATUS.admission(),
+            AdmissionPolicy::Public
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.effect(),
+            RouteEffect::ExpensiveCompute
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+
+        assert_eq!(core::HEALTH.effect(), RouteEffect::ReadOnly);
+        assert_eq!(core::HEALTH.admission(), AdmissionPolicy::Public);
+        assert_eq!(
+            runtime_governance::ZK_IVM_PROVE.effect(),
+            RouteEffect::ExpensiveCompute
+        );
+        assert_eq!(
+            runtime_governance::ZK_IVM_PROVE.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            streaming::SUBSCRIPTION_WS.effect(),
+            RouteEffect::LongLivedStream
+        );
+        assert_eq!(
+            streaming::P2P.admission(),
+            AdmissionPolicy::ValidatorRosterMember
+        );
+    }
+
+    #[test]
     fn implicit_head_and_cors_routes_are_separate_from_explicit_operations() {
         let routes = [
             RouteDescriptor::new(
@@ -1181,6 +1765,8 @@ mod tests {
                 "/v1/tests/resource",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true)
             .with_cors_options(true),
@@ -1190,6 +1776,8 @@ mod tests {
                 "/v1/tests/resource",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_cors_options(true),
         ];
@@ -1222,6 +1810,8 @@ mod tests {
             "/gateway/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_path_policy(PathPolicy::ProtocolException {
@@ -1235,6 +1825,8 @@ mod tests {
             "/v1/tests/{*tail}",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_projections(RouteProjections::OPENAPI);
@@ -1290,6 +1882,58 @@ mod tests {
         }
     }
 
-    // Keep the committed reputation projection contract visible under this test module.
-    include!("reputation_surface_test.rs");
+    #[test]
+    fn reputation_surface_is_committed_projection_read_only() {
+        let routes = [
+            sorafs::REPUTATION_LATEST_GET,
+            sorafs::REPUTATION_SNAPSHOT,
+            sorafs::REPUTATION_PROVIDER,
+            sorafs::REPUTATION_WEIGHTS,
+            sorafs::REPUTATION_EVENTS,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+        ];
+        assert_eq!(
+            routes.map(RouteDescriptor::stable_route_id),
+            [
+                "sorafs.reputation_snapshot.latest",
+                "sorafs.reputation_snapshot.read",
+                "sorafs.reputation_provider.read",
+                "sorafs.reputation_weight.read",
+                "sorafs.reputation_event.list",
+                "protocol.sorafs.reputation_event_stream",
+                "protocol.sorafs.reputation_event_websocket",
+            ]
+        );
+        assert_eq!(RouteCatalog::new(&routes).validate(), Ok(()));
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert!(
+                route.implicit_head(),
+                "Axum GET routing provides authenticated framework HEAD handling"
+            );
+            assert_eq!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| { candidate.stable_route_id() == route.stable_route_id() })
+                    .count(),
+                1,
+                "reputation route `{}` must appear exactly once",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            sorafs::REPUTATION_LATEST_GET.stable_route_id(),
+            "sorafs.reputation_snapshot.latest"
+        );
+        assert!(
+            !CATALOGED_ROUTES
+                .iter()
+                .any(|route| route.stable_route_id() == "sorafs.reputation_snapshot.publish")
+        );
+    }
 }

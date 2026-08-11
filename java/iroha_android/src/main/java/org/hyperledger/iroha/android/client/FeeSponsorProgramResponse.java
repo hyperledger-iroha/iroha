@@ -1,11 +1,13 @@
 package org.hyperledger.iroha.android.client;
 
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 
 /** Exact on-chain fee sponsor program returned by Torii. */
 public final class FeeSponsorProgramResponse {
   private final FeeSponsorProgramId id;
+  private final String payoutAccount;
   private final FeeSponsorProgramLifecycle lifecycle;
   private final Long activeRevision;
   private final Long stagedRevision;
@@ -13,11 +15,13 @@ public final class FeeSponsorProgramResponse {
 
   public FeeSponsorProgramResponse(
       final FeeSponsorProgramId id,
+      final String payoutAccount,
       final FeeSponsorProgramLifecycle lifecycle,
       final Long activeRevision,
       final Long stagedRevision,
       final FeeSponsorProgramActivation scheduledActivation) {
     this.id = Objects.requireNonNull(id, "id");
+    this.payoutAccount = AccountIdLiteral.requireCanonicalI105Address(payoutAccount, "payoutAccount");
     this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
     if (activeRevision != null && activeRevision.longValue() <= 0L) {
       throw new IllegalArgumentException("activeRevision must be positive");
@@ -38,6 +42,10 @@ public final class FeeSponsorProgramResponse {
     return lifecycle;
   }
 
+  public String payoutAccount() {
+    return payoutAccount;
+  }
+
   public Long activeRevision() {
     return activeRevision;
   }
@@ -56,6 +64,7 @@ public final class FeeSponsorProgramResponse {
     if (!(other instanceof FeeSponsorProgramResponse)) return false;
     final FeeSponsorProgramResponse that = (FeeSponsorProgramResponse) other;
     return id.equals(that.id)
+        && payoutAccount.equals(that.payoutAccount)
         && lifecycle == that.lifecycle
         && Objects.equals(activeRevision, that.activeRevision)
         && Objects.equals(stagedRevision, that.stagedRevision)
@@ -64,6 +73,7 @@ public final class FeeSponsorProgramResponse {
 
   @Override
   public int hashCode() {
-    return Objects.hash(id, lifecycle, activeRevision, stagedRevision, scheduledActivation);
+    return Objects.hash(
+        id, payoutAccount, lifecycle, activeRevision, stagedRevision, scheduledActivation);
   }
 }

@@ -10,6 +10,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, ValueEnum};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::NetworkId;
 use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -37,6 +38,9 @@ struct Cli {
     /// Operator account id to place in X-Iroha-Account.
     #[arg(long)]
     account_id: String,
+    /// Exact genesis-derived network identity used by Torii request authentication.
+    #[arg(long)]
+    network_id: NetworkId,
     /// Runtime-only hex-encoded 32-byte Ed25519 private seed.
     #[arg(long)]
     private_key_seed_hex: String,
@@ -90,6 +94,7 @@ struct SignedHeader {
 
 #[derive(Debug, Clone, JsonSerialize)]
 struct SignedSettlementRequest {
+    network_id: NetworkId,
     method: String,
     url: Option<String>,
     path: String,
@@ -119,6 +124,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let signed = sign_artifact(
         &artifact,
         &cli.account_id,
+        &cli.network_id,
         &seed,
         path.as_str(),
         cli.torii_root.as_deref(),
@@ -195,14 +201,21 @@ fn canonical_request_message(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
     .into_bytes()
 }
 
-fn canonical_request_signature_message(
+fn canonical_network_request_signature_message(
+    network_id: &NetworkId,
     method: &str,
     path: &str,
     body: &[u8],
     timestamp_ms: u64,
     nonce: &str,
 ) -> Vec<u8> {
-    let mut message = canonical_request_message(method, path, body);
+    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
+    let request = canonical_request_message(method, path, body);
+    let mut message =
+        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
+    message.extend_from_slice(DOMAIN);
+    message.extend_from_slice(network_id.as_bytes());
+    message.extend_from_slice(&request);
     message.push(b'\n');
     message.extend_from_slice(timestamp_ms.to_string().as_bytes());
     message.push(b'\n');
@@ -213,6 +226,7 @@ fn canonical_request_signature_message(
 fn sign_artifact(
     artifact: &VpnSettlementSpoolRecord,
     account_id: &str,
+    network_id: &NetworkId,
     seed: &[u8; 32],
     path: &str,
     torii_root: Option<&str>,
@@ -222,11 +236,19 @@ fn sign_artifact(
     let body = request_body(artifact)?;
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
         .map_err(|err| format!("failed to derive settlement signing key: {err}"))?;
-    let message = canonical_request_signature_message("POST", path, &body, timestamp_ms, nonce);
+    let message = canonical_network_request_signature_message(
+        network_id,
+        "POST",
+        path,
+        &body,
+        timestamp_ms,
+        nonce,
+    );
     let signature = Signature::try_new(key_pair.private_key(), &message)?;
     let body = String::from_utf8(body)?;
     let url = torii_root.map(|root| request_url(root, path));
     Ok(SignedSettlementRequest {
+        network_id: *network_id,
         method: "POST".to_owned(),
         url,
         path: path.to_owned(),
@@ -281,7 +303,16 @@ fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+
     use super::*;
+
+    fn test_network_id(marker: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([marker; Hash::LENGTH]),
+        ))
+    }
 
     fn sample_record() -> VpnSettlementSpoolRecord {
         VpnSettlementSpoolRecord {
@@ -304,9 +335,11 @@ mod tests {
     fn signs_spooled_artifact_with_verifiable_canonical_message() {
         let record = sample_record();
         let seed = [0x66; 32];
+        let network_id = test_network_id(0x61);
         let signed = sign_artifact(
             &record,
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
             &seed,
             DEFAULT_PATH,
             Some("http://127.0.0.1:8080"),
@@ -314,6 +347,7 @@ mod tests {
             "nonce-1",
         )
         .expect("signed request");
+        assert_eq!(signed.network_id, network_id);
         assert_eq!(signed.method, "POST");
         assert_eq!(
             signed.url.as_deref(),
@@ -334,7 +368,8 @@ mod tests {
                 .expect("base64 signature"),
         )
         .expect("settlement request signature is non-empty and nonzero");
-        let message = canonical_request_signature_message(
+        let message = canonical_network_request_signature_message(
+            &network_id,
             "POST",
             DEFAULT_PATH,
             signed.body.as_bytes(),
@@ -346,6 +381,17 @@ mod tests {
         signature
             .verify(key_pair.public_key(), &message)
             .expect("signature verifies");
+        let foreign_message = canonical_network_request_signature_message(
+            &test_network_id(0x62),
+            "POST",
+            DEFAULT_PATH,
+            signed.body.as_bytes(),
+            1_700_000_000_123,
+            "nonce-1",
+        );
+        signature
+            .verify(key_pair.public_key(), &foreign_message)
+            .expect_err("same request must not verify for a different genesis network");
     }
 
     #[test]
@@ -354,6 +400,7 @@ mod tests {
         let signed = sign_artifact(
             &record,
             "operator",
+            &test_network_id(0x63),
             &[0x11; 32],
             DEFAULT_PATH,
             Some("https://torii.example"),

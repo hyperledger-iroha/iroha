@@ -1401,6 +1401,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     #[cfg(feature = "telemetry")]
     let torii = Torii::new(
         iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -1416,6 +1417,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     #[cfg(not(feature = "telemetry"))]
     let torii = Torii::new(
         iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

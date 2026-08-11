@@ -7,10 +7,10 @@ EXTENDS SumeragiV2AsyncHistoricalRecoveryLivenessProofs,
 Exact historical-recovery transport closure.
 
 This leaf separates the requester, the archive which serves an immutable
-artifact, and the aggregate outer relay used by a response.  In particular,
-a CommitCertificateResponse has `AsyncUntrustedSource` as its transport
-source; that value is never treated as the archive which owns the applied
-Commit receipt.  The exact request record carries that server identity.
+artifact, and the authenticated outer hop used by a response.  In particular,
+a CommitCertificateResponse retains the serving archive as its semantic
+`source`; packet `authenticatedSource` remains the separate transport
+coordinate.  The exact request record binds that server identity.
 
 The physical ownership predicates below use only:
 
@@ -266,9 +266,8 @@ HistoricalCommitServeLifecycleIdentity(server, request) ==
 HistoricalCommitRequestIngressOwned(target, server, request) ==
   LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
   IN /\ HistoricalCommitRequestRegistered(target, server, request)
-     /\ request \in
-          SequenceSet(
-            IngressLane(server, IngressResourceSource(request)))
+     /\ \E source \in AsyncIngressSources:
+          request \in SequenceSet(IngressLane(server, source))
      /\ AsyncServeIngressAdmissionOwned(server, identity)
      /\ AsyncServeIngressAdmissionOrdinal(server, identity) \in Nat \ {0}
 
@@ -298,7 +297,7 @@ HistoricalCommitResponseLineage(
   /\ AppliedDecisionCertificateAuthority(server, qc)
   /\ response = CommitCertificateResponseItem(request, qc)
   /\ response.kind = "CommitCertificateResponse"
-  /\ response.source = AsyncUntrustedSource
+  /\ response.source = server
   /\ response.envelope.recipient = target
   /\ response.envelope.request = request
   /\ response.envelope.qc = qc
@@ -382,8 +381,9 @@ THEOREM HistoricalCommitPacketAdmissionCreatesExactIngressOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalCommitRequestPacketOwned(
          target, server, request, packet)
-    /\ packet = OldestDueSourcePacket(server, request.source)
-    /\ AdmitIngressPacket(server, request.source)
+    /\ packet =
+         OldestDueSourcePacket(server, packet.authenticatedSource)
+    /\ AdmitIngressPacket(server, packet.authenticatedSource)
     => HistoricalCommitRequestIngressOwned(
          target, server, request)'
 BY IsaT(240)
@@ -394,6 +394,8 @@ BY IsaT(240)
        HistoricalCommitRequestOccurrence,
        CommitCertificateRequestAuthorized,
        AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AcceptOrReserveExactServeIngressVia,
+       ReserveExactServeCapacityVia, AdvanceExactServeCapacityVia,
        AcceptOrReserveExactServeIngress,
        ReserveExactServeCapacity, AdvanceExactServeCapacity,
        CoalesceExactServeIngressCapacity,
@@ -403,7 +405,9 @@ BY IsaT(240)
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
        UntrustedGenericCompletionPacketPolicyRejected,
-       IngressResourceSource, IngressLane, SequenceSet,
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressHasCoalescingOwnerVia,
+       IngressLane, SequenceSet,
        AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant,
        AsyncTransportContentTypeInvariant,
@@ -627,8 +631,9 @@ THEOREM HistoricalCommitResponsePacketAdmissionCreatesIngressOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalCommitResponsePacketOwned(
          target, server, request, qc, response, packet)
-    /\ packet = OldestDueSourcePacket(target, response.source)
-    /\ AdmitIngressPacket(target, response.source)
+    /\ packet =
+         OldestDueSourcePacket(target, packet.authenticatedSource)
+    /\ AdmitIngressPacket(target, packet.authenticatedSource)
     => HistoricalCommitResponseIngressOwned(
          target, server, request, qc, response)'
 BY IsaT(300)
@@ -645,7 +650,9 @@ BY IsaT(300)
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
        UntrustedGenericCompletionPacketPolicyRejected,
-       IngressResourceSource, IngressLane, SequenceSet,
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressHasCoalescingOwnerVia,
+       IngressLane, SequenceSet,
        AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant,
        AsyncTransportContentTypeInvariant,
@@ -1006,7 +1013,8 @@ BY ExactDecisionRequestIngressPriorityDebtIsNatural,
    ExactDecisionRequestIngressServeCapacityDebtIsNatural,
    CandidateSequenceIndexIsPosition,
    DrainableIngressTurnReachRankIsNatural,
-   FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
+   SmallestNatural,
+   FS_EmptySet, FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
    DEF HistoricalCommitRequestLifecycleResidual,
        HistoricalCommitRequestLifecycleRank,
        HistoricalCommitRequestLifecycleStage,
@@ -1039,6 +1047,12 @@ BY ExactDecisionRequestIngressPriorityDebtIsNatural,
        ExactDecisionRequestIngressZeroReachSelectorRank,
        ExactDecisionRequestIngressZeroSelectorRank,
        ExactDecisionRequestIngressZeroLaneRank,
+       SelectSeq,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIngressTypeInvariant,
+       AsyncIngressTopologyTypeInvariant,
+       AsyncIngressNonemptySourcesFor,
+       IngressLaneDepth, IngressLane, SequenceSet,
        AsyncConfiguration
 
 HistoricalCommitRequestPacketEmissionKernelProperty(specification) ==
@@ -1414,9 +1428,8 @@ HistoricalDecisionRequestIngressOwned(
         HistoricalDecisionServeLifecycleIdentity(archive, request)
   IN /\ HistoricalDecisionBodyHoldingAlias(
           node, qc, archive, request)
-     /\ request \in
-          SequenceSet(
-            IngressLane(archive, IngressResourceSource(request)))
+     /\ \E source \in AsyncIngressSources:
+          request \in SequenceSet(IngressLane(archive, source))
      /\ AsyncServeIngressAdmissionOwned(archive, identity)
      /\ AsyncServeIngressAdmissionOrdinal(archive, identity) \in Nat \ {0}
 
@@ -1515,8 +1528,9 @@ THEOREM HistoricalDecisionRequestPacketCreatesIngressOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalDecisionRequestPacketOwned(
          node, qc, archive, request, packet)
-    /\ packet = OldestDueSourcePacket(archive, request.source)
-    /\ AdmitIngressPacket(archive, request.source)
+    /\ packet =
+         OldestDueSourcePacket(archive, packet.authenticatedSource)
+    /\ AdmitIngressPacket(archive, packet.authenticatedSource)
     => HistoricalDecisionRequestIngressOwned(
          node, qc, archive, request)'
 BY IsaT(240)
@@ -1527,6 +1541,8 @@ BY IsaT(240)
        HistoricalExactDecisionActiveRequestOwner,
        HistoricalExactDecisionServiceSource,
        AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AcceptOrReserveExactServeIngressVia,
+       ReserveExactServeCapacityVia, AdvanceExactServeCapacityVia,
        AcceptOrReserveExactServeIngress,
        ReserveExactServeCapacity, AdvanceExactServeCapacity,
        CoalesceExactServeIngressCapacity,
@@ -1536,7 +1552,9 @@ BY IsaT(240)
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
        UntrustedGenericCompletionPacketPolicyRejected,
-       IngressResourceSource, IngressLane, SequenceSet
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressHasCoalescingOwnerVia,
+       IngressLane, SequenceSet
 
 THEOREM NormalHistoricalDecisionRequestCreatesFreshServeOwner ==
   \A node, qc, archive, request:
@@ -1782,8 +1800,9 @@ THEOREM FreshHistoricalDecisionResponseAcquiresExactIngressOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
-    /\ packet = OldestDueSourcePacket(node, response.source)
-    /\ AdmitFreshHiddenPacket(node, response.source)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ AdmitFreshHiddenPacket(node, packet.authenticatedSource)
     => HistoricalDecisionClaimedResponseIngressOwned(
          node, qc, response)'
 BY IsaT(300)
@@ -1797,15 +1816,17 @@ BY IsaT(300)
        CertifiedResponseClaimAuthorized,
        CertifiedResponseAuthorized,
        CertifiedResponseFreshClaimGateAllows,
-       IngressResourceSource, IngressLane, SequenceSet
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressLane, SequenceSet
 
 THEOREM CoalescedHistoricalDecisionResponseRetainsRouteNeutralOwner ==
   \A node, qc, archive, request, response, packet:
     /\ AsyncStrongTypeInvariant
     /\ HistoricalDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
-    /\ packet = OldestDueSourcePacket(node, response.source)
-    /\ CoalesceHiddenPacket(node, response.source)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ CoalesceHiddenPacket(node, packet.authenticatedSource)
     => HistoricalDecisionRouteNeutralClaimIngressOwned(
          node, qc, response)'
 BY IsaT(300)
@@ -1818,10 +1839,11 @@ BY IsaT(300)
        CoalesceHiddenPacket,
        CertifiedResponseClaimMatches,
        CertifiedResponseClaimIngressOwner,
-       IngressHasCoalescingOwner,
+       IngressHasCoalescingOwnerVia,
        IngressCoalescingIdentity,
        AsyncCertifiedResponseAuthProjection,
-       IngressResourceSource, IngressLane, SequenceSet
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressLane, SequenceSet
 
 THEOREM HistoricalDecisionRouteNeutralOwnerHasExactIngressOccurrence ==
   \A node, qc, response:
@@ -2164,7 +2186,8 @@ BY ExactDecisionRequestIngressPriorityDebtIsNatural,
    ExactDecisionRequestIngressServeCapacityDebtIsNatural,
    CandidateSequenceIndexIsPosition,
    DrainableIngressTurnReachRankIsNatural,
-   FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
+   SmallestNatural,
+   FS_EmptySet, FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
    DEF HistoricalDecisionRequestLifecycleResidual,
        HistoricalDecisionRequestLifecycleRank,
        HistoricalDecisionRequestLifecycleStage,
@@ -2197,6 +2220,12 @@ BY ExactDecisionRequestIngressPriorityDebtIsNatural,
        ExactDecisionRequestIngressZeroReachSelectorRank,
        ExactDecisionRequestIngressZeroSelectorRank,
        ExactDecisionRequestIngressZeroLaneRank,
+       SelectSeq,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIngressTypeInvariant,
+       AsyncIngressTopologyTypeInvariant,
+       AsyncIngressNonemptySourcesFor,
+       IngressLaneDepth, IngressLane, SequenceSet,
        AsyncConfiguration
 
 HistoricalDecisionRequestPacketEmissionKernelProperty(specification) ==
@@ -3391,7 +3420,8 @@ runner, historical-server runner, and ordinary archive-I/O fairness.
      owner.  Its action handoff is proved above; temporal FIFO exit must be
      instantiated from the archive worker fairness/rank theorem.
 
-  5. CommitCertificateResponse uses the aggregate untrusted outer lane and
+  5. CommitCertificateResponse retains the serving archive as its semantic
+     source while packet authentication selects the transport attempt; it
      needs its finite packet/admission prefix before DeliverQC.
 
   6. CertifiedResponse additionally needs the route-neutral recipient claim,

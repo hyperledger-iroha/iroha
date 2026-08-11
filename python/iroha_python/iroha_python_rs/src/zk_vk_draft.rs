@@ -3,7 +3,7 @@
 use std::str::FromStr;
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     confidential::ConfidentialStatus,
     isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey},
@@ -43,13 +43,10 @@ struct DecodedVerifyingKeyInstruction {
 
 fn decode_bound_verifying_key_instruction(
     payload: &[u8],
-    expected_chain_id: &str,
+    expected_network: &NetworkId,
     expected_authority: &str,
     operation: VerifyingKeyOperation,
 ) -> Result<DecodedVerifyingKeyInstruction, String> {
-    let expected_chain = expected_chain_id
-        .parse::<ChainId>()
-        .map_err(|error| format!("invalid configured chain ID: {error}"))?;
     let parsed_expected_authority = AccountId::parse_encoded(expected_authority)
         .map_err(|error| format!("invalid requested authority: {error}"))?;
     if parsed_expected_authority.canonical() != expected_authority {
@@ -58,8 +55,8 @@ fn decode_bound_verifying_key_instruction(
     let expected_authority = parsed_expected_authority.into_account_id();
     let builder = TransactionBuilder::decode_payload(payload)
         .map_err(|error| format!("invalid canonical transaction payload: {error}"))?;
-    if builder.payload().chain != expected_chain {
-        return Err("transaction payload changed the configured chain ID".to_owned());
+    if builder.payload().network_id() != Some(expected_network) {
+        return Err("transaction payload changed the configured network ID".to_owned());
     }
     if builder.payload().authority != expected_authority {
         return Err("transaction payload changed the requested authority".to_owned());
@@ -167,13 +164,13 @@ fn record_to_python(py: Python<'_>, record: VerifyingKeyRecord) -> PyResult<Py<P
 }
 
 /// Decode one exact canonical unsigned VK transaction and bind its immutable
-/// chain, authority, and requested operation before returning registry data.
+/// network, authority, and requested operation before returning registry data.
 #[pyfunction]
 #[pyo3(name = "decode_zk_vk_transaction_payload")]
 pub(crate) fn decode_zk_vk_transaction_payload_py(
     py: Python<'_>,
     payload: &[u8],
-    expected_chain_id: &str,
+    network_id: &super::PyNetworkId,
     expected_authority: &str,
     operation: &str,
 ) -> PyResult<Py<PyDict>> {
@@ -182,7 +179,7 @@ pub(crate) fn decode_zk_vk_transaction_payload_py(
         .map_err(PyValueError::new_err)?;
     let decoded = decode_bound_verifying_key_instruction(
         payload,
-        expected_chain_id,
+        network_id.as_inner(),
         expected_authority,
         operation,
     )
@@ -198,10 +195,20 @@ pub(crate) fn decode_zk_vk_transaction_payload_py(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{proof::VerifyingKeyBox, transaction::FeePaymentIntent, zk::BackendTag};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader, proof::VerifyingKeyBox, transaction::FeePaymentIntent, zk::BackendTag,
+    };
 
     use super::*;
+
+    const CANONICAL_GENESIS_HASH: [u8; 32] = [0xA5; 32];
+
+    fn network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(CANONICAL_GENESIS_HASH),
+        ))
+    }
 
     fn authority(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -244,12 +251,11 @@ mod tests {
     }
 
     fn payload(
-        chain: &str,
         authority: AccountId,
         instructions: impl IntoIterator<Item = RegisterVerifyingKey>,
     ) -> Vec<u8> {
         TransactionBuilder::new(
-            chain.parse().expect("valid chain"),
+            network_id(),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -260,10 +266,10 @@ mod tests {
     #[test]
     fn accepts_exact_canonical_bound_register_transaction() {
         let authority = authority(7);
-        let bytes = payload("vk-test", authority.clone(), [register()]);
+        let bytes = payload(authority.clone(), [register()]);
         let decoded = decode_bound_verifying_key_instruction(
             &bytes,
-            "vk-test",
+            &network_id(),
             &authority.to_string(),
             VerifyingKeyOperation::Register,
         )
@@ -276,7 +282,7 @@ mod tests {
     fn accepts_exact_canonical_bound_update_transaction() {
         let authority = authority(7);
         let bytes = TransactionBuilder::new(
-            "vk-test".parse().expect("valid chain"),
+            network_id(),
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -284,7 +290,7 @@ mod tests {
         .encode_payload();
         let decoded = decode_bound_verifying_key_instruction(
             &bytes,
-            "vk-test",
+            &network_id(),
             &authority.to_string(),
             VerifyingKeyOperation::Update,
         )
@@ -294,23 +300,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_chain_authority_operation_and_instruction_count() {
+    fn rejects_wrong_network_authority_operation_and_instruction_count() {
         let expected_authority = authority(7);
-        let bytes = payload("vk-test", expected_authority.clone(), [register()]);
-        assert!(
-            decode_bound_verifying_key_instruction(
-                &bytes,
-                "other-chain",
-                &expected_authority.to_string(),
-                VerifyingKeyOperation::Register,
-            )
-            .unwrap_err()
-            .contains("chain ID")
+        let bytes = payload(expected_authority.clone(), [register()]);
+        let wrong_network = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
         );
         assert!(
             decode_bound_verifying_key_instruction(
                 &bytes,
-                "vk-test",
+                &wrong_network,
+                &expected_authority.to_string(),
+                VerifyingKeyOperation::Register,
+            )
+            .unwrap_err()
+            .contains("network ID")
+        );
+        assert!(
+            decode_bound_verifying_key_instruction(
+                &bytes,
+                &network_id(),
                 &format!(" {} ", expected_authority),
                 VerifyingKeyOperation::Register,
             )
@@ -320,7 +329,7 @@ mod tests {
         assert!(
             decode_bound_verifying_key_instruction(
                 &bytes,
-                "vk-test",
+                &network_id(),
                 &authority(8).to_string(),
                 VerifyingKeyOperation::Register,
             )
@@ -330,22 +339,18 @@ mod tests {
         assert!(
             decode_bound_verifying_key_instruction(
                 &bytes,
-                "vk-test",
+                &network_id(),
                 &expected_authority.to_string(),
                 VerifyingKeyOperation::Update,
             )
             .unwrap_err()
             .contains("UpdateVerifyingKey")
         );
-        let extra = payload(
-            "vk-test",
-            expected_authority.clone(),
-            [register(), register()],
-        );
+        let extra = payload(expected_authority.clone(), [register(), register()]);
         assert!(
             decode_bound_verifying_key_instruction(
                 &extra,
-                "vk-test",
+                &network_id(),
                 &expected_authority.to_string(),
                 VerifyingKeyOperation::Register,
             )
@@ -357,12 +362,12 @@ mod tests {
     #[test]
     fn rejects_noncanonical_transaction_payload() {
         let authority = authority(7);
-        let mut bytes = payload("vk-test", authority.clone(), [register()]);
+        let mut bytes = payload(authority.clone(), [register()]);
         bytes.push(0);
         assert!(
             decode_bound_verifying_key_instruction(
                 &bytes,
-                "vk-test",
+                &network_id(),
                 &authority.to_string(),
                 VerifyingKeyOperation::Register,
             )

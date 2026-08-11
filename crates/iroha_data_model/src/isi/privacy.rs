@@ -996,14 +996,15 @@ impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{
-        AssetDefinitionId, ChainId,
+        AssetDefinitionId, NetworkId,
         account::AccountId,
         asset::AssetBalanceScope,
+        block::BlockHeader,
         domain::DomainId,
         name::Name,
         privacy::{
@@ -1133,7 +1134,9 @@ mod tests {
     fn envelope() -> PrivacyProofEnvelopeV1 {
         let activation = activation();
         let context = PrivacyStatementContextV1 {
-            chain_id: ChainId::from("privacy-isi-test"),
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            ),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(digest(6)),
             parameter_id: activation.parameter_id,

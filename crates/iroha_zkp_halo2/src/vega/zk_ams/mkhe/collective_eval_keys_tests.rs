@@ -582,19 +582,64 @@ fn all_38_streamed_digits_match_full_balanced_reference_at_boundaries() {
         .collect::<Vec<_>>();
     let polynomial = RnsPolynomial::from_flat(&profile, residues).unwrap();
     let full = gadget_decompose(&profile, &polynomial).unwrap();
-    let streamed = StreamedHybridDigitDecomposerV1::new(&profile, &polynomial).unwrap();
     let mut recomposed = RnsPolynomial::zero(&profile);
-    for (digit_index, reference) in full.iter().enumerate() {
-        let observed = streamed.digit(digit_index).unwrap();
-        assert_eq!(&observed, reference, "hybrid digit {digit_index}");
-        recomposed = recomposed
-            .add(
-                &observed.scale_gadget(digit_index, &profile).unwrap(),
-                &profile,
-            )
-            .unwrap();
+    reset_hoisted_residue_reads_v1();
+    let mut first_digit = 0_usize;
+    let mut batch_count = 0_usize;
+    while first_digit < profile.gadget_digits {
+        let digit_count =
+            (profile.gadget_digits - first_digit).min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1);
+        let streamed =
+            HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, first_digit, digit_count)
+                .unwrap();
+        let end_digit = first_digit + digit_count;
+        for digit_index in first_digit..end_digit {
+            let observed = streamed.digit(digit_index).unwrap();
+            assert_eq!(&observed, &full[digit_index], "hybrid digit {digit_index}");
+            recomposed = recomposed
+                .add(
+                    &observed.scale_gadget(digit_index, &profile).unwrap(),
+                    &profile,
+                )
+                .unwrap();
+        }
+        first_digit = end_digit;
+        batch_count += 1;
     }
+    assert_eq!(batch_count, 8);
+    assert_eq!(
+        hoisted_residue_reads_v1(),
+        profile.ring_degree * profile.moduli.len() * batch_count,
+        "each batch must perform exactly one coefficient-major CRT source pass"
+    );
     assert_eq!(recomposed, polynomial);
+
+    let exponent = 5;
+    let materialized = polynomial.automorphism(exponent, &profile).unwrap();
+    let transformed_reference = gadget_decompose(&profile, &materialized).unwrap();
+    let mut first_digit = 0_usize;
+    while first_digit < profile.gadget_digits {
+        let digit_count =
+            (profile.gadget_digits - first_digit).min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1);
+        let viewed = HoistedHybridDigitBatchV1::new_automorphed_batch(
+            &profile,
+            &polynomial,
+            exponent,
+            first_digit,
+            digit_count,
+        )
+        .unwrap();
+        let end_digit = first_digit + digit_count;
+        for digit_index in first_digit..end_digit {
+            assert_eq!(
+                viewed.digit(digit_index).unwrap(),
+                transformed_reference[digit_index],
+                "automorphed hybrid digit {digit_index}"
+            );
+        }
+        first_digit = end_digit;
+    }
+
     assert_eq!(
         full[0].limb(&profile, 0)[2],
         super::super::signed_mod(-(half as i64), profile.moduli[0])
@@ -606,16 +651,85 @@ fn all_38_streamed_digits_match_full_balanced_reference_at_boundaries() {
 }
 
 #[test]
-fn allocation_free_automorphed_decomposition_matches_materialized_view() {
+fn every_release_batch_edge_materializes_a_nonzero_digit() {
+    let profile = release_limb_test_profile();
+    let base = 1_u64 << profile.gadget_base_log;
+    let batch_edges = [
+        (0_usize, 4_usize),
+        (5, 9),
+        (10, 14),
+        (15, 19),
+        (20, 24),
+        (25, 29),
+        (30, 34),
+        (35, 37),
+    ];
+    let gadget_power = |digit_index| {
+        (0..digit_index).fold(WideUint::one(), |value, _| {
+            value.checked_mul_u64(base).unwrap()
+        })
+    };
+    let canonical = batch_edges
+        .into_iter()
+        .map(|(first_digit, last_digit)| {
+            gadget_power(first_digit)
+                .checked_add_mul_u64(gadget_power(last_digit), 1)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let half_modulus = modulus_product(profile.moduli).unwrap().shr_one();
+    assert!(canonical.iter().all(|value| *value <= half_modulus));
+    let residues = profile
+        .moduli
+        .iter()
+        .flat_map(|&limb_modulus| {
+            canonical
+                .iter()
+                .map(move |value| value.mod_u64(limb_modulus))
+        })
+        .collect::<Vec<_>>();
+    let polynomial = RnsPolynomial::from_flat(&profile, residues).unwrap();
+    let reference = gadget_decompose(&profile, &polynomial).unwrap();
+
+    let mut first_digit = 0_usize;
+    while first_digit < profile.gadget_digits {
+        let digit_count =
+            (profile.gadget_digits - first_digit).min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1);
+        let batch =
+            HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, first_digit, digit_count)
+                .unwrap();
+        let end_digit = first_digit + digit_count;
+        for digit_index in first_digit..end_digit {
+            assert_eq!(
+                batch.digit(digit_index).unwrap(),
+                reference[digit_index],
+                "release batch digit {digit_index}"
+            );
+        }
+        first_digit = end_digit;
+    }
+
+    for (coefficient, (first_digit, last_digit)) in batch_edges.into_iter().enumerate() {
+        for digit_index in [first_digit, last_digit] {
+            assert_eq!(
+                reference[digit_index].limb(&profile, 0)[coefficient],
+                1,
+                "digit {digit_index} must be nonzero at its batch-edge witness"
+            );
+        }
+    }
+}
+
+#[test]
+fn hoisted_automorphed_decomposition_matches_materialized_view() {
     let profile = hybrid_test_profile();
     let polynomial = signed(&profile, &[17, -19, 23, -29, 31, -37, 41, -43]);
     let twice_degree = profile.ring_degree * 2;
     for exponent in (1..twice_degree).step_by(2) {
         let materialized = polynomial.automorphism(exponent, &profile).unwrap();
-        let reference = StreamedHybridDigitDecomposerV1::new(&profile, &materialized).unwrap();
+        let reference = HoistedHybridDigitBatchV1::new(&profile, &materialized).unwrap();
         let viewed =
-            StreamedHybridDigitDecomposerV1::new_automorphed(&profile, &polynomial, exponent)
-                .unwrap();
+            HoistedHybridDigitBatchV1::new_automorphed(&profile, &polynomial, exponent).unwrap();
         for digit_index in 0..profile.gadget_digits {
             assert_eq!(
                 viewed.digit(digit_index).unwrap(),
@@ -630,8 +744,7 @@ fn allocation_free_automorphed_decomposition_matches_materialized_view() {
     }
     for exponent in [0, 2, twice_degree] {
         assert!(
-            StreamedHybridDigitDecomposerV1::new_automorphed(&profile, &polynomial, exponent,)
-                .is_err()
+            HoistedHybridDigitBatchV1::new_automorphed(&profile, &polynomial, exponent,).is_err()
         );
     }
 
@@ -670,6 +783,129 @@ fn allocation_free_automorphed_decomposition_matches_materialized_view() {
     });
     assert_eq!(observed.unwrap(), reference);
     assert_eq!(measured_peak, accounting.peak_managed_workspace_bytes);
+}
+
+#[test]
+fn hoisted_decomposition_reads_each_source_residue_once_for_all_digits() {
+    let profile = hybrid_test_profile();
+    let polynomial = signed(&profile, &[17, -19, 23, -29, 31, -37, 41, -43]);
+    reset_hoisted_residue_reads_v1();
+    let hoisted = HoistedHybridDigitBatchV1::new(&profile, &polynomial).unwrap();
+    let expected_reads = profile.ring_degree * profile.moduli.len();
+    assert_eq!(hoisted_residue_reads_v1(), expected_reads);
+
+    for digit_index in (0..profile.gadget_digits).rev() {
+        hoisted.digit(digit_index).unwrap();
+    }
+    assert_eq!(
+        hoisted_residue_reads_v1(),
+        expected_reads,
+        "materializing any digit order must not repeat CRT source reads"
+    );
+}
+
+#[test]
+fn release_hoisted_batches_cover_every_digit_with_frozen_workspace_bound() {
+    let profile = release_profile_v1();
+    let mut first_digit = 0_usize;
+    let mut batches = Vec::new();
+    while first_digit < profile.gadget_digits {
+        let count = (profile.gadget_digits - first_digit).min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1);
+        batches.push((first_digit, count));
+        first_digit += count;
+    }
+    assert_eq!(batches.len(), 8);
+    assert_eq!(
+        batches,
+        vec![
+            (0, 5),
+            (5, 5),
+            (10, 5),
+            (15, 5),
+            (20, 5),
+            (25, 5),
+            (30, 5),
+            (35, 3)
+        ]
+    );
+    assert_eq!(hoisted_hybrid_decomposition_passes(&profile).unwrap(), 662);
+
+    let accounting = seekable_evaluated_key_accounting(&profile).unwrap();
+    assert_eq!(accounting.signed_decomposition_scratch_bytes, 5_242_880);
+    let workspace_ceiling = u64::try_from(profile.max_workspace_bytes).unwrap();
+    assert_eq!(workspace_ceiling, 167_772_160);
+    assert_eq!(accounting.peak_managed_workspace_bytes, 166_723_776);
+    assert_eq!(
+        workspace_ceiling - accounting.peak_managed_workspace_bytes,
+        1_048_384
+    );
+
+    let six_digit_scratch = profile
+        .ring_degree
+        .checked_mul(6)
+        .and_then(|values| values.checked_mul(core::mem::size_of::<i64>()))
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .unwrap();
+    let six_digit_peak = accounting
+        .peak_managed_workspace_bytes
+        .checked_sub(accounting.signed_decomposition_scratch_bytes)
+        .and_then(|bytes| bytes.checked_add(six_digit_scratch))
+        .unwrap();
+    assert_eq!(six_digit_peak, 167_772_352);
+    assert_eq!(six_digit_peak - workspace_ceiling, 192);
+    assert!(
+        accounting.peak_managed_workspace_bytes <= workspace_ceiling
+            && six_digit_peak > workspace_ceiling,
+        "five digits are the largest batch admitted by the frozen 160 MiB ceiling"
+    );
+}
+
+#[test]
+fn hoisted_batch_bounds_fail_closed() {
+    let profile = release_limb_test_profile();
+    let polynomial = signed(&profile, &[17, -19, 23, -29, 31, -37, 41, -43]);
+
+    assert!(matches!(
+        HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, 0, 0),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
+    ));
+    assert!(matches!(
+        HoistedHybridDigitBatchV1::new_batch(
+            &profile,
+            &polynomial,
+            0,
+            HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1 + 1,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
+    ));
+    assert!(matches!(
+        HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, profile.gadget_digits, 1,),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
+    ));
+    assert!(matches!(
+        HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, profile.gadget_digits - 3, 4,),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
+    ));
+    assert!(matches!(
+        HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, usize::MAX, 1),
+        Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+    ));
+
+    let last =
+        HoistedHybridDigitBatchV1::new_batch(&profile, &polynomial, profile.gadget_digits - 3, 3)
+            .unwrap();
+    assert_eq!(
+        last.digit(profile.gadget_digits - 4),
+        Err(ZkAmsMkheErrorV1::MissingEvaluatedKey)
+    );
+    assert_eq!(
+        last.digit(profile.gadget_digits),
+        Err(ZkAmsMkheErrorV1::MissingEvaluatedKey)
+    );
+    assert_eq!(
+        last.digit(usize::MAX),
+        Err(ZkAmsMkheErrorV1::MissingEvaluatedKey)
+    );
 }
 
 #[test]
@@ -736,26 +972,26 @@ fn release_seekable_accounting_is_exact_and_io_is_not_arithmetic_work() {
     assert_eq!(accounting.per_key_switch_read_bytes, 1_514_143_934);
     assert_eq!(accounting.native_polynomial_allocation_bytes, 39_845_888);
     assert_eq!(accounting.output_accumulator_bytes, 79_691_776);
-    assert_eq!(accounting.signed_decomposition_scratch_bytes, 1_048_576);
+    assert_eq!(accounting.signed_decomposition_scratch_bytes, 5_242_880);
     assert_eq!(accounting.crt_residue_scratch_bytes, 304);
     assert_eq!(accounting.ntt_limb_scratch_bytes, 2_097_152);
     assert_eq!(accounting.provider_read_buffer_bytes, 8_192);
     assert_eq!(accounting.provider_hash_state_bytes, 1_920);
     assert_eq!(accounting.validation_metadata_bytes, 1_824);
-    assert_eq!(accounting.decomposition_phase_bytes, 120_586_544);
-    assert_eq!(accounting.provider_read_phase_bytes, 159_393_664);
-    assert_eq!(accounting.peak_heap_allocation_bytes, 161_480_704);
-    assert_eq!(accounting.multiplication_phase_bytes, 161_481_912);
+    assert_eq!(accounting.decomposition_phase_bytes, 124_780_544);
+    assert_eq!(accounting.provider_read_phase_bytes, 164_636_544);
+    assert_eq!(accounting.peak_heap_allocation_bytes, 166_723_584);
+    assert_eq!(accounting.multiplication_phase_bytes, 166_723_776);
     assert_eq!(
         accounting.multiplication_phase_bytes - accounting.peak_heap_allocation_bytes,
-        1_208,
-        "decomposer, four RNS owners, and both NTT Vec owners are explicit"
+        192,
+        "hoisted batch, four RNS owners, and both NTT Vec owners are explicit"
     );
-    assert_eq!(accounting.peak_managed_workspace_bytes, 161_481_912);
-    assert_eq!(accounting.balanced_decomposition_work_units, 14_952_169_472);
+    assert_eq!(accounting.peak_managed_workspace_bytes, 166_723_776);
+    assert_eq!(accounting.balanced_decomposition_work_units, 3_297_247_232);
     assert_eq!(accounting.ring_multiplication_work_units, 6_813_646_848);
     assert_eq!(accounting.accumulator_addition_work_units, 378_535_936);
-    assert_eq!(accounting.total_key_switch_work_units, 22_144_352_256);
+    assert_eq!(accounting.total_key_switch_work_units, 10_489_430_016);
     assert_eq!(
         accounting.total_key_switch_work_units,
         accounting.balanced_decomposition_work_units

@@ -4,7 +4,8 @@
 //! inventory the package directory and then subtract an ignore list. Callers are expected to
 //! translate a validated `Musubi.toml` into [`PackageLayout`], pass the original manifest and
 //! verification lock documents to [`plan_package`], and use the resulting immutable plan for a
-//! clean compiler check and `SoraFS` CAR construction.
+//! clean compiler check and `SoraFS` CAR construction. Filesystem-backed planning is qualified on
+//! Unix; other targets fail with [`PackageError::UnsupportedPlatform`] before parsing or I/O.
 
 use std::{
     collections::BTreeMap,
@@ -18,17 +19,18 @@ use std::{
 pub use iroha_data_model::musubi::MusubiArtifactDescriptorV1;
 use iroha_data_model::{
     musubi::{
-        MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiContentDigestV1,
-        MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1, MusubiKeywordV1,
-        MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
-        MusubiReleaseMetadataV1, MusubiResolutionProofV1, MusubiSemanticReleaseManifestV1,
-        MusubiVerificationLockV1, validate_musubi_portable_path_set_v1,
+        MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
+        MusubiContentDigestV1, MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1,
+        MusubiKeywordV1, MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
+        MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
+        MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+        validate_musubi_portable_path_set_v1,
     },
     name::Name,
     sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
 };
 use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use norito::codec::Decode;
 use norito::codec::Encode;
 use sorafs_car::{
@@ -37,13 +39,13 @@ use sorafs_car::{
 };
 
 use crate::{
-    lockfile::render_verification_lock, manifest::Inheritable, workspace::WorkspaceMember,
+    lockfile::{MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1, render_verification_lock},
+    manifest::Inheritable,
+    workspace::WorkspaceMember,
 };
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
 
 /// Maximum total bytes in a Musubi V1 normalized source tree.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -225,6 +227,7 @@ impl PackagePlan {
         verification_lock: &MusubiVerificationLockV1,
     ) -> Result<PackageCommitments, PackageError> {
         validate_sorafs_bundle_paths(&self.files)?;
+        validate_semantic_release_encoded_bound(semantic_release_manifest)?;
         let rendered_lock = render_verification_lock(verification_lock).map_err(|error| {
             PackageError::InvalidBundleBinding(format!(
                 "typed verification lock cannot be rendered: {error}"
@@ -235,11 +238,11 @@ impl PackagePlan {
                 "source-tree and typed verification locks do not match".to_owned(),
             ));
         }
+        let verification_lock_bytes = encode_verification_lock_bounded(verification_lock)?;
         semantic_release_manifest
             .validate_verification_lock(verification_lock)
             .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
         let semantic_release_bytes = semantic_release_manifest.encode();
-        let verification_lock_bytes = verification_lock.encode();
         let source_tree_material = source_tree_material(&self.files);
         let source_tree_digest =
             MusubiContentDigestV1::new(domain_digest(SOURCE_TREE_DOMAIN, &source_tree_material));
@@ -291,7 +294,7 @@ impl PackagePlan {
         let commitments =
             self.commitment_materials(semantic_release_manifest, verification_lock)?;
         let semantic_release_bytes = semantic_release_manifest.encode();
-        let verification_lock_bytes = verification_lock.encode();
+        let verification_lock_bytes = encode_verification_lock_bounded(verification_lock)?;
         let source_file_count = self.files.len();
         let source_bytes = self.source_bytes;
         let mut entries = self
@@ -388,7 +391,7 @@ impl PackageCar {
 
     /// Return the exact concatenated source payload expected by the CAR plan.
     #[must_use]
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
@@ -413,7 +416,7 @@ impl PackageCar {
 
     /// Return the source-tree file count, excluding three mandatory bundle metadata entries.
     #[must_use]
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub const fn source_file_count(&self) -> usize {
         self.source_file_count
     }
@@ -504,7 +507,7 @@ impl PackageCommitments {
 
     /// Return the typed artifact descriptor.
     #[must_use]
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub const fn descriptor(&self) -> &MusubiArtifactDescriptorV1 {
         &self.descriptor
     }
@@ -525,6 +528,8 @@ impl PackageCommitments {
 /// Error returned while planning or encoding a secure package.
 #[derive(Debug)]
 pub enum PackageError {
+    /// Secure filesystem-backed package planning is unsupported on this platform.
+    UnsupportedPlatform,
     /// A filesystem operation failed.
     Io {
         /// Operation being performed without secret-bearing input.
@@ -592,6 +597,20 @@ pub enum PackageError {
         /// V1 maximum.
         maximum: u64,
     },
+    /// The typed verification-lock payload exceeds bundle-metadata admission.
+    VerificationLockTooLarge {
+        /// Exact canonical Norito payload bytes.
+        bytes: u64,
+        /// V1 bundle-metadata maximum.
+        maximum: u64,
+    },
+    /// The typed semantic-release payload exceeds bundle-metadata admission.
+    SemanticReleaseTooLarge {
+        /// Exact canonical Norito payload bytes.
+        bytes: u64,
+        /// V1 bundle-metadata maximum.
+        maximum: u64,
+    },
     /// The `SoraFS` plan exceeds the chunk-count ceiling.
     TooManyChunks {
         /// Planned chunk count.
@@ -624,6 +643,9 @@ pub enum PackageError {
 impl fmt::Display for PackageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedPlatform => formatter.write_str(
+                "secure Musubi package planning is unsupported on this platform; qualified planning currently requires Unix stable file identities",
+            ),
             Self::Io {
                 operation,
                 path,
@@ -696,6 +718,14 @@ impl fmt::Display for PackageError {
                 formatter,
                 "package has {bytes} source bytes; Musubi V1 permits at most {maximum}"
             ),
+            Self::VerificationLockTooLarge { bytes, maximum } => write!(
+                formatter,
+                "typed verification lock has {bytes} bytes; Musubi V1 bundle metadata permits at most {maximum}"
+            ),
+            Self::SemanticReleaseTooLarge { bytes, maximum } => write!(
+                formatter,
+                "typed semantic release has {bytes} bytes; Musubi V1 bundle metadata permits at most {maximum}"
+            ),
             Self::TooManyChunks { count, maximum } => write!(
                 formatter,
                 "package has {count} chunks; Musubi V1 permits at most {maximum}"
@@ -757,7 +787,7 @@ pub fn canonicalize_manifest_toml(input: &str) -> Result<Vec<u8>, PackageError> 
 /// # Errors
 ///
 /// Returns an error for malformed TOML or missing `schema = "musubi-lock"`/`version = 1`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageError> {
     let (table, bytes) = canonicalize_toml(VERIFICATION_LOCK_PATH, input)?;
     let schema_matches = table.get("schema").and_then(toml::Value::as_str) == Some("musubi-lock");
@@ -783,13 +813,20 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
 ///
 /// # Errors
 ///
-/// Returns an error for invalid documents, unsafe paths or filesystem objects, credential
-/// material, inconsistent filesystem identity, or a V1 resource-limit violation.
+/// Returns [`PackageError::UnsupportedPlatform`] on non-Unix targets before parsing documents or
+/// accessing the filesystem. On Unix, returns an error for invalid documents, unsafe paths or
+/// filesystem objects, credential material, inconsistent filesystem identity, or a V1
+/// resource-limit violation.
 pub fn plan_package(
     layout: &PackageLayout,
     manifest_toml: &str,
     verification_lock: &MusubiVerificationLockV1,
 ) -> Result<PackagePlan, PackageError> {
+    if !cfg!(unix) {
+        // TODO: Enable non-Unix planning only after a safe stable handle-identity, single-link,
+        // and no-follow file-open abstraction is available.
+        return Err(PackageError::UnsupportedPlatform);
+    }
     let manifest = canonicalize_manifest_toml(manifest_toml)?;
     let lock = render_verification_lock(verification_lock)
         .map_err(|error| PackageError::InvalidDocument {
@@ -1030,6 +1067,7 @@ pub fn semantic_release_manifest(
             "workspace package, release root, and verification lock disagree".to_owned(),
         ));
     }
+    validate_verification_lock_encoded_bound(verification_lock)?;
     let description = member
         .package
         .description
@@ -1104,6 +1142,7 @@ pub fn semantic_release_manifest(
     };
     semantic.canonicalize();
     semantic.validate().map_err(bundle_parse_error)?;
+    validate_semantic_release_encoded_bound(&semantic)?;
     Ok(semantic)
 }
 
@@ -1114,6 +1153,8 @@ pub fn publication_claim(
     snapshot: MusubiRegistrySnapshotV1,
     verification_lock: MusubiVerificationLockV1,
 ) -> Result<MusubiPublicationV1, PackageError> {
+    validate_semantic_release_encoded_bound(semantic)?;
+    validate_verification_lock_encoded_bound(&verification_lock)?;
     semantic
         .validate()
         .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
@@ -1710,17 +1751,15 @@ fn portable_collision_key(components: &[String]) -> String {
 }
 
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
-}
-
-#[cfg(windows)]
-fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
-    metadata.file_attributes() & 0x0000_0400 != 0
-}
-
-#[cfg(not(windows))]
-const fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
+    #[cfg(unix)]
+    {
+        metadata.file_type().is_symlink()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        true
+    }
 }
 
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
@@ -1728,11 +1767,7 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     {
         metadata.nlink() == 1
     }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = metadata;
         false
@@ -1872,7 +1907,7 @@ fn sensitive_content_marker(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn reject_consumer_only_lock_fields(value: &toml::Value) -> Result<(), PackageError> {
     const FORBIDDEN: &[&str] = &[
         "cache-path",
@@ -2237,6 +2272,98 @@ fn enforce_source_limit(bytes: u64) -> Result<(), PackageError> {
     Ok(())
 }
 
+fn encode_verification_lock_bounded(
+    verification_lock: &MusubiVerificationLockV1,
+) -> Result<Vec<u8>, PackageError> {
+    encode_verification_lock_bounded_with_limit(
+        verification_lock,
+        MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1,
+    )
+}
+
+fn validate_semantic_release_encoded_bound(
+    semantic_release: &MusubiSemanticReleaseManifestV1,
+) -> Result<u64, PackageError> {
+    validate_semantic_release_encoded_bound_with_limit(
+        semantic_release,
+        MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+    )
+}
+
+fn validate_semantic_release_encoded_bound_with_limit(
+    semantic_release: &MusubiSemanticReleaseManifestV1,
+    maximum: u64,
+) -> Result<u64, PackageError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let payload_len = norito::core::encoded_payload_len(semantic_release).map_err(|error| {
+        PackageError::InvalidBundleBinding(format!(
+            "typed semantic release cannot be sized: {error}"
+        ))
+    })?;
+    let payload_len =
+        u64::try_from(payload_len).map_err(|_| PackageError::SemanticReleaseTooLarge {
+            bytes: u64::MAX,
+            maximum,
+        })?;
+    if payload_len > maximum {
+        return Err(PackageError::SemanticReleaseTooLarge {
+            bytes: payload_len,
+            maximum,
+        });
+    }
+    Ok(payload_len)
+}
+
+fn encode_verification_lock_bounded_with_limit(
+    verification_lock: &MusubiVerificationLockV1,
+    maximum: u64,
+) -> Result<Vec<u8>, PackageError> {
+    let payload_len =
+        validate_verification_lock_encoded_bound_with_limit(verification_lock, maximum)?;
+    let bytes = verification_lock.encode();
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != payload_len {
+        return Err(PackageError::InvalidBundleBinding(
+            "typed verification-lock length changed between admission and encoding".to_owned(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_verification_lock_encoded_bound(
+    verification_lock: &MusubiVerificationLockV1,
+) -> Result<u64, PackageError> {
+    validate_verification_lock_encoded_bound_with_limit(
+        verification_lock,
+        MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1,
+    )
+}
+
+fn validate_verification_lock_encoded_bound_with_limit(
+    verification_lock: &MusubiVerificationLockV1,
+    maximum: u64,
+) -> Result<u64, PackageError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let payload_len = norito::core::encoded_payload_len(verification_lock).map_err(|error| {
+        PackageError::InvalidBundleBinding(format!(
+            "typed verification lock cannot be sized: {error}"
+        ))
+    })?;
+    let payload_len =
+        u64::try_from(payload_len).map_err(|_| PackageError::VerificationLockTooLarge {
+            bytes: u64::MAX,
+            maximum,
+        })?;
+    if payload_len > maximum {
+        return Err(PackageError::VerificationLockTooLarge {
+            bytes: payload_len,
+            maximum,
+        });
+    }
+    Ok(payload_len)
+}
+
 fn enforce_chunk_limit(count: usize) -> Result<(), PackageError> {
     if count > MAX_SOURCE_CHUNKS {
         return Err(PackageError::TooManyChunks {
@@ -2307,7 +2434,7 @@ impl Write for BoundedWriter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{
         fs,
@@ -2319,7 +2446,7 @@ mod tests {
     };
 
     use iroha::{
-        crypto::{Algorithm, KeyPair},
+        crypto::{Algorithm, Hash, HashOf, KeyPair},
         musubi_runtime::{
             AuthenticatedMusubiPublicationRuntimeClientV1,
             InMemoryMusubiPublicationServiceJournalV1, MusubiProviderReadbackBackendV1,
@@ -2334,8 +2461,9 @@ mod tests {
         },
     };
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
+        block::BlockHeader,
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
             MusubiDependencyReqV1, MusubiKotodamaEditionV1, MusubiPackageIdV1,
@@ -3123,61 +3251,6 @@ exports = []
         ));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn rejects_windows_hardlinks_and_reparse_points() {
-        use std::os::windows::fs::{symlink_dir, symlink_file};
-
-        let hardlinks = tempdir().expect("tempdir");
-        fs::create_dir(hardlinks.path().join("src")).expect("src");
-        fs::write(hardlinks.path().join("src/a.ko"), b"source").expect("source");
-        fs::hard_link(
-            hardlinks.path().join("src/a.ko"),
-            hardlinks.path().join("src/b.ko"),
-        )
-        .expect("hardlink");
-        assert!(matches!(
-            plan_package(
-                &base_layout(hardlinks.path()),
-                MANIFEST,
-                &semantic_release().1
-            ),
-            Err(PackageError::Hardlink(_))
-        ));
-
-        // Creating symlinks may require Developer Mode or elevated privileges. When the host
-        // permits them, both file and directory reparse points must retain the stable Symlink
-        // classification rather than falling through to a generic I/O failure.
-        let reparse = tempdir().expect("tempdir");
-        fs::create_dir(reparse.path().join("src")).expect("src");
-        fs::write(reparse.path().join("outside.ko"), b"outside").expect("outside");
-        let file_link = reparse.path().join("src/file-link.ko");
-        if symlink_file(reparse.path().join("outside.ko"), &file_link).is_ok() {
-            assert!(matches!(
-                plan_package(
-                    &base_layout(reparse.path()),
-                    MANIFEST,
-                    &semantic_release().1
-                ),
-                Err(PackageError::Symlink(_))
-            ));
-            fs::remove_file(&file_link).expect("remove file link");
-        }
-        let outside_directory = reparse.path().join("outside");
-        fs::create_dir(&outside_directory).expect("outside directory");
-        let directory_link = reparse.path().join("src/directory-link");
-        if symlink_dir(&outside_directory, &directory_link).is_ok() {
-            assert!(matches!(
-                plan_package(
-                    &base_layout(reparse.path()),
-                    MANIFEST,
-                    &semantic_release().1
-                ),
-                Err(PackageError::Symlink(_))
-            ));
-        }
-    }
-
     #[test]
     fn exposed_car_plan_exactly_binds_the_archive_commitment() {
         let temp = tempdir().expect("tempdir");
@@ -3274,9 +3347,12 @@ exports = []
             publisher_key,
         )
         .expect("publisher signer");
-        let chain_id = ChainId::from("musubi-package-service-test");
+        let genesis_block_hash = [0x45; 32];
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(genesis_block_hash)),
+        );
         let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_authorization_signer(
-            chain_id.clone(),
+            network_id,
             publisher.clone(),
             Arc::new(authorization_signer),
             Duration::from_secs(5),
@@ -3291,10 +3367,8 @@ exports = []
         let broker = AccountId::new(broker_key.public_key().clone());
         let provider = ProviderId::new([0x43; 32]);
         let operation_id = [0x44; 32];
-        let genesis_block_hash = [0x45; 32];
         let binding = MusubiSeedIngressReceiptBindingV1 {
-            chain_id: chain_id.clone(),
-            genesis_block_hash,
+            network_id,
             publisher,
             ingress_broker: broker.clone(),
             seed_provider: provider,
@@ -3319,8 +3393,7 @@ exports = []
         assert!(prepared.authorization_expires_at_ms() > prepared.authorization_issued_at_ms());
 
         let config = MusubiPublicationServiceConfigurationV1 {
-            chain_id,
-            genesis_block_hash,
+            network_id,
             ingress_broker: broker.clone(),
             seed_provider: provider,
             max_future_clock_skew_ms: 2_000,
@@ -3407,6 +3480,37 @@ exports = []
             commitment.content_length
                 <= iroha_data_model::musubi::MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1
         );
+    }
+
+    #[test]
+    fn typed_bundle_metadata_is_admitted_before_allocation() {
+        let (semantic, lock) = semantic_release();
+        let expected = lock.encode();
+        let exact = u64::try_from(expected.len()).expect("encoded lock length fits u64");
+
+        assert_eq!(
+            encode_verification_lock_bounded_with_limit(&lock, exact)
+                .expect("exact typed-lock byte bound"),
+            expected
+        );
+        assert!(matches!(
+            encode_verification_lock_bounded_with_limit(&lock, exact - 1),
+            Err(PackageError::VerificationLockTooLarge { bytes, maximum })
+                if bytes == exact && maximum == exact - 1
+        ));
+
+        let semantic_exact = u64::try_from(semantic.encode().len())
+            .expect("encoded semantic-release length fits u64");
+        assert_eq!(
+            validate_semantic_release_encoded_bound_with_limit(&semantic, semantic_exact)
+                .expect("exact semantic-release byte bound"),
+            semantic_exact
+        );
+        assert!(matches!(
+            validate_semantic_release_encoded_bound_with_limit(&semantic, semantic_exact - 1),
+            Err(PackageError::SemanticReleaseTooLarge { bytes, maximum })
+                if bytes == semantic_exact && maximum == semantic_exact - 1
+        ));
     }
 
     #[test]
@@ -3675,5 +3779,43 @@ exports = []
                 ..
             })
         ));
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod unsupported_platform_tests {
+    use iroha_data_model::{
+        musubi::{
+            MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
+            MusubiVerificationLockV1,
+        },
+        nexus::DataSpaceId,
+    };
+
+    use super::{PackageError, PackageLayout, plan_package};
+
+    #[test]
+    fn package_planning_fails_before_parsing_or_inspecting_the_root() {
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "unsupported".parse().expect("package name"),
+        );
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: MusubiReleaseIdV1::new(package, "1.0.0".parse().expect("version")),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let requested = parent.path().join("must-remain-absent");
+        let layout = PackageLayout::new(&requested);
+
+        let error = plan_package(&layout, "not valid TOML", &lock)
+            .expect_err("non-Unix package planning must fail");
+
+        assert!(matches!(error, PackageError::UnsupportedPlatform));
+        assert!(!requested.exists());
     }
 }

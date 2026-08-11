@@ -4999,7 +4999,7 @@ PROOF
              AsyncRuntimeScalarTypeInvariant, TypeInvariant
     <2>6. /\ AsyncItemTyped(DrainItem)
            /\ DrainItem.envelope.recipient = node
-           /\ IngressResourceSource(DrainItem) = DrainSource
+           /\ AsyncIngressItemSourceBinding(DrainItem, DrainSource)
       BY <2>1, <2>4, <2>5, SelectedIngressItemIsTyped,
          SelectedIngressItemHasLaneOwnership
          DEF DrainItem, SelectedIngressItemAt, DrainLaneIndex,

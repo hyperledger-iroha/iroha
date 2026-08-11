@@ -2,7 +2,11 @@
 //! Integration test for /v1/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
 
-use std::sync::Arc;
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{Router, routing::post};
 use base64::Engine as _;
@@ -13,7 +17,8 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
-    Registrable,
+    NetworkId, Registrable,
+    block::BlockHeader,
     proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId},
     query::{QueryRequest, prelude::SingularQueryBox, proof::prelude::FindProofRecordById},
 };
@@ -89,6 +94,19 @@ async fn proofs_query_find_by_id_returns_norito() {
     }
 
     let state = Arc::new(state);
+    let network_id =
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+        ));
+    let signed_query_admission = Arc::new(
+        iroha_torii::SignedQueryAdmission::new(
+            network_id,
+            Duration::from_secs(1),
+            Duration::from_secs(120),
+            NonZeroUsize::new(16).expect("nonzero replay capacity"),
+        )
+        .expect("valid signed-query admission"),
+    );
     #[cfg(feature = "telemetry")]
     let tel = iroha_torii::MaybeTelemetry::for_tests();
     #[cfg(not(feature = "telemetry"))]
@@ -98,6 +116,7 @@ async fn proofs_query_find_by_id_returns_norito() {
         "/v1/proofs/query",
         post({
             let state = state.clone();
+            let signed_query_admission = Arc::clone(&signed_query_admission);
             move |iroha_torii::NoritoJson(dto): iroha_torii::NoritoJson<
                 iroha_torii::ProofFindByIdQueryDto,
             >| async move {
@@ -105,6 +124,7 @@ async fn proofs_query_find_by_id_returns_norito() {
                 iroha_torii::handle_queries_with_opts(
                     live_for_route.clone(),
                     state,
+                    signed_query_admission,
                     signed,
                     tel,
                     iroha_torii::NoritoQuery(QueryOptions::default()),
@@ -119,7 +139,18 @@ async fn proofs_query_find_by_id_returns_norito() {
         QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
             id: proof_id.clone(),
         }))
-        .with_authority(authority)
+        .with_authority(
+            network_id,
+            authority,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("test clock follows Unix epoch")
+                .as_millis()
+                .try_into()
+                .expect("query creation time fits u64"),
+            NonZeroU64::new(100_000).expect("nonzero query TTL"),
+            [0x51; 32],
+        )
         .try_sign(&key_pair)
         .expect("sign proof query locally");
     let dto = iroha_torii::json_object(vec![iroha_torii::json_entry(

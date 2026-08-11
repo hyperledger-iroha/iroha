@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -62,8 +62,11 @@ pub struct Args {
     bound_manifest_out: Option<PathBuf>,
     /// Write the exact signed consensus-header hash as one lowercase line.
     ///
-    /// Provision this value as `genesis.expected_hash` independently of the
-    /// signed block body before starting any validator.
+    /// This also atomically publishes a sibling `*.identity.toml` containing
+    /// the same exact value as both client `network_id` and
+    /// `genesis.expected_hash`. Deployment tooling must consume that paired
+    /// identity artifact rather than assembling the two trust domains
+    /// independently.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -120,6 +123,114 @@ const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+const MAX_DEPLOYMENT_IDENTITY_BYTES: u64 = 4 * 1024;
+
+fn deployment_identity_path(expected_hash_path: &Path) -> PathBuf {
+    expected_hash_path.with_extension("identity.toml")
+}
+
+fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
+    let body = format!(
+        "network_id = \"{expected_hash}\"\n\n[genesis]\nexpected_hash = \"{expected_hash}\"\n"
+    );
+    if body.len() as u64 > MAX_DEPLOYMENT_IDENTITY_BYTES {
+        return Err(eyre!(
+            "generated deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit"
+        ));
+    }
+
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(eyre!(
+                "deployment identity output must be a regular file: {}",
+                path.display()
+            ));
+        }
+        if metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES {
+            return Err(eyre!(
+                "existing deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit: {}",
+                path.display()
+            ));
+        }
+        let mut existing = String::new();
+        File::open(path)?
+            .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
+            .read_to_string(&mut existing)
+            .wrap_err_with(|| format!("read existing deployment identity {}", path.display()))?;
+        if existing == body {
+            return Ok(());
+        }
+        return Err(eyre!(
+            "refusing to replace a different deployment identity: {}",
+            path.display()
+        ));
+    }
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".genesis-identity-")
+        .tempfile_in(parent)
+        .wrap_err_with(|| {
+            format!(
+                "create temporary deployment identity beside {}",
+                path.display()
+            )
+        })?;
+    temporary
+        .write_all(body.as_bytes())
+        .wrap_err("write temporary deployment identity")?;
+    temporary
+        .flush()
+        .wrap_err("flush temporary deployment identity")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .wrap_err("sync temporary deployment identity")?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+                format!("inspect raced deployment identity {}", path.display())
+            })?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES
+            {
+                return Err(eyre!(
+                    "raced deployment identity is not the expected regular bounded file: {}",
+                    path.display()
+                ));
+            }
+            let mut existing = String::new();
+            File::open(path)?
+                .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
+                .read_to_string(&mut existing)
+                .wrap_err_with(|| format!("read raced deployment identity {}", path.display()))?;
+            if existing != body {
+                return Err(eyre!(
+                    "refusing raced deployment identity with different contents: {}",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) => {
+            return Err(error.error).wrap_err_with(|| {
+                format!(
+                    "publish deployment identity atomically to {}",
+                    path.display()
+                )
+            });
+        }
+    }
+    #[cfg(unix)]
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .wrap_err_with(|| format!("sync deployment identity directory {}", parent.display()))?;
+    Ok(())
+}
 
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
@@ -633,7 +744,7 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         default_nexus = actual::Nexus::default();
         &default_nexus.dataspace_catalog
     };
-    // Match fresh-node and `irohad --check-config` semantics exactly: genesis aliases are
+    // Match fresh-node and `iroha3d --check-config` semantics exactly: genesis aliases are
     // pre-seeded before the block executes so declarative EnsureAlias instructions repair
     // derived state without charging or depending on policy activation order.
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &provisional.0, dataspace_catalog);
@@ -668,7 +779,6 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         provisional.0,
         &topology,
-        genesis.chain_id(),
         &authority,
         &TimeSource::new_system(),
         &state,
@@ -894,6 +1004,12 @@ impl<T: Write> RunArgs<T> for Args {
             ));
         }
         if let Some(expected_hash) = self.expected_hash_out.as_deref() {
+            let deployment_identity = deployment_identity_path(expected_hash);
+            if deployment_identity == expected_hash {
+                return Err(eyre!(
+                    "genesis expected-hash output must not use the reserved `.identity.toml` deployment-identity path"
+                ));
+            }
             for (label, path) in [
                 ("signed genesis output", self.out_file.as_deref()),
                 ("bound manifest output", self.bound_manifest_out.as_deref()),
@@ -902,6 +1018,11 @@ impl<T: Write> RunArgs<T> for Args {
                 if path == Some(expected_hash) {
                     return Err(eyre!(
                         "genesis expected-hash output and {label} must use different paths"
+                    ));
+                }
+                if path == Some(deployment_identity.as_path()) {
+                    return Err(eyre!(
+                        "paired deployment-identity output and {label} must use different paths"
                     ));
                 }
             }
@@ -1073,6 +1194,8 @@ impl<T: Write> RunArgs<T> for Args {
         if let Some(path) = self.expected_hash_out.as_deref() {
             fs::write(path, format!("{genesis_expected_hash}\n"))
                 .wrap_err_with(|| format!("write genesis expected hash to {}", path.display()))?;
+            let identity_path = deployment_identity_path(path);
+            publish_deployment_identity(&identity_path, &genesis_expected_hash.to_string())?;
         }
         tui::success("Genesis block signed");
 
@@ -2230,6 +2353,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn expected_hash_output_matches_the_signed_consensus_header() {
         let temp = tempfile::tempdir().expect("expected hash output temp dir");
         let expected_hash_path = temp.path().join("genesis.expected_hash");
+        let identity_path = deployment_identity_path(&expected_hash_path);
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -2260,6 +2384,47 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             fs::read_to_string(expected_hash_path).expect("read expected hash output"),
             format!("{}\n", block.hash()),
+        );
+        assert_eq!(
+            fs::read_to_string(identity_path).expect("read paired deployment identity"),
+            format!(
+                "network_id = \"{}\"\n\n[genesis]\nexpected_hash = \"{}\"\n",
+                block.hash(),
+                block.hash()
+            ),
+        );
+    }
+
+    #[test]
+    fn deployment_identity_publication_is_idempotent_and_refuses_drift() {
+        let temp = tempfile::tempdir().expect("deployment identity temp dir");
+        let identity_path = temp.path().join("genesis.identity.toml");
+        let expected_hash = Hash::new(b"deployment identity").to_string();
+        let different_hash = Hash::new(b"different deployment identity").to_string();
+
+        publish_deployment_identity(&identity_path, &expected_hash)
+            .expect("publish deployment identity");
+        let published = fs::read(&identity_path).expect("read deployment identity");
+        publish_deployment_identity(&identity_path, &expected_hash)
+            .expect("same deployment identity must be idempotent");
+        publish_deployment_identity(&identity_path, &different_hash)
+            .expect_err("different deployment identity must not replace the trust root");
+
+        assert_eq!(
+            fs::read(&identity_path).expect("reread deployment identity"),
+            published,
+        );
+        assert!(
+            fs::read_dir(temp.path())
+                .expect("list deployment identity directory")
+                .all(|entry| {
+                    !entry
+                        .expect("deployment identity directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".genesis-identity-")
+                }),
+            "atomic publication must not retain temporary files"
         );
     }
 

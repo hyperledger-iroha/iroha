@@ -1866,6 +1866,8 @@ mod tests {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         assert_eq!(
             validate_pointer_payload(

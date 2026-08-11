@@ -3,7 +3,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{SharedAppState, app_auth::verify_canonical_request, limits};
+use crate::{SharedAppState, app_auth::verify_canonical_network_request, limits};
 use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header},
@@ -401,7 +401,15 @@ fn signed_account(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, ContentError> {
-    match verify_canonical_request(state, headers, method, uri, &[], None) {
+    match verify_canonical_network_request(
+        state,
+        state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        &[],
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified.account),
         Ok(None) => Err(ContentError::Unauthorized(
             "signed account headers are required".to_string(),
@@ -752,10 +760,11 @@ mod tests {
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         Registrable,
         account::Account,
+        block::BlockHeader,
         content::{ContentCachePolicy, ContentDaReceipt, ContentFileEntry},
         da::{
             prelude::{BlobClass, DaStripeLayout},
@@ -825,6 +834,7 @@ mod tests {
     }
 
     fn signed_headers(
+        network_id: &iroha_data_model::NetworkId,
         account: &AccountId,
         key_pair: &KeyPair,
         method: &Method,
@@ -835,8 +845,14 @@ mod tests {
             .expect("system clock")
             .as_millis() as u64;
         let nonce = format!("content-test-{timestamp_ms}-{}", uri.path());
-        let message =
-            crate::canonical_request_signature_message(method, uri, &[], timestamp_ms, &nonce);
+        let message = crate::canonical_network_request_signature_message(
+            network_id,
+            method,
+            uri,
+            &[],
+            timestamp_ms,
+            &nonce,
+        );
         let signature = Signature::try_new(key_pair.private_key(), &message)
             .expect("checked content signed-header fixture signature");
         signature
@@ -1244,7 +1260,13 @@ mod tests {
             ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+        let headers = signed_headers(
+            state.network_id_ref(),
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+        );
 
         let err =
             enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("missing role");
@@ -1262,7 +1284,13 @@ mod tests {
             ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+        let headers = signed_headers(
+            state.network_id_ref(),
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+        );
 
         let first = enforce_auth(&manifest, &state, &headers, &method, &uri)
             .expect_err("unsigned role membership should still be forbidden");
@@ -1287,7 +1315,13 @@ mod tests {
         manifest.auth = ContentAuthMode::Sponsor(uaid);
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+        let headers = signed_headers(
+            state.network_id_ref(),
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+        );
 
         enforce_auth(&manifest, &state, &headers, &method, &uri).expect("authorized");
     }
@@ -1309,11 +1343,44 @@ mod tests {
         );
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+        let headers = signed_headers(
+            state.network_id_ref(),
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+        );
 
         let err =
             enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("uaid mismatch");
         assert!(matches!(err, ContentError::Forbidden(_)));
+    }
+
+    #[test]
+    fn protected_content_rejects_foreign_network_signature() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = checked_ed25519_keypair();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_with_account(&account_id, None);
+        let manifest = ContentBundleManifest {
+            auth: ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name"))),
+            ..sample_manifest()
+        };
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"same-label-foreign-content-genesis",
+            )),
+        );
+        let headers = signed_headers(&foreign_network, &account_id, &key_pair, &method, &uri);
+
+        let error = enforce_auth(&manifest, &state, &headers, &method, &uri)
+            .expect_err("foreign-network content signature must fail closed");
+        assert!(matches!(
+            error,
+            ContentError::Unauthorized(ref message) if message == "invalid request signature"
+        ));
     }
 
     #[test]

@@ -18,6 +18,7 @@ export {
   configureCurveSupport,
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
+export { NetworkId } from "./networkId.js";
 export {
   AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,

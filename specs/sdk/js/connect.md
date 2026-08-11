@@ -107,12 +107,13 @@ payload (SID, URIs, invite metadata) and the Torii session result, including
 the wallet/app role tokens plus the management and relay tokens.
 
 ```ts
-import { ToriiClient, bootstrapConnectPreviewSession } from "@iroha/iroha-js";
+import { NetworkId, ToriiClient, bootstrapConnectPreviewSession } from "@iroha/iroha-js";
 
 const toriiBaseUrl = "https://torii.nexus.sora";
 const torii = new ToriiClient(toriiBaseUrl);
+const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 const { preview, session, tokens } = await bootstrapConnectPreviewSession(torii, {
-  chainId: "iroha2-dev",
+  networkId,
   register: true,
   sessionOptions: { node: "lane-default" },
 });

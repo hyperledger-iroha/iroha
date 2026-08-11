@@ -113,7 +113,7 @@ authoritative.
 `ProviderCreditRecord` persists the runtime view of each provider’s credit state:
 
 - `available_credit`: canonical non-negative `Quantity` spendable after the latest telemetry fees.
-- `bonded`: canonical non-negative `Quantity` of currently bonded collateral.
+- `bonded`: canonical non-negative unslashed portion of the provider's owner-funded native reserve after subtracting outstanding treasury-funded credit principal and the custody-backed `slashed` lien. Core never treats this field as a funding source.
 - `required_bond`: canonical collateral requirement derived from the pricing schedule.
 - `expected_settlement`: canonical projected debit for the next settlement window.
 - `onboarding_epoch`: Unix epoch when the provider entered the programme (used for discounts).
@@ -160,9 +160,13 @@ following instructions:
 - `RecordCapacityTelemetry` consumes provider telemetry, calculates storage fees using the current
   schedule, applies uptime/PoR multipliers, updates the fee ledger, and debits provider credit
   accounts when present.
-- `UpsertProviderCredit` seeds or updates the governance view of a provider’s credit record (e.g.,
-  after manual top-ups or collateral adjustments). Providers must have a registered capacity
-  declaration before a credit record can be inserted.
+- `UpsertProviderCredit` seeds or updates the governed credit projection. A governed owner and
+  native reserve account must already exist, and `bonded + slashed` must exactly match the
+  verified owner-funded reserve balance. Existing slash totals and penalty epochs are monotonic
+  across upserts. Ordinary transfers and burns cannot debit the active custody asset;
+  withdrawals consume a sealed capability bound to an exact pending owner request, provider
+  revision, active policy, and decision. The credit instruction cannot create or increase
+  collateral by writing a number.
 
 ## Worked Examples
 

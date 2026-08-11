@@ -42,7 +42,7 @@ pub(crate) fn persist_preflighted_historical_autonomous_lane_recovery(
 ) -> Result<HistoricalAutonomousLaneRecoveryInstallOutcome, V2ReservationLifecycleError> {
     kura.persist_lane_executable_payload(
         &record.payload,
-        record.payload.chain_id_hash,
+        record.payload.network_id,
         record.payload.epoch,
     )?;
     persist_preflighted_historical_autonomous_lane_recoveries(kura, std::slice::from_ref(record))?

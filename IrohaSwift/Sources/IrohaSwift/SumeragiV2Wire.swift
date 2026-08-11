@@ -54,26 +54,6 @@ public struct SumeragiV2PeerIDPayload: Equatable, Hashable, Sendable {
     }
 }
 
-/// Canonical Norito representation of an Iroha chain identifier.
-public struct SumeragiV2ChainID: Equatable, Hashable, Sendable {
-    public let value: String
-
-    public init(_ value: String) {
-        self.value = value
-    }
-
-    public func encode() -> Data {
-        sumeragiV2Struct(sumeragiV2String(value))
-    }
-
-    fileprivate static func decode(_ data: Data) throws -> Self {
-        var reader = SumeragiV2Reader(data)
-        let value = try Self(sumeragiV2DecodeString(reader.field("chain ID value")))
-        try reader.finish("chain ID")
-        return value
-    }
-}
-
 /// Typed hash of the immutable height context.
 public struct SumeragiV2HeightContextID: Equatable, Sendable {
     public let hash: SumeragiV2Hash
@@ -1099,7 +1079,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
         Data("iroha:sumeragi:v2:commit-certificate-request".utf8)
 
     public let protocolVersion: UInt16
-    public let chainID: SumeragiV2ChainID
+    public let networkID: NetworkId
     public let contextID: SumeragiV2HeightContextID
     public let height: UInt64
     public let requester: SumeragiV2PeerIDPayload
@@ -1107,7 +1087,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
 
     public init(
         protocolVersion: UInt16 = SumeragiV2ConsensusMessage.protocolVersion,
-        chainID: SumeragiV2ChainID,
+        networkID: NetworkId,
         contextID: SumeragiV2HeightContextID,
         height: UInt64,
         requester: SumeragiV2PeerIDPayload,
@@ -1122,7 +1102,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
             throw SumeragiV2WireError.invalid("commit-certificate request signature is missing")
         }
         self.protocolVersion = protocolVersion
-        self.chainID = chainID
+        self.networkID = networkID
         self.contextID = contextID
         self.height = height
         self.requester = requester
@@ -1131,7 +1111,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            sumeragiV2U16(protocolVersion), chainID.encode(), contextID.encode(),
+            sumeragiV2U16(protocolVersion), networkID.bytes, contextID.encode(),
             sumeragiV2U64(height), requester.bytes, sumeragiV2ByteVector(signature)
         )
     }
@@ -1140,7 +1120,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
     public func signaturePreimage() -> Data {
         var output = Self.signatureDomain
         output.append(sumeragiV2Struct(
-            sumeragiV2U16(protocolVersion), chainID.encode(), contextID.encode(),
+            sumeragiV2U16(protocolVersion), networkID.bytes, contextID.encode(),
             sumeragiV2U64(height), requester.bytes, sumeragiV2ByteVector(Data())
         ))
         return output
@@ -1155,7 +1135,7 @@ public struct SumeragiV2CommitCertificateRequest: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             protocolVersion: sumeragiV2DecodeU16(reader.field("commit request protocol")),
-            chainID: SumeragiV2ChainID.decode(reader.field("commit request chain ID")),
+            networkID: NetworkId(bytes: reader.field("commit request network ID")),
             contextID: SumeragiV2HeightContextID.decode(reader.field("commit request context")),
             height: sumeragiV2DecodeU64(reader.field("commit request height")),
             requester: SumeragiV2PeerIDPayload(reader.field("commit request requester")),

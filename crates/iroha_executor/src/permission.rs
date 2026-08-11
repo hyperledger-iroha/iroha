@@ -166,6 +166,7 @@ declare_permissions! {
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
+    iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionConfidentialPolicy},
     iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionAlias},
 
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
@@ -206,10 +207,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
     iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
     iroha_executor_data_model::permission::settlement::{CanSetFxCorridorPolicy},
-    iroha_executor_data_model::permission::settlement::{CanSettleFxCorridor},
-    iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsPin},
-    iroha_executor_data_model::permission::sorafs::{CanApproveSorafsPin},
-    iroha_executor_data_model::permission::sorafs::{CanRetireSorafsPin},
     iroha_executor_data_model::permission::sorafs::{CanBindSorafsAlias},
     iroha_executor_data_model::permission::sorafs::{CanDeclareSorafsCapacity},
     iroha_executor_data_model::permission::sorafs::{CanSubmitSorafsTelemetry},
@@ -238,7 +235,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForUaid},
     iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
-    iroha_executor_data_model::permission::nexus::{CanWithdrawFeeSponsorProgram},
 }
 
 impl AnyPermission {
@@ -527,7 +523,7 @@ mod smart_contract {
 
 mod settlement {
     use iroha_executor_data_model::permission::settlement::{
-        CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+        CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
 
     use super::*;
@@ -621,14 +617,12 @@ mod settlement {
     }
 
     impl_corridor_permission!(CanSetFxCorridorPolicy);
-    impl_corridor_permission!(CanSettleFxCorridor);
 }
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
-        CanWithdrawFeeSponsorProgram,
     };
 
     use super::*;
@@ -884,15 +878,13 @@ mod nexus {
     }
 
     impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
-    impl_program_scoped_delegation!(CanWithdrawFeeSponsorProgram);
 }
 
 mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
-        CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
+        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
+        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
         CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
@@ -900,9 +892,6 @@ mod sorafs {
     use super::*;
 
     impl_owned_permission!(
-        CanRegisterSorafsPin,
-        CanApproveSorafsPin,
-        CanRetireSorafsPin,
         CanBindSorafsAlias,
         CanDeclareSorafsCapacity,
         CanSubmitSorafsTelemetry,
@@ -1397,7 +1386,8 @@ pub mod asset_definition {
 
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+        CanUnregisterAssetDefinition,
     };
 
     use super::*;
@@ -1556,6 +1546,20 @@ pub mod asset_definition {
         }
     }
 
+    impl ValidateGrantRevoke for CanManageAssetDefinitionConfidentialPolicy {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanManageAssetDefinitionAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
@@ -1604,6 +1608,7 @@ pub mod asset_definition {
     impl_froms!(
         CanUnregisterAssetDefinition,
         CanModifyAssetDefinitionMetadata,
+        CanManageAssetDefinitionConfidentialPolicy,
         iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
@@ -2444,12 +2449,15 @@ mod tests {
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
         },
         asset::{CanMintAssetToAccount, CanMintAssetWithDefinition},
-        asset_definition::{AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias},
+        asset_definition::{
+            AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+            CanManageAssetDefinitionConfidentialPolicy,
+        },
         domain::CanRegisterDomain,
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
-            CanPublishSpaceDirectoryManifestForUaid, CanWithdrawFeeSponsorProgram,
+            CanPublishSpaceDirectoryManifestForUaid,
         },
         peer::CanManagePeers,
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
@@ -2625,6 +2633,44 @@ mod tests {
             &role_permissions,
             &role_ids,
             &token,
+        ));
+    }
+
+    #[test]
+    fn confidential_policy_permission_holder_can_delegate_only_the_exact_asset_definition() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let target = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("currency", "paynet").expect("asset domain"),
+            "pkr".parse().expect("asset name"),
+        );
+        let other = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("currency", "paynet").expect("asset domain"),
+            "usd".parse().expect("asset name"),
+        );
+        let exact = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: target,
+        };
+        let sibling = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: other,
+        };
+        let held: PermissionObject = exact.clone().into();
+        let exact_dispatched =
+            AnyPermission::try_from(&held).expect("confidential-policy permission must be typed");
+        let sibling_dispatched = AnyPermission::try_from(&PermissionObject::from(sibling))
+            .expect("sibling confidential-policy permission must be typed");
+        let previous = test_override::replace_permissions(vec![held]);
+
+        let exact_grant = exact_dispatched.validate_grant(&authority, &context, &Iroha);
+        let exact_revoke = exact_dispatched.validate_revoke(&authority, &context, &Iroha);
+        let sibling_grant = sibling_dispatched.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(exact_revoke.is_ok());
+        assert!(matches!(
+            sibling_grant,
+            Err(ValidationFail::NotPermitted(_))
         ));
     }
 
@@ -2921,7 +2967,9 @@ mod tests {
             "root_asset".parse().expect("asset name"),
         );
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -2982,7 +3030,9 @@ mod tests {
         let context = make_context(&authority, 2);
         let raw = PermissionObject::from(CanInvokeContractEntrypoint {
             contract: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &make_other_account_id(),
                 88,
                 DataSpaceId::UNIVERSAL,
@@ -3290,7 +3340,7 @@ mod tests {
     }
 
     #[test]
-    fn fee_program_manager_can_delegate_exact_enrollment_and_withdrawal_scopes() {
+    fn fee_program_manager_can_delegate_exact_enrollment_scope() {
         let sponsor = make_account_id();
         let manager = make_other_account_id();
         let context = make_context(&manager, 2);
@@ -3298,7 +3348,6 @@ mod tests {
         let enrollment = CanEnrollFeeSponsorProgram {
             program_id: program_id.clone(),
         };
-        let withdrawal = CanWithdrawFeeSponsorProgram { program_id };
         let previous = test_override::replace_permissions(vec![PermissionObject::from(
             CanManageFeeSponsorProgram { sponsor },
         )]);
@@ -3306,8 +3355,6 @@ mod tests {
         for result in [
             enrollment.validate_grant(&manager, &context, &Iroha),
             enrollment.validate_revoke(&manager, &context, &Iroha),
-            withdrawal.validate_grant(&manager, &context, &Iroha),
-            withdrawal.validate_revoke(&manager, &context, &Iroha),
         ] {
             assert!(result.is_ok(), "program manager must delegate exact scopes");
         }
@@ -3377,12 +3424,7 @@ mod tests {
         let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
         let permissions = [
             AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor }),
-            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram {
-                program_id: program_id.clone(),
-            }),
-            AnyPermission::CanWithdrawFeeSponsorProgram(CanWithdrawFeeSponsorProgram {
-                program_id,
-            }),
+            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram { program_id }),
         ];
 
         for permission in permissions {

@@ -11,8 +11,9 @@ quickstart, maintenance controls, and live activity surfaces for day-to-day deve
   - macOS: Xcode Command Line Tools (`xcode-select --install`).
   - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
 - Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
-    `cargo build -p irohad -p kagami -p iroha_cli`.
+  - `cargo xtask mochi-bundle` requires built `iroha3d`, `kagami`, and `iroha`. Build them once via
+    `cargo build -p irohad --bin iroha3d`, `cargo build -p iroha_kagami --bin kagami`, and
+    `cargo build -p iroha_cli --bin iroha`.
 - Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
 
 MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
@@ -20,9 +21,9 @@ below or available on the PATH:
 
 | Binary   | Environment override | Notes                                   |
 |----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
+| `iroha3d` | `MOCHI_IROHAD`      | Supervises peers                        |
 | `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| `iroha`   | `MOCHI_IROHA_CLI`   | Optional for upcoming helper features   |
 
 ## Building MOCHI
 
@@ -65,7 +66,7 @@ cargo run -p mochi-ui --features gui --bin mochi -- \
   --torii-start 12000 \
   --p2p-start 13000 \
   --kagami /path/to/kagami \
-  --irohad /path/to/irohad
+  --irohad /path/to/iroha3d
 ```
 
 Environment variables mirror the same overrides when CLI flags are omitted: set
@@ -177,7 +178,7 @@ Both flows are covered by regression tests (`export_snapshot_captures_storage_an
 
 The **Activity** view exposes the live debugging surfaces:
 
-- **Logs** — tails `irohad` stdout/stderr/system lifecycle messages for the selected peer.
+- **Logs** — tails `iroha3d` stdout/stderr/system lifecycle messages for the selected peer.
 - **Events** — shows managed event streams with filter and export controls.
 - **Blocks** — shows managed block streams with decoded summaries.
 - The activity toggles can auto-attach these surfaces to a running peer so you can start a devnet
@@ -214,7 +215,7 @@ roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
 - Stop the application to terminate supervised peers.
 - Remove the sandbox root (`rm -rf <workspace>/.mochi/sandbox/<profile>`) to reset runtime state, or
   use `scripts/mochi_local_sandbox.sh reset`.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
+- If Kagami or iroha3d locations change, update the environment variables or re-run MOCHI with the
   appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
 
 For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and

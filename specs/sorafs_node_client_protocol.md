@@ -384,11 +384,13 @@ message instead of a stack trace.
 The SoraFS subcommands under `iroha app sorafs …` expose structured JSON for pin
 registry listings (`pin list`), alias enumeration (`alias list`), replication
 order listings (`replication list`), finalized repair tasks (`repair list`), and
-storage stats (`storage show`). Pin/alias/replication list commands accept
-pagination parameters (`--limit`, `--offset`) and filters (for example
-`--alias-namespace`, `--manifest-digest`). `repair list` instead uses a bounded
-immutable task-id cursor, an optional exact finalized height/block-hash pair,
-and optional `--ticket-id` for the singular finalized task. GC helpers (`gc
+storage stats (`storage show`). Pin lists use `--limit`, `--max-bytes`, an
+exclusive `--after-digest-hex`, an optional lifecycle status, and an optional
+paired finalized height/block hash; there is no pin-list offset. Alias and
+replication lists retain their bounded `--limit`/`--offset` controls and filters
+(for example `--alias-namespace`, `--manifest-digest`). `repair list` uses a
+bounded immutable task-id cursor, an optional exact finalized height/block-hash
+pair, and optional `--ticket-id` for the singular finalized task. GC helpers (`gc
 inspect`, `gc dry-run`) scan the local storage directory to report retention
 deadlines and expired manifests without performing deletions.
 
@@ -405,11 +407,18 @@ ordering with `manifest_id` tie-breakers.
 Torii now exposes read-only views of the on-chain pin registry so operators
 and SDKs can inspect manifests without issuing ad-hoc queries:
 
-- `GET /v1/sorafs/pin` returns the paginated manifest catalogue alongside an
-  `attestation` block hash. Optional query parameters:
-  - `status=pending|approved|retired`
-  - `limit` (defaults to 50, capped at 500)
-  - `offset`
+- `GET /v1/sorafs/pin` returns `PinManifestPageV1` from one immutable finalized
+  state view. Each page carries the paired finalized height/hash, O(1)
+  consensus-maintained `charged_usage`, bounded `PinManifestSummaryV1` rows in
+  ascending digest order, `has_more`, and an exclusive `next_after_digest`.
+  Optional query parameters are `status=pending|approved|retired`, `limit`
+  (default 50, `1..=256`), `max_bytes` (`1024..=262144`), non-zero lowercase
+  `after_digest_hex`, and the paired `expected_finalized_height` plus
+  `expected_finalized_block_hash_hex`. Continue with the returned digest and
+  the same finalized pair. Offset, unpaired anchors, and stale anchors are
+  rejected; a stale pair returns HTTP 409. The server bounds both rows and
+  encoded bytes without materializing the complete registry, and responds with
+  `Cache-Control: no-store`.
 - `GET /v1/sorafs/pin/{digest_hex}` returns exact native Norito JSON
   `PinManifestFinalizedRecordV1`: `finalized_cursor` contains the finalized
   height and block-hash bytes, while `manifest` is the chain-authoritative
@@ -422,32 +431,40 @@ and SDKs can inspect manifests without issuing ad-hoc queries:
   alias-list, replication-order, cache-state, and proof-expiry projections are
   neither accepted nor returned. Query aliases and replication orders through
   their dedicated list endpoints.
-- `POST /v1/sorafs/pin/register` accepts the closed JSON V1 request. Its required
-  `manifest_payload` is exact canonical padded base64 of canonical Norito
-  `ManifestV1` bytes. Torii derives the digest, chunker, content length, pin
-  policy, and fee inputs solely from that decoded manifest and rejects retired
-  duplicate summary fields. `alias` and `successor_of_hex` remain optional; a
-  supplied predecessor must be a nonzero canonical digest. The alias proof must
-  be valid base64, and unknown, unapproved, or retired predecessors return HTTP
-  400 so cycles never enter the registry.
+- `POST /v1/sorafs/pin/register` accepts only a canonical versioned
+  `SignedTransaction` for the exact runtime `NetworkId`. Torii verifies the
+  authority signature and requires exactly one `RegisterPinManifest`; its
+  `manifest_payload` contains exact canonical Norito `ManifestV1` bytes, with
+  optional native `alias` and non-zero `successor_of` fields. There is no JSON
+  registration DTO and no client-supplied lifecycle epoch. Core derives the
+  submission epoch from consensus time, enforces global/per-account count and
+  byte quotas plus lineage ceilings, and collects the configured fee from the
+  authenticated submitter. General pinning needs no permission token; alias
+  attachment still requires `CanBindSorafsAlias`. Unknown, unapproved, or
+  retired predecessors fail before any state or fee effect.
 - `GET /v1/sorafs/aliases` lists active alias bindings with filters for
-  `namespace` and `manifest_digest`, sharing the same `limit`/`offset` controls
-  as the manifest listing.
+  `namespace` and `manifest_digest`; this separate legacy projection retains
+  its own bounded `limit`/`offset` controls.
 - `GET /v1/sorafs/replication` surfaces governance-issued replication orders.
   Clients can scope the response via `status=pending|completed|expired` and
   `manifest_digest` query parameters.
 
-Registry list responses retain their listing attestation. The single-manifest
-read instead binds the native record directly to its `finalized_cursor`.
+Pin list and single-manifest reads both bind native results directly to their
+`finalized_cursor`; there is no separate listing-attestation shape. The list
+omits large detail fields by design, while the exact route returns one bounded
+native record.
 
 ### CLI Helpers
 
 The `iroha` CLI wraps the REST endpoints for day-to-day operations:
 
-- `iroha app sorafs pin list --status=approved` returns the registry snapshot and
-  its `attestation` metadata so operators can verify the reported block hash.
-- `iroha app sorafs pin show --digest=<hex>` fetches a single manifest together with
-  bound aliases and replication orders.
+- `iroha app sorafs pin list --status=approved` returns a bounded finalized page
+  with `charged_usage`. Use `--limit`, `--max-bytes`, and
+  `--after-digest-hex` plus the same expected finalized height/hash to continue
+  an exclusive keyset scan.
+- `iroha app sorafs pin show --digest=<hex>` fetches one exact
+  `PinManifestFinalizedRecordV1`; aliases and replication orders remain on their
+  dedicated list routes.
 - `iroha app sorafs alias list --namespace=docs` and
   `iroha app sorafs replication list --status=pending` mirror the REST filters.
 - `iroha app sorafs repair list` reads the finalized task page, or one task with
@@ -498,9 +515,12 @@ the SLO work in SF-7:
 - `torii_sorafs_chunk_range_requests_total{endpoint,status}` and
   `torii_sorafs_chunk_range_bytes_total{endpoint}` drive request/byte rate SLOs
   for range-capable gateways.【crates/iroha_telemetry/src/metrics.rs:4303】
-- `torii_sorafs_registry_*` gauges expose manifest counts, alias inventory, and
-  replication order backlog so dashboards can track governance health without
-  scraping JSON endpoints.【crates/iroha_telemetry/src/metrics.rs:5278】
+- `torii_sorafs_pin_retained_manifests` and
+  `torii_sorafs_pin_live_content_bytes` expose the consensus-maintained global
+  pin accounting summary in O(1). They do not reconstruct lifecycle, alias, or
+  replication-order inventories; inspect finalized, height/hash-bound registry
+  queries for those details. `PinManifestPageV1.charged_usage` exposes the same
+  retained-record/live-content charge for authenticated queries.【crates/iroha_telemetry/src/metrics.rs:5278】
 - `torii_sorafs_gc_*` counters/gauges surface retention sweeps, bytes freed,
   blocked evictions, and expired-manifest age for capacity dashboards.
 - `torii_sorafs_alias_cache_refresh_total{result,reason}` and
@@ -512,11 +532,14 @@ the SLO work in SF-7:
 The end-to-end storage tests follow a deterministic sequence to confirm the API
 and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1150】
 
-1. Register the manifest on-chain with `RegisterPinManifest`; the submitter pays
-   the configured SoraFS public pin fee and the approved registry record stores
-   the manifest digest, chunk digest, content length, policy, fee asset, treasury,
-   and fee amount. That fee metadata is a committed receipt; storage ingest does
-   not reprice the record against later governance schedule or treasury changes.
+1. Register the manifest on-chain with a signed `RegisterPinManifest`; the
+   authenticated submitter pays the configured SoraFS public pin fee and is
+   charged against global/per-account count and byte quotas. Consensus derives
+   `submitted_epoch`. The record stores the manifest digest, chunk digest,
+   content length, policy, fee asset, treasury, and fee amount; it remains
+   pending when threshold approval is required. That fee metadata is a committed
+   receipt, and storage ingest does not reprice the record against later
+   governance schedule or treasury changes.
 2. After the registration is finalized, the supervised provider worker
    reconciles the exact finalized height/hash, approved manifest record,
    configured provider identity, and committed replication assignment. It

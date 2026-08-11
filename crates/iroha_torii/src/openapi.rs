@@ -589,6 +589,7 @@ mod tests {
                         | "/v1/proofs/query"
                         | "/v1/rwas/query"
                         | "/v1/pipeline/transactions/status"
+                        | "/v1/pipeline/transactions/details"
                         | "/v1/zk/merkle-path"
                         | "/v1/zk/roots"
                         | "/v1/zk/verify-batch"
@@ -984,6 +985,378 @@ mod tests {
     }
 
     #[test]
+    fn transaction_payload_schema_requires_closed_network_domain_and_positive_ttl() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "TransactionPayload",
+            &[
+                "domain",
+                "authority",
+                "creation_time_ms",
+                "instructions",
+                "time_to_live_ms",
+                "fee_payment",
+                "metadata",
+            ],
+            &["nonce", "attachments"],
+        );
+
+        let properties = schemas["TransactionPayload"]["properties"]
+            .as_object()
+            .expect("TransactionPayload properties");
+        for retired in ["chain", "chain_id", "chainId"] {
+            assert!(
+                !properties.contains_key(retired),
+                "retired transaction identity key `{retired}` must be absent"
+            );
+        }
+        assert_eq!(
+            properties["domain"].get("$ref").and_then(Value::as_str),
+            Some("#/components/schemas/TransactionDomain")
+        );
+        assert_eq!(
+            properties["time_to_live_ms"]
+                .get("minimum")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            schemas["NetworkId"]["allOf"][0]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
+        );
+
+        let variants = schemas["TransactionDomain"]["oneOf"]
+            .as_array()
+            .expect("TransactionDomain variants");
+        assert_eq!(variants.len(), 2);
+        for variant in variants {
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+        }
+        assert_eq!(
+            variants[0]["properties"]["kind"]
+                .get("const")
+                .and_then(Value::as_str),
+            Some("network")
+        );
+        assert_eq!(
+            variants[0]["properties"]["value"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NetworkId")
+        );
+        assert_eq!(
+            variants[1]["properties"]["kind"]
+                .get("const")
+                .and_then(Value::as_str),
+            Some("genesis")
+        );
+        assert!(variants[1]["properties"].get("value").is_none());
+    }
+
+    #[test]
+    fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+
+        for (name, network_property, retired_property, target) in [
+            (
+                "OfflineTransitionProofBundle",
+                "network_id",
+                "chain_id",
+                "NetworkId",
+            ),
+            (
+                "OfflineSpendableNoteDescriptor",
+                "network_id",
+                "chain_id",
+                "NetworkId",
+            ),
+            ("OfflineTopUpAnchor", "network_id", "chain_id", "NetworkId"),
+            (
+                "OfflineTopUpFinalityHeightContext",
+                "network_id",
+                "chain_id",
+                "Hash",
+            ),
+            (
+                "OfflineSpendStatement",
+                "network_id",
+                "chain_id",
+                "NetworkId",
+            ),
+            (
+                "OfflineRedemptionIntent",
+                "network_id",
+                "chain_id",
+                "NetworkId",
+            ),
+            ("SumeragiV2HeightContext", "network_id", "chain_id", "Hash"),
+            (
+                "BridgeFinalityAttestationBodyV1",
+                "network_id",
+                "chain_id",
+                "Hash",
+            ),
+            ("BridgeCommitment", "network_id", "chain_id", "Hash"),
+            (
+                "NativeAmxAttestationBody",
+                "network_id",
+                "chain_id_hash",
+                "NetworkId",
+            ),
+            (
+                "NativeAmxReceipt",
+                "network_id",
+                "chain_id_hash",
+                "NetworkId",
+            ),
+            ("HedgeIntentV1", "network_id", "chain_id", "NetworkId"),
+        ] {
+            let properties = schemas[name]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} properties"));
+            assert!(!properties.contains_key(retired_property), "{name}");
+            assert_eq!(
+                property_ref(schemas, name, network_property),
+                format!("{COMPONENT_SCHEMA_REF_PREFIX}{target}"),
+                "{name}.{network_property} reference drift"
+            );
+        }
+        assert_eq!(
+            property_ref(schemas, "OfflineUnshieldPublicInputs", "network_tag"),
+            "#/components/schemas/OfflineFixed32Bytes"
+        );
+        assert!(
+            !schemas["OfflineUnshieldPublicInputs"]["properties"]
+                .as_object()
+                .expect("OfflineUnshieldPublicInputs properties")
+                .contains_key("chain_tag")
+        );
+
+        for name in [
+            "ConnectSessionCreateRequest",
+            "ConnectSessionCreateResponse",
+            "GovernanceCapabilitiesV1",
+            "GovernancePlainBallotRequestV1",
+            "GovernanceParliamentBallotRequestV1",
+            "GovernanceZkBallotEnvelopeRequestV1",
+            "GovernanceZkBallotProofRequestV1",
+            "PipelineTransactionDetailsResponse",
+            "PinManifestPageV1",
+            "PrivacyExact12CapabilityManifestV1",
+        ] {
+            assert!(schemas.contains_key(name), "missing static schema {name}");
+        }
+        assert!(!schemas.contains_key("PrivacyCapabilityRowV1"));
+        assert!(!schemas.contains_key("PrivacyCapabilitySnapshotV1"));
+        let protocols = schemas["PrivacyExact12CapabilityManifestV1"]["properties"]["protocols"]
+            .as_object()
+            .expect("Exact12 protocols schema");
+        assert_eq!(protocols["minItems"].as_u64(), Some(12));
+        assert_eq!(protocols["maxItems"].as_u64(), Some(12));
+        assert_eq!(
+            protocols["prefixItems"]
+                .as_array()
+                .expect("Exact12 positional schemas")
+                .len(),
+            12
+        );
+        assert_eq!(protocols["items"].as_bool(), Some(false));
+
+        let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
+        assert_eq!(
+            operation_request_schema_ref(details, "transaction details"),
+            "#/components/schemas/VersionedSignedQueryJson"
+        );
+        assert_eq!(
+            operation_response_schema_ref(details, "200", "transaction details"),
+            "#/components/schemas/PipelineTransactionDetailsResponse"
+        );
+        assert_eq!(
+            details.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+            Some("read")
+        );
+
+        let connect = openapi_operation(&document, "/v1/connect/session", "post");
+        assert_eq!(
+            operation_request_schema_ref(connect, "Connect session"),
+            "#/components/schemas/ConnectSessionCreateRequest"
+        );
+        assert_eq!(
+            operation_response_schema_ref(connect, "200", "Connect session"),
+            "#/components/schemas/ConnectSessionCreateResponse"
+        );
+
+        for (path, request_schema) in [
+            (
+                "/v1/gov/ballots/zk-v1",
+                "GovernanceZkBallotEnvelopeRequestV1",
+            ),
+            (
+                "/v1/gov/ballots/zk-v1/ballot-proof",
+                "GovernanceZkBallotProofRequestV1",
+            ),
+            ("/v1/gov/ballots/plain", "GovernancePlainBallotRequestV1"),
+            (
+                "/v1/gov/parliament/ballots",
+                "GovernanceParliamentBallotRequestV1",
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_request_schema_ref(operation, path),
+                format!("{COMPONENT_SCHEMA_REF_PREFIX}{request_schema}")
+            );
+            assert!(operation.contains_key("security"), "POST {path}");
+            assert!(
+                operation_header_requirements(operation)
+                    .iter()
+                    .any(|(name, _)| name == "X-Iroha-Account"),
+                "POST {path} must publish account authentication"
+            );
+        }
+
+        let pin = openapi_operation(&document, "/v1/sorafs/pin", "get");
+        let pin_parameters = pin["parameters"]
+            .as_array()
+            .expect("pin list parameters")
+            .iter()
+            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pin_parameters,
+            [
+                "expected_finalized_height",
+                "expected_finalized_block_hash_hex",
+                "limit",
+                "max_bytes",
+                "after_digest_hex",
+                "status",
+            ]
+        );
+        assert_eq!(
+            operation_response_schema_ref(pin, "200", "pin list"),
+            "#/components/schemas/PinManifestPageV1"
+        );
+
+        let axt_properties = schemas["AxtErrorDetails"]["properties"]
+            .as_object()
+            .expect("AXT error details properties");
+        assert!(axt_properties.contains_key("active_handle_era"));
+        assert!(axt_properties.contains_key("next_handle_counter"));
+        assert!(!axt_properties.contains_key("next_min_handle_era"));
+        assert!(!axt_properties.contains_key("next_min_sub_nonce"));
+    }
+
+    #[test]
+    fn static_account_operations_publish_exact_auth_and_private_responses() {
+        let document = canonical_document();
+        for (path, methods) in [
+            ("/v1/zk/verify-batch", &["post"][..]),
+            ("/v1/zk/ivm/derive", &["post"][..]),
+            ("/v1/zk/ivm/prove", &["post"][..]),
+            ("/v1/zk/ivm/prove/{job_id}", &["get", "delete"][..]),
+            ("/v1/zk/attachments", &["get", "post"][..]),
+            ("/v1/zk/attachments/{id}", &["get", "delete"][..]),
+            ("/v1/zk/attachments/count", &["get"][..]),
+            ("/v1/zk/roots", &["post"][..]),
+            ("/v1/zk/merkle-path", &["post"][..]),
+            ("/v1/zk/vote/tally", &["post"][..]),
+            ("/v1/runtime/abi/active", &["get"][..]),
+            ("/v1/runtime/metrics", &["get"][..]),
+            ("/v1/node/capabilities", &["get"][..]),
+            ("/v1/privacy/capabilities", &["get"][..]),
+            ("/v1/node/query/projection/checkpoint", &["get"][..]),
+            ("/v1/ministry/agenda/proposals/draft", &["post"][..]),
+            ("/v1/ministry/agenda/proposals/{proposal_id}", &["get"][..]),
+            ("/v1/gov/proposals/deploy-contract", &["post"][..]),
+            ("/v1/gov/proposals/sccp-route-governance", &["post"][..]),
+            ("/v1/gov/capabilities", &["get"][..]),
+            ("/v1/gov/citizens/draft", &["post"][..]),
+            ("/v1/validation-fee/policy/current/proof", &["post"][..]),
+            ("/v1/validation-fee/proposals", &["get"][..]),
+            ("/v1/validation-fee/proposals/draft", &["post"][..]),
+            ("/v1/validation-fee/proposals/{proposal_id}", &["get"][..]),
+            (
+                "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
+                &["post"][..],
+            ),
+            ("/v1/gov/proposals/{id}", &["get"][..]),
+            ("/v1/gov/locks/{rid}", &["get"][..]),
+            ("/v1/gov/referenda/{id}", &["get"][..]),
+            ("/v1/gov/tally/{id}", &["get"][..]),
+            ("/v1/gov/protected-namespaces", &["get"][..]),
+            ("/v1/gov/unlocks/stats", &["get"][..]),
+            ("/v1/gov/contracts/{contract_address}", &["get"][..]),
+            ("/v1/gov/enact", &["post"][..]),
+            ("/v1/gov/council/current", &["get"][..]),
+            ("/v1/gov/citizens", &["get"][..]),
+            ("/v1/gov/citizens/{account_id}", &["get"][..]),
+        ] {
+            for method in methods {
+                let operation = openapi_operation(&document, path, method);
+                assert!(operation.contains_key("security"), "{method} {path}");
+                assert!(
+                    operation.contains_key("x-iroha-canonical-auth-v1"),
+                    "{method} {path}"
+                );
+                let header_names = operation_header_requirements(operation)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>();
+                for name in [
+                    "X-Iroha-Account",
+                    "X-Iroha-Signature",
+                    "X-Iroha-Timestamp-Ms",
+                    "X-Iroha-Nonce",
+                    "X-Iroha-Witness",
+                ] {
+                    assert_eq!(
+                        header_names
+                            .iter()
+                            .filter(|actual| actual.as_str() == name)
+                            .count(),
+                        1,
+                        "{method} {path} must publish one {name} header"
+                    );
+                }
+                assert!(
+                    operation["responses"]
+                        .as_object()
+                        .expect("operation responses")
+                        .values()
+                        .all(|response| {
+                            response["headers"]["Cache-Control"]["schema"]["const"].as_str()
+                                == Some("private, no-store")
+                        }),
+                    "{method} {path} must publish private no-store responses"
+                );
+            }
+        }
+
+        for (path, method) in [
+            ("/v1/runtime/abi/hash", "get"),
+            ("/v1/gov/finalize", "post"),
+            ("/v1/gov/protected-namespaces", "post"),
+        ] {
+            let operation = openapi_operation(&document, path, method);
+            assert!(
+                !operation_header_requirements(operation)
+                    .iter()
+                    .any(|(name, _)| name == "X-Iroha-Account"),
+                "{method} {path} must retain its non-account admission contract"
+            );
+        }
+    }
+
+    #[test]
     fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
         const PROVIDER_ATTESTATION_WIRE_ID: &str =
             "iroha.musubi.v1.provider_bundle_attestation.register";
@@ -1037,15 +1410,13 @@ mod tests {
             (
                 "MusubiExactReleaseSnapshotV1",
                 vec![
-                    "chain_id",
-                    "genesis_hash",
+                    "network_id",
                     "snapshot",
                     "home_release",
                     "universal_release",
                 ],
                 vec![
-                    ("chain_id", "MusubiChainIdV1"),
-                    ("genesis_hash", "MusubiFixed32BytesV1"),
+                    ("network_id", "NetworkId"),
                     ("snapshot", "MusubiRegistrySnapshotV1"),
                     ("home_release", "MusubiReleaseRecordV1"),
                     ("universal_release", "MusubiResolverReleaseRowV1"),
@@ -2684,7 +3055,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineSpendStatement"),
             [
-                "chain_id",
+                "network_id",
                 "asset",
                 "asset_scale",
                 "final_root",
@@ -2760,7 +3131,7 @@ mod tests {
             ),
             ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
             ("OfflineBranchPath", "depth", (0, 64)),
-            ("OfflineReadiness", "required_bridge_abi_version", (21, 21)),
+            ("OfflineReadiness", "required_bridge_abi_version", (22, 22)),
             ("OfflineReadiness", "max_hops", (8, 8)),
             (
                 "OfflineAuthenticatedArtifactSet",
@@ -3861,25 +4232,9 @@ mod tests {
     }
 
     #[test]
-    fn musubi_chain_and_chunker_text_bounds_match_the_wire_types() {
+    fn musubi_chunker_text_bounds_match_the_wire_type() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        let chain_id = schemas
-            .get("MusubiChainIdV1")
-            .and_then(Value::as_object)
-            .expect("Musubi chain-id schema");
-        assert_eq!(
-            chain_id.get("maxLength").and_then(Value::as_u64),
-            Some(
-                u64::try_from(iroha_data_model::id::MAX_CHAIN_ID_BYTES)
-                    .expect("chain-id bound fits u64")
-            )
-        );
-        assert_eq!(
-            chain_id.get("pattern").and_then(Value::as_str),
-            Some("^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$")
-        );
-
         let chunker = schemas
             .get("MusubiChunkerProfileHandleV1")
             .and_then(Value::as_object)
@@ -4409,6 +4764,8 @@ mod tests {
     }
 
     include!("openapi/tests/finality_app_contracts.rs");
+
+    include!("openapi/tests/iso20022_auth.rs");
 
     include!("openapi/tests/vpn_da.rs");
 }

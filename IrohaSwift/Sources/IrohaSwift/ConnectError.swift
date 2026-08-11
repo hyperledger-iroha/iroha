@@ -120,6 +120,11 @@ extension ConnectSessionError: ConnectErrorConvertible {
                                 code: "session.flow_control_exceeded",
                                 message: "Flow control window exhausted for direction \(direction.rawValue)",
                                 underlying: self)
+        case .protocolViolation(let description):
+            return ConnectError(category: .authorization,
+                                code: "session.protocol_violation",
+                                message: description,
+                                underlying: self)
         case .clientError(let error):
             return error.connectError
         case .envelopeError(let error):
@@ -227,9 +232,34 @@ extension ConnectCryptoError: ConnectErrorConvertible {
                                 code: "crypto.invalid_session_identifier_length",
                                 message: errorDescription ?? "",
                                 underlying: self)
+        case .invalidNonceLength:
+            return ConnectError(category: .internalError,
+                                code: "crypto.invalid_nonce_length",
+                                message: errorDescription ?? "",
+                                underlying: self)
         case .invalidRelayToken:
             return ConnectError(category: .authorization,
                                 code: "crypto.invalid_relay_token",
+                                message: errorDescription ?? "",
+                                underlying: self)
+        case .allZeroPublicKey:
+            return ConnectError(category: .authorization,
+                                code: "crypto.all_zero_public_key",
+                                message: errorDescription ?? "",
+                                underlying: self)
+        case .allZeroNonce:
+            return ConnectError(category: .authorization,
+                                code: "crypto.all_zero_nonce",
+                                message: errorDescription ?? "",
+                                underlying: self)
+        case .invalidApprovalInput(let field):
+            return ConnectError(category: .authorization,
+                                code: "crypto.invalid_approval_input",
+                                message: "Invalid approval input: \(field)",
+                                underlying: self)
+        case .invalidApprovalSignature:
+            return ConnectError(category: .authorization,
+                                code: "crypto.invalid_approval_signature",
                                 message: errorDescription ?? "",
                                 underlying: self)
         }

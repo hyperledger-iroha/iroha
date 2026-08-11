@@ -73,7 +73,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     assert sum(
         kind == "theorem"
         for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
-    ) == 24
+    ) == 47
     continuation_theorems = [
         name
         for name, kind, _, _ in checker._top_level_declarations(
@@ -96,12 +96,16 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "bed3c18674dfb65a2c52d5b7ba6b74dffcdebf9bc29ece4f7755d0ca98266add"
+        "890905af5a1709778d0d5c1c34be35fec5e90895cd03484aba220644181a0bd4"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
     assert errors == []
     for theorem in (
+        "AsyncNextPreservesCandidateLifecycleSchedulerCoverage",
+        "AsyncNextPreservesStrongTypeInvariant",
+        "AsyncBracketNextPreservesStrongTypeInvariant",
+        "RetainedBodyRebindCandidateIsTypedAndOwned",
         "HistoricalVoteAdmissionIsExactLockedCommit",
         "HistoricalCommitFormationIsExactLockedRound",
         "HistoricalLockedCommitUsesProgressReserve",
@@ -196,7 +200,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "0ef3719aa9746767087c949a97a4b35a2678b31d90a977eafae11d935e586fd5"
+        "4038baf8706294252436e6dc8cf8934556c4553fb234df6a22e578f7f802a6ae"
     )
 
 

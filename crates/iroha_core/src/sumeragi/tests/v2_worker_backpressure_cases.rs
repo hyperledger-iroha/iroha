@@ -1944,7 +1944,7 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
     };
     let advert = sign_advert(KuraReplicaAdvertV1 {
         version: crate::sumeragi::message::KURA_REPLICA_ADVERT_VERSION_V1,
-        chain_id: ChainId::from("rollover-kura-replica-advert"),
+        network_id: crate::sumeragi::synthetic_network_id("rollover-kura-replica-advert"),
         height: 7,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"rollover-block")),
         executed_block_wire_len: 1_024,

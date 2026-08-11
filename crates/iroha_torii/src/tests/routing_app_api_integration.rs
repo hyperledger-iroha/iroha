@@ -316,7 +316,7 @@ mod app_api_integration_tests {
         ));
 
         // Build three transactions with distinct timestamps
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let network_id = *state.network_id_ref();
         let kp_a = checked_app_api_keypair(
             0x7A,
             iroha_crypto::Algorithm::Ed25519,
@@ -336,7 +336,7 @@ mod app_api_integration_tests {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
         let mut b1 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_a.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -346,7 +346,7 @@ mod app_api_integration_tests {
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
         let mut b2 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -356,7 +356,7 @@ mod app_api_integration_tests {
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
         let mut b3 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -759,10 +759,7 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![
-                (rose_def, "rose".to_owned()),
-                (lily_def, "lily".to_owned()),
-            ],
+            vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
 
@@ -831,10 +828,7 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![
-                (rose_def, "rose".to_owned()),
-                (lily_def, "lily".to_owned()),
-            ],
+            vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
 
@@ -1178,10 +1172,7 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![
-                (rose_def, "rose".to_owned()),
-                (lily_def, "lily".to_owned()),
-            ],
+            vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
 
@@ -1751,12 +1742,17 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.clone()).build(&alice_id);
-        let asset_def = AssetDefinition::numeric(AssetDefinitionId::derive_from_components(
+        let mut asset_def = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
-            ), "rose".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .confidential_policy(policy)
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&alice_id);
+        asset_def.set_confidential_policy(policy);
         let asset_def_id = asset_def.id().clone();
         let expected_asset_id = asset_def_id.to_string();
         let world = World::with([domain], [account], [asset_def]);
@@ -2231,8 +2227,13 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let rose_definition = AssetDefinition::numeric(rose_def.clone(), "rose".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(&alice_id);
+        let rose_definition = AssetDefinition::numeric(
+            rose_def.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&alice_id);
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -2277,8 +2278,13 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
         let pkr_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");
-        let pkr_definition = AssetDefinition::numeric(pkr_def.clone(), "pkr".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(&alice_id);
+        let pkr_definition = AssetDefinition::numeric(
+            pkr_def.clone(),
+            "pkr".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&alice_id);
         let paynet_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
         let assets = vec![
             Asset::new(
@@ -2642,6 +2648,7 @@ mod app_api_integration_tests {
                     order_id,
                     manifest_digest,
                     manifest_root_cid,
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 8,
                     deadline_epoch: 24,

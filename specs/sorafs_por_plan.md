@@ -26,8 +26,9 @@ HTTPS endpoints, a strict-majority quorum, bounded DNS/body/timeouts, freshness
 limits, and a durable high-water state file. It verifies unchained G1/RFC 9380
 drand signatures, rejects rollback and equivocation, and only returns a round
 after the configured endpoint quorum agrees. Provider VRF submissions are
-signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
-with replay state, and supplied to the coordinator through the verified feed.
+signature-checked, bound to the exact genesis-derived `NetworkId` plus
+provider/manifest/epoch/drand inputs, persisted with exact-network replay state,
+and supplied to the coordinator through the verified feed.
 `sorafs.por.enabled = true` fails startup when this configuration is
 missing or internally inconsistent. It also requires the complete non-secret
 `[sorafs.por.potr_runtime]` binding and injected
@@ -107,17 +108,14 @@ canaries.
    the BLS signature against pinned chain metadata, requires strict-majority
    endpoint agreement, applies configured freshness/skew bounds, and persists a
    rollback/equivocation high-water mark.
-3. **Provider VRF:** Each provider signs the current `epoch_id` with its registered VRF key. Payload:
+3. **Provider VRF:** Each provider signs the exact `NetworkId` and current
+   `epoch_id` with its registered VRF key. The canonical VRF input is:
    ```
-   vrf_input = norito::json::to_vec({
-       "epoch_id": epoch_id,
-       "provider_id": provider_id,
-       "manifest_digest": manifest_digest
-   })
+   vrf_input = domain || provider_id || manifest_digest || epoch_id_be || drand_round_be
    ```
    Resulting `vrf_output` and `vrf_proof` are submitted through the authenticated,
    rate-limited `POST /v1/sorafs/por/vrf` route. Torii verifies the registered
-   provider key, chain id, manifest, epoch, and drand-round binding before
+   provider key, exact network identity, manifest, epoch, and drand-round binding before
    durable insertion. Failure to supply a fresh VRF proof before the governed
    deadline triggers the forced-challenge policy and governance telemetry.
 4. **Seed derivation:** `seed = BLAKE3(drand_randomness || vrf_output || manifest_digest || epoch_id_le)`. Seeds are 32 bytes.
@@ -325,7 +323,10 @@ qualification and rollout requirements.
 `sorafs.por.state_dir` is the single private PoR state root. The coordinator
 snapshot (`por-coordinator.to`), verified drand high-water
 (`drand-high-water.to`), and authenticated provider-VRF replay state
-(`provider-vrf-state.to`) are derived beneath it. The obsolete
+(`provider-vrf-state.to`) are derived beneath it. The provider-VRF snapshot
+contains the mandatory exact `NetworkId`; startup rejects a snapshot copied
+from another genesis lineage before accepting entries or sequence high-water.
+The obsolete
 `governance_dir`, `governance_dag_dir`, and independently configurable drand or
 VRF state paths are rejected; this directory never serves as a competing
 Governance DAG sink. `PorCoordinator::with_persistence` writes the canonical

@@ -2,12 +2,10 @@
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
     asset::AssetDefinitionId,
-    events::data::prelude::AssetBatchTransferOutcome,
     nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
-    transaction::{
-        FeeChargeKind, FeePaymentIntent, TransactionPayload, error::TransactionRejectionReason,
-    },
+    query::CommittedTransaction,
+    transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
@@ -194,6 +192,11 @@ pub mod uri {
     pub const TRANSACTION_ENTRYPOINT: &str = "/v1/pipeline/transaction-entrypoints";
     /// Batched transaction URI is used to handle multiple signed transaction submissions.
     pub const TRANSACTIONS_BATCH: &str = "/v1/pipeline/transactions/batch";
+    /// Public status-only transaction lookup URI.
+    pub const TRANSACTION_STATUS: &str = crate::route_catalog::pipeline::TRANSACTION_STATUS.path();
+    /// Canonical signed-query transaction-details URI.
+    pub const TRANSACTION_DETAILS: &str =
+        crate::route_catalog::pipeline::TRANSACTION_DETAILS.path();
     /// URI used to quote the exact fee intent of an unsigned transaction payload.
     pub const FEES_QUOTE: &str = crate::route_catalog::fees::QUOTE_PATH;
     /// URI used to read one exact on-chain sponsor program.
@@ -365,14 +368,14 @@ pub struct AxtErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub lane: Option<u32>,
-    /// Minimum handle era a client should use for retry.
+    /// Exact active handle era a client must use for retry.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub next_min_handle_era: Option<u64>,
-    /// Minimum sub-nonce a client should use for retry.
+    pub active_handle_era: Option<u64>,
+    /// Exact next handle counter a client must use for retry.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub next_min_sub_nonce: Option<u64>,
+    pub next_handle_counter: Option<u64>,
 }
 
 /// Structured fee-payment rejection metadata returned to authorized callers.
@@ -648,87 +651,13 @@ pub struct PipelineTransactionStatusResponse {
     pub hash: String,
     /// Current pipeline status details.
     pub status: PipelineTransactionStatus,
-    /// Human-readable one-line summary for CLI and operator diagnostics.
-    #[norito(default)]
-    pub summary: String,
-    /// Structured diagnostics decoded from rejection and execution failures.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<PipelineDiagnostic>,
-    /// Trigger completions associated with this status response when Torii can hydrate them.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub trigger_completions: Vec<TriggerCompletionSummary>,
-    /// Durable correlated outcomes for a native independent transfer batch.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub batch_transfer_outcomes: Vec<AssetBatchTransferOutcome>,
     /// Read scope applied by Torii (`local`, `auto`, `global`).
     pub scope: String,
     /// Source used to resolve the status (`cache`, `queue`, `state`).
     pub resolved_from: String,
 }
 
-/// Structured pipeline diagnostic extracted from a rejection reason or execution failure.
-#[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
-)]
-pub struct PipelineDiagnostic {
-    /// Stable broad category such as `validation`, `ivm_execution`, or `trigger_execution`.
-    pub category: String,
-    /// Stable machine-readable rejection code.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    /// Human-readable diagnostic message.
-    pub message: String,
-    /// Decoded rejection reason text without transport encoding.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub decoded_reason: Option<String>,
-    /// Contract address or alias when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub contract: Option<String>,
-    /// Entrypoint name when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub entrypoint: Option<String>,
-    /// Trigger identifier when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub trigger_id: Option<String>,
-    /// Trigger step index when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub step_index: Option<u32>,
-    /// VM program counter when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub vm_pc: Option<u64>,
-    /// VM function name when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub function: Option<String>,
-    /// Source location or source fragment when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// VM opcode when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub opcode: Option<String>,
-    /// Host syscall when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub syscall: Option<String>,
-    /// Lossless raw rejection reason string.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub raw_reason: Option<String>,
-}
-
-/// Compact trigger completion included in status and smoke evidence.
+/// Compact trigger completion included in authenticated detail and historical evidence.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
@@ -795,14 +724,27 @@ pub struct PipelineTransactionStatus {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub block_height: Option<u64>,
-    /// Structured rejection reason for rejected transactions.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub rejection_reason: Option<TransactionRejectionReason>,
+}
+
+/// Authenticated detailed transaction response.
+///
+/// This payload is never returned by the public pipeline-status endpoint. It is
+/// available only after canonical signed-query admission and an involved-account
+/// or operator authorization check.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineTransactionDetailsResponse {
+    /// Canonical signed transaction hash requested by the caller.
+    pub hash: String,
+    /// Exact committed transaction, including its entrypoint, result, and batch receipts.
+    pub transaction: CommittedTransaction,
+    /// Trigger completions associated with the exact committed entrypoint.
+    pub trigger_completions: Vec<TriggerCompletionSummary>,
 }
 
 impl PipelineTransactionStatusResponse {
-    /// Construct a status response and populate summary/diagnostics from the status payload.
+    /// Construct a public status-only response.
     #[must_use]
     pub fn new(
         hash: String,
@@ -810,108 +752,13 @@ impl PipelineTransactionStatusResponse {
         scope: String,
         resolved_from: String,
     ) -> Self {
-        let diagnostics = status
-            .rejection_reason
-            .as_ref()
-            .map(diagnostics_from_rejection_reason)
-            .unwrap_or_default();
-        let summary = pipeline_status_summary(&status, diagnostics.first());
         Self {
             hash,
             status,
-            summary,
-            diagnostics,
-            trigger_completions: Vec::new(),
-            batch_transfer_outcomes: Vec::new(),
             scope,
             resolved_from,
         }
     }
-}
-
-fn pipeline_status_summary(
-    status: &PipelineTransactionStatus,
-    first_diagnostic: Option<&PipelineDiagnostic>,
-) -> String {
-    if let Some(diagnostic) = first_diagnostic {
-        return format!("{}: {}", status.kind, diagnostic.message);
-    }
-    status.kind.clone()
-}
-
-fn diagnostics_from_rejection_reason(
-    reason: &TransactionRejectionReason,
-) -> Vec<PipelineDiagnostic> {
-    let (category, code, message): (&str, &str, String) = match reason {
-        TransactionRejectionReason::AccountDoesNotExist(err) => (
-            "account",
-            "account_does_not_exist",
-            format!("account does not exist: {err}"),
-        ),
-        TransactionRejectionReason::LimitCheck(err) => {
-            ("limit_check", "limit_check", err.to_string())
-        }
-        TransactionRejectionReason::Validation(err) => {
-            ("validation", "validation", err.to_string())
-        }
-        TransactionRejectionReason::InstructionExecution(err) => (
-            "instruction_execution",
-            "instruction_execution",
-            err.to_string(),
-        ),
-        TransactionRejectionReason::IvmExecution(err) => {
-            ("ivm_execution", "ivm_execution", err.to_string())
-        }
-        TransactionRejectionReason::TriggerExecution(err) => {
-            ("trigger_execution", "trigger_execution", err.to_string())
-        }
-    };
-
-    let mut diagnostic = PipelineDiagnostic {
-        category: category.to_owned(),
-        code: Some(code.to_owned()),
-        message: message.clone(),
-        decoded_reason: Some(message.clone()),
-        contract: extract_labeled_value(&message, &["contract=", "contract: "]),
-        entrypoint: extract_labeled_value(&message, &["entrypoint=", "entrypoint: "]),
-        trigger_id: extract_labeled_value(&message, &["trigger=", "trigger_id="]),
-        step_index: extract_labeled_value(&message, &["step=", "step_index="])
-            .and_then(|value| value.parse::<u32>().ok()),
-        vm_pc: extract_labeled_value(&message, &["pc=", "vm_pc="])
-            .and_then(|value| value.parse::<u64>().ok()),
-        function: extract_labeled_value(&message, &["fn=", "function="]),
-        source: extract_labeled_value(&message, &["src=", "source="]),
-        opcode: extract_labeled_value(&message, &["opcode="]),
-        syscall: extract_labeled_value(&message, &["syscall="]),
-        raw_reason: Some(reason.to_string()),
-    };
-    if diagnostic.message.is_empty() {
-        diagnostic.message = diagnostic
-            .raw_reason
-            .clone()
-            .unwrap_or_else(|| "transaction rejected".to_owned());
-        diagnostic.decoded_reason = Some(diagnostic.message.clone());
-    }
-    vec![diagnostic]
-}
-
-fn extract_labeled_value(message: &str, labels: &[&str]) -> Option<String> {
-    for label in labels {
-        let Some(offset) = message.find(label) else {
-            continue;
-        };
-        let start = offset + label.len();
-        let rest = &message[start..];
-        let token = rest
-            .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';')
-            .next()
-            .unwrap_or_default()
-            .trim_matches(['"', '\'', '`', '[', ']']);
-        if !token.is_empty() {
-            return Some(token.to_owned());
-        }
-    }
-    None
 }
 
 /// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
@@ -939,11 +786,10 @@ pub struct AccountReadResponse {
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ValidationFail,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         name::Name,
         nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::FeePaymentIntent,
     };
 
     use super::{
@@ -1225,15 +1071,12 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_transaction_status_roundtrip_preserves_typed_rejection_reason() {
+    fn pipeline_transaction_status_roundtrip_is_status_only() {
         let payload = PipelineTransactionStatusResponse::new(
             "ab".repeat(32),
             PipelineTransactionStatus {
                 kind: "Rejected".to_owned(),
                 block_height: Some(42),
-                rejection_reason: Some(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted("denied".to_owned()),
-                )),
             },
             "auto".to_owned(),
             "state".to_owned(),
@@ -1243,39 +1086,24 @@ mod tests {
         let decoded: PipelineTransactionStatusResponse =
             norito::decode_from_bytes(&encoded).expect("decode status payload");
         assert_eq!(decoded, payload);
-    }
 
-    #[test]
-    fn pipeline_transaction_status_populates_diagnostics_from_rejection_reason() {
-        let payload = PipelineTransactionStatusResponse::new(
-            "cd".repeat(32),
-            PipelineTransactionStatus {
-                kind: "Rejected".to_owned(),
-                block_height: Some(77),
-                rejection_reason: Some(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted("missing permission".to_owned()),
-                )),
-            },
-            "global".to_owned(),
-            "state".to_owned(),
-        );
-
-        assert!(payload.summary.contains("Rejected"));
-        assert_eq!(payload.diagnostics.len(), 1);
-        assert_eq!(payload.diagnostics[0].category, "validation");
-        assert_eq!(payload.diagnostics[0].code.as_deref(), Some("validation"));
-        assert!(
-            payload.diagnostics[0]
-                .message
-                .contains("missing permission")
-        );
-        assert!(
-            payload.diagnostics[0]
-                .decoded_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("missing permission"))
-        );
-        assert!(payload.diagnostics[0].raw_reason.is_some());
+        let json = norito::json::to_json(&payload).expect("encode public status JSON");
+        for forbidden in [
+            "rejection_reason",
+            "diagnostics",
+            "trigger_completions",
+            "batch_transfer_outcomes",
+            "summary",
+            "authority",
+            "destination",
+            "amount",
+            "instructions",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "public status leaked forbidden field `{forbidden}`: {json}"
+            );
+        }
     }
 
     #[test]

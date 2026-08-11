@@ -37,9 +37,13 @@ public sealed partial class ToriiClient
         "query_projection.emitted_at_unix",
     ];
 
-    public async Task<ToriiNodeCapabilities> GetNodeCapabilitiesAsync(CancellationToken cancellationToken = default)
+    /// <summary>Reads node capabilities through exact network-bound account authentication.</summary>
+    public async Task<ToriiNodeCapabilities> GetNodeCapabilitiesAsync(
+        CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiNodeCapabilities>("/v1/node/capabilities", cancellationToken: cancellationToken);
+        var response = await GetAuthenticatedRuntimeGovernanceAsync<ToriiNodeCapabilities>(
+            "/v1/node/capabilities",
+            cancellationToken);
         ValidateNodeCapabilities(response, "node capabilities response");
         return response;
     }

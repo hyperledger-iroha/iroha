@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -40,14 +41,14 @@ public final class TransactionBuilderTests {
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
     mixedBatchBuilderAndSignerPreserveOrder();
-    transactionPayloadRejectsPaddedIdsBeforeSigning();
+    transactionPayloadRejectsPaddedAuthorityBeforeSigning();
     System.out.println("[IrohaAndroid] Transaction builder tests passed.");
   }
 
   private static void encodeAndSignWithExplicitSigner() throws Exception {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000002")
+            .setNetworkId(TestNetworkIds.fromSeed(2L))
             .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setCreationTimeMs(1_735_000_001_234L)
             .setExecutable(Executable.ivm("payload-bytes".getBytes()))
@@ -69,7 +70,7 @@ public final class TransactionBuilderTests {
         : "Fake signer should return test public key";
 
     final TransactionPayload decoded = codec.decodeTransaction(signed.encodedPayload());
-    assert decoded.chainId().equals(payload.chainId()) : "Chain must round-trip";
+    assert decoded.networkId().equals(payload.networkId()) : "NetworkId must round-trip";
     assert decoded.authority().equals(payload.authority()) : "Authority must round-trip";
     assert decoded.creationTimeMs() == payload.creationTimeMs() : "Timestamp must round-trip";
     assert Arrays.equals(
@@ -83,7 +84,7 @@ public final class TransactionBuilderTests {
   private static void encodeAndSignWithKeyManagerAlias() throws Exception {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000003")
+            .setNetworkId(TestNetworkIds.fromSeed(3L))
             .setAuthority(TestAccountIds.ed25519Authority(0x29))
             .setCreationTimeMs(1_735_000_111_000L)
             .setExecutable(Executable.ivm("alias-sign".getBytes()))
@@ -104,7 +105,7 @@ public final class TransactionBuilderTests {
         new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload());
     assert Arrays.equals(payload.executable().ivmBytes(), decoded.executable().ivmBytes())
         : "Decoded transaction must match original instructions";
-    assert decoded.chainId().equals(payload.chainId()) : "Chain must match";
+    assert decoded.networkId().equals(payload.networkId()) : "NetworkId must match";
     assert decoded.authority().equals(payload.authority()) : "Authority must match";
 
     final KeyPair keyPair =
@@ -125,7 +126,7 @@ public final class TransactionBuilderTests {
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000000")
+            .setNetworkId(TestNetworkIds.fromSeed(0L))
             .setAuthority(TestAccountIds.ed25519Authority(0x2A))
             .setExecutable(
                 Executable.instructions(
@@ -165,7 +166,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 5_000L))
-            .setChainId("00000004")
+            .setNetworkId(TestNetworkIds.fromSeed(4L))
             .setAuthority(TestAccountIds.ed25519Authority(0x2A))
             .setCreationTimeMs(1_735_000_222_000L)
             .setBatch(batch)
@@ -183,14 +184,8 @@ public final class TransactionBuilderTests {
         : "Signing must preserve mixed batch order";
   }
 
-  private static void transactionPayloadRejectsPaddedIdsBeforeSigning() {
+  private static void transactionPayloadRejectsPaddedAuthorityBeforeSigning() {
     final String authority = TestAccountIds.ed25519Authority(0x2F);
-    assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId(" 00000042"),
-        "chainId must begin and end with an ASCII alphanumeric character");
-    assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId("00000042 "),
-        "chainId must begin and end with an ASCII alphanumeric character");
     assertIllegalArgumentMessage(
         () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setAuthority(" " + authority),
         "authority must not contain surrounding whitespace");

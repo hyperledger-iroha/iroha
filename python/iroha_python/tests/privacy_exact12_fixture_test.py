@@ -9,8 +9,10 @@ from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Any, Callable, cast
 
-import iroha_python
 import pytest
+
+import iroha_python
+import iroha_python.privacy_exact12 as exact12_module
 from iroha_python.privacy_catalog import PRIVACY_PROTOCOL_IDS_V1
 from iroha_python.privacy_exact12 import (
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -54,6 +56,26 @@ def _compact(value: int) -> bytes:
         value >>= 7
     output.append(value)
     return bytes(output)
+
+
+def test_exact12_transaction_domain_requires_one_marked_network_id() -> None:
+    network_id = bytes.fromhex("a4" * 31 + "a5")
+    archive = struct.pack("<I", 0) + _compact(len(network_id)) + network_id
+    assert (
+        exact12_module._decode_network_transaction_domain_v1(archive, "transaction.domain")
+        == network_id
+    )
+
+    for retired_or_malformed in (
+        struct.pack("<I", 1),
+        struct.pack("<I", 0) + _compact(4) + b"test",
+        struct.pack("<I", 0) + _compact(32) + bytes(32),
+        struct.pack("<I", 0) + b"\xa0\x00" + network_id,
+    ):
+        with pytest.raises(PrivacyExact12FixtureErrorV1):
+            exact12_module._decode_network_transaction_domain_v1(
+                retired_or_malformed, "transaction.domain"
+            )
 
 
 def _read_compact(payload: bytes | bytearray, offset: int) -> tuple[int, int]:
@@ -216,7 +238,7 @@ def _replace_projected_statement(
         assert end == len(tagged)
         statement_fields = _fields(
             statement_variant,
-            (10, 10, 6, 9, 15, 20, 4, 8, 8, 8, 12, 13)[struct.unpack("<I", statement_tag)[0]],
+            (11, 10, 6, 9, 15, 20, 4, 8, 9, 8, 13, 13)[struct.unpack("<I", statement_tag)[0]],
         )
         mutate(statement_fields)
         variant = _encode_fields(statement_fields)
@@ -264,6 +286,41 @@ def test_checked_fixture_decodes_all_rows_and_reencodes_byte_identically() -> No
         iroha_python.decode_privacy_exact12_fixture_bundle_v1
         is decode_privacy_exact12_fixture_bundle_v1
     )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    (
+        struct.pack("<I", 0),
+        b"\x01\x00\x00\x00\x09\x08" + struct.pack("<Q", 1),
+        b"\x01\x00\x00\x00\x09\x08" + struct.pack("<Q", 0xFFFF_FFFF_FFFF_FFFF),
+    ),
+)
+def test_exact12_public_balance_scope_wire_accepts_only_canonical_usable_values(
+    scope: bytes,
+) -> None:
+    exact12_module._validate_public_balance_scope_v1(scope, "scope")
+
+
+@pytest.mark.parametrize(
+    "scope",
+    (
+        b"",
+        struct.pack("<I", 0) + b"\x00",
+        struct.pack("<I", 2),
+        struct.pack("<I", 1),
+        b"\x01\x00\x00\x00\x08\x08" + struct.pack("<Q", 1),
+        b"\x01\x00\x00\x00\x09\x08" + struct.pack("<Q", 0),
+        b"\x01\x00\x00\x00\x09\x08" + bytes(7),
+        b"\x01\x00\x00\x00\x09\x08" + bytes(9),
+        b"\x01\x00\x00\x00\x89\x00\x08" + struct.pack("<Q", 1),
+    ),
+)
+def test_exact12_public_balance_scope_wire_rejects_unknown_universal_and_alias_shapes(
+    scope: bytes,
+) -> None:
+    with pytest.raises(PrivacyExact12FixtureErrorV1, match="public balance scope"):
+        exact12_module._validate_public_balance_scope_v1(scope, "scope")
 
 
 def test_models_snapshot_mutable_inputs_and_are_immutable() -> None:
@@ -745,7 +802,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
         context_fields = _fields(statement_fields[0], 8)
         final_statement = _frame_payload(row.statement_norito, 8)
         final_variant, _, _ = _read_field(final_statement, 4)
-        final_context = _fields(_fields(final_variant, 10)[0], 8)
+        final_context = _fields(_fields(final_variant, 11)[0], 8)
         context_fields[2] = final_context[2]
         statement_fields[0] = _encode_fields(context_fields)
 
@@ -772,7 +829,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
         statement_payload = envelope_fields[9]
         statement_variant, _, end = _read_field(statement_payload, 4)
         assert end == len(statement_payload)
-        statement_fields = _fields(statement_variant, 10)
+        statement_fields = _fields(statement_variant, 11)
         context_fields = _fields(statement_fields[0], 8)
         changed = bytearray(context_fields[3])
         changed[-1] ^= 1
@@ -793,7 +850,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
     projection = _replace_projected_statement(
         row,
         lambda fields: fields.__setitem__(
-            9, _fields(_read_field(_frame_payload(row.statement_norito, 8), 4)[0], 10)[9]
+            10, _fields(_read_field(_frame_payload(row.statement_norito, 8), 4)[0], 11)[10]
         ),
     )
     _assert_row_rejected(
@@ -806,7 +863,7 @@ def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_chang
 
 @pytest.mark.parametrize(
     ("row_index", "derived_index", "field_count"),
-    ((0, 9, 10), (4, 10, 15), (10, 4, 12)),
+    ((0, 10, 11), (4, 10, 15), (10, 5, 13)),
 )
 def test_projection_zeroes_every_protocol_specific_derived_statement_field(
     row_index: int,

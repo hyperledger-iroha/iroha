@@ -92,7 +92,6 @@ async fn handler_post_transactions_batch(
                 for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
                     let accepted_tx =
                         routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                            app.chain_id.clone(),
                             app.state.clone(),
                             transaction,
                             &app.telemetry,
@@ -1085,37 +1084,20 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
 }
 
 fn pipeline_status_response(
-    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
     resolved_from: &'static str,
 ) -> PipelineTransactionStatusResponse {
-    let mut response = PipelineTransactionStatusResponse::new(
+    PipelineTransactionStatusResponse::new(
         hash.to_string(),
         PipelineTransactionStatus {
             kind: entry.kind.as_str().to_owned(),
             block_height: entry.block_height.map(NonZeroU64::get),
-            rejection_reason: entry.rejection.clone(),
         },
         scope.as_str().to_owned(),
         resolved_from.to_owned(),
-    );
-    if let Some(block_height) = entry.block_height.map(NonZeroU64::get) {
-        response.trigger_completions =
-            trigger_completion_summaries_for_entrypoint_hash(app, block_height, &hash.to_string());
-        if let Some(height) = usize::try_from(block_height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            && let Some(block) = app.kura.get_block(height)
-        {
-            let entrypoint_hash =
-                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(hash.clone()));
-            response.batch_transfer_outcomes =
-                block.batch_transfer_outcomes_for(&entrypoint_hash).to_vec();
-        }
-    }
-    response
+    )
 }
 
 fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
@@ -1306,7 +1288,6 @@ fn pipeline_status_local_entry(
 }
 
 fn pipeline_status_response_with_route(
-    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
@@ -1315,7 +1296,7 @@ fn pipeline_status_response_with_route(
     route: Option<(RoutingDecision, &'static str)>,
 ) -> Response {
     let mut response = crate::utils::respond_with_format(
-        pipeline_status_response(app, hash, entry, scope, resolved_from),
+        pipeline_status_response(hash, entry, scope, resolved_from),
         format,
     );
     if let Some((routing_decision, routed_by)) = route {
@@ -1337,6 +1318,186 @@ fn pipeline_status_error_is_not_found(error: &Error) -> bool {
             iroha_data_model::query::error::QueryExecutionFail::NotFound
         ))
     )
+}
+
+fn exact_transaction_details_query_hash(
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> Result<HashOf<TransactionEntrypoint>, Error> {
+    use iroha_data_model::query::{
+        CommittedTxFilters, QueryItemKind, QueryRequest, iter_query_inner,
+        transaction::prelude::FindTransactions,
+    };
+
+    fn exact_hash_from_predicate(
+        predicate: &iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
+    ) -> Option<HashOf<TransactionEntrypoint>> {
+        let filters = predicate.committed_tx_filters()?;
+        let entry_eq = filters.entry_eq.clone()?;
+        (filters
+            == CommittedTxFilters {
+                entry_eq: Some(entry_eq.clone()),
+                ..CommittedTxFilters::default()
+            })
+        .then_some(entry_eq)
+    }
+
+    let QueryRequest::Start(query) = request.request() else {
+        return Err(conversion_error(
+            "transaction details requires a signed FindTransactions start query".to_owned(),
+        ));
+    };
+    if query.params() != &iroha_data_model::query::parameters::QueryParams::default() {
+        return Err(conversion_error(
+            "transaction details query parameters must use their canonical defaults".to_owned(),
+        ));
+    }
+
+    let hash = if let Some(query_box) = query.query_box() {
+        let erased = iter_query_inner::<CommittedTransaction>(query_box).ok_or_else(|| {
+            conversion_error(
+                "transaction details requires the committed-transaction query type".to_owned(),
+            )
+        })?;
+        if !payload_matches_query::<FindTransactions>(erased.payload())
+            || erased.selector()
+                != &iroha_data_model::query::dsl::SelectorTuple::<CommittedTransaction>::default()
+        {
+            return Err(conversion_error(
+                "transaction details requires canonical FindTransactions without projection"
+                    .to_owned(),
+            ));
+        }
+        exact_hash_from_predicate(erased.predicate())
+    } else {
+        let Some((item_kind, predicate_bytes, selector_bytes, payload)) = query.fast_dsl_parts()
+        else {
+            return Err(conversion_error(
+                "transaction details query has no executable payload".to_owned(),
+            ));
+        };
+        if item_kind != QueryItemKind::CommittedTransaction
+            || !payload_matches_query::<FindTransactions>(payload)
+        {
+            return Err(conversion_error(
+                "transaction details requires canonical FindTransactions".to_owned(),
+            ));
+        }
+        let predicate = decode_query_payload::<
+            iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
+        >(predicate_bytes)
+        .ok_or_else(|| {
+            conversion_error("transaction details predicate is not canonical".to_owned())
+        })?;
+        let selector = decode_query_payload::<
+            iroha_data_model::query::dsl::SelectorTuple<CommittedTransaction>,
+        >(selector_bytes)
+        .ok_or_else(|| {
+            conversion_error("transaction details selector is not canonical".to_owned())
+        })?;
+        if selector
+            != iroha_data_model::query::dsl::SelectorTuple::<CommittedTransaction>::default()
+        {
+            return Err(conversion_error(
+                "transaction details query does not accept a projection".to_owned(),
+            ));
+        }
+        exact_hash_from_predicate(&predicate)
+    };
+
+    hash.ok_or_else(|| {
+        conversion_error(
+            "transaction details requires exactly one entrypoint_hash equality predicate"
+                .to_owned(),
+        )
+    })
+}
+
+fn transaction_details_operator_authority(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> bool {
+    let permission: Permission = CanReadAllLedgerData.into();
+    torii_account_has_permission(world, authority, &permission)
+}
+
+fn transaction_details_authority_is_involved(
+    authority: &AccountId,
+    transaction: &CommittedTransaction,
+) -> bool {
+    transaction.entrypoint().authority() == authority
+        || transaction
+            .result()
+            .batch_transfer_outcomes()
+            .iter()
+            .any(|outcome| {
+                outcome.asset.account() == authority || &outcome.destination == authority
+            })
+}
+
+fn pipeline_transaction_details_response(
+    app: &SharedAppState,
+    authority: &AccountId,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<PipelineTransactionDetailsResponse, Error> {
+    use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
+
+    let signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
+    let block_height = app
+        .state
+        .committed_transaction_height(&signed_hash)
+        .ok_or_else(pipeline_status_not_found_error)?;
+    let state_view = app.state.view();
+    let world = state_view.world();
+    world.account(authority).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+            "transaction-details authority `{authority}` is not a registered account"
+        )))
+    })?;
+    let is_operator = transaction_details_operator_authority(world, authority);
+
+    let mut transactions =
+        iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
+            &state_view,
+            CompoundPredicate::from_filters(CommittedTxFilters {
+                entry_eq: Some(entrypoint_hash),
+                ..CommittedTxFilters::default()
+            }),
+        )
+        .map_err(pipeline_status_projection_error)?;
+    if transactions.len() != 1 {
+        return if transactions.is_empty() {
+            Err(pipeline_status_not_found_error())
+        } else {
+            Err(pipeline_status_projection_error(format!(
+                "entrypoint hash resolved to {} committed transactions",
+                transactions.len()
+            )))
+        };
+    }
+    let transaction = transactions
+        .pop()
+        .expect("length checked before committed transaction extraction");
+    if !is_operator && !transaction_details_authority_is_involved(authority, &transaction) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "transaction details are restricted to an involved account or operator".to_owned(),
+            ),
+        ));
+    }
+
+    let block_height = u64::try_from(block_height.get())
+        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
+    let hash = signed_hash.to_string();
+    Ok(PipelineTransactionDetailsResponse {
+        trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
+            app,
+            block_height,
+            &hash,
+        ),
+        hash,
+        transaction,
+    })
 }
 
 fn pipeline_status_proxy_query(
@@ -1372,7 +1533,6 @@ fn execute_pipeline_status_local_read(
 
     if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
-            app,
             &hash,
             &entry,
             read_scope,
@@ -1501,6 +1661,36 @@ async fn handler_pipeline_transaction_status(
         let _ = hash;
         Err(pipeline_status_not_found_error())
     }
+}
+
+async fn handler_pipeline_transaction_details(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::utils::extractors::JsonOrNoritoVersioned(query): crate::utils::extractors::JsonOrNoritoVersioned<
+        SignedQuery,
+    >,
+) -> Result<Response, Error> {
+    let format =
+        match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
+            Ok(format) => format,
+            Err(response) => return Ok(response),
+        };
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        admit_signed_query_preauth(app.as_ref(), &headers, Some(remote.ip())).await?;
+    }
+
+    // Exact network, freshness, signature, and one-shot nonce checks complete before the first
+    // state or Kura access. The signed request itself binds the sole permitted entrypoint hash.
+    let verified =
+        routing::verify_signed_query_request(query, app.signed_query_admission.as_ref())?;
+    let authority = verified.authority().clone();
+    let entrypoint_hash = exact_transaction_details_query_hash(&verified)?;
+    admit_signed_query_authority(app.as_ref(), &authority).await?;
+    let _admission = acquire_signed_query_physical_admission(app.as_ref(), &verified).await?;
+    let response = pipeline_transaction_details_response(&app, &authority, entrypoint_hash)?;
+    Ok(crate::utils::respond_with_format(response, format))
 }
 
 async fn handler_trigger_completions(

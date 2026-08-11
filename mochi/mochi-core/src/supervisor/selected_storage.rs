@@ -160,15 +160,9 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
     )?;
     let config_path = immutable_peer.join("config.toml");
     validate_selected_direct_child_file(&immutable_peer, &config_path, "selected peer config")?;
-    let source = TomlSource::from_file(&config_path).map_err(|error| {
+    let config = ManagedNodeConfig::from_path(&config_path).map_err(|error| {
         SupervisorError::GenerationValidation(format!(
-            "selected peer config `{}` failed reading: {error:?}",
-            config_path.display()
-        ))
-    })?;
-    let config = actual::Root::from_toml_source(source).map_err(|error| {
-        SupervisorError::GenerationValidation(format!(
-            "selected peer config `{}` failed parsing: {error:?}",
+            "selected peer config `{}` failed loading: {error:#}",
             config_path.display()
         ))
     })?;
@@ -183,7 +177,7 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
             "selected immutable generation has no network root".to_owned(),
         )
     })?;
-    let configured_snapshot = config.snapshot.store_dir.resolve_relative_path();
+    let configured_snapshot = config.managed_paths.snapshot_store_dir.clone();
     let configured_snapshot_metadata =
         fs::symlink_metadata(&configured_snapshot).map_err(|error| {
             SupervisorError::GenerationValidation(format!(

@@ -676,9 +676,7 @@ pub async fn run_state_query(
         kind.build_request(fetch_size)
     };
 
-    let signed = request
-        .with_authority(ALICE_ID.clone())
-        .sign(&ALICE_KEYPAIR);
+    let signed = client.sign_query(request, ALICE_ID.clone(), &ALICE_KEYPAIR)?;
     let output = client.execute_query(&signed).await?;
     parse_iterable_output(kind, output)
 }
@@ -912,7 +910,8 @@ mod tests {
             then.status(200).body(encoded.clone());
         });
 
-        let client = ToriiClient::new(server.url("/")).expect("client");
+        let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
+            .expect("client");
         let page = run_state_query(client, StateQueryKind::Accounts, None, None)
             .await
             .expect("state page");
@@ -945,7 +944,8 @@ mod tests {
             then.status(200).body(encoded.clone());
         });
 
-        let client = ToriiClient::new(server.url("/")).expect("client");
+        let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
+            .expect("client");
         let page = run_state_query(client, StateQueryKind::Peers, None, None)
             .await
             .expect("state page");
@@ -972,7 +972,8 @@ mod tests {
             then.status(200).body(encoded.clone());
         });
 
-        let client = ToriiClient::new(server.url("/")).expect("client");
+        let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
+            .expect("client");
         let err = run_state_query(client, StateQueryKind::Accounts, None, None)
             .await
             .expect_err("unexpected batch kind should error");

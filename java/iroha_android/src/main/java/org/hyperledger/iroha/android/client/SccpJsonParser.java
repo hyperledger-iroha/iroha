@@ -847,12 +847,12 @@ public final class SccpJsonParser {
     final Map<String, Object> settlement = requiredObject(value, "settlement");
     exactFields(
         settlement,
-        Set.of("asset_definition_id", "custody_account_id", "payload_amount_scale"),
+        Set.of("asset_definition_id", "custody_owner", "payload_amount_scale"),
         label + ".settlement");
     if (!TAIRA_XOR_ASSET_ID.equals(requiredText(settlement, "asset_definition_id"))) {
       throw new IllegalArgumentException(label + " settlement must use canonical Taira XOR");
     }
-    requiredText(settlement, "custody_account_id");
+    requiredText(settlement, "custody_owner");
     requiredInt(settlement, "payload_amount_scale", 9, 9);
     final String lineage = routeId + '\0' + assetKey;
     return new ParsedRoute(

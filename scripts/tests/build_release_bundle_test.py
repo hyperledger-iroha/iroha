@@ -26,7 +26,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
     for name in (
-        "irohad",
+        "iroha3d",
         "sorafs_governance_dag",
         "iroha",
         "kagami",
@@ -161,7 +161,7 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
         expected_binaries = {
             f"{bundle_root}/bin/{name}"
             for name in (
-                "irohad",
+                "iroha3d",
                 "sorafs_governance_dag",
                 "iroha",
                 "kagami",

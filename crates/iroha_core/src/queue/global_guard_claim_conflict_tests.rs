@@ -153,7 +153,7 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
         .routing_plan()
         .expect("fixture binding routing plan");
     let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        fixture.state.chain_id_ref(),
+        fixture.state.network_id_ref(),
         fixture.transaction.entrypoint(),
         &routing_plan,
         fixture.binding.admission_context.clone(),

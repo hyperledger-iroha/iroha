@@ -14,9 +14,17 @@ use mv::storage::StorageReadOnly; // trait for .get()
 
 mod snapshots;
 
+fn test_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label),
+        ),
+    )
+}
+
 fn run_with_workers(
     workers: usize,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
@@ -40,8 +48,13 @@ fn run_with_workers(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query,
+        ChainId::from("chain"),
+        *network_id,
+    );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -76,7 +89,7 @@ fn run_with_workers(
 
 #[test]
 fn overlay_parallel_workers_parity() {
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"overlay-workers-parity");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId =
@@ -90,7 +103,7 @@ fn overlay_parallel_workers_parity() {
     // Build a mixed set of instruction-only transactions to exercise overlay builder
     let txs: Vec<SignedTransaction> = vec![
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -101,7 +114,7 @@ fn overlay_parallel_workers_parity() {
         )])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -112,21 +125,21 @@ fn overlay_parallel_workers_parity() {
         )])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -139,8 +152,8 @@ fn overlay_parallel_workers_parity() {
     ];
 
     // Run with workers=0 (Rayon default) and workers=2
-    let (json0, state0) = run_with_workers(0, &chain_id, txs.clone(), &alice_id, &bob_id);
-    let (json2, state2) = run_with_workers(2, &chain_id, txs, &alice_id, &bob_id);
+    let (json0, state0) = run_with_workers(0, &network_id, txs.clone(), &alice_id, &bob_id);
+    let (json2, state2) = run_with_workers(2, &network_id, txs, &alice_id, &bob_id);
 
     // Compare event JSON and balances
     assert_eq!(

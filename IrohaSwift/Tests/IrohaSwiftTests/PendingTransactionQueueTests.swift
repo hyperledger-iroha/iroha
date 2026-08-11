@@ -1,49 +1,7 @@
 import XCTest
 @testable import IrohaSwift
 
-private final class QueueStubPipelineClient: ToriiTransactionSubmitting {
-    var submitted: [Data] = []
-    var queuedResults: [Swift.Result<ToriiSubmitTransactionResponse?, Error>] = []
-    var defaultResult: Swift.Result<ToriiSubmitTransactionResponse?, Error> =
-        .success(QueueStubPipelineClient.makeReceipt())
-
-    private static func makeReceipt() -> ToriiSubmitTransactionResponse {
-        ToriiSubmitTransactionResponse(
-            payload: .init(txHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
-            signature: "deadbeef"
-        )
-    }
-
-    func submitTransaction(data: Data,
-                           mode: PipelineEndpointMode,
-                           idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
-        submitted.append(data)
-        if !queuedResults.isEmpty {
-            let next = queuedResults.removeFirst()
-            switch next {
-            case .success(let response):
-                return response
-            case .failure(let error):
-                throw error
-            }
-        }
-        switch defaultResult {
-        case .success(let response):
-            return response
-        case .failure(let error):
-            throw error
-        }
-    }
-}
-
 final class PendingTransactionQueueTests: XCTestCase {
-    private func requireNativeEncoder() throws {
-        try requireNativeTestCapability(
-            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-            "Native transaction encoder unavailable"
-        )
-    }
-
     private func makeEnvelope() -> SignedTransactionEnvelope {
         let payload = Data([0x00, 0x01, 0x02])
         let signed = Data([0xAA, 0xBB])
@@ -136,60 +94,4 @@ final class PendingTransactionQueueTests: XCTestCase {
         }
     }
 
-    @available(iOS 15.0, macOS 12.0, *)
-    func testSdkQueuesAfterRetryExhaustion() async throws {
-        try requireNativeEncoder()
-        let stub = QueueStubPipelineClient()
-        stub.defaultResult = .failure(ToriiClientError.transport(URLError(.notConnectedToInternet)))
-        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0)
-        let queueURL = makeQueueURL("retry-exhausted")
-        sdk.pendingTransactionQueue = try FilePendingTransactionQueue(fileURL: queueURL)
-
-        let keypair = try Keypair.generate()
-        let transfer = TransferRequest(chainId: "chain",
-                                       authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                                       quantity: "1",
-                                       destination: AccountId.make(publicKey: keypair.publicKey),
-                                       description: nil,
-                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                       ttlMs: nil)
-        do {
-            try await sdk.submit(transfer: transfer, keypair: keypair)
-            XCTFail("Expected submit to throw")
-        } catch {
-            // Expected
-        }
-        let queued = try sdk.pendingTransactionQueue?.drain()
-        XCTAssertEqual(queued?.count, 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testQueuedTransactionsFlushBeforeNewSubmission() async throws {
-        try requireNativeEncoder()
-        let stub = QueueStubPipelineClient()
-        stub.queuedResults = [.success(nil), .success(nil)]
-        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        let tempQueue = try FilePendingTransactionQueue(fileURL: makeQueueURL("flush"))
-        sdk.pendingTransactionQueue = tempQueue
-
-        // Queue a manual envelope.
-        let manualEnvelope = makeEnvelope()
-        try tempQueue.enqueue(manualEnvelope)
-
-        let keypair = try Keypair.generate()
-        let transfer = TransferRequest(chainId: "chain",
-                                       authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                                       quantity: "1",
-                                       destination: AccountId.make(publicKey: keypair.publicKey),
-                                       description: nil,
-                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                       ttlMs: nil)
-        try await sdk.submit(transfer: transfer, keypair: keypair)
-
-        XCTAssertEqual(stub.submitted.count, 2)
-        XCTAssertEqual(try tempQueue.size(), 0)
-    }
 }

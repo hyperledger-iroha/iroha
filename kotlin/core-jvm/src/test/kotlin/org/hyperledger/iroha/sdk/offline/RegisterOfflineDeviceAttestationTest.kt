@@ -5,6 +5,7 @@ import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.FixtureGeneratorRunner
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
@@ -30,7 +31,7 @@ class RegisterOfflineDeviceAttestationTest {
         assertEquals(5, rust.size)
         val registration = registration(rust[3])
 
-        assertEquals(21, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(22, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
         assertContentEquals(hexToBytes(rust[4]), registration.canonicalRegistrationHash())
@@ -171,7 +172,7 @@ class RegisterOfflineDeviceAttestationTest {
         }
         assertFailsWith<IllegalArgumentException> {
             RegisterOfflineDeviceAttestation(
-                "00000000",
+                TEST_NETWORK_ID,
                 accountId,
                 registration,
                 1_900_000_000_000,
@@ -182,7 +183,7 @@ class RegisterOfflineDeviceAttestationTest {
         }
         assertFailsWith<IllegalArgumentException> {
             RegisterOfflineDeviceAttestation(
-                "00000000",
+                TEST_NETWORK_ID,
                 accountId,
                 registration,
                 1_900_000_000_000,
@@ -193,7 +194,7 @@ class RegisterOfflineDeviceAttestationTest {
         }
         assertFailsWith<IllegalArgumentException> {
             RegisterOfflineDeviceAttestation(
-                "00000000",
+                TEST_NETWORK_ID,
                 accountId,
                 registration,
                 Long.MAX_VALUE - 1,
@@ -204,7 +205,7 @@ class RegisterOfflineDeviceAttestationTest {
         }
         assertFailsWith<IllegalArgumentException> {
             RegisterOfflineDeviceAttestation(
-                "00000000",
+                TEST_NETWORK_ID,
                 accountId,
                 registration,
                 registration.expiresAtMs - 1,
@@ -231,6 +232,9 @@ class RegisterOfflineDeviceAttestationTest {
     }
 
     companion object {
+        private val TEST_NETWORK_ID = NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
         private const val P256_GENERATOR =
             "04" +
                 "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296" +
@@ -239,7 +243,7 @@ class RegisterOfflineDeviceAttestationTest {
 
         private fun request(registration: DeviceAttestationRegistration) =
             RegisterOfflineDeviceAttestation(
-                chainId = "00000000",
+                networkId = TEST_NETWORK_ID,
                 authority = registration.accountId,
                 registration = registration,
                 creationTimeMs = 1_900_000_000_000,

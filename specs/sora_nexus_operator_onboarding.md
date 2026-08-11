@@ -78,11 +78,12 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 ## Step 3 — Stage configuration from templates
 1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
 2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
+   - Set each public identity explicitly and provision the matching node, SoraNet transport, and streaming private keys through the configured `*_private_key_file` paths. Those owner-held files must contain one canonical key and, on Unix, grant no group/other access. Never place production private keys in the deployment template.
+   - Mount the Kagami-produced public `genesis.expected_hash` at `/run/iroha/genesis.expected_hash` for both the validator's `genesis.expected_hash_file` and the client's `network_id_file`; never render those values independently.
    - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned. Validators must be BLS-Normal with PoPs provided in `trusted_peers_pop`; any trusted peer without a PoP is treated as network-trusted only and excluded from consensus. Configs carrying the removed `trusted_peers_bls` mapping, invalid PoPs, or PoPs for keys outside `trusted_peers` are rejected.
    - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
 3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent. The profile supplies defaults, but explicit `[sorafs.storage].enabled` and `[sorafs.discovery].discovery_enabled` values remain authoritative; disabling embedded storage does not require disabling Nexus consensus.
+4. Plan to start the node with the Sora profile flag: `iroha3d --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent. The profile supplies defaults, but explicit `[sorafs.storage].enabled` and `[sorafs.discovery].discovery_enabled` values remain authoritative; disabling embedded storage does not require disabling Nexus consensus.
 
 ## Step 4 — Align data-space metadata and routing
 1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
@@ -95,7 +96,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 ## Step 5 — Pre-flight validation
 1. Run the built-in configuration validator before joining the network:
    ```bash
-   ./bin/irohad --sora --config config/config.toml --trace-config
+   ./bin/iroha3d --sora --config config/config.toml --trace-config
    ```
    This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
 2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
@@ -125,7 +126,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 - [ ] Aggregate signature plus bundle/image hashes verified.
 - [ ] Keys, peer addresses, and Torii endpoints updated to production values.
 - [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
+- [ ] Configuration validator (`iroha3d --sora --config … --trace-config`) passes without warnings.
 - [ ] Aggregate signature, manifests, and checksums archived in the onboarding ticket and Ops notified.
 
 For broader context on Nexus migration phases and telemetry expectations, review `specs/nexus_transition_notes.md`.

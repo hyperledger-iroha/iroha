@@ -3329,12 +3329,14 @@ fn take_slice_v1<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
         PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
+    use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand_core_06::Error as RngError;
 
     use super::super::issuer::{
@@ -3573,11 +3575,15 @@ mod tests {
         [value; 32]
     }
 
+    fn network_id(value: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(digest(value)),
+        ))
+    }
+
     fn statement_context_v1() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: "bootle-lantern-holder-store-test"
-                .parse()
-                .expect("valid chain id"),
+            network_id: network_id(0x32),
             action_index: 3,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(digest(0x11)),
             parameter_id: PrivacyParameterIdV1::new(digest(0x12)),

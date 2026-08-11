@@ -31,9 +31,10 @@ public final class TransactionSubmissionCompatibilityTests {
     dataModelDriftFailsBeforeTransactionPost();
     schemaDriftFailsBeforeEntrypointPost();
     guardFetchesFreshCapabilitiesForEachSubmission();
-    retryProbesFreshCapabilitiesBeforeASecondPost();
-    queuedReplayAndLiveSubmissionEachUseFreshGuard();
-    queuedReplayDriftRetainsCurrentTransactionAndSendsNoPost();
+    redirectAndTransientStatusesNeverRedispatchSignedBytes();
+    networkFailureIsAmbiguousAndNeverRedispatchesSignedBytes();
+    configuredPendingQueueIsNeverDrainedOrReplayedImplicitly();
+    compatibilityFailureNeitherDrainsQueueNorDispatchesSignedBytes();
     System.out.println(
         "[IrohaAndroid] transaction submission compatibility tests passed.");
   }
@@ -154,37 +155,69 @@ public final class TransactionSubmissionCompatibilityTests {
         : "second submission must probe again and block its POST";
   }
 
-  private static void retryProbesFreshCapabilitiesBeforeASecondPost() {
-    final CompatibilityExecutor executor =
-        new CompatibilityExecutor(
-            Arrays.asList(
-                capabilities(4, expectedSchemaHash()),
-                capabilities(8, expectedSchemaHash())),
-            Arrays.asList(503, 202));
+  private static void redirectAndTransientStatusesNeverRedispatchSignedBytes() {
+    for (final int status : Arrays.asList(307, 308, 503)) {
+      final SignedTransaction transaction = sampleTransaction(status);
+      final CompatibilityExecutor executor =
+          new CompatibilityExecutor(
+              Collections.singletonList(capabilities(4, expectedSchemaHash())),
+              Arrays.asList(status, 202));
+      final HttpClientTransport client =
+          transport(
+              executor,
+              null,
+              RetryPolicy.builder()
+                  .setMaxAttempts(2)
+                  .setBaseDelay(Duration.ZERO)
+                  .build());
+
+      final CompletionException failure =
+          expectCompletionFailure(() -> client.submitTransaction(transaction).join());
+      assert failure.getCause() instanceof AmbiguousTransactionSubmissionException
+          : "redirect/transient response must surface an ambiguous outcome";
+      final AmbiguousTransactionSubmissionException ambiguous =
+          (AmbiguousTransactionSubmissionException) failure.getCause();
+      assert org.hyperledger.iroha.android.tx.SignedTransactionHasher.hashHex(transaction)
+          .equals(ambiguous.hashHex()) : "ambiguous outcome must carry canonical hash";
+      assert ambiguous.statusCode().isPresent()
+          && ambiguous.statusCode().getAsInt() == status : "ambiguous status must be retained";
+      assert executor.requests().equals(
+              Arrays.asList(
+                  "GET /v1/node/capabilities",
+                  "POST /v1/pipeline/transactions"))
+          : "signed bytes must be dispatched once: " + executor.requests();
+    }
+  }
+
+  private static void networkFailureIsAmbiguousAndNeverRedispatchesSignedBytes() {
+    final SignedTransaction transaction = sampleTransaction(7);
+    final NetworkFailureExecutor executor = new NetworkFailureExecutor();
     final HttpClientTransport client =
         transport(
             executor,
             null,
             RetryPolicy.builder()
-                .setMaxAttempts(2)
+                .setMaxAttempts(3)
                 .setBaseDelay(Duration.ZERO)
                 .build());
 
     final CompletionException failure =
-        expectCompletionFailure(
-            () -> client.submitTransaction(sampleTransaction(5)).join());
-
-    assert failure.getCause() instanceof ToriiDataModelMismatchException
-        : "retry must observe fresh capability drift";
-    assert executor.requests().equals(
+        expectCompletionFailure(() -> client.submitTransaction(transaction).join());
+    assert failure.getCause() instanceof AmbiguousTransactionSubmissionException
+        : "network failure must surface an ambiguous outcome";
+    final AmbiguousTransactionSubmissionException ambiguous =
+        (AmbiguousTransactionSubmissionException) failure.getCause();
+    assert org.hyperledger.iroha.android.tx.SignedTransactionHasher.hashHex(transaction)
+        .equals(ambiguous.hashHex()) : "ambiguous outcome must carry canonical hash";
+    assert !ambiguous.statusCode().isPresent() : "network failure has no HTTP status";
+    assert executor.requests.equals(
             Arrays.asList(
                 "GET /v1/node/capabilities",
-                "POST /v1/pipeline/transactions",
-                "GET /v1/node/capabilities"))
-        : "retry must probe again before a second POST";
+                "POST /v1/pipeline/transactions"))
+        : "network failure must not redispatch signed bytes";
   }
 
-  private static void queuedReplayAndLiveSubmissionEachUseFreshGuard() {
+  private static void configuredPendingQueueIsNeverDrainedOrReplayedImplicitly() {
     final MemoryPendingQueue queue = new MemoryPendingQueue();
     queue.enqueue(sampleTransaction(10));
     final CompatibilityExecutor executor =
@@ -192,17 +225,15 @@ public final class TransactionSubmissionCompatibilityTests {
 
     transport(executor, queue).submitTransaction(sampleTransaction(11)).join();
 
-    assert queue.size() == 0 : "successful replay must drain the queue";
+    assert queue.size() == 1 : "submission must not drain persisted signed bytes";
     assert executor.requests().equals(
             Arrays.asList(
                 "GET /v1/node/capabilities",
-                "POST /v1/pipeline/transactions",
-                "GET /v1/node/capabilities",
                 "POST /v1/pipeline/transactions"))
-        : "queued replay and live submit each need a fresh guard";
+        : "only the caller-supplied transaction may be dispatched";
   }
 
-  private static void queuedReplayDriftRetainsCurrentTransactionAndSendsNoPost() {
+  private static void compatibilityFailureNeitherDrainsQueueNorDispatchesSignedBytes() {
     final MemoryPendingQueue queue = new MemoryPendingQueue();
     queue.enqueue(sampleTransaction(20));
     final CompatibilityExecutor executor =
@@ -219,10 +250,8 @@ public final class TransactionSubmissionCompatibilityTests {
         : "live submission must report the fresh mismatch";
     assert queue.size() == 1 : "failed queued replay must retain its current transaction";
     assert executor.requests().equals(
-            Arrays.asList(
-                "GET /v1/node/capabilities",
-                "GET /v1/node/capabilities"))
-        : "both replay and live submission must stop before POST";
+            Collections.singletonList("GET /v1/node/capabilities"))
+        : "compatibility failure must stop before POST";
   }
 
   private static HttpClientTransport transport(
@@ -248,7 +277,8 @@ public final class TransactionSubmissionCompatibilityTests {
         TransactionPayload.builder()
             .setFeePayment(
                 FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", seed))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(seed))
             .setAuthority(TestAccountIds.ed25519Authority(0x37))
             .setCreationTimeMs(1_700_000_000_000L + seed)
             .setInstructionBytes(new byte[] {(byte) seed, (byte) (seed + 1)})
@@ -353,6 +383,29 @@ public final class TransactionSubmissionCompatibilityTests {
 
     private List<String> requests() {
       return requests;
+    }
+  }
+
+  private static final class NetworkFailureExecutor
+      implements HttpTransportExecutor {
+    private final List<String> requests = new ArrayList<>();
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(
+        final TransportRequest request) {
+      requests.add(request.method() + " " + request.uri().getPath());
+      if ("GET".equals(request.method())
+          && request.uri().getPath().endsWith("/v1/node/capabilities")) {
+        return CompletableFuture.completedFuture(
+            new TransportResponse(
+                200,
+                capabilities(4, expectedSchemaHash()).getBytes(StandardCharsets.UTF_8),
+                "",
+                Collections.emptyMap()));
+      }
+      final CompletableFuture<TransportResponse> failed = new CompletableFuture<>();
+      failed.completeExceptionally(new RuntimeException("simulated network failure"));
+      return failed;
     }
   }
 

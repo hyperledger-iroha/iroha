@@ -255,8 +255,8 @@ _SERVE_TERMINAL_EFFECT_CONTEXT = (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
             "fully_authenticate_persisted_certified_serve_request",
             (),
-            "verify_quorum_certificate_with_validator_pops(",
-            "verify_quorum_certificate(",
+            "authenticate_certified_body_request_with_validator_pops(",
+            "authenticate_certified_body_request(",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),

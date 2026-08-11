@@ -10,6 +10,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, StateTransaction},
 };
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::Account,
     asset::{AssetDefinition, AssetId},
@@ -24,14 +25,18 @@ use iroha_data_model::{
         bridge::{
             ApplySccpRouteGovernance, SccpAdvanceLaneTrustAnchorV1,
             SccpInitializeLaneTrustAnchorV1, SccpRegisterRouteV1, SccpRouteGovernanceActionV1,
-            SccpSetRouteActivationV1, SccpSwitchRouteRevisionV1,
+            SccpRouteGovernanceAnchorV1, SccpSetRouteActivationV1, SccpSwitchRouteRevisionV1,
         },
+        governance::{EnactSccpRouteGovernance, ProposeSccpRouteGovernance, VotingMode},
     },
     permission::Permission,
 };
-use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
+use iroha_executor_data_model::permission::{
+    governance::CanEnactGovernance, sccp::CanProposeSccpRouteGovernance,
+};
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_samples::ALICE_ID;
+use mv::storage::StorageReadOnly;
 
 #[path = "common/world_fixture.rs"]
 mod test_world;
@@ -137,13 +142,18 @@ fn native_anchor() -> SccpNativeTrustAnchorV1 {
 }
 
 fn grant_governance_permission(stx: &mut StateTransaction<'_, '_>) {
-    Grant::account_permission(Permission::from(CanManageSccpGovernance), ALICE_ID.clone())
-        .execute(&ALICE_ID, stx)
-        .expect("grant exact SCCP governance permission");
+    for permission in [
+        Permission::from(CanProposeSccpRouteGovernance),
+        Permission::from(CanEnactGovernance),
+    ] {
+        Grant::account_permission(permission, ALICE_ID.clone())
+            .execute(&ALICE_ID, stx)
+            .expect("grant exact SCCP referendum permission");
+    }
 }
 
 fn configure_taira(stx: &mut StateTransaction<'_, '_>) {
-    stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+    stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 }
 
 fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
@@ -158,7 +168,7 @@ fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &Sc
 }
 
 fn register_custody_account(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
-    Register::account(Account::new(route.settlement.custody_account_id.clone()))
+    Register::account(Account::new(route.settlement.custody_owner.clone()))
         .execute(&ALICE_ID, stx)
         .expect("register exact SCCP custody account");
 }
@@ -168,7 +178,7 @@ fn materialize_custody_asset(stx: &mut StateTransaction<'_, '_>, route: &SccpGov
         1_u64,
         AssetId::new(
             route.settlement.asset_definition_id.clone(),
-            route.settlement.custody_account_id.clone(),
+            route.settlement.custody_owner.clone(),
         ),
     )
     .execute(&ALICE_ID, stx)
@@ -184,8 +194,75 @@ fn register_route_resources(stx: &mut StateTransaction<'_, '_>, route: &SccpGove
 fn execute_governance(
     stx: &mut StateTransaction<'_, '_>,
     action: SccpRouteGovernanceActionV1,
-) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
-    ApplySccpRouteGovernance::new(action).execute(&ALICE_ID, stx)
+) -> Result<EnactSccpRouteGovernance, iroha_data_model::isi::error::InstructionExecutionError> {
+    let anchor = SccpRouteGovernanceAnchorV1 {
+        network_id: stx.network_id,
+        action,
+    };
+    ProposeSccpRouteGovernance {
+        anchor: anchor.clone(),
+        window: None,
+        mode: Some(VotingMode::Plain),
+    }
+    .execute(&ALICE_ID, stx)?;
+    let proposal_id = stx
+        .world
+        .governance_proposals()
+        .iter()
+        .find_map(|(id, proposal)| match &proposal.kind {
+            iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(payload)
+                if payload.anchor.as_ref() == &anchor =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("proposed SCCP anchor must be retained");
+    let referendum_id = hex::encode(proposal_id);
+    let referendum = *stx
+        .world
+        .governance_referenda()
+        .get(&referendum_id)
+        .expect("SCCP proposal must create a referendum");
+    {
+        let mut proposals = stx.world.governance_proposals_mut();
+        let proposal = proposals
+            .get_mut(&proposal_id)
+            .expect("SCCP proposal record must exist");
+        proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;
+        proposal.finalization_evidence = Some(
+            iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+                proposal_id,
+                referendum_id: proposal_id,
+                finalized_at_height: 0,
+                mode: VotingMode::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+        );
+    }
+    stx.world.governance_referenda_mut().insert(
+        referendum_id,
+        iroha_core::state::GovernanceReferendumRecord {
+            status: iroha_core::state::GovernanceReferendumStatus::Closed,
+            ..referendum
+        },
+    );
+    let enactment = EnactSccpRouteGovernance {
+        referendum_id: proposal_id,
+        anchor,
+        at_window: iroha_data_model::governance::types::AtWindow {
+            lower: referendum.h_start,
+            upper: referendum.h_end,
+        },
+    };
+    enactment.clone().execute(&ALICE_ID, stx)?;
+    Ok(enactment)
 }
 
 fn register_action(
@@ -240,6 +317,56 @@ fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
 }
 
 #[test]
+fn direct_sccp_route_governance_is_always_rejected() {
+    let state = test_state();
+    let mut block = state.block(test_header());
+    let mut stx = block.transaction();
+    let error =
+        ApplySccpRouteGovernance::new(register_action(staged_route(), Some(native_anchor())))
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("direct SCCP route mutation must remain closed");
+    assert!(format!("{error:?}").contains("finalized threshold referendum"));
+}
+
+#[test]
+fn typed_sccp_enactment_rejects_wrong_preimage_network_and_replay() {
+    let state = test_state();
+    let mut block = state.block(test_header());
+    let mut stx = block.transaction();
+    configure_taira(&mut stx);
+    grant_governance_permission(&mut stx);
+    let route = staged_route();
+    let key = route.key();
+    register_route_resources(&mut stx, &route);
+
+    let enactment = execute_governance(&mut stx, register_action(route, Some(native_anchor())))
+        .expect("exact typed SCCP enactment must apply once");
+
+    let replay = enactment
+        .clone()
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("SCCP enactment must be one-shot");
+    assert!(format!("{replay:?}").contains("cannot be replayed"));
+
+    let mut wrong_action = enactment.clone();
+    wrong_action.anchor.action = SccpRouteGovernanceActionV1::Remove(key);
+    let wrong_action = wrong_action
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("an approved referendum id must not authorize another action preimage");
+    assert!(format!("{wrong_action:?}").contains("does not derive"));
+
+    let mut wrong_network = enactment;
+    wrong_network.anchor.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+    );
+    assert_ne!(wrong_network.anchor.network_id, stx.network_id);
+    let wrong_network = wrong_network
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("an SCCP approval must not replay on another exact network");
+    assert!(format!("{wrong_network:?}").contains("different exact NetworkId"));
+}
+
+#[test]
 fn route_registration_requires_permission_and_complete_resources() {
     let state = test_state();
     let mut block = state.block(test_header());
@@ -253,7 +380,7 @@ fn route_registration_requires_permission_and_complete_resources() {
         let before = denied.sccp_registry.revision();
         let error = execute_governance(&mut denied, action.clone())
             .expect_err("an unprivileged account must not register an SCCP route");
-        assert!(format!("{error:?}").contains("CanManageSccpGovernance"));
+        assert!(format!("{error:?}").contains("CanProposeSccpRouteGovernance"));
         assert_eq!(denied.sccp_registry.revision(), before);
         assert!(denied.sccp_registry.route(&key).is_none());
     }
@@ -270,19 +397,12 @@ fn route_registration_requires_permission_and_complete_resources() {
 
     register_settlement_definition(&mut stx, &route);
     let error = execute_governance(&mut stx, action.clone())
-        .expect_err("a route must not register before its custody account exists");
-    assert!(format!("{error:?}").contains("custody account is not registered"));
+        .expect_err("a route must not register before its custody owner exists");
+    assert!(format!("{error:?}").contains("custody owner is not registered"));
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&key).is_none());
 
     register_custody_account(&mut stx, &route);
-    let error = execute_governance(&mut stx, action.clone())
-        .expect_err("a route must not register before its custody asset is materialized");
-    assert!(format!("{error:?}").contains("custody asset account must exist"));
-    assert_eq!(stx.sccp_registry.revision(), before);
-    assert!(stx.sccp_registry.route(&key).is_none());
-
-    materialize_custody_asset(&mut stx, &route);
     execute_governance(&mut stx, action).expect("complete exact route registration");
     assert_ne!(stx.sccp_registry.revision(), before);
     assert_eq!(

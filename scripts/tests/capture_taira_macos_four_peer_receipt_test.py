@@ -58,7 +58,7 @@ def running_supervisor(tmp_path: Path) -> tuple[capture.RunningSupervisor, int, 
     pid_file.write_text("222\n", encoding="ascii")
     pid_file.chmod(0o600)
     process = FakeProcess()
-    child_argv = ("/installed/irohad", "--sora", "--config", "/bundle/config.toml")
+    child_argv = ("/installed/iroha3d", "--sora", "--config", "/bundle/config.toml")
     item = capture.RunningSupervisor(
         peer=SimpleNamespace(label="taira-validator-1"),
         process=process,  # type: ignore[arg-type]
@@ -147,7 +147,7 @@ def test_restart_rejects_process_replacement_after_child_inventory_check(
         initial.pid,
         initial.ppid,
         initial.uid,
-        ("/installed/irohad", "--sora", "--config", "/attacker/config.toml"),
+        ("/installed/iroha3d", "--sora", "--config", "/attacker/config.toml"),
     )
 
     with pytest.raises(capture.MacosFourPeerCaptureError, match="changed"):

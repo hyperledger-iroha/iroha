@@ -196,7 +196,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
+        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -979,8 +979,8 @@ def make_prebuilt_binary_bundle(
     release.mkdir(parents=True)
     message_control_release.mkdir(parents=True)
     binary_specs = (
-        ("irohad", "release/irohad"),
-        ("irohad_message_control", "message-control/release/irohad"),
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     )
@@ -2151,9 +2151,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256="
                     f"{prebuilt_manifest_sha256} "
                     "TEST_NETWORK_BIN_IROHAD="
-                    f"{seed_program_target / 'release' / 'irohad'} "
+                    f"{seed_program_target / 'release' / 'iroha3d'} "
                     "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-                    f"{seed_program_target / 'message-control' / 'release' / 'irohad'} "
+                    f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
                     f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
                     f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
                     "CARGO_NET_OFFLINE=true "
@@ -2800,7 +2800,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
+        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -2959,10 +2959,10 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         }
         for (role, relative), path in zip(
             (
-                ("irohad", "release/irohad"),
+                ("irohad", "release/iroha3d"),
                 (
                     "irohad_message_control",
-                    "message-control/release/irohad",
+                    "message-control/release/iroha3d",
                 ),
                 ("iroha", "release/iroha"),
                 ("kagami", "release/kagami"),
@@ -5587,10 +5587,7 @@ def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
     writer = fixture_writer(tmp_path)
     release_root = evidence["release_root"]
     assert isinstance(release_root, Path)
-    source = (
-        release_root
-        / "python/iroha_python/tests/client_sumeragi_v2_status_test.py"
-    )
+    source = release_root / "ci/run_sumeragi_v2_sdk_diagnostics.sh"
     source.write_bytes(source.read_bytes() + b"\n# forged post-harness source drift\n")
 
     result = run_writer(evidence, tmp_path / "receipt.json", writer)
@@ -5734,7 +5731,7 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
         ),
         (
             r"TEST_NETWORK_BIN_IROHAD=[^ ]+",
-            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-irohad",
+            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-iroha3d",
         ),
     ),
 )

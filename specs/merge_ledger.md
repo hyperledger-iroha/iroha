@@ -36,7 +36,8 @@ every accepted encoded form:
    digest before exposing a signature. Restart cannot erase or change that
    decision.
 5. A merge QC authorizes exactly one global carrier height, parent hash, view,
-   chain, ordered roster, candidate, lane binding set, and execution result.
+   exact network, ordered roster, candidate, lane binding set, and execution
+   result.
 6. The full entry is hash addressed. The globally ordered block contains a
    bounded compact reference, not the multi-megabyte body.
 7. WSV stages the resolved entry on a pristine block overlay before lifecycle,
@@ -71,7 +72,7 @@ dataspace, and view. Each `MergeLaneExecution` embeds:
 - the exact framed producer-authenticated source bundle and its hash;
 - the origin proposal and the current quorum-authorized proposal;
 - availability-backed prepare and commit QCs plus signer proofs of possession;
-- chain, epoch, payload, lane, dataspace, incarnation, and activation bindings;
+- exact `NetworkId`, epoch, payload, lane, dataspace, incarnation, and activation bindings;
 - exact entrypoints, queue reservation keys, routing plans, and Native AMX
   receipts;
 - deterministic results and result hashes; and
@@ -115,8 +116,9 @@ signature.
 A drain candidate is certificate-only: it contains neither an execution batch
 nor relay snapshots. The certificate body repeats the exact committed close
 intent and final `(lane height, descriptor hash)` frontier. The intent binds
-the chain, lane, dataspace, incarnation, close height, initial merged frontier,
-and the exact ordered historical lane committee with its canonical quorum.
+the exact genesis-derived `NetworkId`, lane, dataspace, incarnation, close
+height, initial merged frontier, and the exact ordered historical lane committee
+with its canonical quorum.
 Each selected signer supplies a BLS proof of possession, and the aggregate
 signature covers the complete body.
 
@@ -173,7 +175,7 @@ The global commit topology determines the round leader and the ordered merge
 validator set. The signed payload is the canonical Norito encoding of:
 
 ```text
-chain_id_digest
+network_id
 validator_set_hash_version
 validator_set_hash
 view
@@ -190,7 +192,9 @@ lane_drain_certificates
 global_state_root
 ```
 
-It is domain separated by `iroha:merge:qc:v1\0` and the configured chain ID.
+`network_id` is the exact genesis-header-derived `NetworkId`, not a digest of
+the human-readable chain label. The encoded payload is domain separated by
+`iroha:merge:qc:v2\0`.
 The resulting digest is stored in `MergeQuorumCertificate.message_digest`.
 The QC also embeds the exact historical roster, canonical LSB-first signer
 bitmap, ordered signer PoPs, and aggregate BLS-normal signature. Validation

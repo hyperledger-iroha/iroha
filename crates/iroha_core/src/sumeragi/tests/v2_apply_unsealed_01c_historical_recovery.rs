@@ -63,15 +63,13 @@ v2_apply_test!(
         };
         let participant_domains = (0..2)
             .map(|index| {
-                DomainId::try_new(
-                    format!("nativeparticipant{index}"),
-                    "independent-dataspace",
-                )
-                .expect("valid grouped Native participant domain")
+                DomainId::try_new(format!("nativeparticipant{index}"), "independent-dataspace")
+                    .expect("valid grouped Native participant domain")
             })
             .collect::<Vec<_>>();
-        let participant_metadata_key: iroha_data_model::name::Name =
-            "historical-application".parse().expect("valid metadata key");
+        let participant_metadata_key: iroha_data_model::name::Name = "historical-application"
+            .parse()
+            .expect("valid metadata key");
         let participant_metadata_is_committed = || {
             let view = fixture.state.view();
             participant_domains
@@ -137,7 +135,11 @@ v2_apply_test!(
         let native_receipts = payload
             .native_amx_receipts
             .iter()
-            .map(|receipt| receipt.as_ref().expect("Native source carries a V2 receipt"))
+            .map(|receipt| {
+                receipt
+                    .as_ref()
+                    .expect("Native source carries a V2 receipt")
+            })
             .collect::<Vec<_>>();
         assert_eq!(native_receipts.len(), 2);
         assert_eq!(
@@ -225,7 +227,7 @@ v2_apply_test!(
             .expect("install historical autonomous end-to-end lane marker");
         let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
             &payload,
-            payload.chain_id_hash,
+            payload.network_id,
             payload.epoch,
         )
         .expect("encode historical autonomous end-to-end envelope");
@@ -316,8 +318,7 @@ v2_apply_test!(
         assert_eq!(install.payload.reservation_keys, expected_reservation_keys);
         assert_eq!(install.payload.routing_plans, expected_routing_plans);
         assert_eq!(
-            install.payload.native_amx_receipts,
-            payload.native_amx_receipts,
+            install.payload.native_amx_receipts, payload.native_amx_receipts,
             "historical recovery must retain the exact Native receipt bytes"
         );
         assert_eq!(
@@ -365,19 +366,19 @@ v2_apply_test!(
             panic!("installed historical autonomous recovery must make ownership ready");
         };
         assert_eq!(
-                apply_lane_reservation_reconciliation_plan(
-                    fixture.state.as_ref(),
-                    queue.as_ref(),
-                    fixture.kura.as_ref(),
-                    plan,
-                )
-                .expect("publish exact historical autonomous reservation reconciliation"),
-                LaneReservationReconciliationSummary {
-                    recovered: expected_reservation_keys.len(),
-                    retained_historical_recovery: expected_reservation_keys.len(),
-                    ..LaneReservationReconciliationSummary::default()
-                }
-            );
+            apply_lane_reservation_reconciliation_plan(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                plan,
+            )
+            .expect("publish exact historical autonomous reservation reconciliation"),
+            LaneReservationReconciliationSummary {
+                recovered: expected_reservation_keys.len(),
+                retained_historical_recovery: expected_reservation_keys.len(),
+                ..LaneReservationReconciliationSummary::default()
+            }
+        );
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
         let payload_row = diagnostic_at(
             &queue,
@@ -443,10 +444,7 @@ v2_apply_test!(
         .expect("hydrate the historical autonomous recovery in live lane work");
         let lifecycle_generation = fixture
             .kura
-            .claim_autonomous_lifecycle_process_generation(
-                install.payload.chain_id_hash,
-                &local_peer,
-            )
+            .claim_autonomous_lifecycle_process_generation(install.payload.network_id, &local_peer)
             .expect("reuse historical autonomous lifecycle process generation");
         assert_eq!(
             install_live_lifecycle_cursor_for_apply_test(
@@ -464,7 +462,7 @@ v2_apply_test!(
         let availability_body = crate::lane_consensus::lane_payload_availability_body(
             &install.payload,
             &anchored_proposal,
-            install.payload.chain_id_hash,
+            install.payload.network_id,
             install.payload.epoch,
         )
         .expect("build exact historical autonomous READY body");
@@ -554,7 +552,7 @@ v2_apply_test!(
             .durable_autonomous_lane_merge_source(
                 origin_descriptor.lane_id,
                 origin_descriptor.lane_block_height,
-                install.payload.chain_id_hash,
+                install.payload.network_id,
                 install.payload.epoch,
             )
             .expect("read the complete durable autonomous merge source");
@@ -583,7 +581,7 @@ v2_apply_test!(
         assert_eq!(
             Kura::decode_autonomous_lane_merge_bundle(
                 &source.source_bundle,
-                install.payload.chain_id_hash,
+                install.payload.network_id,
                 install.payload.epoch,
             )
             .expect("decode the exact durable autonomous merge source"),
@@ -610,19 +608,18 @@ v2_apply_test!(
                 .expect("historical Native source retains every receipt");
             let mut source_id = [0_u8; Hash::LENGTH];
             source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
-            let expected_v2_context =
-                crate::block::expected_native_amx_v2_context_from_receipt(
-                    receipt,
-                    install.payload.epoch,
-                )
-                .expect("derive historical Native receipt context");
+            let expected_v2_context = crate::block::expected_native_amx_v2_context_from_receipt(
+                receipt,
+                install.payload.epoch,
+            )
+            .expect("derive historical Native receipt context");
             crate::block::validate_native_amx_receipt_against_plan(
                 receipt,
                 &source.bundle.executable_payload().origin_proposal,
                 entrypoint.hash(),
                 routing_plan,
                 source_id,
-                install.payload.chain_id_hash,
+                install.payload.network_id,
                 &nexus.dataspace_catalog,
                 &state_view,
                 Some(expected_v2_context),
@@ -662,8 +659,7 @@ v2_apply_test!(
         assert_eq!(execution.reservation_keys, expected_reservation_bytes);
         assert_eq!(execution.routing_plans, expected_routing_bytes);
         assert_eq!(
-            execution.native_amx_receipts,
-            install.payload.native_amx_receipts,
+            execution.native_amx_receipts, install.payload.native_amx_receipts,
             "merge execution must retain each production Native receipt unchanged"
         );
         assert_eq!(
@@ -701,7 +697,7 @@ v2_apply_test!(
             .collect::<Vec<_>>();
         let validator_set_hash = HashOf::new(&validator_set);
         let merge_digest = crate::merge::merge_qc_message_digest(
-            &active_context.context().chain_id,
+            &active_context.context().network_id,
             &candidate,
             VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
@@ -734,7 +730,7 @@ v2_apply_test!(
             candidate.epoch_id,
             candidate.carrier_height,
             candidate.carrier_parent_hash,
-            crate::merge::merge_chain_id_digest(&active_context.context().chain_id),
+            active_context.context().network_id,
             VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
             validator_set,
@@ -774,7 +770,6 @@ v2_apply_test!(
             Arc::clone(&fixture.kura),
             None,
             None,
-            fixture.service.chain_id.clone(),
             fixture.service.block_cadence,
             fixture.service.genesis_account.clone(),
             events_sender.clone(),
@@ -917,9 +912,7 @@ v2_apply_test!(
         let pre_live_state_hash =
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let pre_live_merge_ledger = fixture.state.merge_ledger.snapshot();
-        fixture
-            .kura
-            .fail_next_native_amx_prepublication_for_tests();
+        fixture.kura.fail_next_native_amx_prepublication_for_tests();
         let error = service
             .execute(active_context.context(), &mut body_store, &task)
             .expect_err("inject the exact live Native prepublication crash boundary");
@@ -1008,28 +1001,29 @@ v2_apply_test!(
             .expect("derive exact staged Native application manifest");
         assert_eq!(native_amx_manifest.count(), 1);
         let native_entry = &native_amx_manifest.entries()[0];
-        assert_eq!(native_entry.participant_proposal.descriptor.proposal_height, 2);
+        assert_eq!(
+            native_entry.participant_proposal.descriptor.proposal_height,
+            2
+        );
         assert_eq!(native_entry.leaf.application_block_height, 3);
-        assert!(native_entry
-            .participant_settlement
-            .receipts
-            .iter()
-            .all(|receipt| receipt.timestamp_ms == 2));
+        assert!(
+            native_entry
+                .participant_settlement
+                .receipts
+                .iter()
+                .all(|receipt| receipt.timestamp_ms == 2)
+        );
         assert_eq!(native_entry.leaf.members.len(), 2);
-        let native_amx_frontiers =
-            State::native_amx_participant_frontier_markers_and_merge_entry(
-                durable_carrier.as_ref(),
-                Some(&entry),
-            )
-            .expect("derive exact staged Native State frontier");
+        let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
+            durable_carrier.as_ref(),
+            Some(&entry),
+        )
+        .expect("derive exact staged Native State frontier");
         assert_eq!(native_amx_frontiers.len(), 1);
         assert_eq!(native_amx_frontiers[0].source_count, 2);
         let missing_live_witness = fixture
             .kura
-            .prepublish_native_amx_participant_application_evidence(
-                durable_carrier.as_ref(),
-                None,
-            )
+            .prepublish_native_amx_participant_application_evidence(durable_carrier.as_ref(), None)
             .expect_err("live merge prepublication requires its exact staged witness");
         assert!(
             missing_live_witness
@@ -1180,9 +1174,8 @@ v2_apply_test!(
             )
             .expect("read structural Native participant receipt");
         assert_eq!(structural_native_receipt, native_receipt);
-        let structural_native_receipt_bytes =
-            norito::encode_canonical(&structural_native_receipt)
-                .expect("encode exact structural Native receipt");
+        let structural_native_receipt_bytes = norito::encode_canonical(&structural_native_receipt)
+            .expect("encode exact structural Native receipt");
         let pre_startup_state_hash =
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
@@ -1342,7 +1335,10 @@ v2_apply_test!(
             pre_startup_state_hash,
             "startup evidence repair must not mutate canonical WSV"
         );
-        assert_eq!(fixture.state.merge_ledger.snapshot(), pre_startup_merge_ledger);
+        assert_eq!(
+            fixture.state.merge_ledger.snapshot(),
+            pre_startup_merge_ledger
+        );
         assert_eq!(autonomous_balance(), pre_startup_balance);
         assert!(participant_metadata_is_committed());
         assert!(

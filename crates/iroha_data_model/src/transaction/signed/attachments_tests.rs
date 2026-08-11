@@ -4,7 +4,7 @@ mod attachments_tests {
 
     #[test]
     fn signed_tx_with_attachments_roundtrip() {
-        let chain: ChainId = "test-chain".parse().unwrap();
+        let network_id = test_network_id(0x2E);
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -21,7 +21,7 @@ mod attachments_tests {
         .expect("one attachment is a valid bounded proof list");
 
         let tx: SignedTransaction = TransactionBuilder::new(
-            chain,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

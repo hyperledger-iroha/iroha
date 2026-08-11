@@ -60,10 +60,23 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
 
     /// Parse the value belonging to the current key.
     pub fn parse_value<T: JsonDeserialize>(&mut self) -> Result<T, Error> {
+        self.parse_value_with_parser(T::json_deserialize)
+    }
+
+    /// Parse the pending value directly from the underlying parser.
+    ///
+    /// The closure must consume exactly one JSON value. Object delimiter
+    /// handling remains owned by this visitor, so custom seeded decoders can
+    /// stream into typed owners without constructing an intermediate
+    /// [`crate::json::Value`].
+    pub fn parse_value_with_parser<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Parser<'a>) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         if !self.value_pending {
             return Err(Error::Message("no pending value for current key".into()));
         }
-        let value = T::json_deserialize(self.parser)?;
+        let value = parse(self.parser)?;
         self.finish_value()?;
         Ok(value)
     }

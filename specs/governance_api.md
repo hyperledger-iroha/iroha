@@ -24,8 +24,29 @@ Overview
   - `payload_hex`: Norito payload bytes (hex)
 - Governance endpoints do not server-sign and their request types have no
   private-key fields. Clients assemble a `SignedTransaction` using their
-  authority and chain id, then sign locally and POST to
+  authority and exact genesis-derived `NetworkId`, then sign locally and POST to
   `/v1/pipeline/transactions`.
+- Runtime/governance routes that read committed state, derive a principal-bound
+  draft, or perform bounded proof work require canonical account request
+  authentication. The signature commits the exact genesis-derived `NetworkId`,
+  HTTP method, origin-form URI (including the query), bounded raw body, timestamp,
+  and one-shot nonce. Torii verifies the account against committed state before
+  path/query/body extraction or computation, rejects wrong-network signatures
+  and nonce replay, and serves successful authenticated responses with
+  `Cache-Control: private, no-store` and the canonical-auth `Vary` fields.
+  Catalog paths use strict normalization: clients sign and send the declared path
+  exactly, without a trailing-slash redirect.
+- This boundary covers the ZK roots, Merkle-path and vote-tally reads; active ABI,
+  runtime-metrics, node/privacy-capability and projection-checkpoint reads; the
+  Ministry draft/read routes; governance proposal, capability, citizen, lock,
+  referendum, tally, protected-namespace, unlock, governed-contract, enactment,
+  and council reads/drafts; and all typed validation-fee proof/proposal routes.
+  The Ministry agenda `authority`, citizenship-draft `owner`, and validation-fee
+  PLAIN-ballot-draft `owner` must equal the verified account before state access.
+  Operator and protocol-handshake routes retain their stronger dedicated
+  boundaries. Only the fixed ABI-v1 hash calculator and the state-independent
+  referendum-finalize instruction calculator remain public in this audited
+  route family.
 - SDK coverage:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
@@ -69,9 +90,9 @@ Modified`.
 Endpoints
 
 - GET `/v1/gov/capabilities`
-  - Public, unsigned readiness projection. Returns schema
-    `iroha.governance.capabilities.v1`, version `1`, the exact chain/genesis
-    binding, current height, ABI/data-model versions, configured PLAIN voting
+  - Exact-network account-authenticated readiness projection. Returns schema
+    `iroha.governance.capabilities.v1`, version `1`, one mandatory typed
+    `network_id`, current height, ABI/data-model versions, configured PLAIN voting
     and turnout/window parameters, all seven configured Parliament body
     targets, supported proposal kinds, and supported routes.
   - Configured body sizes are targets, not a minimum citizen count. Each
@@ -215,7 +236,7 @@ Code Size Cap
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
+  - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing
     lock’s amount or expiry. The `owner` must equal the transaction authority.
@@ -230,6 +251,9 @@ Code Size Cap
     `amount` uses the same
     canonical Kotodama V1 `Quantity` grammar as ZK lock hints, while
     `duration_blocks` is a canonical decimal string in `0..=u64::MAX`.
+    Torii verifies a canonical exact-network account signature over the bounded
+    raw body before JSON decoding, requires its account to equal `authority`,
+    and rejects redirects/replays. `chain_id` and `genesis_hash` are retired.
 
 - POST `/v1/gov/finalize`
   - Strict request: { "referendum_id": "…64hex", "proposal_id": "…same 64hex" }
@@ -280,7 +304,7 @@ Code Size Cap
     a roster by scanning account assets.
 
 - POST `/v1/gov/parliament/ballots`
-  - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "policy-jury", "decision": "approve|reject|abstain" }
+  - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "proposal_id": "<hex32>", "body": "policy-jury", "decision": "approve|reject|abstain" }
   - `body` uses the exact canonical kebab-case Parliament body label.
   - `decision` uses those exact lowercase spellings; capitalized aliases and
     surrounding whitespace are rejected.
@@ -409,7 +433,7 @@ CLI Helpers
   - Submits the canonical flat ZK V1 envelope request. It validates canonical
     I105 account ids, canonicalizes 32-byte nullifier hints, and merges the
     closed optional hint set from `--public <path>` into the request.
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, exact `network_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
@@ -429,7 +453,7 @@ Unlock Sweep (Operator/Audit)
   - Request (v1-style DTO):
     {
       "authority": "<i105-account-id>",
-      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "network_id": "hash:<64-uppercase-hex>#<CRC16>",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
@@ -442,9 +466,13 @@ Unlock Sweep (Operator/Audit)
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes:
-    - `authority`, `chain_id`, `election_id`, and `backend` are exact
-      non-empty tokens; whitespace/control variants are rejected rather than
-      trimmed. `envelope_b64` must be canonical, non-empty standard base64.
+    - `network_id` is the mandatory typed canonical hash of the genesis header.
+      `authority`, `election_id`, and `backend` are exact non-empty tokens;
+      whitespace/control variants are rejected rather than trimmed.
+      `envelope_b64` must be canonical, non-empty standard base64.
+    - The bounded raw request is exact-network account-authenticated before DTO
+      decoding; the authenticated account must equal `authority`. Legacy
+      `chain_id`/`genesis_hash` keys and label-based signatures are rejected.
     - `amount` is an exact canonical non-negative Kotodama V1 `Quantity`
       string. Fractional values through scale 28 are supported; JSON numbers,
       signed/trimmed spellings, leading zeroes, and redundant fractional zeroes
@@ -462,7 +490,7 @@ Unlock Sweep (Operator/Audit)
   - Request:
     {
       "authority": "<i105-account-id>",
-      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "network_id": "hash:<64-uppercase-hex>#<CRC16>",
       "election_id": "ref-1",
       "ballot": {
         "backend": "halo2/ipa",

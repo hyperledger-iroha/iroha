@@ -26,7 +26,7 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
 ## FASTPQ production prover
 
 - Production binaries initialise the Stage 6 backend via `fastpq_prover::Prover::canonical`; the deterministic mock has been removed, so all builds ship the production prover by default.【crates/fastpq_prover/src/proof.rs:126】
-- Execution mode overrides (`zk.fastpq.execution_mode`, `irohad --fastpq-execution-mode`) let operators pin CPU/GPU deterministically while the startup hook logs the resolved backend and increments `fastpq_execution_mode_total{requested,resolved,backend}` for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
+- Execution mode overrides (`zk.fastpq.execution_mode`, `iroha3d --fastpq-execution-mode`) let operators pin CPU/GPU deterministically while the startup hook logs the resolved backend and increments `fastpq_execution_mode_total{requested,resolved,backend}` for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
 - Dashboards should ingest the counter above and alert on unexpected backend labels or mode downgrades to ensure cluster parity before enabling GPU acceleration globally.
 
 ## Quick checklist

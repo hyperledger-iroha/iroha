@@ -1,15 +1,224 @@
-use std::marker::PhantomData;
+use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 
-use norito::codec::DecodeAll;
-use norito::json::{self, JsonDeserialize};
+use norito::codec::{DecodeAll, Encode};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 use super::{default_oracle, *};
+
+enum SnapshotJsonField<'a> {
+    Borrowed(&'a str),
+    #[cfg(test)]
+    Owned(json::Value),
+}
+
+impl<'a> SnapshotJsonField<'a> {
+    fn decode_canonical<T>(self, field: &str) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + JsonSerialize,
+    {
+        let decoded: Result<T, json::Error> = match self {
+            #[cfg(test)]
+            Self::Owned(value) => json::value::from_value(value),
+            Self::Borrowed(raw) => {
+                let value = json::from_str::<T>(raw)?;
+                // TODO: Teach Norito JSON serialization to target a comparison sink so
+                // canonical verification does not need one field-sized temporary String.
+                let canonical = json::to_json(&value)?;
+                if canonical.as_bytes() != raw.as_bytes() {
+                    return Err(json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: "snapshot field is not canonically encoded".to_owned(),
+                    });
+                }
+                Ok(value)
+            }
+        };
+        decoded.map_err(|error| json::Error::InvalidField {
+            field: field.to_owned(),
+            message: error.to_string(),
+        })
+    }
+
+    fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
+        match self {
+            Self::Borrowed(raw) => SnapshotJsonMap::parse(raw, field),
+            #[cfg(test)]
+            Self::Owned(json::Value::Object(map)) => Ok(SnapshotJsonMap::from_owned(map)),
+            #[cfg(test)]
+            Self::Owned(_) => Err(json::Error::InvalidField {
+                field: field.to_owned(),
+                message: "expected object".to_owned(),
+            }),
+        }
+    }
+
+    fn validate_sccp_registry(&self) -> Result<(), json::Error> {
+        match self {
+            Self::Borrowed(raw) => validate_sccp_registry_cell_json_str(raw),
+            #[cfg(test)]
+            Self::Owned(value) => validate_sccp_registry_cell_json(value),
+        }
+        .map_err(|message| json::Error::InvalidField {
+            field: "sccp_registry".to_owned(),
+            message,
+        })
+    }
+}
+
+struct SnapshotJsonMap<'a> {
+    fields: BTreeMap<String, SnapshotJsonField<'a>>,
+    source_order: Option<Vec<String>>,
+}
+
+impl<'a> SnapshotJsonMap<'a> {
+    #[cfg(test)]
+    fn from_owned(map: json::native::Map) -> Self {
+        Self {
+            fields: map
+                .into_iter()
+                .map(|(key, value)| (key, SnapshotJsonField::Owned(value)))
+                .collect(),
+            source_order: None,
+        }
+    }
+
+    fn parse(input: &'a str, field: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(input);
+        parser
+            .expect(b'{')
+            .map_err(|error| json::Error::InvalidField {
+                field: field.to_owned(),
+                message: error.to_string(),
+            })?;
+        parser.skip_ws();
+        let mut fields = BTreeMap::new();
+        let mut source_order = Vec::new();
+        if parser.peek() == Some(b'}') {
+            parser.bump();
+        } else {
+            loop {
+                let key = parser
+                    .parse_string()
+                    .map_err(|error| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: error.to_string(),
+                    })?;
+                parser
+                    .expect(b':')
+                    .map_err(|error| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: error.to_string(),
+                    })?;
+                parser.skip_ws();
+                let start = parser.position();
+                parser
+                    .skip_value()
+                    .map_err(|error| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: error.to_string(),
+                    })?;
+                let end = parser.position();
+                if fields
+                    .insert(key.clone(), SnapshotJsonField::Borrowed(&input[start..end]))
+                    .is_some()
+                {
+                    return Err(json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("duplicate field `{key}`"),
+                    });
+                }
+                source_order.push(key);
+                parser.skip_ws();
+                match parser.bump() {
+                    Some(b',') => {}
+                    Some(b'}') => break,
+                    _ => {
+                        return Err(json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: "expected comma or object end".to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        parser.skip_ws();
+        if !parser.eof() {
+            return Err(json::Error::InvalidField {
+                field: field.to_owned(),
+                message: "trailing bytes after snapshot object".to_owned(),
+            });
+        }
+        Ok(Self {
+            fields,
+            source_order: Some(source_order),
+        })
+    }
+
+    fn remove(&mut self, key: &str) -> Option<SnapshotJsonField<'a>> {
+        self.fields.remove(key)
+    }
+
+    fn get(&self, key: &str) -> Option<&SnapshotJsonField<'a>> {
+        self.fields.get(key)
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.fields.contains_key(key)
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    fn first_key(&self) -> Option<&str> {
+        self.fields.keys().next().map(String::as_str)
+    }
+
+    fn require_source_order(&self, expected: &[&str], field: &str) -> Result<(), json::Error> {
+        let Some(actual) = self.source_order.as_ref() else {
+            return Ok(());
+        };
+        if let Some(unknown) = actual.iter().find(|key| !expected.contains(&key.as_str())) {
+            return Err(json::Error::InvalidField {
+                field: format!("{field}.{unknown}"),
+                message: "unknown field is not permitted in a signed first-release snapshot"
+                    .to_owned(),
+            });
+        }
+        if actual
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied())
+        {
+            Ok(())
+        } else {
+            Err(json::Error::InvalidField {
+                field: field.to_owned(),
+                message: "snapshot object fields are not in canonical schema order".to_owned(),
+            })
+        }
+    }
+}
+
+fn canonical_world_field_order() -> &'static [String] {
+    static ORDER: OnceLock<Vec<String>> = OnceLock::new();
+    ORDER.get_or_init(|| {
+        let encoded = json::to_json(&World::default())
+            .expect("default World must have a canonical JSON representation");
+        SnapshotJsonMap::parse(&encoded, "default world")
+            .expect("default World JSON must be a canonical object")
+            .source_order
+            .expect("borrowed default World JSON retains source order")
+    })
+}
 
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
     _marker: PhantomData<T>,
 }
+
 impl<'e, T> IvmSeed<'e, T> {
     pub fn cast<U>(&self) -> IvmSeed<'e, U> {
         IvmSeed {
@@ -21,10 +230,8 @@ impl<'e, T> IvmSeed<'e, T> {
 
 impl IvmSeed<'_, TriggerSet> {
     #[allow(clippy::unused_self)]
-    pub fn parse_trigger_set(self, value: &json::Value) -> Result<TriggerSet, json::Error> {
-        let json = json::to_json(value)?;
-        let mut parser = json::Parser::new(&json);
-        TriggerSet::json_deserialize(&mut parser)
+    fn parse_trigger_set(self, value: SnapshotJsonField<'_>) -> Result<TriggerSet, json::Error> {
+        value.decode_canonical("triggers")
     }
 }
 
@@ -36,8 +243,19 @@ pub struct KuraSeed {
 }
 
 impl KuraSeed {
+    #[cfg(test)]
     pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
         self.into_state_from_json_with_recovery_mode(value, true)
+    }
+
+    /// Decode a canonical snapshot directly from its authenticated JSON bytes.
+    ///
+    /// The borrowed field map retains only schema keys and raw value slices;
+    /// each field is decoded into its final typed owner before the next field,
+    /// so restoration never constructs a recursive full-state JSON tree.
+    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<State, json::Error> {
+        let map = SnapshotJsonMap::parse(input, "state")?;
+        self.into_state_from_snapshot_map(map, true)
     }
 
     /// Decode a State without loading, promoting, truncating, or otherwise
@@ -46,32 +264,78 @@ impl KuraSeed {
     /// Replay prevalidation uses this constructor for an isolated dry run;
     /// its in-memory merge and query authority is populated explicitly
     /// from the already authenticated live State.
-    pub(crate) fn into_state_from_json_without_durable_recovery(
+    /// Decode canonical snapshot bytes for isolated replay prevalidation.
+    pub(crate) fn into_state_from_json_str_without_durable_recovery(
         self,
-        value: json::Value,
+        input: &str,
     ) -> Result<State, json::Error> {
-        self.into_state_from_json_with_recovery_mode(value, false)
+        let map = SnapshotJsonMap::parse(input, "state")?;
+        self.into_state_from_snapshot_map(map, false)
     }
 
+    #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
         self,
         value: json::Value,
         allow_durable_recovery: bool,
     ) -> Result<State, json::Error> {
-        let json::Value::Object(mut map) = value else {
+        let json::Value::Object(map) = value else {
             return Err(json::Error::InvalidField {
                 field: "state".into(),
                 message: "expected object".into(),
             });
         };
+        self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
+    }
+
+    fn into_state_from_snapshot_map(
+        self,
+        mut map: SnapshotJsonMap<'_>,
+        allow_durable_recovery: bool,
+    ) -> Result<State, json::Error> {
+        const WITHOUT_BOOTSTRAP: &[&str] = &[
+            "chain_id",
+            "network_id",
+            "world",
+            "nexus_runtime",
+            "block_hashes",
+            "transactions",
+            "public_lane_validators",
+            "public_lane_stake_shares",
+            "public_lane_rewards",
+            "public_lane_reward_claims",
+            "space_directory_manifests",
+            "commit_topology",
+            "prev_commit_topology",
+        ];
+        const WITH_BOOTSTRAP: &[&str] = &[
+            "chain_id",
+            "network_id",
+            "sumeragi_v2_bootstrap",
+            "world",
+            "nexus_runtime",
+            "block_hashes",
+            "transactions",
+            "public_lane_validators",
+            "public_lane_stake_shares",
+            "public_lane_rewards",
+            "public_lane_reward_claims",
+            "space_directory_manifests",
+            "commit_topology",
+            "prev_commit_topology",
+        ];
+        let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
+            WITH_BOOTSTRAP
+        } else {
+            WITHOUT_BOOTSTRAP
+        };
+        map.require_source_order(expected_order, "state")?;
 
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
-        if world_value
-            .as_object()
-            .is_none_or(|world| !world.contains_key("contract_subject_bindings"))
-        {
+        let world_map = world_value.into_object("world")?;
+        if !world_map.contains_key("contract_subject_bindings") {
             return Err(json::Error::missing_field(
                 "world.contract_subject_bindings",
             ));
@@ -81,7 +345,7 @@ impl KuraSeed {
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_value, &ivm_seed)?;
+        let mut world = parse_world(world_map, &ivm_seed)?;
         let public_lane_validators: Vec<SnapshotNoritoBlob> =
             take_required(&mut map, "public_lane_validators")?;
         let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -92,17 +356,11 @@ impl KuraSeed {
             take_required(&mut map, "public_lane_reward_claims")?;
         let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
             take_required(&mut map, "space_directory_manifests")?;
-        let snapshot_nexus_runtime: SnapshotNexusRuntime = map
-            .remove("nexus_runtime")
-            .ok_or_else(|| json::Error::missing_field("nexus_runtime"))
-            .and_then(|value| {
-                json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                    field: "nexus_runtime".to_owned(),
-                    message: err.to_string(),
-                })
-            })?;
+        let snapshot_nexus_runtime: SnapshotNexusRuntime =
+            take_required(&mut map, "nexus_runtime")?;
 
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
+        let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
             u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
@@ -138,14 +396,8 @@ impl KuraSeed {
         let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-        let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> = map
-            .remove("sumeragi_v2_bootstrap")
-            .map(json::value::from_value)
-            .transpose()
-            .map_err(|err| json::Error::InvalidField {
-                field: "sumeragi_v2_bootstrap".to_owned(),
-                message: err.to_string(),
-            })?;
+        let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
+            take_optional(&mut map, "sumeragi_v2_bootstrap")?;
 
         reject_unknown(&map, "state")?;
 
@@ -166,6 +418,41 @@ impl KuraSeed {
             decode_public_lane_validator_records(public_lane_validators)?;
         let public_lane_stake_share_records =
             decode_public_lane_stake_share_records(public_lane_stake_shares)?;
+        let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
+            public_lane_rewards,
+            "public_lane_rewards",
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_validator_records,
+            "public_lane_validators",
+            |record| (record.lane_id, record.validator.clone()),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_stake_share_records,
+            "public_lane_stake_shares",
+            |record| {
+                (
+                    record.lane_id,
+                    record.validator.clone(),
+                    record.staker.clone(),
+                )
+            },
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_reward_records,
+            "public_lane_rewards",
+            |record| (record.lane_id, record.epoch),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_reward_claims,
+            "public_lane_reward_claims",
+            |record| (record.lane_id, record.account.clone(), record.asset.clone()),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &space_directory_manifests,
+            "space_directory_manifests",
+            |record| record.uaid,
+        )?;
 
         world.public_lane_validators = public_lane_validator_records
             .into_iter()
@@ -184,13 +471,10 @@ impl KuraSeed {
                 )
             })
             .collect();
-        world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
-            public_lane_rewards,
-            "public_lane_rewards",
-        )?
-        .into_iter()
-        .map(|record| ((record.lane_id, record.epoch), record))
-        .collect();
+        world.public_lane_rewards = public_lane_reward_records
+            .into_iter()
+            .map(|record| ((record.lane_id, record.epoch), record))
+            .collect();
         world.public_lane_reward_claims = public_lane_reward_claims
             .into_iter()
             .map(|record| {
@@ -224,6 +508,7 @@ impl KuraSeed {
                 lane_incarnation_lineage,
                 autoscale_sample_history,
                 chain_id,
+                network_id,
                 snapshot_v2_bootstrap_candidate,
                 nexus_runtime_restored_from_snapshot,
                 kura: self.kura,
@@ -294,6 +579,26 @@ fn nexus_from_snapshot_runtime(
                 runtime.version,
                 SnapshotNexusRuntime::VERSION
             ),
+        });
+    }
+    if runtime
+        .lanes
+        .windows(2)
+        .any(|pair| pair[0].id >= pair[1].id)
+    {
+        return Err(json::Error::InvalidField {
+            field: "nexus_runtime.lanes".to_owned(),
+            message: "lanes must be in strict canonical lane-id order".to_owned(),
+        });
+    }
+    if runtime
+        .lane_incarnation_lineage
+        .windows(2)
+        .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+    {
+        return Err(json::Error::InvalidField {
+            field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
+            message: "lineage entries must be in strict canonical lane-id order".to_owned(),
         });
     }
     let autoscale_scale_out_window_blocks =
@@ -621,7 +926,7 @@ fn decode_snapshot_records<T>(
     field: &str,
 ) -> Result<Vec<T>, json::Error>
 where
-    T: DecodeAll,
+    T: DecodeAll + Encode,
 {
     records
         .into_iter()
@@ -633,12 +938,46 @@ where
                     message: format!("record {index} hex decode failed: {err}"),
                 })?;
             let mut cursor = bytes.as_slice();
-            T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
+            let decoded = T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
                 field: field.to_owned(),
                 message: format!("record {index} norito decode failed: {err}"),
-            })
+            })?;
+            if decoded.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
+            Ok(decoded)
         })
         .collect()
+}
+
+fn validate_canonical_snapshot_record_order<T, K>(
+    records: &[T],
+    field: &str,
+    key: impl Fn(&T) -> K,
+) -> Result<(), json::Error>
+where
+    K: Ord,
+{
+    let mut previous = None;
+    for (index, record) in records.iter().enumerate() {
+        let current = key(record);
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous >= &current)
+        {
+            return Err(json::Error::InvalidField {
+                field: field.to_owned(),
+                message: format!(
+                    "record {index} is duplicated or not in canonical semantic key order"
+                ),
+            });
+        }
+        previous = Some(current);
+    }
+    Ok(())
 }
 
 fn decode_public_lane_validator_records(
@@ -651,14 +990,19 @@ fn decode_public_lane_validator_records(
             message: format!("record {index} hex decode failed: {err}"),
         })?;
         let mut cursor = bytes.as_slice();
-        decoded.push(
-            PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
-                json::Error::InvalidField {
-                    field: "public_lane_validators".to_owned(),
-                    message: format!("record {index} norito decode failed: {err}"),
-                }
-            })?,
-        );
+        let decoded_record = PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
+            json::Error::InvalidField {
+                field: "public_lane_validators".to_owned(),
+                message: format!("record {index} norito decode failed: {err}"),
+            }
+        })?;
+        if decoded_record.encode() != bytes {
+            return Err(json::Error::InvalidField {
+                field: "public_lane_validators".to_owned(),
+                message: format!("record {index} is not canonical Norito"),
+            });
+        }
+        decoded.push(decoded_record);
     }
     Ok(decoded)
 }
@@ -673,14 +1017,19 @@ fn decode_public_lane_stake_share_records(
             message: format!("record {index} hex decode failed: {err}"),
         })?;
         let mut cursor = bytes.as_slice();
-        decoded.push(
-            PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
-                json::Error::InvalidField {
-                    field: "public_lane_stake_shares".to_owned(),
-                    message: format!("record {index} norito decode failed: {err}"),
-                }
-            })?,
-        );
+        let decoded_record = PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
+            json::Error::InvalidField {
+                field: "public_lane_stake_shares".to_owned(),
+                message: format!("record {index} norito decode failed: {err}"),
+            }
+        })?;
+        if decoded_record.encode() != bytes {
+            return Err(json::Error::InvalidField {
+                field: "public_lane_stake_shares".to_owned(),
+                message: format!("record {index} is not canonical Norito"),
+            });
+        }
+        decoded.push(decoded_record);
     }
     Ok(decoded)
 }
@@ -701,6 +1050,12 @@ fn decode_space_directory_manifest_sets(
                 message: format!("record {index} norito decode failed: {err}"),
             }
         })?;
+        if manifest_set.encode() != bytes {
+            return Err(json::Error::InvalidField {
+                field: "space_directory_manifests".to_owned(),
+                message: format!("record {index} is not canonical Norito"),
+            });
+        }
         if storage.insert(record.uaid, manifest_set).is_some() {
             return Err(json::Error::InvalidField {
                 field: "space_directory_manifests".to_owned(),
@@ -711,36 +1066,35 @@ fn decode_space_directory_manifest_sets(
     Ok(storage)
 }
 
-fn take_required<T: JsonDeserialize>(
-    map: &mut json::native::Map,
-    key: &str,
-) -> Result<T, json::Error> {
+fn take_required<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
+where
+    T: JsonDeserialize + JsonSerialize,
+{
     let value = map
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
-    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-        field: key.to_owned(),
-        message: err.to_string(),
-    })
+    value.decode_canonical(key)
 }
 
-fn take_optional_default<T>(map: &mut json::native::Map, key: &str) -> Result<T, json::Error>
+fn take_optional<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<Option<T>, json::Error>
 where
-    T: JsonDeserialize + Default,
+    T: JsonDeserialize + JsonSerialize,
 {
-    map.remove(key).map_or_else(
-        || Ok(T::default()),
-        |value| {
-            json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                field: key.to_owned(),
-                message: err.to_string(),
-            })
-        },
-    )
+    map.remove(key)
+        .map(|value| value.decode_canonical(key))
+        .transpose()
+}
+
+fn take_optional_default<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
+where
+    T: JsonDeserialize + JsonSerialize + Default,
+{
+    map.remove(key)
+        .map_or_else(|| Ok(T::default()), |value| value.decode_canonical(key))
 }
 
 fn take_musubi_namespace_bindings(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>, json::Error> {
     let bindings: Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1> =
         take_required(map, "musubi_namespace_bindings")?;
@@ -765,7 +1119,7 @@ fn take_musubi_namespace_bindings(
 }
 
 fn take_musubi_domain_ownership_generations(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<DomainId, u64>, json::Error> {
     let generations: Storage<DomainId, u64> =
         take_required(map, "musubi_domain_ownership_generations")?;
@@ -783,7 +1137,7 @@ fn take_musubi_domain_ownership_generations(
 }
 
 fn take_musubi_registry_policy(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<MusubiRegistryPolicyV1>, json::Error> {
     let policy: Cell<MusubiRegistryPolicyV1> = take_required(map, "musubi_registry_policy")?;
     policy
@@ -798,7 +1152,7 @@ fn take_musubi_registry_policy(
 }
 
 fn take_musubi_resolver_index_revision(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<MusubiResolverIndexRevisionV1>, json::Error> {
     let revision: Cell<MusubiResolverIndexRevisionV1> =
         take_required(map, "musubi_resolver_index_revision")?;
@@ -812,13 +1166,13 @@ fn take_musubi_resolver_index_revision(
 }
 
 fn take_musubi_resolver_index_checkpoints(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
     take_required(map, "musubi_resolver_index_checkpoints")
 }
 
 fn take_musubi_replication_shortfall_releases(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<u64>, json::Error> {
     take_required(map, "musubi_replication_shortfall_releases")
 }
@@ -887,11 +1241,11 @@ fn validate_sccp_outbound_pending_messages(
 ) -> Result<(), json::Error> {
     for (key, record) in messages.view().iter() {
         crate::bridge::validate_sccp_outbound_message_record_v1(key, record).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: "world.sccp_outbound_pending_messages".to_owned(),
-                    message: "outbound replay entry must carry one bounded canonical payload bound to its exact lane, governed context, message id, and payload hash".to_owned(),
-                }
-            })?;
+            json::Error::InvalidField {
+                field: "world.sccp_outbound_pending_messages".to_owned(),
+                message: "outbound replay entry must carry one bounded canonical payload bound to its exact lane, governed context, message id, and payload hash".to_owned(),
+            }
+        })?;
     }
     Ok(())
 }
@@ -929,15 +1283,15 @@ fn validate_sccp_outbound_proofs(
     for (key, proof) in proofs.view().iter() {
         if !proof.is_well_formed_for_key(key) {
             return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_proofs".to_owned(),
-                    message: "outbound proof replay entry must use one exact outbound lane/message key, ordered nonzero heights, and six distinct nonzero hash roles".to_owned(),
-                });
+                field: "world.sccp_outbound_proofs".to_owned(),
+                message: "outbound proof replay entry must use one exact outbound lane/message key, ordered nonzero heights, and six distinct nonzero hash roles".to_owned(),
+            });
         }
         if locator.get(&key.message_id) != Some(key) {
             return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_proofs".to_owned(),
-                    message: "outbound proof replay key is inconsistent with the global outbound message locator".to_owned(),
-                });
+                field: "world.sccp_outbound_proofs".to_owned(),
+                message: "outbound proof replay key is inconsistent with the global outbound message locator".to_owned(),
+            });
         }
     }
     Ok(())
@@ -963,9 +1317,9 @@ fn validate_sccp_outbound_indexes(
         })?;
     if union_len != locator.iter().count() || union_len != ordered.iter().count() {
         return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "pending/terminal outbound replay union, global locator, and ordered index cardinalities differ".to_owned(),
-            });
+            field: "world.sccp_outbound_message_index".to_owned(),
+            message: "pending/terminal outbound replay union, global locator, and ordered index cardinalities differ".to_owned(),
+        });
     }
     for (key, record) in pending.iter() {
         if terminal.get(key).is_some() {
@@ -1088,44 +1442,23 @@ fn validate_sccp_outbound_indexes(
 }
 
 fn take_ram_lfe_program_policies(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
-    let value = map
-        .remove("ram_lfe_program_policies")
-        .ok_or_else(|| json::Error::missing_field("ram_lfe_program_policies"))?;
-    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-        field: "ram_lfe_program_policies".to_owned(),
-        message: err.to_string(),
-    })
+    take_required(map, "ram_lfe_program_policies")
 }
 
 fn take_parameters_cell(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Parameters>, json::Error> {
-    let value = map
-        .remove(key)
-        .ok_or_else(|| json::Error::missing_field(key))?;
-    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-        field: key.to_owned(),
-        message: err.to_string(),
-    })
+    take_required(map, key)
 }
 
 fn take_topology_cell(
-    map: &mut json::native::Map,
+    map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-    let value = map
-        .remove(key)
-        .ok_or_else(|| json::Error::missing_field(key))?;
-    match value {
-        json::Value::Array(_) => {
-            let peers: Vec<PeerId> = json::value::from_value(value)?;
-            Ok(Cell::new(peers))
-        }
-        other => json::value::from_value(other),
-    }
+    take_required(map, key)
 }
 
 fn reject_legacy_musubi_state(
@@ -1154,8 +1487,12 @@ fn is_legacy_musubi_state_path(path: &str) -> bool {
         || path.starts_with("musubi:")
 }
 
-pub(super) fn validate_musubi_location_reverse_indices(
+#[allow(clippy::too_many_lines)]
+pub(crate) fn validate_musubi_location_reverse_indices(
+    archives: &Storage<ArchiveId, MusubiArchiveRecordV1>,
     locations: &Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+    pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
+    replication_orders: &Storage<ReplicationOrderId, ReplicationOrderRecord>,
     by_pin: &Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
     by_order: &Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
     by_provider: &Storage<MusubiProviderLocationKeyV1, ()>,
@@ -1164,10 +1501,38 @@ pub(super) fn validate_musubi_location_reverse_indices(
         field: "world.musubi_location_reverse_indices".to_owned(),
         message,
     };
+    let archives = archives.view();
     let locations = locations.view();
+    let pin_manifests = pin_manifests.view();
+    let replication_orders = replication_orders.view();
     let by_pin = by_pin.view();
     let by_order = by_order.view();
     let by_provider = by_provider.view();
+
+    for (order, record) in replication_orders.iter() {
+        let reference = by_order.get(order);
+        match (record.musubi_archive, reference) {
+            (None, None) => {}
+            (Some(archive_id), Some(reference))
+                if reference.binding.replication_order == *order
+                    && reference.binding.archive_id == archive_id => {}
+            (Some(_), None) => {
+                return Err(invalid(
+                    "Musubi-purpose replication order is missing its archive binding".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(invalid(
+                    "generic replication order cannot carry a Musubi archive binding".into(),
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(invalid(
+                    "replication-order Musubi purpose does not match its archive binding".into(),
+                ));
+            }
+        }
+    }
 
     for (digest, reference) in by_pin.iter() {
         reference
@@ -1195,21 +1560,118 @@ pub(super) fn validate_musubi_location_reverse_indices(
         reference
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
-        if order != &reference.replication_order {
+        if order != &reference.binding.replication_order {
             return Err(invalid(
                 "order reverse-index key does not match its duplicated order identity".into(),
             ));
         }
-        let target = locations
-            .get(&reference.location)
-            .ok_or_else(|| invalid("order reverse reference targets a missing location".into()))?;
-        if reference.active {
-            if target.state == MusubiArchiveLocationStateV1::Retired
-                || target.replication_order != *order
-            {
-                return Err(invalid(
-                    "active order reverse reference does not match its current location".into(),
-                ));
+        let archive = archives
+            .get(&reference.binding.archive_id)
+            .ok_or_else(|| invalid("order binding targets a missing Musubi archive".into()))?;
+        archive
+            .validate()
+            .map_err(|error| invalid(error.to_string()))?;
+        if archive.archive_id != reference.binding.archive_id
+            || archive.commitment != reference.binding.commitment
+        {
+            return Err(invalid(
+                "order binding does not match the authoritative archive commitment".into(),
+            ));
+        }
+        let order_record = replication_orders
+            .get(order)
+            .ok_or_else(|| invalid("order binding targets a missing replication order".into()))?;
+        if order_record.order_id != *order
+            || order_record.musubi_archive != Some(reference.binding.archive_id)
+            || order_record.manifest_root_cid != archive.commitment.root_cid
+        {
+            return Err(invalid(
+                "order binding does not match its authoritative replication order".into(),
+            ));
+        }
+        let canonical_order =
+            crate::smartcontracts::isi::sorafs::validate_stored_replication_order(
+                order_record,
+                &hex::encode(order.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        let pin = pin_manifests
+            .get(&order_record.manifest_digest)
+            .ok_or_else(|| {
+                invalid("order binding replication order targets a missing pin manifest".into())
+            })?;
+        if pin.digest != order_record.manifest_digest
+            || pin.root_cid != archive.commitment.root_cid
+            || pin.chunker != archive.commitment.chunker
+            || pin.chunk_digest_sha3_256 != *archive.commitment.chunk_plan_digest.as_bytes()
+            || pin.por_root != *archive.commitment.por_root.as_bytes()
+            || pin.content_length != archive.commitment.content_length
+            || canonical_order.chunking_profile != pin.chunker.to_handle()
+            || canonical_order.target_replicas
+                < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
+            || canonical_order.target_replicas < pin.policy.min_replicas
+            || pin.policy.min_replicas < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
+            || order_record.deadline_epoch > pin.policy.retention_epoch
+        {
+            return Err(invalid(
+                "order binding does not match its immutable pin commitment or retention policy"
+                    .into(),
+            ));
+        }
+        let mut completed_providers = order_record
+            .provider_completions
+            .iter()
+            .map(|completion| completion.provider_id)
+            .collect::<Vec<_>>();
+        completed_providers.sort();
+        match &reference.lifecycle {
+            MusubiReplicationOrderLocationLifecycleV1::PreLocation => {}
+            MusubiReplicationOrderLocationLifecycleV1::Active(location) => {
+                let target = locations.get(location).ok_or_else(|| {
+                    invalid("active order binding targets a missing location".into())
+                })?;
+                if !matches!(
+                    target.state,
+                    MusubiArchiveLocationStateV1::Healthy | MusubiArchiveLocationStateV1::Degraded
+                ) || target.archive_id != archive.archive_id
+                    || target.replication_order != *order
+                    || !matches!(
+                        order_record.status,
+                        iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(
+                            _
+                        )
+                    )
+                    || completed_providers != target.providers
+                {
+                    return Err(invalid(
+                        "active order binding does not match its completed provider location"
+                            .into(),
+                    ));
+                }
+            }
+            MusubiReplicationOrderLocationLifecycleV1::Retired(retired) => {
+                let target = locations.get(&retired.location).ok_or_else(|| {
+                    invalid("retired order binding targets a missing location".into())
+                })?;
+                if target.archive_id != archive.archive_id
+                    || (target.state != MusubiArchiveLocationStateV1::Retired
+                        && target.replication_order == *order)
+                    || !matches!(
+                        order_record.status,
+                        iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(
+                            _
+                        )
+                    )
+                    || completed_providers != retired.providers
+                    || (target.state == MusubiArchiveLocationStateV1::Retired
+                        && target.replication_order == *order
+                        && target.providers != retired.providers)
+                {
+                    return Err(invalid(
+                        "retired order binding does not match its completed historical location"
+                            .into(),
+                    ));
+                }
             }
         }
     }
@@ -1241,7 +1703,7 @@ pub(super) fn validate_musubi_location_reverse_indices(
                 .is_some_and(|reference| !reference.active && reference.location == *key)
                 || !by_order
                     .get(&location.replication_order)
-                    .is_some_and(|reference| !reference.active && reference.location == *key)
+                    .is_some_and(|reference| reference.retired_location() == Some(*key))
             {
                 return Err(invalid(
                     "retired archive location is missing an immutable reuse tombstone".into(),
@@ -1254,7 +1716,7 @@ pub(super) fn validate_musubi_location_reverse_indices(
             .is_some_and(|reference| reference.active && reference.location == *key)
             || !by_order
                 .get(&location.replication_order)
-                .is_some_and(|reference| reference.active && reference.location == *key)
+                .is_some_and(|reference| reference.active_location() == Some(*key))
             || location.providers.iter().any(|provider| {
                 by_provider
                     .get(&MusubiProviderLocationKeyV1::new(*provider, *key))

@@ -129,7 +129,7 @@ validation_report = {
     "generation": nonce,
     "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
     "generation_memory_enforcement_profile": "self-physical-footprint-v1",
-    "bridge_abi_version": 21,
+    "bridge_abi_version": 22,
     "artifact_count": len(artifact_reports),
     "artifacts": artifact_reports,
     "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",

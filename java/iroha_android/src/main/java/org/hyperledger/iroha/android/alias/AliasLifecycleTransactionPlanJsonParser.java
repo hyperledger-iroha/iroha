@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Strict parser for lease-renewal and auto-renew planner responses. */
 public final class AliasLifecycleTransactionPlanJsonParser {
@@ -39,7 +40,7 @@ public final class AliasLifecycleTransactionPlanJsonParser {
         set(
             "version",
             "authority",
-            "chain_id",
+            "network_id",
             "anchor",
             "operation",
             "disposition",
@@ -55,7 +56,7 @@ public final class AliasLifecycleTransactionPlanJsonParser {
     return new AliasLifecycleTransactionPlanBodyV1(
         intField(root, "version", "body.version"),
         stringField(root, "authority", "body.authority"),
-        stringField(root, "chain_id", "body.chain_id"),
+        NetworkId.parse(stringField(root, "network_id", "body.network_id")),
         AliasTransactionPlanJsonParser.parseAnchor(objectField(root, "anchor", "body.anchor")),
         parseOperation(objectField(root, "operation", "body.operation"), "body.operation"),
         parseDisposition(objectField(root, "disposition", "body.disposition"), "body.disposition"),

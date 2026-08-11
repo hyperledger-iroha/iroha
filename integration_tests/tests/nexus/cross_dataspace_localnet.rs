@@ -20,7 +20,7 @@ use iroha::{
     client::Client,
     crypto::HashOf,
     data_model::{
-        ChainId, Level, ValidationFail,
+        ChainId, Level, NetworkId, ValidationFail,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{
@@ -69,7 +69,7 @@ use iroha_config_base::WithOrigin;
 use iroha_core::{
     da::proof_policy_bundle,
     kura::Kura,
-    merge::{MergeLedgerCandidate, merge_chain_id_digest, merge_qc_message_digest},
+    merge::{MergeLedgerCandidate, merge_qc_message_digest},
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
@@ -4554,7 +4554,7 @@ fn execute_autoscale_autonomous_work(
 }
 
 fn validate_autoscale_drain_certificate(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     certificate: &LaneDrainCertificateV1,
 ) -> Result<()> {
     let body = &certificate.body;
@@ -4569,8 +4569,8 @@ fn validate_autoscale_drain_certificate(
         "lane-3 drain certificate contains an unsupported layout version"
     );
     ensure!(
-        intent.chain_id_digest == merge_chain_id_digest(chain_id),
-        "lane-3 drain intent is bound to another chain"
+        intent.network_id == *network_id,
+        "lane-3 drain intent is bound to another network"
     );
     ensure!(
         intent.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1,
@@ -4745,7 +4745,8 @@ fn exact_autoscale_carrier_height_context(
     let first = proofs
         .first()
         .ok_or_else(|| eyre!("autoscale carrier-height proof set is empty"))?;
-    verify_bridge_finality_proof(first, &network.chain_id())
+    let network_id = network.client().network_id;
+    verify_bridge_finality_proof(first, &network_id)
         .wrap_err("first autoscale carrier finality proof is invalid")?;
     ensure!(
         first.finality_artifact.height == carrier_height,
@@ -4756,7 +4757,7 @@ fn exact_autoscale_carrier_height_context(
     let expected_context_id = expected_context.id();
     let expected_block_hash = first.block_header.hash();
     for (peer_index, proof) in proofs.iter().enumerate().skip(1) {
-        verify_bridge_finality_proof(proof, &network.chain_id()).wrap_err_with(|| {
+        verify_bridge_finality_proof(proof, &network_id).wrap_err_with(|| {
             format!("peer {peer_index} autoscale carrier finality proof is invalid")
         })?;
         let context = &proof.finality_artifact.height_context;
@@ -4764,7 +4765,7 @@ fn exact_autoscale_carrier_height_context(
             proof.finality_artifact.height == carrier_height
                 && proof.block_header.hash() == expected_block_hash
                 && context.id() == expected_context_id
-                && context.chain_id == expected_context.chain_id
+                && context.network_id == expected_context.network_id
                 && context.height == expected_context.height
                 && context.epoch == expected_context.epoch
                 && context.roster == expected_context.roster
@@ -4776,7 +4777,7 @@ fn exact_autoscale_carrier_height_context(
 }
 
 fn validate_autoscale_merge_qc_height_context_binding(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     context: &HeightContext,
     carrier_height: u64,
     epoch_id: u64,
@@ -4784,10 +4785,10 @@ fn validate_autoscale_merge_qc_height_context_binding(
     signer_indices: &[usize],
 ) -> Result<()> {
     ensure!(
-        context.chain_id == *chain_id
+        context.network_id == *network_id
             && context.height == carrier_height
             && context.epoch == epoch_id,
-        "merge QC carrier height/epoch/chain differs from its historical Sumeragi v2 context"
+        "merge QC carrier height/epoch/network differs from its historical Sumeragi v2 context"
     );
     ensure!(
         validator_set.len() == context.roster.len()
@@ -4809,15 +4810,15 @@ fn validate_autoscale_merge_qc_height_context_binding(
 }
 
 fn validate_autoscale_merge_qc(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     context: &HeightContext,
     entry: &MergeLedgerEntry,
 ) -> Result<()> {
     let qc = &entry.merge_qc;
     ensure!(qc.epoch_id == entry.epoch_id, "merge QC epoch mismatch");
     ensure!(
-        qc.chain_id_digest == merge_chain_id_digest(chain_id),
-        "merge QC is bound to another chain"
+        qc.network_id == *network_id,
+        "merge QC is bound to another network"
     );
     ensure!(
         qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
@@ -4830,7 +4831,7 @@ fn validate_autoscale_merge_qc(
     ensure!(
         qc.message_digest
             == merge_qc_message_digest(
-                chain_id,
+                network_id,
                 &candidate,
                 qc.validator_set_hash_version,
                 qc.validator_set_hash,
@@ -4870,7 +4871,7 @@ fn validate_autoscale_merge_qc(
         "merge QC is below quorum or has unaligned signer proofs"
     );
     validate_autoscale_merge_qc_height_context_binding(
-        chain_id,
+        network_id,
         context,
         qc.carrier_height,
         qc.epoch_id,
@@ -4916,10 +4917,11 @@ fn validate_autoscale_retirement_evidence(
     };
     let intent = &certificate.body.intent;
     let final_frontier = &certificate.body.final_frontier;
-    validate_autoscale_drain_certificate(&network.chain_id(), certificate)?;
+    let network_id = network.client().network_id;
+    validate_autoscale_drain_certificate(&network_id, certificate)?;
     let carrier_context =
         exact_autoscale_carrier_height_context(runtime, network, entry.merge_qc.carrier_height)?;
-    validate_autoscale_merge_qc(&network.chain_id(), &carrier_context, entry)?;
+    validate_autoscale_merge_qc(&network_id, &carrier_context, entry)?;
     ensure!(
         entry.execution_batch.is_none() && entry.lane_snapshots.is_empty(),
         "drain carrier mixed the certificate with autonomous execution or lane snapshots"
@@ -7594,7 +7596,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         HeightContext {
-            chain_id: ChainId::from("g13p-historical-roster-test"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"g13p historical roster genesis",
+            ))),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
@@ -8368,7 +8372,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         validate_autoscale_merge_qc_height_context_binding(
-            &historical.chain_id,
+            &historical.network_id,
             &historical,
             historical.height,
             historical.epoch,
@@ -8378,7 +8382,7 @@ mod tests {
         .expect("exact historical equal-vote quorum should pass");
 
         let subquorum_error = validate_autoscale_merge_qc_height_context_binding(
-            &historical.chain_id,
+            &historical.network_id,
             &historical,
             historical.height,
             historical.epoch,
@@ -8402,7 +8406,7 @@ mod tests {
             DualQuorum::from_roster(&current_rotated.roster).expect("rotated quorum");
         assert!(
             validate_autoscale_merge_qc_height_context_binding(
-                &historical.chain_id,
+                &historical.network_id,
                 &current_rotated,
                 historical.height,
                 historical.epoch,
@@ -8417,7 +8421,7 @@ mod tests {
         reordered.swap(0, 1);
         assert!(
             validate_autoscale_merge_qc_height_context_binding(
-                &historical.chain_id,
+                &historical.network_id,
                 &historical,
                 historical.height,
                 historical.epoch,

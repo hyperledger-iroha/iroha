@@ -29,7 +29,7 @@ use iroha_crypto::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
 };
-use iroha_data_model::prelude::{ChainId, Peer};
+use iroha_data_model::prelude::{NetworkId, Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{prelude::*, test_logger};
 use iroha_p2p::{NetworkHandle, network::message::*, peer::message::PeerMessage};
@@ -273,7 +273,7 @@ async fn network_create() {
     let key_pair = super::random_node_key_pair();
     let public_key = key_pair.public_key().clone();
     let idle_timeout = Duration::from_secs(60);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
     let config = Config {
         address: WithOrigin::inline(address.clone()),
         public_address: WithOrigin::inline(address.clone()),
@@ -443,7 +443,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
-    let chain = ChainId::from("trust_gate_opt_out");
+    let chain = super::test_network_id("trust_gate_opt_out");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = super::random_node_key_pair();
@@ -601,7 +601,7 @@ async fn trust_gossip_enabled_flows_through() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
-    let chain = ChainId::from("trust_gate_enabled");
+    let chain = super::test_network_id("trust_gate_enabled");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = super::random_node_key_pair();
@@ -711,7 +711,7 @@ async fn ws_fallback_connects_and_handshakes() {
     }
 
     let peer2_key_pair = super::random_node_key_pair();
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
     let idle_timeout = Duration::from_secs(5);
     let peer2_listen_address = super::next_addr();
     let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
@@ -872,7 +872,7 @@ async fn two_networks() {
     let public_key1 = key_pair1.public_key().clone();
     let key_pair2 = super::random_node_key_pair().clone();
     let public_key2 = key_pair2.public_key().clone();
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
     info!("Starting first network...");
     let address1 = socket_addr!(127.0.0.1: {next_port()});
     let config1 = Config {
@@ -1242,7 +1242,7 @@ async fn update_peers_triggers_immediate_connect() {
         return;
     }
     let idle_timeout = Duration::from_secs(60);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     // Fixed but unused ports in this file; pick new ones unlikely to collide
     let address1 = socket_addr!(127.0.0.1: {next_port()});
@@ -1575,7 +1575,7 @@ async fn happy_eyeballs_parallel_dials() {
         return;
     }
     let idle_timeout = Duration::from_secs(60);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     // Listener (peer2)
     let address2 = socket_addr!(127.0.0.1: {next_port()});
@@ -1929,7 +1929,7 @@ async fn low_topics_do_not_starve_each_other() {
         return;
     }
     let idle_timeout = Duration::from_secs(30);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     // Start receiver network (B)
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
@@ -2302,7 +2302,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
         return;
     }
     let idle_timeout = Duration::from_secs(30);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     let hub_addr = socket_addr!(127.0.0.1: {next_port()});
     let spoke1_addr = socket_addr!(127.0.0.1: {next_port()});
@@ -2575,7 +2575,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
         return;
     }
     let idle_timeout = Duration::from_secs(30);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     let hub_addr = socket_addr!(127.0.0.1: {next_port()});
     let spoke_addr = socket_addr!(127.0.0.1: {next_port()});
@@ -2873,7 +2873,7 @@ async fn multiple_networks() {
         .expect("Failed to convert to u32");
     let mut msgs = WaitForN::new(expected_msgs);
     let barrier = Arc::new(Barrier::new(peers.len()));
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     peers
         .iter()
@@ -2930,7 +2930,7 @@ async fn start_network(
     peers: Vec<Peer>,
     messages: WaitForN,
     barrier: Arc<Barrier>,
-    chain_id: ChainId,
+    chain_id: NetworkId,
     shutdown_signal: ShutdownSignal,
 ) -> (Peer, NetworkHandle<TestMessage>) {
     info!(peer_addr = %peer.address(), "Starting network");
@@ -3142,7 +3142,7 @@ async fn tls_inbound_listener_smoke() {
         return;
     }
     let idle_timeout = Duration::from_secs(30);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     // Find a free local port for TLS listener
     let port = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {

@@ -11,7 +11,6 @@ use halo2curves::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     block::consensus_v2::{
         BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
@@ -340,7 +339,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_account_id: AccountId::new(custody),
+            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         },
     };
@@ -640,7 +639,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     };
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => HeightContext {
-            chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.into(),
+            network_id: sccp_taira_finality_network_id_v1(),
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -672,7 +671,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             );
             let parent_context = &parent.proof().finality_artifact.height_context;
             HeightContext {
-                chain_id: parent_context.chain_id.clone(),
+                network_id: parent_context.network_id,
                 protocol_version: PROTOCOL_VERSION,
                 height,
                 epoch: parent_context.epoch,
@@ -771,7 +770,7 @@ fn exact_sccp_fixture_block(
         .expect("exact SCCP fixture transaction key");
     let authority = AccountId::new(transaction_key.public_key().clone());
     let mut transaction_builder = TransactionBuilder::new(
-        ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        sccp_taira_finality_network_id_v1(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );

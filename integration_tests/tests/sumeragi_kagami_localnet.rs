@@ -44,7 +44,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         generate_localnet(&out_dir, base_api_port, base_p2p_port)?;
         let irohad_bin = Program::Irohad
             .resolve()
-            .wrap_err("resolve irohad binary")?;
+            .wrap_err("resolve iroha3d binary")?;
         let mut localnet = KagamiLocalnet::start(
             &out_dir,
             &irohad_bin,
@@ -149,7 +149,7 @@ impl KagamiLocalnet {
                 .stdout(Stdio::from(log_file))
                 .stderr(Stdio::from(log_file_err))
                 .spawn()
-                .wrap_err_with(|| format!("spawn irohad for peer {idx}"))?;
+                .wrap_err_with(|| format!("spawn iroha3d for peer {idx}"))?;
             children.push(child);
         }
 

@@ -480,7 +480,7 @@ can be mandated deterministically.
   and `gpu_kind`, letting operators pivot Metal adoption by the exact matrix
   label (e.g., `apple-m4-max`), by Apple chip family, or by discrete vs.
   integrated GPU classes without editing the queries.
-  macOS nodes built with `irohad --features fastpq-gpu` now emit
+  macOS `iroha3d` nodes built with `--features fastpq-gpu` now emit
   `fastpq_execution_mode_total{device_class,chip_family,gpu_kind,...}`,
   `fastpq_metal_queue_ratio{device_class,chip_family,gpu_kind,queue,metric}`
   (busy/overlap ratios), and
@@ -710,7 +710,7 @@ and Alertmanager rules mirror the same evidence captured during release prep:
    class, regenerate the matrix manifest via
    `scripts/fastpq/capture_matrix.sh --devices artifacts/fastpq_benchmarks/matrix/devices`
    so CI and dashboards understand the additional label.
-2. **Verify queue gauges and adoption metrics.** Run `irohad --features fastpq-gpu`
+2. **Verify queue gauges and adoption metrics.** Run `iroha3d` built with `--features fastpq-gpu`
    on the Metal hosts and scrape the telemetry endpoint to confirm live queue
    gauges are exporting:
 

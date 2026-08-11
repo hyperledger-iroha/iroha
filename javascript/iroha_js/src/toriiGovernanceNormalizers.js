@@ -16,6 +16,8 @@ export const VERIFYING_KEY_PRIVATE_KEY_FIELDS = new Set([
 ]);
 
 export function createToriiGovernanceNormalizers({
+  LocalSigningContext,
+  NetworkId,
   ToriiClient,
   ValidationErrorCode,
   assertSupportedOptionKeys,
@@ -28,6 +30,9 @@ export function createToriiGovernanceNormalizers({
   normalizeGovernanceUint64Integer,
   normalizeHex32String,
   normalizeManifestProvenancePayload,
+  normalizeNetworkId,
+  normalizeVpnSessionOptions,
+  networkIdBytes,
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
@@ -56,7 +61,7 @@ export function createToriiGovernanceNormalizers({
   const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
   const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
     "authority",
-    "chainId",
+    "networkId",
     "referendumId",
     "owner",
     "amount",
@@ -65,14 +70,14 @@ export function createToriiGovernanceNormalizers({
   ]);
   const GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS = new Set([
     "authority",
-    "chainId",
+    "networkId",
     "proposalId",
     "body",
     "decision",
   ]);
   const GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS = new Set([
     "authority",
-    "chainId",
+    "networkId",
     "electionId",
     "backend",
     "envelope",
@@ -85,7 +90,7 @@ export function createToriiGovernanceNormalizers({
   ]);
   const GOVERNANCE_ZK_BALLOT_PROOF_REQUEST_KEYS = new Set([
     "authority",
-    "chainId",
+    "networkId",
     "electionId",
     "ballot",
   ]);
@@ -882,6 +887,35 @@ export function createToriiGovernanceNormalizers({
     return normalizeManifestProvenancePayload(record, context);
   }
 
+  function normalizeGovernanceBallotIdentity(
+    payload,
+    options,
+    localSigningContext,
+    context,
+  ) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    if (canonicalAuth.accountId !== payload.authority) {
+      throw new TypeError(
+        `${context} canonicalAuth.accountId must equal the exact payload authority`,
+      );
+    }
+    if (!(localSigningContext instanceof LocalSigningContext)) {
+      throw new TypeError(`${context} requires an immutable LocalSigningContext`);
+    }
+    const exactNetworkId = NetworkId.parse(payload.network_id);
+    const actual = networkIdBytes(exactNetworkId, `${context}.networkId`);
+    const expected = networkIdBytes(
+      localSigningContext.networkId,
+      `${context}.localSigningContext.networkId`,
+    );
+    if (!actual.every((byte, index) => byte === expected[index])) {
+      throw new TypeError(
+        `${context} networkId must equal the client's exact LocalSigningContext`,
+      );
+    }
+    return { signal, canonicalAuth, exactNetworkId };
+  }
+
   function normalizeGovernancePlainBallotPayload(input) {
     const context = "governanceSubmitPlainBallot payload";
     const record = ensureRecord(input, context);
@@ -893,9 +927,9 @@ export function createToriiGovernanceNormalizers({
         record.authority,
         "governanceSubmitPlainBallot.authority",
       ),
-      chain_id: requireExactTokenString(
-        record.chainId,
-        "governanceSubmitPlainBallot.chainId",
+      network_id: normalizeNetworkId(
+        record.networkId,
+        "governanceSubmitPlainBallot.networkId",
       ),
       referendum_id: requireGovernanceSelectorString(
         record.referendumId,
@@ -932,9 +966,9 @@ export function createToriiGovernanceNormalizers({
         record.authority,
         "governanceSubmitParliamentBallot.authority",
       ),
-      chain_id: requireExactTokenString(
-        record.chainId,
-        "governanceSubmitParliamentBallot.chainId",
+      network_id: normalizeNetworkId(
+        record.networkId,
+        "governanceSubmitParliamentBallot.networkId",
       ),
       proposal_id: normalizeHex32String(
         record.proposalId,
@@ -1009,9 +1043,9 @@ export function createToriiGovernanceNormalizers({
         record.authority,
         "governanceSubmitZkBallotV1.authority",
       ),
-      chain_id: requireExactTokenString(
-        record.chainId,
-        "governanceSubmitZkBallotV1.chainId",
+      network_id: normalizeNetworkId(
+        record.networkId,
+        "governanceSubmitZkBallotV1.networkId",
       ),
       election_id: requireGovernanceSelectorString(
         record.electionId,
@@ -1159,9 +1193,9 @@ export function createToriiGovernanceNormalizers({
         record.authority,
         "governanceSubmitZkBallotProofV1.authority",
       ),
-      chain_id: requireExactTokenString(
-        record.chainId,
-        "governanceSubmitZkBallotProofV1.chainId",
+      network_id: normalizeNetworkId(
+        record.networkId,
+        "governanceSubmitZkBallotProofV1.networkId",
       ),
       election_id: requireGovernanceSelectorString(
         record.electionId,
@@ -1174,6 +1208,7 @@ export function createToriiGovernanceNormalizers({
 
   return {
     createEmptyGovernanceDraftResponse,
+    normalizeGovernanceBallotIdentity,
     normalizeGovernanceBallotResponse,
     normalizeGovernanceDeployContractProposalPayload,
     normalizeGovernanceDraftResponse,

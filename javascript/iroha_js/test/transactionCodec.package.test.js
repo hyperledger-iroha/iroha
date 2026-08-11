@@ -41,12 +41,15 @@ test("transaction codec is identical across root, browser, dist, and package sub
   }
 });
 
-test("source and packaged codecs reject malformed Unicode before other fields", () => {
+test("source and packaged codecs reject every retired ordinary-transaction chain alias", () => {
   for (const codec of [sourceSubpath, distSubpath, distRoot, browserAggregate, packageSubpath]) {
-    assert.throws(
-      () => codec.buildBrowserTransferPayload({ chainId: "bad\ud800" }),
-      (error) => error?.code === "invalid_input",
-    );
+    for (const field of ["chain", "chainId", "chain_id"]) {
+      assert.throws(
+        () => codec.buildBrowserTransferPayload({ [field]: "bad\ud800" }),
+        (error) => error?.code === "invalid_input",
+        field,
+      );
+    }
   }
 });
 
@@ -153,13 +156,15 @@ test("packed browser declarations compile without ambient Node types", () => {
     fs.writeFileSync(
       path.join(tempRoot, "consumer.ts"),
       [
+        'import { NetworkId } from "@iroha/iroha-js";',
         'import { NexusAppClient, type NexusFinalizeOptions, type NexusTransactionCodec } from "@iroha/iroha-js/nexus-app";',
         'import type { BrowserConnectApproval } from "@iroha/iroha-js/connect-browser";',
         'import { browserTransactionCodec, buildBrowserTransferPayload } from "@iroha/iroha-js/transaction-codec";',
         "const codec: NexusTransactionCodec = browserTransactionCodec;",
         "new NexusAppClient({ transactionCodec: codec });",
+        'const networkId = NetworkId.parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");',
         "const bytes: Uint8Array = buildBrowserTransferPayload({",
-        '  chainId: "chain", authority: "authority", sourceAssetHoldingId: "asset#authority",',
+        '  networkId, authority: "authority", sourceAssetHoldingId: "asset#authority",',
         '  quantity: "1", destinationAccountId: "destination",',
         '  feePayment: { payer: "authority", chargeLimits: [] },',
         "});",

@@ -1,5 +1,10 @@
-//! Contains the end-point querying logic.  This is where you need to
-//! add any custom end-point related logic.
+//! End-point querying logic, including custom public and authenticated routes.
+
+mod public_musubi;
+mod runtime_governance_client_auth;
+pub use public_musubi::{
+    PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
+};
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -49,7 +54,8 @@ use iroha_data_model::{
         AssetPermissionManifest, FeeSponsorProgramId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, UniversalAccountId,
     },
-    privacy::PrivacyCapabilitySnapshotV1,
+    privacy::PrivacyExact12CapabilityManifestV1,
+    sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -141,11 +147,6 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
-// Exact-release JSON repeats the bounded dependency vector in the authoritative home record and
-// the universal resolver row. Byte-budgeted resolver pages share this Musubi-specific ceiling,
-// which remains below the shared HTTP client's 64 MiB default.
-const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize =
-    iroha_data_model::musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -177,121 +178,6 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
-
-/// First-release public Musubi query endpoint selected without constructing a signer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PublicMusubiQueryPathV1 {
-    /// Fetch one exact structural package record.
-    ExactPackage,
-    /// Fetch one exact paired home/universal release snapshot.
-    ExactRelease,
-    /// Fetch one exact immutable provider bundle-attestation record.
-    ProviderBundleAttestation,
-    /// Fetch one finalized resolver-index page.
-    ResolverIndex,
-    /// Fetch one finalized structured-version page.
-    Versions,
-    /// Fetch one finalized package-member page.
-    Maintainers,
-    /// Fetch one finalized archive-location page.
-    ArchiveLocations,
-    /// Fetch bounded exact finalized archive cache-retention decisions.
-    ArchiveRetention,
-    /// Fetch one exact permanent global alias.
-    Alias,
-    /// Fetch one finalized permanent-alias history page.
-    AliasHistory,
-    /// Fetch one finalized byte-ordered package-prefix page.
-    OrderedPrefix,
-    /// Search the finalized-event package metadata projection.
-    Search,
-}
-
-impl PublicMusubiQueryPathV1 {
-    const fn path(self) -> &'static str {
-        match self {
-            Self::ExactPackage => "/v1/musubi/queries/exact-package",
-            Self::ExactRelease => "/v1/musubi/queries/exact-release",
-            Self::ProviderBundleAttestation => "/v1/musubi/queries/provider-bundle-attestation",
-            Self::ResolverIndex => "/v1/musubi/queries/resolver-index",
-            Self::Versions => "/v1/musubi/queries/versions",
-            Self::Maintainers => "/v1/musubi/queries/maintainers",
-            Self::ArchiveLocations => "/v1/musubi/queries/archive-locations",
-            Self::ArchiveRetention => "/v1/musubi/queries/archive-retention",
-            Self::Alias => "/v1/musubi/queries/alias",
-            Self::AliasHistory => "/v1/musubi/queries/alias-history",
-            Self::OrderedPrefix => "/v1/musubi/queries/ordered-prefix",
-            Self::Search => "/v1/musubi/queries/search",
-        }
-    }
-}
-
-/// Result of a signer-free public Musubi query.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PublicMusubiQueryResultV1<T> {
-    /// The exact record or finalized page was returned and decoded.
-    Found(T),
-    /// No exact record exists at the requested finalized state.
-    NotFound,
-    /// A supplied finalized cursor is stale and must not be silently restarted.
-    StaleCursor,
-}
-
-/// Execute one bounded public Musubi V1 query without loading an account or key pair.
-///
-/// This function deliberately accepts only the fixed typed-query route inventory. It
-/// never attaches configured headers, canonical account authentication, or signing
-/// material. Callers that need to mutate state must construct [`Client`] separately.
-///
-/// # Errors
-/// Returns an error when the base URL is unsuitable for a public request, request or
-/// response JSON is invalid, transport fails, or Torii returns any status other than
-/// success, not-found, or stale-cursor.
-pub fn post_public_musubi_query_v1<Q, R>(
-    torii_url: &Url,
-    path: PublicMusubiQueryPathV1,
-    query: &Q,
-    timeout: Duration,
-) -> Result<PublicMusubiQueryResultV1<R>>
-where
-    Q: norito::json::JsonSerialize + ?Sized,
-    R: norito::json::JsonDeserialize,
-{
-    if !matches!(torii_url.scheme(), "http" | "https")
-        || !torii_url.username().is_empty()
-        || torii_url.password().is_some()
-    {
-        return Err(eyre!("invalid public Musubi Torii URL"));
-    }
-    let url = torii_url
-        .join(path.path())
-        .wrap_err("failed to build public Musubi query URL")?;
-    let body = norito::json::to_vec(query).wrap_err("failed to encode public Musubi query")?;
-    let mut builder = DefaultRequestBuilder::new(HttpMethod::POST, url)
-        .header("Content-Type", APPLICATION_JSON)
-        .header("Accept", APPLICATION_JSON)
-        .max_response_bytes(MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES)
-        .body(body);
-    if timeout != Duration::ZERO {
-        builder = builder.timeout(timeout);
-    }
-    let response = builder
-        .build()
-        .wrap_err("failed to build public Musubi query")?
-        .send()
-        .wrap_err("public Musubi query transport failed")?;
-    match response.status() {
-        StatusCode::OK => norito::json::from_slice(response.body())
-            .map(PublicMusubiQueryResultV1::Found)
-            .wrap_err("public Musubi query response was invalid"),
-        StatusCode::NOT_FOUND => Ok(PublicMusubiQueryResultV1::NotFound),
-        StatusCode::GONE => Ok(PublicMusubiQueryResultV1::StaleCursor),
-        status => Err(eyre!(
-            "public Musubi query failed with HTTP status {}",
-            status.as_u16()
-        )),
-    }
-}
 
 #[derive(
     Clone,
@@ -358,7 +244,6 @@ fn alias_setup_dependency_rank(intent: &AliasIntentV1) -> u8 {
 }
 
 /// Decode and verify every exact instruction frame in an alias setup plan.
-///
 /// This verifies the domain-separated plan-body hash, rejects blocker/conflict
 /// plans, requires the setup-only instruction surface, and proves that each
 /// framed instruction survives a registry decode/re-encode without changing
@@ -566,7 +451,6 @@ pub fn decode_and_verify_alias_setup_plan(
 }
 
 /// Verify that an alias setup plan is the complete canonical result for one request.
-///
 /// This extends [`decode_and_verify_alias_setup_plan`] by sorting the requested
 /// `EnsureAlias` instructions with the planner's public dependency order and
 /// comparing every acquisition term, quote guard, and resolved intent against
@@ -853,7 +737,8 @@ pub fn decode_and_verify_alias_auto_renew_plan_for_request(
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
 
-const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
+/// Domain separator for sponsored account-onboarding receipt commitments.
+pub const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
     b"iroha:account-onboarding-plan-receipt:v1\0";
 
 /// Secret-free intent accepted by the sponsored account-onboarding planner.
@@ -970,8 +855,8 @@ pub struct AccountOnboardingPlanBodyV1 {
     pub request: AccountOnboardingPlanRequestV1,
     /// Configured Torii authority and transaction payer.
     pub authority: AccountId,
-    /// Chain to which this receipt is bound.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network to which this receipt is bound.
+    pub network_id: NetworkId,
     /// Committed world-state anchor used during planning.
     pub anchor: AliasPlanAnchorV1,
     /// Canonical account-alias resource and live-state classification.
@@ -1044,6 +929,148 @@ impl AccountOnboardingPlanReceiptV1 {
     }
 }
 
+/// Deterministic sponsored-onboarding fixtures exposed only to repository tooling and tests.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod account_onboarding_test_fixture {
+    use eyre::{Result, WrapErr as _, eyre};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
+        alias_setup::{
+            AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+            AliasFramedInstructionV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasLeaseQuoteV1,
+            AliasPlanAnchorV1, AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1,
+            ResolvedAccountAliasV1,
+        },
+        block::BlockHeader,
+        isi::{InstructionBox, alias_setup::EnsureAlias, framed_instruction_payload},
+        nexus::DataSpaceId,
+    };
+
+    use super::{
+        AccountOnboardingPlanBodyV1, AccountOnboardingPlanReceiptV1,
+        AccountOnboardingPlanRequestV1, decode_and_verify_account_onboarding_plan_for_request,
+    };
+
+    /// One-byte input hashed into the exact fixture genesis identity.
+    pub const NETWORK_HASH_SEED_V1: u8 = 0xA1;
+    /// Ed25519 seed byte repeated for the fixture's target account.
+    pub const TARGET_ACCOUNT_KEY_SEED_V1: u8 = 0x22;
+    /// Ed25519 seed byte repeated for the fixture's onboarding authority.
+    pub const ONBOARDING_AUTHORITY_KEY_SEED_V1: u8 = 0x51;
+
+    /// Return the exact genesis-derived network used by the V1 onboarding fixture.
+    #[must_use]
+    pub fn network_id_v1() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
+            NETWORK_HASH_SEED_V1,
+        ])))
+    }
+
+    /// Construct and verify the canonical V1 sponsored-onboarding receipt.
+    ///
+    /// # Errors
+    /// Returns an error if a fixed key, canonical request, instruction frame, or signature cannot
+    /// be constructed, or if the resulting receipt fails its exact-network verifier.
+    pub fn receipt_v1() -> Result<AccountOnboardingPlanReceiptV1> {
+        let target_signer =
+            KeyPair::try_from_seed(vec![TARGET_ACCOUNT_KEY_SEED_V1; 32], Algorithm::Ed25519)
+                .wrap_err("derive deterministic onboarding target")?;
+        let target_account = AccountId::new(target_signer.public_key().clone());
+        let onboarding_signer = KeyPair::try_from_seed(
+            vec![ONBOARDING_AUTHORITY_KEY_SEED_V1; 32],
+            Algorithm::Ed25519,
+        )
+        .wrap_err("derive deterministic onboarding authority")?;
+        let authority = AccountId::new(onboarding_signer.public_key().clone());
+        let request = AccountOnboardingPlanRequestV1::try_new(
+            "merchant@banka.paynet",
+            &target_account,
+            Vec::new(),
+        )?;
+        let alias = ResolvedAccountAliasV1::new(
+            request
+                .alias
+                .parse::<AccountAliasName>()
+                .map_err(|error| eyre!("invalid deterministic onboarding alias: {error}"))?,
+            DataSpaceId::new(7),
+        );
+        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias,
+            target_account,
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        });
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 2,
+            expected_payment_asset: "4rPeAP6jAjiLVZThZYwwPRBuQagt".parse().map_err(|error| {
+                eyre!("invalid deterministic onboarding payment asset: {error}")
+            })?,
+            max_amount: 3_u64.into(),
+            valid_until_ms: 50_000,
+        };
+        let acquisition = AliasLeaseAcquisitionV1::new(1, None);
+        let ensure: InstructionBox =
+            EnsureAlias::new(intent.clone(), acquisition, guard.clone()).into();
+        let (wire_id, framed_payload) = framed_instruction_payload(&ensure)
+            .ok_or_else(|| eyre!("failed to frame deterministic onboarding instruction"))?;
+        let network_id = network_id_v1();
+        let body = AccountOnboardingPlanBodyV1 {
+            version: AccountOnboardingPlanBodyV1::VERSION,
+            request,
+            authority,
+            network_id,
+            anchor: AliasPlanAnchorV1 {
+                block_height: 11,
+                block_hash: Hash::new(b"account-onboarding-receipt-fixture-anchor"),
+            },
+            resource: AliasPlanResourceV1 {
+                intent: intent.clone(),
+                disposition: AliasPlanDispositionV1::Create,
+                quote: Some(AliasLeaseQuoteV1 {
+                    target: intent.target(),
+                    pricing_class: 1,
+                    exact_amount: 3_u64.into(),
+                    guard: guard.clone(),
+                    expires_at_ms: 1_000,
+                    grace_expires_at_ms: 2_000,
+                    redemption_expires_at_ms: 3_000,
+                }),
+                instruction_index: Some(0),
+            },
+            acquisition,
+            quote_guard: guard,
+            instructions: vec![AliasFramedInstructionV1 {
+                wire_id: wire_id.to_owned(),
+                framed_payload,
+            }],
+            owner_auto_renew_instruction: None,
+            valid_until_ms: 50_000,
+        };
+        let plan_hash = body.canonical_hash();
+        let signature = Signature::try_new(onboarding_signer.private_key(), plan_hash.as_ref())
+            .wrap_err("sign deterministic onboarding receipt")?;
+        let receipt = AccountOnboardingPlanReceiptV1 {
+            body,
+            plan_hash,
+            signature,
+        };
+        let instructions = decode_and_verify_account_onboarding_plan_for_request(
+            network_id,
+            &receipt.body.request,
+            &receipt,
+        )?;
+        if instructions.len() != 1 {
+            return Err(eyre!(
+                "deterministic onboarding receipt produced {} instructions; expected one",
+                instructions.len()
+            ));
+        }
+        Ok(receipt)
+    }
+}
+
 /// Verify a sponsored onboarding receipt against the exact secret-free request.
 ///
 /// The receipt hash and signature, normalized request, resource disposition,
@@ -1060,6 +1087,7 @@ impl AccountOnboardingPlanReceiptV1 {
     reason = "the onboarding verifier preserves the receipt's ordered fail-closed checks"
 )]
 pub fn decode_and_verify_account_onboarding_plan_for_request(
+    expected_network_id: NetworkId,
     request: &AccountOnboardingPlanRequestV1,
     receipt: &AccountOnboardingPlanReceiptV1,
 ) -> Result<Vec<InstructionBox>> {
@@ -1069,6 +1097,12 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
             "unsupported account onboarding receipt version {}; expected {}",
             receipt.body.version,
             AccountOnboardingPlanBodyV1::VERSION,
+        ));
+    }
+    if receipt.body.network_id != expected_network_id {
+        return Err(eyre!(
+            "account onboarding receipt network `{}` does not match expected network `{expected_network_id}`",
+            receipt.body.network_id,
         ));
     }
     if receipt.body.request != canonical_request {
@@ -2922,11 +2956,16 @@ fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV
 }
 
 fn sccp_route_governance_proposal_id(
+    network_id: iroha_data_model::NetworkId,
     action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
 ) -> Result<[u8; 32]> {
     use blake2::{Blake2b512, Digest as _};
 
-    let canonical = norito::codec::Encode::encode(action);
+    let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+        network_id,
+        action: action.clone(),
+    };
+    let canonical = norito::codec::Encode::encode(&anchor);
     let action_len: u32 = canonical
         .len()
         .try_into()
@@ -2948,13 +2987,14 @@ fn sccp_route_governance_proposal_id(
 fn validate_sccp_route_governance_draft_response(
     response: &SccpRouteGovernanceDraftResponse,
     request: &SccpRouteGovernanceDraftRequest,
+    network_id: iroha_data_model::NetworkId,
 ) -> Result<()> {
     if !response.ok {
         return Err(eyre!(
             "SCCP route-governance draft response is not successful"
         ));
     }
-    let expected_proposal_id = sccp_route_governance_proposal_id(&request.action)?;
+    let expected_proposal_id = sccp_route_governance_proposal_id(network_id, &request.action)?;
     if decode_exact_nonzero_sccp_hex32(&response.proposal_id, "SCCP route-governance proposal id")?
         != expected_proposal_id
     {
@@ -2988,7 +3028,8 @@ fn validate_sccp_route_governance_draft_response(
         .ok_or_else(|| {
             eyre!("SCCP route-governance draft returned a different instruction type")
         })?;
-    if proposed.action != request.action
+    if proposed.anchor.network_id != network_id
+        || proposed.anchor.action != request.action
         || proposed.window != request.window
         || proposed.mode != request.mode
     {
@@ -3140,10 +3181,10 @@ fn validate_taira_only_sccp_registry(
 }
 
 fn validate_sccp_taira_client_chain(chain: &ChainId) -> Result<()> {
-    if chain.to_string() != iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1 {
+    if chain.to_string() != iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1 {
         return Err(eyre!(
             "SCCP submit endpoints require the exact public Taira chain id `{}`",
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
         ));
     }
     Ok(())
@@ -3526,14 +3567,16 @@ fn validate_sccp_bridge_transaction_payload(
     payload: &iroha_data_model::transaction::signed::TransactionPayload,
     expectation: &SccpBridgeSubmitExpectation,
     expected_route_configuration_hash: Option<[u8; 32]>,
-    expected_chain: &ChainId,
+    expected_network_id: &NetworkId,
     expected_creation_time_ms: u64,
 ) -> Result<()> {
     use iroha_data_model::{bridge::BridgeProofPayload, transaction::Executable};
 
-    if &payload.chain != expected_chain {
+    if payload.domain
+        != iroha_data_model::transaction::TransactionDomain::Network(*expected_network_id)
+    {
         return Err(eyre!(
-            "bridge submit response transaction payload targets the wrong chain"
+            "bridge submit response transaction payload targets the wrong network"
         ));
     }
     if payload.authority != expectation.authority {
@@ -3624,7 +3667,9 @@ fn exact_sccp_client_transaction_builder(
     canonical_payload_bytes: &[u8],
 ) -> Result<TransactionBuilder> {
     let mut builder = TransactionBuilder::new(
-        payload.chain.clone(),
+        *payload.network_id().ok_or_else(|| {
+            eyre!("SCCP transaction payload cannot use the genesis-only transaction domain")
+        })?,
         payload.authority.clone(),
         payload.fee_payment.clone(),
     );
@@ -3645,7 +3690,7 @@ fn preflight_sccp_direct_transaction(
     signature_b64: &str,
     expectation: &SccpBridgeSubmitExpectation,
     expected_route_configuration_hash: Option<[u8; 32]>,
-    expected_chain: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Result<[u8; 32]> {
     let expected_creation_time_ms = expectation.creation_time_ms.ok_or_else(|| {
         eyre!("signed SCCP submission requires an explicit positive creation_time_ms")
@@ -3655,7 +3700,7 @@ fn preflight_sccp_direct_transaction(
         &payload,
         expectation,
         expected_route_configuration_hash,
-        expected_chain,
+        expected_network_id,
         expected_creation_time_ms,
     )?;
     let signature = decode_sccp_detached_signature(signature_b64)?;
@@ -3684,7 +3729,7 @@ fn decode_sccp_bridge_submit_response(
     value: JsonValue,
     expectation: &SccpBridgeSubmitExpectation,
     expected_route_configuration_hash: [u8; 32],
-    expected_chain: &ChainId,
+    expected_network_id: &NetworkId,
     expected_submitted_tx_hash: Option<[u8; 32]>,
 ) -> Result<SccpBridgeSubmitResponse> {
     const FIELDS: [&str; 13] = [
@@ -3819,7 +3864,7 @@ fn decode_sccp_bridge_submit_response(
                 &payload,
                 expectation,
                 Some(expected_route_configuration_hash),
-                expected_chain,
+                expected_network_id,
                 response.creation_time_ms,
             )?;
         }
@@ -4692,7 +4737,7 @@ fn expected_zk_vk_record_from_request(
 fn decode_zk_vk_transaction_draft(
     body: &[u8],
     request: &norito::json::Value,
-    expected_chain: &ChainId,
+    expected_network_id: &NetworkId,
     operation: ZkVkDraftOperation,
 ) -> Result<ZkVkTransactionDraft> {
     let draft: ZkVkTransactionDraft = norito::json::from_slice(body)
@@ -4730,9 +4775,12 @@ fn decode_zk_vk_transaction_draft(
         )?,
         "verifying-key draft request.authority",
     )?;
-    if builder.payload().chain != *expected_chain || builder.payload().authority != authority {
+    if builder.payload().domain
+        != iroha_data_model::transaction::TransactionDomain::Network(*expected_network_id)
+        || builder.payload().authority != authority
+    {
         return Err(eyre!(
-            "verifying-key draft transaction payload changed the requested chain or authority"
+            "verifying-key draft transaction payload changed the requested network or authority"
         ));
     }
 
@@ -5156,26 +5204,60 @@ fn require_non_empty_path_segment<'a>(value: &'a str, context: &str) -> Result<&
     Ok(trimmed)
 }
 
-/// Filters for `/v1/sorafs/pin` listing endpoint.
-#[derive(Debug, Default, Clone)]
+/// Optional finalized-block anchor for authoritative `SoraFS` pin pages.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsPinFinalizedAnchor<'a> {
+    /// Non-zero finalized block height.
+    pub expected_finalized_height: Option<u64>,
+    /// Canonical lowercase finalized block hash.
+    pub expected_finalized_block_hash_hex: Option<&'a str>,
+}
+
+impl SorafsPinFinalizedAnchor<'_> {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(height) = self.expected_finalized_height {
+            req = req.param("expected_finalized_height", &height);
+        }
+        if let Some(block_hash) = self.expected_finalized_block_hash_hex {
+            req = req.param("expected_finalized_block_hash_hex", &block_hash);
+        }
+        req
+    }
+}
+
+/// Filters for the finalized `/v1/sorafs/pin` keyset page.
+#[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsPinListFilter<'a> {
-    /// Maximum number of manifests to return.
+    /// Optional finalized-block anchor shared by this page and its successor.
+    pub finalized: SorafsPinFinalizedAnchor<'a>,
+    /// Maximum number of bounded summaries to return (1 through 256).
     pub limit: Option<u32>,
-    /// Offset for pagination.
-    pub offset: Option<u32>,
-    /// Optional status filter (`pending`, `approved`, `retired`).
-    pub status: Option<&'a str>,
+    /// Maximum canonical encoded page bytes (1 KiB through 256 KiB).
+    pub max_bytes: Option<u32>,
+    /// Canonical lowercase exclusive manifest-digest cursor.
+    pub after_digest_hex: Option<&'a str>,
+    /// Optional closed lifecycle selector.
+    pub status: Option<PinStatusKindV1>,
 }
 
 impl SorafsPinListFilter<'_> {
     fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        req = self.finalized.apply(req);
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
-        if let Some(offset) = self.offset {
-            req = req.param("offset", &offset);
+        if let Some(max_bytes) = self.max_bytes {
+            req = req.param("max_bytes", &max_bytes);
+        }
+        if let Some(after_digest) = self.after_digest_hex {
+            req = req.param("after_digest_hex", &after_digest);
         }
         if let Some(status) = self.status {
+            let status = match status {
+                PinStatusKindV1::Pending => "pending",
+                PinStatusKindV1::Approved => "approved",
+                PinStatusKindV1::Retired => "retired",
+            };
             req = req.param("status", &status);
         }
         req
@@ -6797,8 +6879,6 @@ pub struct SorafsPinAlias<'a> {
 pub struct SorafsPinRegisterArgs<'a> {
     /// Exact canonical Norito `ManifestV1` bytes to register.
     pub manifest_payload: &'a [u8],
-    /// Epoch at which the registration was submitted.
-    pub submitted_epoch: u64,
     /// Optional alias binding to attach to the manifest entry.
     pub alias: Option<SorafsPinAlias<'a>>,
     /// Optional predecessor manifest hash when rotating registrations.
@@ -7008,22 +7088,22 @@ pub enum DataModelCompatibility {
 type DataModelCompatibilityState = Arc<Mutex<DataModelCompatibility>>;
 
 fn data_model_compatibility_cache_key(
-    chain: &ChainId,
+    network_id: &NetworkId,
     torii_url: &Url,
     account: &AccountId,
 ) -> String {
-    format!("{chain}|{}|{account}", torii_url.as_str())
+    format!("{network_id}|{}|{account}", torii_url.as_str())
 }
 
 fn shared_data_model_compatibility_state(
-    chain: &ChainId,
+    network_id: &NetworkId,
     torii_url: &Url,
     account: &AccountId,
 ) -> DataModelCompatibilityState {
     static CACHE: OnceLock<Mutex<HashMap<String, Weak<Mutex<DataModelCompatibility>>>>> =
         OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = data_model_compatibility_cache_key(chain, torii_url, account);
+    let key = data_model_compatibility_cache_key(network_id, torii_url, account);
 
     let mut guard = cache.lock().expect("data model compatibility cache lock");
     if let Some(existing) = guard.get(&key).and_then(Weak::upgrade) {
@@ -7089,13 +7169,20 @@ impl TransactionResponseHandler {
 
 fn async_http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
-            .build()
-            .expect("Failed to build async HTTP client")
-    })
+    CLIENT.get_or_init(build_async_http_client)
+}
+
+fn build_async_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        // Signed transaction bodies are one-shot. A redirect can arrive after
+        // the original endpoint admitted the request, so replaying the body at
+        // the target would make the transport outcome ambiguous.
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("Failed to build async HTTP client")
 }
 
 async fn async_client_response_to_response(
@@ -7439,6 +7526,44 @@ impl Client {
         Self::require_governance_selector_v1(selector, &format!("{context}.{field}"))
     }
 
+    fn require_exact_governance_ballot_identity(
+        &self,
+        value: &JsonValue,
+        context: &str,
+    ) -> Result<()> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| eyre!("{context} must be a JSON object"))?;
+        for retired in ["chain_id", "genesis_hash"] {
+            if object.contains_key(retired) {
+                return Err(eyre!(
+                    "{context}.{retired} is retired; use the one mandatory network_id field"
+                ));
+            }
+        }
+        let network_value = object
+            .get("network_id")
+            .ok_or_else(|| eyre!("{context}.network_id is required"))?
+            .clone();
+        let network_id: NetworkId = norito::json::from_value(network_value)
+            .wrap_err_with(|| format!("{context}.network_id must be a canonical NetworkId"))?;
+        if network_id != self.network_id {
+            return Err(eyre!(
+                "{context}.network_id `{network_id}` does not match client NetworkId `{}`",
+                self.network_id
+            ));
+        }
+        let authority = Self::require_json_string_field(value, "authority", context)?;
+        let authority =
+            parse_canonical_i105_account_id(authority, &format!("{context}.authority"))?;
+        if authority != self.account {
+            return Err(eyre!(
+                "{context}.authority must equal the canonically authenticated client account"
+            ));
+        }
+        Ok(())
+    }
+
     fn require_json_lower_hex_32(value: &JsonValue, field: &str, context: &str) -> Result<()> {
         let hex = Self::require_json_string_field(value, field, context)?;
         Self::require_lower_hex_32(hex, &format!("{context}.{field}"))
@@ -7572,7 +7697,7 @@ impl Client {
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
             return Err(eyre!(
-                "offline capability response does not advertise native bridge ABI 21"
+                "offline capability response does not advertise native bridge ABI 22"
             ));
         }
         if status.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
@@ -8307,7 +8432,7 @@ mod offline_client_tests {
 
         assert!(!result.mandatory);
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(result.required_bridge_abi_version, 21);
+        assert_eq!(result.required_bridge_abi_version, 22);
         assert_eq!(result.max_hops, 8);
         assert!(result.ready);
         assert!(result.assets.is_empty());
@@ -9025,6 +9150,7 @@ mod evidence_http_tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let config = Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: test_network_id(),
             key_pair,
             account: account_id,
             account_chain_discriminant:
@@ -9148,6 +9274,7 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
+        assert_canonical_account_signed_json_request(&client, snapshot);
     }
 
     #[test]
@@ -9731,7 +9858,7 @@ mod evidence_http_tests {
     }
 
     fn vk_transaction_draft_response(
-        chain: &ChainId,
+        network_id: NetworkId,
         authority: &AccountId,
         request: &norito::json::Value,
         operation: ZkVkDraftOperation,
@@ -9752,7 +9879,7 @@ mod evidence_http_tests {
             ZkVkDraftOperation::Update => InstructionBox::from(UpdateVerifyingKey { id, record }),
         };
         let builder = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9787,13 +9914,13 @@ mod evidence_http_tests {
             ],
         );
         let register_response = vk_transaction_draft_response(
-            &client.chain,
+            client.network_id,
             &authority,
             &register_req,
             ZkVkDraftOperation::Register,
         );
         let update_response = vk_transaction_draft_response(
-            &client.chain,
+            client.network_id,
             &authority,
             &update_req,
             ZkVkDraftOperation::Update,
@@ -9853,7 +9980,7 @@ mod evidence_http_tests {
         let authority = client.account.clone();
         let request = vk_submission_json(&authority, &[]);
         let valid_response = vk_transaction_draft_response(
-            &client.chain,
+            client.network_id,
             &authority,
             &request,
             ZkVkDraftOperation::Register,
@@ -10090,6 +10217,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
+        assert_canonical_account_signed_request(&client, snapshot);
     }
 
     #[test]
@@ -10113,6 +10241,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
+        assert_canonical_account_signed_request(&client, snapshot);
     }
 
     type SorafsFetchHook = Arc<
@@ -10413,14 +10542,12 @@ mod evidence_http_tests {
 
         let instruction = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &manifest_payload,
-            submitted_epoch: 9,
             alias: Some(alias),
             successor_of: Some(successor),
         })
         .expect("instruction build succeeds");
 
         assert_eq!(instruction.manifest_payload, manifest_payload);
-        assert_eq!(instruction.submitted_epoch, 9);
         let alias = instruction.alias.expect("alias binding");
         assert_eq!(alias.namespace, "sora");
         assert_eq!(alias.name, "docs");
@@ -10451,13 +10578,11 @@ mod evidence_http_tests {
         let explicit_manifest_payload = manifest.encode().expect("canonical manifest encoding");
         let instruction = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &explicit_manifest_payload,
-            submitted_epoch: 10,
             alias: None,
             successor_of: None,
         })
         .expect("instruction build succeeds");
         assert_eq!(instruction.manifest_payload, explicit_manifest_payload);
-        assert_eq!(instruction.submitted_epoch, 10);
         assert!(instruction.alias.is_none());
         assert!(instruction.successor_of.is_none());
     }
@@ -10468,7 +10593,6 @@ mod evidence_http_tests {
 
         let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: mismatched_manifest_bytes,
-            submitted_epoch: 10,
             alias: None,
             successor_of: None,
         })
@@ -10491,7 +10615,6 @@ mod evidence_http_tests {
 
         let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &legacy_manifest_bytes,
-            submitted_epoch: 10,
             alias: None,
             successor_of: None,
         })
@@ -10510,7 +10633,6 @@ mod evidence_http_tests {
 
         let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &oversized,
-            submitted_epoch: 10,
             alias: None,
             successor_of: None,
         })
@@ -10554,7 +10676,6 @@ mod evidence_http_tests {
         for alias in cases {
             let _ = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
                 manifest_payload: &manifest_payload,
-                submitted_epoch: 10,
                 alias: Some(alias),
                 successor_of: None,
             })
@@ -10569,7 +10690,6 @@ mod evidence_http_tests {
 
         let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &manifest_payload,
-            submitted_epoch: 10,
             alias: None,
             successor_of: Some([0; 32]),
         })
@@ -11118,14 +11238,13 @@ mod evidence_http_tests {
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
-                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                prelude::{AccountId, TransactionBuilder},
                 query::CommittedTransaction,
                 transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
             },
         };
 
-        let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let network_id = test_network_id();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -11136,7 +11255,7 @@ mod evidence_http_tests {
                 .parse()
                 .unwrap();
         let tx = TransactionBuilder::new(
-            chain,
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11335,7 +11454,7 @@ mod evidence_http_tests {
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
                 ValidationFail,
-                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                prelude::{AccountId, TransactionBuilder},
                 query::CommittedTransaction,
                 transaction::{
                     TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
@@ -11343,8 +11462,7 @@ mod evidence_http_tests {
             },
         };
 
-        let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let network_id = test_network_id();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -11355,7 +11473,7 @@ mod evidence_http_tests {
                 .parse()
                 .unwrap();
         let tx = TransactionBuilder::new(
-            chain,
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11679,7 +11797,6 @@ mod evidence_http_tests {
             PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
-                rejection_reason: None,
             },
             "global".to_owned(),
             "queue".to_owned(),
@@ -11731,7 +11848,6 @@ mod evidence_http_tests {
             PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: Some(7),
-                rejection_reason: None,
             },
             "local".to_owned(),
             "state".to_owned(),
@@ -11780,7 +11896,6 @@ mod evidence_http_tests {
             PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: Some(7),
-                rejection_reason: None,
             },
             "global".to_owned(),
             "state".to_owned(),
@@ -11949,14 +12064,13 @@ mod evidence_http_tests {
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
-                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                prelude::{AccountId, TransactionBuilder},
                 query::CommittedTransaction,
                 transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
             },
         };
 
-        let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let network_id = test_network_id();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -11967,7 +12081,7 @@ mod evidence_http_tests {
                 .parse()
                 .unwrap();
         let tx = TransactionBuilder::new(
-            chain,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -12425,18 +12539,10 @@ pub struct TransactionWaitOutcome {
     pub elapsed_ms: u64,
     /// Block height reported for the terminal status when available.
     pub block_height: Option<u64>,
-    /// Rejection reason reported for rejected transactions.
-    pub rejection_reason: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
     /// Status read scope used by Torii.
     pub scope: String,
     /// Source used by Torii to resolve the terminal status.
     pub resolved_from: String,
-    /// One-line finality summary supplied by Torii.
-    pub summary: String,
-    /// Structured diagnostics supplied by Torii.
-    pub diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
-    /// Trigger completions supplied by Torii when available.
-    pub trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
@@ -12514,15 +12620,27 @@ fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
     }
 }
 
-/// Iroha client
+#[cfg(test)]
+pub(crate) fn test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA5; Hash::LENGTH],
+        )),
+    )
+}
+
+/// Iroha client.
+///
+/// Main entry point used by external applications to communicate with an Iroha
+/// peer. The client is lightweight and holds only configuration data needed to
+/// build and sign transactions.
 #[derive(Clone, Display)]
 #[display("{}@{torii_url}", key_pair.public_key())]
-/// Main entry point used by external applications to communicate with an Iroha
-/// peer.  The client is lightweight and holds only configuration data needed
-/// to build and sign transactions.
 pub struct Client {
-    /// Unique id of the blockchain. Used for simple replay attack protection.
+    /// Human-readable business chain label used by APIs that explicitly carry a [`ChainId`].
     pub chain: ChainId,
+    /// Exact genesis-lineage identity used for signed transaction and query domain separation.
+    pub network_id: NetworkId,
     /// Url for accessing Iroha node
     pub torii_url: Url,
     /// Accounts keypair
@@ -12584,6 +12702,7 @@ impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("chain", &self.chain)
+            .field("network_id", &self.network_id)
             .field("torii_url", &self.torii_url)
             .field("public_key", &self.key_pair.public_key())
             .field("transaction_ttl", &self.transaction_ttl)
@@ -12629,6 +12748,7 @@ impl Client {
     pub fn with_headers(
         Config {
             chain,
+            network_id,
             account,
             account_chain_discriminant: _account_chain_discriminant,
             torii_api_url,
@@ -12658,10 +12778,11 @@ impl Client {
         }
 
         let data_model_compatibility =
-            shared_data_model_compatibility_state(&chain, &torii_api_url, &account);
+            shared_data_model_compatibility_state(&network_id, &torii_api_url, &account);
 
         Self {
             chain,
+            network_id,
             torii_url: torii_api_url,
             key_pair,
             transaction_ttl: Some(transaction_ttl),
@@ -12776,17 +12897,48 @@ impl Client {
         .into_bytes()
     }
 
-    fn operator_request_message(
+    fn operator_network_request_message(
+        network_id: &NetworkId,
         method: &HttpMethod,
         url: &Url,
         body: &[u8],
         timestamp_ms: u64,
         nonce: &str,
     ) -> Vec<u8> {
-        let mut message = Self::canonical_request_message(method, url, body);
+        const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
+        let canonical_request = Self::canonical_request_message(method, url, body);
+        let mut message = Vec::with_capacity(
+            DOMAIN.len() + network_id.as_bytes().len() + canonical_request.len() + nonce.len() + 32,
+        );
+        message.extend_from_slice(DOMAIN);
+        message.extend_from_slice(network_id.as_bytes());
+        message.extend_from_slice(&canonical_request);
         message.extend_from_slice(b"\n");
         message.extend_from_slice(timestamp_ms.to_string().as_bytes());
         message.extend_from_slice(b"\n");
+        message.extend_from_slice(nonce.as_bytes());
+        message
+    }
+
+    fn exact_network_request_message(
+        network_id: &NetworkId,
+        method: &HttpMethod,
+        url: &Url,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> Vec<u8> {
+        const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
+        let request = Self::canonical_request_message(method, url, body);
+        let mut message = Vec::with_capacity(
+            DOMAIN.len() + network_id.as_bytes().len() + request.len() + 2 + 20 + nonce.len(),
+        );
+        message.extend_from_slice(DOMAIN);
+        message.extend_from_slice(network_id.as_bytes());
+        message.extend_from_slice(&request);
+        message.push(b'\n');
+        message.extend_from_slice(timestamp_ms.to_string().as_bytes());
+        message.push(b'\n');
         message.extend_from_slice(nonce.as_bytes());
         message
     }
@@ -12846,7 +12998,14 @@ impl Client {
             .try_into()
             .unwrap_or(u64::MAX);
         let nonce = Self::signed_request_nonce()?;
-        let message = Self::operator_request_message(&method, &url, &body, timestamp_ms, &nonce);
+        let message = Self::exact_network_request_message(
+            &self.network_id,
+            &method,
+            &url,
+            &body,
+            timestamp_ms,
+            &nonce,
+        );
         let signature = Signature::try_new(self.key_pair.private_key(), &message)
             .wrap_err("failed to sign account request headers")?;
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
@@ -12878,8 +13037,14 @@ impl Client {
                 .try_into()
                 .unwrap_or(u64::MAX);
             let nonce = Self::signed_request_nonce()?;
-            let message =
-                Self::operator_request_message(&method, &url, &body, timestamp_ms, nonce.as_str());
+            let message = Self::operator_network_request_message(
+                &self.network_id,
+                &method,
+                &url,
+                &body,
+                timestamp_ms,
+                nonce.as_str(),
+            );
             let signature = Signature::try_new(operator_key_pair.private_key(), &message)
                 .wrap_err("failed to sign operator request headers")?;
             let public_key = operator_key_pair.public_key().to_string();
@@ -13111,7 +13276,7 @@ impl Client {
         R: rand::rand_core::TryCryptoRng + ?Sized,
     {
         let mut builder =
-            TransactionBuilder::new(self.chain.clone(), self.account.clone(), fee_payment)
+            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
                 .with_executable(instructions.into());
         self.apply_transaction_defaults_with_rng(&mut builder, rng)?;
         builder
@@ -13132,7 +13297,7 @@ impl Client {
         R: rand::rand_core::TryCryptoRng + ?Sized,
     {
         let mut tx_builder =
-            TransactionBuilder::new(self.chain.clone(), self.account.clone(), fee_payment)
+            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
                 .with_executable(instructions.into());
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
@@ -13206,7 +13371,7 @@ impl Client {
         I: Into<InstructionBox>,
     {
         let mut builder =
-            TransactionBuilder::new(self.chain.clone(), self.account.clone(), fee_payment)
+            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
                 .with_instructions(instructions);
         self.apply_transaction_defaults_with_rng(&mut builder, &mut rand::rngs::OsRng)?;
         builder
@@ -13227,7 +13392,7 @@ impl Client {
         R: rand::rand_core::TryCryptoRng + ?Sized,
     {
         let mut tx_builder =
-            TransactionBuilder::new(self.chain.clone(), self.account.clone(), fee_payment)
+            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
                 .with_instructions(instructions);
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
@@ -13255,14 +13420,27 @@ impl Client {
     /// Try to sign a transaction.
     ///
     /// # Errors
-    /// Fails if the configured signature backend cannot sign the transaction.
+    /// Fails if the transaction does not bind this client's exact network or
+    /// the configured signature backend cannot sign it.
     pub fn try_sign_transaction(
         &self,
         transaction: TransactionBuilder,
     ) -> Result<SignedTransaction> {
+        self.ensure_transaction_signing_domain(transaction.payload())?;
         transaction
             .try_sign(self.key_pair.private_key())
             .wrap_err("sign client transaction builder")
+    }
+
+    fn ensure_transaction_signing_domain(&self, payload: &TransactionPayload) -> Result<()> {
+        if payload.domain
+            != iroha_data_model::transaction::TransactionDomain::Network(self.network_id)
+        {
+            return Err(eyre!(
+                "transaction signing domain does not match the client network"
+            ));
+        }
+        Ok(())
     }
 
     /// Sign the exact payload previously quoted by Torii.
@@ -13273,12 +13451,14 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Fails if the payload is invalid, uses a non-single-key authority, names
-    /// an authority different from this client's key, or signing fails.
+    /// Fails if the payload does not bind this client's exact network, is
+    /// invalid, uses a non-single-key authority, names an authority different
+    /// from this client's key, or signing fails.
     pub fn try_sign_transaction_payload(
         &self,
         payload: TransactionPayload,
     ) -> Result<SignedTransaction> {
+        self.ensure_transaction_signing_domain(&payload)?;
         let signatory = payload.authority.try_signatory().ok_or_else(|| {
             eyre!("direct quote-to-sign requires a single-key transaction authority")
         })?;
@@ -14364,24 +14544,16 @@ impl Client {
                 }
                 if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
                     let block_height = response.status.block_height;
-                    let rejection_reason = response.status.rejection_reason.clone();
                     let scope = response.scope.clone();
                     let resolved_from = response.resolved_from.clone();
-                    let summary = response.summary.clone();
-                    let diagnostics = response.diagnostics.clone();
-                    let trigger_completions = response.trigger_completions.clone();
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
                         terminal_kind: kind.to_owned(),
                         attempts,
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
                         block_height,
-                        rejection_reason,
                         scope,
                         resolved_from,
-                        summary,
-                        diagnostics,
-                        trigger_completions,
                         r#final: response,
                     });
                 }
@@ -14867,9 +15039,8 @@ impl Client {
             "max": max,
         }))?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", "application/json")
-                .body(body),
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", "application/json"),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -14953,12 +15124,12 @@ impl Client {
     /// Request and fully verify one executable alias setup plan.
     ///
     /// In addition to verifying the plan hash and exact instruction frames,
-    /// this binds the response to this client's configured account and chain and
+    /// this binds the response to this client's configured account and network and
     /// rejects expired plans.
     ///
     /// # Errors
     /// Returns an error for request failures, non-success planner responses,
-    /// malformed JSON, an invalid plan, an authority/chain mismatch, or expiry.
+    /// malformed JSON, an invalid plan, an authority/network mismatch, or expiry.
     pub fn plan_alias_setup(
         &self,
         request: &AliasSetupPlanRequestV1,
@@ -15000,7 +15171,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error when plan verification fails, the plan belongs to a
-    /// different authority or chain, or its deadline has passed.
+    /// different authority or network, or its deadline has passed.
     pub fn verify_alias_setup_plan(
         &self,
         plan: &AliasTransactionPlanV1,
@@ -15012,11 +15183,11 @@ impl Client {
                 self.account,
             ));
         }
-        if plan.body.chain_id != self.chain {
+        if plan.body.network_id != self.network_id {
             return Err(eyre!(
-                "alias setup plan chain `{}` does not match client chain `{}`",
-                plan.body.chain_id,
-                self.chain,
+                "alias setup plan NetworkId `{}` does not match client NetworkId `{}`",
+                plan.body.network_id,
+                self.network_id,
             ));
         }
         let now_ms: u64 = SystemTime::now()
@@ -15198,7 +15369,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error when hash/frame verification fails, the plan belongs to
-    /// another authority or chain, or its deadline has passed.
+    /// another authority or network, or its deadline has passed.
     pub fn verify_alias_lifecycle_plan(
         &self,
         plan: &AliasLifecycleTransactionPlanV1,
@@ -15210,11 +15381,11 @@ impl Client {
                 self.account,
             ));
         }
-        if plan.body.chain_id != self.chain {
+        if plan.body.network_id != self.network_id {
             return Err(eyre!(
-                "alias lifecycle plan chain `{}` does not match client chain `{}`",
-                plan.body.chain_id,
-                self.chain,
+                "alias lifecycle plan NetworkId `{}` does not match client NetworkId `{}`",
+                plan.body.network_id,
+                self.network_id,
             ));
         }
         let now_ms: u64 = SystemTime::now()
@@ -15349,23 +15520,16 @@ impl Client {
         Ok(receipt)
     }
 
-    /// Verify a sponsored onboarding receipt in this client's chain context.
+    /// Verify a sponsored onboarding receipt in this client's exact network context.
     ///
     /// # Errors
     /// Returns an error for a substituted request, invalid receipt signature or
-    /// frames, chain mismatch, or expired deadline.
+    /// frames, network mismatch, or expired deadline.
     pub fn verify_account_onboarding_plan_for_request(
         &self,
         request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
     ) -> Result<Vec<InstructionBox>> {
-        if receipt.body.chain_id != self.chain {
-            return Err(eyre!(
-                "account onboarding receipt chain `{}` does not match client chain `{}`",
-                receipt.body.chain_id,
-                self.chain,
-            ));
-        }
         let now_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -15378,7 +15542,7 @@ impl Client {
                 receipt.body.valid_until_ms,
             ));
         }
-        decode_and_verify_account_onboarding_plan_for_request(request, receipt)
+        decode_and_verify_account_onboarding_plan_for_request(self.network_id, request, receipt)
     }
 
     /// Token-authenticated apply of one exact sponsored-onboarding receipt.
@@ -16130,6 +16294,8 @@ impl Client {
         manifest_bytes: Option<Vec<u8>>,
     ) -> Result<DaIngestRequest> {
         build_da_request(
+            self.network_id,
+            self.account.clone(),
             payload.into(),
             params,
             metadata,
@@ -16932,7 +17098,6 @@ impl Client {
     ) -> Result<iroha_data_model::isi::sorafs::RegisterPinManifest> {
         let SorafsPinRegisterArgs {
             manifest_payload,
-            submitted_epoch,
             alias,
             successor_of,
         } = params;
@@ -16951,7 +17116,6 @@ impl Client {
 
         Ok(iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             manifest_payload.to_vec(),
-            submitted_epoch,
             alias,
             successor_of,
         ))
@@ -17500,7 +17664,7 @@ impl Client {
         I: Into<InstructionBox>,
     {
         let mut builder = TransactionBuilder::new(
-            self.chain.clone(),
+            self.network_id,
             self.account.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -18635,12 +18799,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_zk_verify_batch_norito(&self, body: &[u8]) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/verify-batch");
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", "application/x-norito")
-            .body(body.to_vec())
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body.to_vec())?
+                .header("Content-Type", "application/x-norito"),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to verify-batch (norito) with HTTP status: {}. {}",
@@ -18662,12 +18824,10 @@ impl Client {
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/verify-batch");
         let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to verify-batch (json) with HTTP status: {}. {}",
@@ -18680,7 +18840,8 @@ impl Client {
 
     /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
     ///
-    /// The request body is expected to match the Torii app API DTO:
+    /// The configured account signs the exact-network request and must match
+    /// `authority`. The body is expected to match the Torii app API DTO:
     /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode }`.
     ///
     /// # Errors
@@ -18692,12 +18853,10 @@ impl Client {
         validate_zk_ivm_json(value, "zk ivm derive json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/ivm/derive");
         let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to derive ivm proved payload (json) with HTTP status: {}. {}",
@@ -18712,6 +18871,7 @@ impl Client {
     ///
     /// The request body is expected to match the Torii app API DTO:
     /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode, proved? }`.
+    /// The configured client account signs the exact request and must equal `authority`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -18722,12 +18882,10 @@ impl Client {
         validate_zk_ivm_json(value, "zk ivm prove json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/ivm/prove");
         let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to submit ivm prove job (json) with HTTP status: {}. {}",
@@ -18739,12 +18897,14 @@ impl Client {
     }
 
     /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    /// The configured client account signs the exact request and must own the job.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get ivm prove job (json) with HTTP status: {}. {}",
@@ -18756,12 +18916,14 @@ impl Client {
     }
 
     /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    /// The configured client account signs the exact request and must own the job.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn delete_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to delete ivm prove job (json) with HTTP status: {}. {}",
@@ -18783,9 +18945,8 @@ impl Client {
             "election_id": election_id,
         }))?;
         let resp = self
-            .default_request(HttpMethod::POST, url)
+            .account_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
-            .body(body)
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
@@ -18798,22 +18959,19 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Upload an attachment to the app API `/v1/zk/attachments`.
-    /// Returns JSON metadata `{ id, size, content_type, created_ms }`.
+    /// Upload an attachment to `/v1/zk/attachments`; returns its JSON metadata.
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is not `201 Created`, or response JSON deserialization fails.
+    /// Returns an error if canonical request signing or HTTP fails, the response is not `201 Created`, or response JSON deserialization fails.
     pub fn post_zk_attachment(
         &self,
         body: &[u8],
         content_type: &str,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/attachments");
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", content_type)
-            .body(body.to_vec())
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body.to_vec())?
+                .header("Content-Type", content_type),
+        )?;
         if resp.status() != StatusCode::CREATED {
             return Err(eyre!(
                 "Failed to upload attachment with HTTP status: {}. {}",
@@ -18834,9 +18992,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/gov/proposals/deploy-contract");
         let body = norito::json::to_vec(value)?;
         let resp = self
-            .default_request(HttpMethod::POST, url)
+            .account_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
-            .body(body)
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
@@ -18882,11 +19039,10 @@ impl Client {
         );
         let body = norito::json::to_vec(request)?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
-                .body(body),
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -18903,7 +19059,7 @@ impl Client {
         }
         let response: SccpRouteGovernanceDraftResponse = norito::json::from_slice(resp.body())
             .wrap_err("failed to decode typed SCCP route-governance draft response")?;
-        validate_sccp_route_governance_draft_response(&response, request)?;
+        validate_sccp_route_governance_draft_response(&response, request, self.network_id)?;
         Ok(response)
     }
 
@@ -18935,11 +19091,10 @@ impl Client {
             torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
         );
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_NORITO)
                 .header("Accept", APPLICATION_NORITO)
-                .max_response_bytes(VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES)
-                .body(body),
+                .max_response_bytes(VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES),
         )?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
@@ -18958,7 +19113,7 @@ impl Client {
             .wrap_err("failed to decode validation-fee policy proof")?;
         proof
             .verify_against(
-                self.chain.clone(),
+                self.network_id,
                 trusted_checkpoint_height,
                 trusted_checkpoint_context_id,
             )
@@ -19041,7 +19196,7 @@ impl Client {
             url.query_pairs_mut().append_pair("cursor", cursor);
         }
         let response = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
         )?;
@@ -19126,7 +19281,7 @@ impl Client {
         let path = torii_uri::VALIDATION_FEE_PROPOSAL_DETAIL.replace("{proposal_id}", proposal_id);
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
         )?;
@@ -19167,11 +19322,10 @@ impl Client {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode validation-fee proposal draft")?;
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES)
-                .body(body),
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
         )?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
@@ -19217,6 +19371,11 @@ impl Client {
         request: &ValidationFeePlainBallotDraftRequestV1,
     ) -> Result<ValidationFeePlainBallotDraftResponseV1> {
         Self::require_lower_hex_32(proposal_id, "proposal_id")?;
+        if request.owner != self.account {
+            return Err(eyre!(
+                "validation-fee PLAIN ballot owner must equal the client account"
+            ));
+        }
         if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
             return Err(eyre!(
                 "validation-fee PLAIN ballot draft has an unsupported version"
@@ -19228,11 +19387,10 @@ impl Client {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode validation-fee PLAIN ballot draft")?;
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES)
-                .body(body),
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
         )?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
@@ -19248,13 +19406,19 @@ impl Client {
         Ok(result)
     }
 
-    /// POST `/v1/gov/ballots/zk-v1` with the canonical flat envelope DTO.
+    /// Draft a ZK ballot instruction via `/v1/gov/ballots/zk-v1`.
+    ///
+    /// The body must carry this client's exact [`NetworkId`] and canonical account authority. The
+    /// request is signed over that exact network and dispatched once; the response is an unsigned
+    /// instruction draft for local transaction signing.
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    /// Returns an error if the body identity is missing or mismatched, the HTTP request fails, the
+    /// response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_ballot_zk_v1_json(
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        self.require_exact_governance_ballot_identity(value, "governance ZK ballot request")?;
         Self::require_json_governance_selector_v1(
             value,
             "election_id",
@@ -19262,15 +19426,14 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk-v1");
         let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit ZK V1 ballot: {} {}",
+                "Failed to draft ZK V1 ballot: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -19278,13 +19441,19 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/ballots/plain` with a JSON DTO body.
+    /// Draft a PLAIN ballot instruction via `/v1/gov/ballots/plain`.
+    ///
+    /// The body must carry this client's exact [`NetworkId`] and canonical account authority. The
+    /// request is signed over that exact network and dispatched once; the response is an unsigned
+    /// instruction draft for local transaction signing.
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    /// Returns an error if the body identity is missing or mismatched, the HTTP request fails, the
+    /// response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_ballot_plain_json(
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        self.require_exact_governance_ballot_identity(value, "governance plain ballot request")?;
         Self::require_json_governance_selector_v1(
             value,
             "referendum_id",
@@ -19292,15 +19461,14 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/gov/ballots/plain");
         let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit plain ballot: {} {}",
+                "Failed to draft plain ballot: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -19383,9 +19551,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/gov/enact");
         let body = norito::json::to_vec(value)?;
         let resp = self
-            .default_request(HttpMethod::POST, url)
+            .account_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
-            .body(body)
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
@@ -19405,7 +19572,7 @@ impl Client {
         Self::require_lower_hex_32(id_hex, "proposal_id")?;
         let path = format!("v1/gov/proposals/{id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get proposal: {} {}",
@@ -19423,7 +19590,7 @@ impl Client {
         Self::require_governance_selector_v1(rid, "referendum_id")?;
         let path = format!("v1/gov/locks/{rid}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get locks: {} {}",
@@ -19439,7 +19606,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_council_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/council/current");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get council: {} {}",
@@ -19455,7 +19622,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_citizens_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/citizens");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get citizens: {} {}",
@@ -19473,7 +19640,7 @@ impl Client {
         Self::require_governance_selector_v1(id, "referendum_id")?;
         let path = format!("v1/gov/referenda/{id}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get referendum: {} {}",
@@ -19492,7 +19659,7 @@ impl Client {
         Self::require_governance_selector_v1(id, "referendum_id")?;
         let path = format!("v1/gov/tally/{id}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get tally: {} {}",
@@ -19509,7 +19676,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_unlock_stats_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/unlocks/stats");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get unlock stats: {} {}",
@@ -19526,7 +19693,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_protected_namespaces_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/protected-namespaces");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get protected namespaces: {} {}",
@@ -19770,9 +19937,12 @@ impl Client {
                 "contract call signing message does not match the transaction payload"
             ));
         }
-        if builder.payload().chain != self.chain || &builder.payload().authority != authority {
+        if builder.payload().domain
+            != iroha_data_model::transaction::TransactionDomain::Network(self.network_id)
+            || &builder.payload().authority != authority
+        {
             return Err(eyre!(
-                "contract call transaction payload changed the requested chain or authority"
+                "contract call transaction payload changed the requested network or authority"
             ));
         }
 
@@ -19809,7 +19979,6 @@ impl Client {
                     iroha_torii_shared::PipelineTransactionStatus {
                         kind: "Queued".to_owned(),
                         block_height: None,
-                        rejection_reason: None,
                     },
                     "local".to_owned(),
                     "queue".to_owned(),
@@ -20147,7 +20316,7 @@ impl Client {
     pub fn get_runtime_abi_active_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/abi/active");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_get_request(url)?
                 .header("Accept", APPLICATION_JSON),
         )?;
         if resp.status() != StatusCode::OK {
@@ -20239,7 +20408,7 @@ impl Client {
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_get_request(url)?
                 .header(http::header::ACCEPT, APPLICATION_JSON),
         )?;
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -20284,7 +20453,7 @@ impl Client {
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_get_request(url)?
                 .header(http::header::ACCEPT, APPLICATION_JSON),
         )?;
         if resp.status() != StatusCode::OK {
@@ -20299,7 +20468,7 @@ impl Client {
 
     /// GET `/v1/privacy/capabilities`.
     ///
-    /// Returns the authoritative committed privacy capability snapshot as
+    /// Returns the authoritative committed Exact12 capability manifest as
     /// validated canonical JSON. Static SDK catalogs are not consulted.
     ///
     /// # Errors
@@ -20310,7 +20479,7 @@ impl Client {
     pub fn get_privacy_capabilities_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_get_request(url)?
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
@@ -20327,18 +20496,18 @@ impl Client {
                 "privacy capabilities response has invalid content type {content_type}"
             ));
         }
-        let snapshot: PrivacyCapabilitySnapshotV1 = norito::json::from_slice(resp.body())
+        let manifest: PrivacyExact12CapabilityManifestV1 = norito::json::from_slice(resp.body())
             .wrap_err("failed to decode typed privacy capabilities JSON")?;
-        snapshot
+        manifest
             .validate()
             .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
-        norito::json::to_value(&snapshot)
+        norito::json::to_value(&manifest)
             .wrap_err("failed to render validated privacy capabilities JSON")
     }
 
     /// GET `/v1/privacy/capabilities`.
     ///
-    /// Returns the authoritative committed privacy capability snapshot as one
+    /// Returns the authoritative committed Exact12 capability manifest as one
     /// canonical typed Norito payload.
     ///
     /// # Errors
@@ -20346,10 +20515,10 @@ impl Client {
     /// Returns an error for a failed request, non-OK status, non-Norito media
     /// type, oversized response, noncanonical or malformed encoding, or any
     /// invalid profile/activation binding.
-    pub fn get_privacy_capabilities(&self) -> Result<PrivacyCapabilitySnapshotV1> {
+    pub fn get_privacy_capabilities(&self) -> Result<PrivacyExact12CapabilityManifestV1> {
         let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_get_request(url)?
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
@@ -20366,19 +20535,21 @@ impl Client {
                 "privacy capabilities response has invalid content type {content_type}"
             ));
         }
-        let snapshot: PrivacyCapabilitySnapshotV1 = norito::decode_from_bytes(resp.body())
-            .wrap_err("failed to decode privacy capabilities")?;
-        if !norito::to_bytes(&snapshot)
+        let manifest: PrivacyExact12CapabilityManifestV1 =
+            norito::decode_from_bytes(resp.body())
+                .wrap_err("failed to decode privacy capabilities")?;
+        if !manifest
+            .canonical_bytes()
             .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
         {
             return Err(eyre!(
                 "privacy capabilities response is not one canonical Norito payload"
             ));
         }
-        snapshot
+        manifest
             .validate()
             .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
-        Ok(snapshot)
+        Ok(manifest)
     }
 
     /// GET `/v1/sccp/capabilities`.
@@ -20800,7 +20971,7 @@ impl Client {
                 signature,
                 &expectation,
                 Some(expected_route_configuration_hash),
-                &self.chain,
+                &self.network_id,
             )?),
             (None, None) => None,
             _ => unreachable!("preflight rejected a mixed SCCP signing state"),
@@ -20833,7 +21004,7 @@ impl Client {
             response,
             &expectation,
             expected_route_configuration_hash,
-            &self.chain,
+            &self.network_id,
             expected_submitted_tx_hash,
         )
     }
@@ -20863,7 +21034,7 @@ impl Client {
                     signature,
                     &expectation,
                     None,
-                    &self.chain,
+                    &self.network_id,
                 )?;
                 Some((payload, signature))
             }
@@ -20883,7 +21054,7 @@ impl Client {
                     signature,
                     &expectation,
                     Some(expected_route_configuration_hash),
-                    &self.chain,
+                    &self.network_id,
                 )
             })
             .transpose()?;
@@ -20915,7 +21086,7 @@ impl Client {
             response,
             &expectation,
             expected_route_configuration_hash,
-            &self.chain,
+            &self.network_id,
             expected_submitted_tx_hash,
         )
     }
@@ -20925,7 +21096,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_metrics_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/metrics");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_account_signed_get(url)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get runtime metrics: {} {}",
@@ -21154,10 +21325,11 @@ impl Client {
 
     /// List attachments via `/v1/zk/attachments`. Returns JSON array of metadata objects.
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    /// Returns an error if canonical request signing or HTTP fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_attachments_list(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/attachments");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to list attachments with HTTP status: {}. {}",
@@ -21301,10 +21473,11 @@ impl Client {
     /// Fetch attachment bytes by id via `/v1/zk/attachments/{id}`.
     /// Returns the raw bytes and optional content-type.
     /// # Errors
-    /// Returns an error if the HTTP request fails or the response is non-OK.
+    /// Returns an error if canonical request signing or HTTP fails or the response is non-OK.
     pub fn get_zk_attachment_raw(&self, id: &str) -> Result<(Vec<u8>, Option<String>)> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/attachments/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to fetch attachment with HTTP status: {}. {}",
@@ -21321,10 +21494,11 @@ impl Client {
 
     /// Delete attachment by id via `/v1/zk/attachments/{id}`.
     /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `204 No Content`.
+    /// Returns an error if canonical request signing or HTTP fails or the response is not `204 No Content`.
     pub fn delete_zk_attachment(&self, id: &str) -> Result<()> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/attachments/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
         if resp.status() != StatusCode::NO_CONTENT {
             return Err(eyre!(
                 "Failed to delete attachment with HTTP status: {}. {}",
@@ -21437,7 +21611,7 @@ impl Client {
         decode_zk_vk_transaction_draft(
             resp.body(),
             value,
-            &self.chain,
+            &self.network_id,
             ZkVkDraftOperation::Register,
         )
     }
@@ -21468,7 +21642,12 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        decode_zk_vk_transaction_draft(resp.body(), value, &self.chain, ZkVkDraftOperation::Update)
+        decode_zk_vk_transaction_draft(
+            resp.body(),
+            value,
+            &self.network_id,
+            ZkVkDraftOperation::Update,
+        )
     }
 
     /// Convenience: GET `/v1/zk/vk` as JSON Value.
@@ -21514,7 +21693,7 @@ fn tx_confirmation_status_from_pipeline_response(
 ) -> Option<TxConfirmationStatus> {
     tx_confirmation_status_from_kind(
         &payload.status.kind,
-        payload.status.rejection_reason.clone(),
+        None,
         payload.status.block_height.and_then(NonZeroU64::new),
     )
 }
@@ -22567,29 +22746,21 @@ mod tx_hash_tests {
     }
 
     #[test]
-    fn tx_confirmation_status_from_pipeline_response_decodes_rejection_reason() {
-        use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+    fn tx_confirmation_status_from_pipeline_response_keeps_rejection_private() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "nope".to_string(),
-        ));
         let payload = PipelineTransactionStatusResponse::new(
             "deadbeef".to_owned(),
             PipelineTransactionStatus {
                 kind: "Rejected".to_owned(),
                 block_height: None,
-                rejection_reason: Some(reason.clone()),
             },
             "auto".to_owned(),
             "state".to_owned(),
         );
 
         let status = super::tx_confirmation_status_from_pipeline_response(&payload);
-        assert_eq!(
-            status,
-            Some(super::TxConfirmationStatus::Rejected(Some(reason)))
-        );
+        assert_eq!(status, Some(super::TxConfirmationStatus::Rejected(None)));
     }
 
     #[test]
@@ -22601,7 +22772,6 @@ mod tx_hash_tests {
             PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: None,
-                rejection_reason: None,
             },
             "auto".to_owned(),
             "state".to_owned(),
@@ -22611,7 +22781,6 @@ mod tx_hash_tests {
             PipelineTransactionStatus {
                 kind: "Applied".to_owned(),
                 block_height: None,
-                rejection_reason: None,
             },
             "auto".to_owned(),
             "state".to_owned(),
@@ -22636,7 +22805,6 @@ mod tx_hash_tests {
             PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
-                rejection_reason: None,
             },
             "auto".to_owned(),
             "queue".to_owned(),
@@ -22646,7 +22814,6 @@ mod tx_hash_tests {
             PipelineTransactionStatus {
                 kind: "Approved".to_owned(),
                 block_height: Some(7),
-                rejection_reason: None,
             },
             "auto".to_owned(),
             "state".to_owned(),
@@ -22725,15 +22892,14 @@ mod tx_hash_tests {
         use crate::{
             crypto::MerkleProof,
             data_model::{
-                prelude::{AccountId, ChainId, DomainId, InstructionBox, TransactionBuilder},
+                prelude::{AccountId, InstructionBox, TransactionBuilder},
                 query::CommittedTransaction,
                 transaction::{ExecutionStep, TransactionEntrypoint, TransactionResult},
                 trigger::DataTriggerSequence,
             },
         };
 
-        let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let network_id = test_network_id();
         let public_key: crate::crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -22745,7 +22911,7 @@ mod tx_hash_tests {
                 .unwrap();
 
         let tx = TransactionBuilder::new(
-            chain,
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -23979,8 +24145,10 @@ mod tests {
     use std::{
         collections::HashMap,
         fs,
+        io::{Read, Write},
+        net::TcpListener,
         sync::{Arc, Mutex},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
@@ -24018,7 +24186,7 @@ mod tests {
                 DaCommitmentBundle, DaCommitmentLocation, DaCommitmentProof, DaCommitmentRecord,
                 DaCommitmentWithLocation, DaProofPolicyBundle, DaProofScheme,
             },
-            ingest::DaStripeLayout,
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1, DaStripeLayout},
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             pin_intent::{
                 DaPinIntent, DaPinIntentBundle, DaPinIntentProof, DaPinIntentWithLocation,
@@ -24030,30 +24198,7 @@ mod tests {
         },
         domain::DomainId,
         id::MAX_CHAIN_ID_BYTES,
-        isi::{
-            alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
-            musubi::PublishMusubiReleaseV1,
-        },
-        musubi::{
-            ArchiveId, MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_MAX_DEPENDENCIES_V1,
-            MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_KEYWORDS_V1,
-            MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1, MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1,
-            MUSUBI_MAX_VERSION_COMPARATORS_V1, MUSUBI_REGISTRY_VERSION_V1,
-            MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1, MusubiAbiBindingV1,
-            MusubiArchiveAvailabilityV1, MusubiArtifactGovernanceStateV1, MusubiArtifactTakedownV1,
-            MusubiComparatorOpV1, MusubiContentDigestV1, MusubiDependencyKindV1,
-            MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1,
-            MusubiExactDependencyEdgeV1, MusubiExactReleaseSnapshotV1,
-            MusubiGovernanceActionDigestV1, MusubiKeywordV1, MusubiKotodamaEditionV1,
-            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
-            MusubiPrereleaseIdentifierV1, MusubiPublicationV1, MusubiReasonV1,
-            MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
-            MusubiReleaseMetadataV1, MusubiReleaseRecordV1, MusubiReleaseRevisionsV1,
-            MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiResolutionProofV1,
-            MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
-            MusubiVerificationNodeV1, MusubiVersionComparatorV1, MusubiVersionReqV1,
-            MusubiVersionV1, validate_musubi_account_id_v1,
-        },
+        isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
@@ -24062,7 +24207,7 @@ mod tests {
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
             PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
-            PrivacyProtocolIdV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1,
         },
         sorafs::{
             moderation::{
@@ -24115,6 +24260,135 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn owned_async_http_client_does_not_follow_signed_body_redirects() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build async HTTP test runtime");
+
+        for (status_code, reason) in [
+            (307_u16, "Temporary Redirect"),
+            (308_u16, "Permanent Redirect"),
+        ] {
+            let redirect_listener = TcpListener::bind("127.0.0.1:0").expect("redirect listener");
+            let redirect_addr = redirect_listener.local_addr().expect("redirect address");
+            let target_listener = TcpListener::bind("127.0.0.1:0").expect("target listener");
+            let target_addr = target_listener.local_addr().expect("target address");
+            target_listener
+                .set_nonblocking(true)
+                .expect("nonblocking target listener");
+
+            let redirect_server = std::thread::spawn(move || {
+                let (mut stream, _) = redirect_listener.accept().expect("redirect request");
+                let mut request = [0_u8; 1024];
+                let request_len = stream.read(&mut request).expect("read redirect request");
+                assert!(request_len > 0, "redirect request must not be empty");
+                write!(
+                    stream,
+                    "HTTP/1.1 {status_code} {reason}\r\nLocation: http://{target_addr}/target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .expect("write redirect response");
+            });
+
+            let target_server = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_millis(750);
+                loop {
+                    match target_listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut request = [0_u8; 1024];
+                            let request_len =
+                                stream.read(&mut request).expect("read redirected request");
+                            assert!(request_len > 0, "redirected request must not be empty");
+                            stream
+                                .write_all(
+                                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                                )
+                                .expect("write target response");
+                            return true;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return false;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("target listener failed: {error}"),
+                    }
+                }
+            });
+
+            let response = runtime
+                .block_on(
+                    build_async_http_client()
+                        .post(format!("http://{redirect_addr}/transaction"))
+                        .body(vec![0x01, 0x02, 0x03])
+                        .send(),
+                )
+                .expect("redirect response");
+
+            redirect_server.join().expect("redirect server");
+            let followed = target_server.join().expect("target server");
+            assert_eq!(response.status().as_u16(), status_code);
+            assert!(!followed, "one-shot signed body must not be redirected");
+        }
+    }
+
+    #[test]
+    fn owned_async_http_client_does_not_retry_signed_body_after_server_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
+        let address = listener.local_addr().expect("test address");
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("first request");
+            let mut request = [0_u8; 1024];
+            let request_len = stream.read(&mut request).expect("read first request");
+            assert!(request_len > 0, "first request must not be empty");
+            stream
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write first response");
+            drop(stream);
+
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking retry listener");
+            let deadline = Instant::now() + Duration::from_millis(750);
+            loop {
+                match listener.accept() {
+                    Ok((_stream, _)) => return true,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("retry listener failed: {error}"),
+                }
+            }
+        });
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build async HTTP test runtime");
+        let response = runtime
+            .block_on(
+                build_async_http_client()
+                    .post(format!("http://{address}/transaction"))
+                    .body(vec![0x01, 0x02, 0x03])
+                    .send(),
+            )
+            .expect("server response");
+
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            !server.join().expect("test server"),
+            "signed body was retried"
+        );
+    }
 
     #[test]
     fn governance_selector_client_validation_matches_canonical_v1() {
@@ -24192,8 +24466,116 @@ mod tests {
         assert_no_http(|| client.get_gov_tally_json("tally#fragment"));
     }
 
-    include!("client/musubi_tests.rs");
+    #[test]
+    fn governance_ballot_clients_require_exact_network_and_authenticated_authority() {
+        fn assert_no_http(call: impl FnOnce() -> Result<JsonValue>) -> String {
+            with_mock_http(
+                |_| panic!("invalid governance ballot identity reached HTTP transport"),
+                call,
+            )
+            .expect_err("invalid governance ballot identity must fail locally")
+            .to_string()
+        }
 
+        let client = client_with_base_url(base_url());
+        let authority = client
+            .account
+            .canonical_i105()
+            .expect("fixture account has canonical I105");
+        let foreign_network = foreign_alias_plan_network_id();
+        let foreign_error = assert_no_http(|| {
+            client.post_gov_ballot_plain_json(&norito::json!({
+                "authority": authority.as_str(),
+                "network_id": foreign_network,
+                "referendum_id": "referendum-1",
+                "owner": authority.as_str(),
+                "amount": "1",
+                "duration_blocks": "0",
+                "direction": "Aye"
+            }))
+        });
+        assert!(foreign_error.contains("does not match client NetworkId"));
+
+        for retired in ["chain_id", "genesis_hash"] {
+            let mut payload = norito::json!({
+                "authority": authority.as_str(),
+                "network_id": client.network_id,
+                "election_id": "election-1",
+                "backend": "halo2/ipa",
+                "envelope_b64": "cHJvb2Y="
+            });
+            payload
+                .as_object_mut()
+                .expect("ballot object")
+                .insert(retired.to_owned(), norito::json::Value::from("legacy"));
+            let error = assert_no_http(|| client.post_gov_ballot_zk_v1_json(&payload));
+            assert!(error.contains("is retired"), "{retired}: {error}");
+        }
+
+        let error = assert_no_http(|| {
+            client.post_gov_ballot_plain_json(&norito::json!({
+                "authority": TEST_AUDITOR_I105,
+                "network_id": client.network_id,
+                "referendum_id": "referendum-1",
+                "owner": TEST_AUDITOR_I105,
+                "amount": "1",
+                "duration_blocks": "0",
+                "direction": "Aye"
+            }))
+        });
+        assert!(error.contains("authenticated client account"));
+    }
+
+    #[test]
+    fn governance_ballot_clients_sign_one_exact_network_request() {
+        let client = client_with_base_url(base_url());
+        let authority = client
+            .account
+            .canonical_i105()
+            .expect("fixture account has canonical I105");
+
+        for (path, is_zk) in [
+            ("/v1/gov/ballots/zk-v1", true),
+            ("/v1/gov/ballots/plain", false),
+        ] {
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let response = json_response(StatusCode::OK, "{}");
+            with_mock_http(respond_with(&store, response), || {
+                if is_zk {
+                    client
+                        .post_gov_ballot_zk_v1_json(&norito::json!({
+                            "authority": authority.as_str(),
+                            "network_id": client.network_id,
+                            "election_id": "election-1",
+                            "backend": "halo2/ipa",
+                            "envelope_b64": "cHJvb2Y="
+                        }))
+                        .expect("exact-network ZK ballot draft");
+                } else {
+                    client
+                        .post_gov_ballot_plain_json(&norito::json!({
+                            "authority": authority.as_str(),
+                            "network_id": client.network_id,
+                            "referendum_id": "referendum-1",
+                            "owner": authority.as_str(),
+                            "amount": "1",
+                            "duration_blocks": "0",
+                            "direction": "Aye"
+                        }))
+                        .expect("exact-network PLAIN ballot draft");
+                }
+            });
+            let snapshots = store.lock().expect("snapshot store");
+            assert_eq!(snapshots.len(), 1, "ballot auth must be one-shot");
+            let snapshot = &snapshots[0];
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), path);
+            assert_canonical_account_signed_json_request(&client, snapshot);
+        }
+    }
+
+    include!("client/musubi_tests.rs");
+    include!("client/zk_attachment_auth_tests.rs");
     fn validation_fee_plain_ballot_draft_fixture() -> (
         String,
         ValidationFeePlainBallotDraftRequestV1,
@@ -24345,92 +24727,16 @@ mod tests {
     fn deterministic_account_onboarding_receipt_vector() -> SharedAccountOnboardingReceiptVector {
         use norito::codec::Encode as _;
 
-        let target_signer = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
-            .expect("derive deterministic onboarding target");
-        let target_account = AccountId::new(target_signer.public_key().clone());
-        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
-            .expect("derive deterministic onboarding authority");
-        let authority = AccountId::new(onboarding_signer.public_key().clone());
-        let request = AccountOnboardingPlanRequestV1::try_new(
-            "merchant@banka.paynet",
-            &target_account,
-            Vec::new(),
-        )
-        .expect("canonical deterministic onboarding request");
-        let alias = ResolvedAccountAliasV1::new(
-            request
-                .alias
-                .parse::<AccountAliasName>()
-                .expect("deterministic onboarding alias"),
-            DataSpaceId::new(7),
-        );
-        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
-            alias: alias.clone(),
-            target_account,
-            provision: AccountProvisionV1::Create,
-            role: AccountAliasRoleV1::Primary,
-        });
-        let guard = AliasQuoteGuardV1 {
-            expected_policy_version: 2,
-            expected_payment_asset: "4rPeAP6jAjiLVZThZYwwPRBuQagt"
-                .parse()
-                .expect("deterministic onboarding payment asset"),
-            max_amount: 3_u64.into(),
-            valid_until_ms: 50_000,
-        };
-        let acquisition = AliasLeaseAcquisitionV1::new(1, None);
-        let ensure: InstructionBox =
-            EnsureAlias::new(intent.clone(), acquisition, guard.clone()).into();
-        let (wire_id, framed_payload) = iroha_data_model::isi::framed_instruction_payload(&ensure)
-            .expect("registered deterministic onboarding instruction");
-        let body = AccountOnboardingPlanBodyV1 {
-            version: AccountOnboardingPlanBodyV1::VERSION,
-            request,
-            authority: authority.clone(),
-            chain_id: ChainId::from("alias-fixture-chain"),
-            anchor: AliasPlanAnchorV1 {
-                block_height: 11,
-                block_hash: Hash::new(b"account-onboarding-receipt-fixture-anchor"),
-            },
-            resource: AliasPlanResourceV1 {
-                intent: intent.clone(),
-                disposition: AliasPlanDispositionV1::Create,
-                quote: Some(AliasLeaseQuoteV1 {
-                    target: intent.target(),
-                    pricing_class: 1,
-                    exact_amount: 3_u64.into(),
-                    guard: guard.clone(),
-                    expires_at_ms: 1_000,
-                    grace_expires_at_ms: 2_000,
-                    redemption_expires_at_ms: 3_000,
-                }),
-                instruction_index: Some(0),
-            },
-            acquisition,
-            quote_guard: guard,
-            instructions: vec![AliasFramedInstructionV1 {
-                wire_id: wire_id.to_owned(),
-                framed_payload,
-            }],
-            owner_auto_renew_instruction: None,
-            valid_until_ms: 50_000,
-        };
-        let body_bytes = body.encode();
-        let plan_hash = body.canonical_hash();
-        let signature = Signature::try_new(onboarding_signer.private_key(), plan_hash.as_ref())
-            .expect("sign deterministic onboarding receipt");
-        let receipt = AccountOnboardingPlanReceiptV1 {
-            body,
-            plan_hash,
-            signature,
-        };
+        let receipt = account_onboarding_test_fixture::receipt_v1()
+            .expect("construct deterministic onboarding receipt");
+        let body_bytes = receipt.body.encode();
         SharedAccountOnboardingReceiptVector {
             name: "sponsored_account_alias_create".to_owned(),
             domain: String::from_utf8(ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1.to_vec())
                 .expect("onboarding receipt hash domain is UTF-8"),
             canonical_body_norito_hex: hex::encode(body_bytes),
             canonical_plan_hash_hex: hex::encode(receipt.plan_hash.as_ref()),
-            authority: authority.to_string(),
+            authority: receipt.body.authority.to_string(),
             signature_hex: hex::encode_upper(receipt.signature.payload()),
             receipt_json: receipt,
         }
@@ -24450,17 +24756,6 @@ mod tests {
         receipt.plan_hash = receipt.body.canonical_hash();
 
         assert!(!receipt.verify());
-    }
-
-    #[test]
-    #[ignore = "fixture regeneration helper; the committed vector is checked separately"]
-    fn print_deterministic_account_onboarding_receipt_vector() {
-        let vector = deterministic_account_onboarding_receipt_vector();
-        println!(
-            "{}",
-            norito::json::to_string_pretty(&vector)
-                .expect("render deterministic onboarding receipt vector")
-        );
     }
 
     #[test]
@@ -24533,7 +24828,7 @@ mod tests {
         AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
             version: AliasTransactionPlanBodyV1::VERSION,
             authority: client.account.clone(),
-            chain_id: client.chain.clone(),
+            network_id: client.network_id,
             anchor: AliasPlanAnchorV1 {
                 block_height: 1,
                 block_hash: Hash::new(b"alias-client-plan-anchor"),
@@ -24565,6 +24860,12 @@ mod tests {
             // The planner's own short lifetime may be stricter than the quote guard.
             valid_until_ms: u64::MAX - 2,
         })
+    }
+
+    fn foreign_alias_plan_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"foreign-alias-plan-network",
+        )))
     }
 
     fn account_onboarding_plan_fixture(
@@ -24611,7 +24912,7 @@ mod tests {
             version: AccountOnboardingPlanBodyV1::VERSION,
             request: request.clone(),
             authority: AccountId::new(signer.public_key().clone()),
-            chain_id: client.chain.clone(),
+            network_id: client.network_id,
             anchor: AliasPlanAnchorV1 {
                 block_height: 3,
                 block_hash: Hash::new(b"account-onboarding-plan-anchor"),
@@ -24652,6 +24953,16 @@ mod tests {
         )
     }
 
+    fn resign_account_onboarding_receipt(
+        receipt: &mut AccountOnboardingPlanReceiptV1,
+        signer: &KeyPair,
+    ) {
+        receipt.body.authority = AccountId::new(signer.public_key().clone());
+        receipt.plan_hash = receipt.body.canonical_hash();
+        receipt.signature = Signature::try_new(signer.private_key(), receipt.plan_hash.as_ref())
+            .expect("re-sign onboarding receipt fixture");
+    }
+
     fn alias_renewal_request_fixture(client: &Client) -> AliasLeaseRenewPlanRequestV1 {
         let alias = ResolvedAccountAliasV1::new(
             "merchant@banka.paynet"
@@ -24686,7 +24997,7 @@ mod tests {
         AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
             version: AliasLifecycleTransactionPlanBodyV1::VERSION,
             authority: client.account.clone(),
-            chain_id: client.chain.clone(),
+            network_id: client.network_id,
             anchor: AliasPlanAnchorV1 {
                 block_height: 2,
                 block_hash: Hash::new(b"alias-lifecycle-plan-anchor"),
@@ -24722,7 +25033,7 @@ mod tests {
         AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
             version: AliasLifecycleTransactionPlanBodyV1::VERSION,
             authority: client.account.clone(),
-            chain_id: client.chain.clone(),
+            network_id: client.network_id,
             anchor: AliasPlanAnchorV1 {
                 block_height: 2,
                 block_hash: Hash::new(b"alias-auto-renew-noop-anchor"),
@@ -24817,7 +25128,8 @@ mod tests {
             .expect("signature header should decode");
         let signature = Signature::try_from_bytes(&signature_bytes)
             .expect("account signature header must pass checked admission");
-        let signed_message = Client::operator_request_message(
+        let signed_message = Client::exact_network_request_message(
+            &client.network_id,
             &snapshot.method,
             &snapshot.url,
             &snapshot.body,
@@ -25457,6 +25769,14 @@ mod tests {
             .expect_err("changed acquisition terms must fail");
         assert!(error.to_string().contains("signed planning request"));
 
+        let mut wrong_network_body = plan.body.clone();
+        wrong_network_body.network_id = foreign_alias_plan_network_id();
+        let wrong_network = AliasTransactionPlanV1::new(wrong_network_body);
+        let error = client
+            .verify_alias_setup_plan(&wrong_network)
+            .expect_err("a plan for another exact network must fail");
+        assert!(error.to_string().contains("NetworkId"));
+
         let payload = client
             .try_build_transaction_payload_from_items(
                 instructions,
@@ -25469,7 +25789,10 @@ mod tests {
         };
         assert_eq!(payload_instructions.len(), 1);
         assert_eq!(payload.authority, client.account);
-        assert_eq!(payload.chain, client.chain);
+        assert_eq!(
+            payload.domain,
+            TransactionDomain::Network(client.network_id)
+        );
 
         let mut no_op_body = plan.body.clone();
         no_op_body.resources[0].disposition = AliasPlanDispositionV1::NoOp;
@@ -25559,6 +25882,14 @@ mod tests {
                 .downcast_ref::<RenewAliasLease>()
                 .is_some()
         );
+
+        let mut wrong_network_body = plan.body.clone();
+        wrong_network_body.network_id = foreign_alias_plan_network_id();
+        let wrong_network = AliasLifecycleTransactionPlanV1::new(wrong_network_body);
+        let error = client
+            .verify_alias_lifecycle_plan(&wrong_network)
+            .expect_err("a lifecycle plan for another exact network must fail");
+        assert!(error.to_string().contains("NetworkId"));
 
         let mut quote_tampered_body = plan.body.clone();
         quote_tampered_body
@@ -25793,6 +26124,57 @@ mod tests {
     }
 
     #[test]
+    fn sponsored_onboarding_rejects_same_label_foreign_genesis_receipt() {
+        let client = client_with_base_url(base_url());
+        let (request, mut receipt) = account_onboarding_plan_fixture(&client);
+        let local_chain_label = client.chain.clone();
+        receipt.body.network_id = foreign_alias_plan_network_id();
+        let signer = checked_random_keypair();
+        resign_account_onboarding_receipt(&mut receipt, &signer);
+
+        let error = client
+            .verify_account_onboarding_plan_for_request(&request, &receipt)
+            .expect_err("same-label receipt from another genesis must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match expected network"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(client.chain, local_chain_label);
+    }
+
+    #[test]
+    fn sponsored_onboarding_receipt_json_rejects_genesis_and_retired_network_keys() {
+        let client = client_with_base_url(base_url());
+        let (_, receipt) = account_onboarding_plan_fixture(&client);
+        let encoded = norito::json::to_json(&receipt).expect("encode onboarding receipt JSON");
+        let exact_field = format!("\"network_id\":\"{}\"", receipt.body.network_id);
+        assert!(encoded.contains(&exact_field));
+
+        let genesis = encoded.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
+        assert!(norito::json::from_str::<AccountOnboardingPlanReceiptV1>(&genesis).is_err());
+
+        for retired in ["chain", "chainId", "chain_id"] {
+            let alias_only =
+                encoded.replacen(&exact_field, &format!("\"{retired}\":\"same-label\""), 1);
+            assert!(
+                norito::json::from_str::<AccountOnboardingPlanReceiptV1>(&alias_only).is_err(),
+                "retired receipt key {retired} must not replace network_id"
+            );
+            let dual = encoded.replacen(
+                &exact_field,
+                &format!("{exact_field},\"{retired}\":\"same-label\""),
+                1,
+            );
+            assert!(
+                norito::json::from_str::<AccountOnboardingPlanReceiptV1>(&dual).is_err(),
+                "retired receipt key {retired} must remain unknown beside network_id"
+            );
+        }
+    }
+
+    #[test]
     fn sponsored_onboarding_rejects_short_tokens_and_tampered_receipts_before_http() {
         let client = client_with_base_url(base_url());
         let (request, mut receipt) = account_onboarding_plan_fixture(&client);
@@ -25843,10 +26225,14 @@ mod tests {
         });
         resign(&mut receipt);
         assert!(
-            decode_and_verify_account_onboarding_plan_for_request(&request, &receipt)
-                .expect_err("mismatched owner follow-up target must fail")
-                .to_string()
-                .contains("targets a different alias")
+            decode_and_verify_account_onboarding_plan_for_request(
+                client.network_id,
+                &request,
+                &receipt,
+            )
+            .expect_err("mismatched owner follow-up target must fail")
+            .to_string()
+            .contains("targets a different alias")
         );
 
         let (request, mut receipt) = account_onboarding_plan_fixture(&client);
@@ -25854,10 +26240,14 @@ mod tests {
         receipt.body.quote_guard.valid_until_ms = u64::MAX;
         resign(&mut receipt);
         assert!(
-            decode_and_verify_account_onboarding_plan_for_request(&request, &receipt)
-                .expect_err("unbounded receipt deadline must fail")
-                .to_string()
-                .contains("finite, nonzero deadline")
+            decode_and_verify_account_onboarding_plan_for_request(
+                client.network_id,
+                &request,
+                &receipt,
+            )
+            .expect_err("unbounded receipt deadline must fail")
+            .to_string()
+            .contains("finite, nonzero deadline")
         );
     }
 
@@ -26110,7 +26500,7 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &client.chain,
+            &client.network_id,
             &client.account,
             0,
             DataSpaceId::UNIVERSAL,
@@ -26144,7 +26534,7 @@ mod tests {
             std::str::from_utf8(raw).expect("fixture JSON"),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &client.chain,
+            &client.network_id,
             &client.account,
             1,
             DataSpaceId::UNIVERSAL,
@@ -26494,15 +26884,8 @@ mod tests {
             0,
         );
         block_header.set_da_commitments_hash(da_hash);
-        let commit_qc = sample_commit_qc(&block_header);
-        let relay_envelope = LaneRelayEnvelope::new(
-            block_header,
-            Some(commit_qc),
-            da_hash,
-            settlement.clone(),
-            256,
-        )
-        .expect("construct lane relay envelope");
+        let relay_envelope = LaneRelayEnvelope::new(block_header, da_hash, settlement.clone(), 256)
+            .expect("construct lane relay envelope");
         let status = SumeragiDiagnosticsStatus {
             pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
@@ -26560,13 +26943,14 @@ mod tests {
             timestamp_ms,
             0,
         );
-        LaneRelayEnvelope::new(block_header, None, None, settlement, 0).expect("lane relay")
+        LaneRelayEnvelope::new(block_header, None, settlement, 0).expect("lane relay")
     }
 
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: test_network_id(),
             key_pair,
             account: account_id,
             account_chain_discriminant:
@@ -26698,7 +27082,7 @@ mod tests {
             crypto::{PrivateKey, PublicKey},
             data_model::{
                 block::{SignedBlock, stream::BlockMessage, stream::BlockSubscriptionRequest},
-                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                prelude::{AccountId, TransactionBuilder},
             },
         };
 
@@ -26716,10 +27100,6 @@ mod tests {
             .expect("decode block subscription request");
         assert_eq!(decoded.0, height);
 
-        let chain: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("chain id");
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -26729,8 +27109,7 @@ mod tests {
                 .parse()
                 .expect("private key");
         let authority = AccountId::new(public_key);
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -26768,7 +27147,13 @@ mod tests {
         assert_eq!(request.metadata, metadata);
         assert_eq!(request.norito_manifest, manifest_bytes);
         assert_eq!(request.lane_id, params.lane_id);
-        assert_eq!(request.submitter, client.key_pair.public_key().clone());
+        assert_eq!(request.network_id, client.network_id);
+        assert_eq!(request.owner, client.account);
+        assert_eq!(request.signatures.len(), 1);
+        assert_eq!(
+            request.signatures[0].signer,
+            client.key_pair.public_key().clone()
+        );
         let expected_blob = blake3::hash(&payload);
         assert_eq!(request.client_blob_id.as_ref(), expected_blob.as_bytes());
     }
@@ -28404,7 +28789,7 @@ mod tests {
 
         let tx2 = {
             let mut tx = TransactionBuilder::new(
-                client.chain.clone(),
+                client.network_id,
                 client.account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -28428,7 +28813,7 @@ mod tests {
     fn try_sign_transaction_attaches_verifiable_signature() {
         let client = client_with_base_url(base_url());
         let builder = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             client.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -28442,6 +28827,47 @@ mod tests {
         tx.verify_signature()
             .expect("client transaction signature must verify");
         assert_eq!(tx.authority(), &client.account);
+    }
+
+    #[test]
+    fn client_signing_rejects_foreign_and_genesis_transaction_domains() {
+        let client = client_with_base_url(base_url());
+        let foreign_network = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0xFE; Hash::LENGTH],
+            )),
+        );
+        let fee_payment =
+            || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        let cases = [
+            (
+                "foreign network",
+                TransactionBuilder::new(foreign_network, client.account.clone(), fee_payment()),
+            ),
+            (
+                "genesis",
+                TransactionBuilder::new_genesis(client.account.clone(), fee_payment()),
+            ),
+        ];
+
+        for (label, builder) in cases {
+            let payload = builder
+                .clone()
+                .into_payload()
+                .expect("hostile-domain payload remains structurally valid");
+            for result in [
+                client.try_sign_transaction(builder),
+                client.try_sign_transaction_payload(payload),
+            ] {
+                let error = result.expect_err("client must reject a hostile transaction domain");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("does not match the client network"),
+                    "unexpected {label} rejection: {error}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -28566,22 +28992,28 @@ mod tests {
     }
 
     #[test]
-    fn prepared_transaction_payload_allows_foreign_chain_for_server_rejection_tests() {
+    fn prepared_transaction_payload_allows_foreign_network_for_server_rejection_tests() {
+        let client = client_with_base_url(base_url());
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
+        let foreign_network = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0xFE; Hash::LENGTH],
+            )),
+        );
         let tx = TransactionBuilder::new(
-            ChainId::from("foreign-chain"),
+            foreign_network,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(Vec::<InstructionBox>::new())
         .try_sign(keypair.private_key())
-        .expect("foreign-chain fixture transaction should sign");
-        let prepared = Client::prepare_transaction_payload(&tx);
+        .expect("foreign-network fixture transaction should sign");
+        let prepared = client.prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());
         let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())
             .expect("prepared payload must decode as the original signed transaction");
-        assert_eq!(decoded.chain(), tx.chain());
+        assert_eq!(decoded.network_id(), tx.network_id());
     }
 
     #[test]
@@ -29096,6 +29528,26 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_cache_is_scoped_by_exact_network_id() {
+        let config = config_factory();
+        let local = data_model_compatibility_cache_key(
+            &config.network_id,
+            &config.torii_api_url,
+            &config.account,
+        );
+        let foreign = data_model_compatibility_cache_key(
+            &foreign_alias_plan_network_id(),
+            &config.torii_api_url,
+            &config.account,
+        );
+
+        assert_ne!(
+            local, foreign,
+            "same-label deployments must not share compatibility state"
+        );
+    }
+
+    #[test]
     fn submit_transaction_reuses_compatibility_cache_across_equivalent_clients() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let capabilities_body = compatible_capabilities_body();
@@ -29331,7 +29783,8 @@ mod tests {
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
+            let operator_key_pair = checked_random_keypair();
+            client.set_operator_key_pair(operator_key_pair.clone());
 
             with_mock_http(
                 respond_with(
@@ -29396,6 +29849,47 @@ mod tests {
                     .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
                         && value == APPLICATION_JSON),
                 "{path} JSON helper must request JSON"
+            );
+
+            let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+            let timestamp_ms = headers[HEADER_OPERATOR_TIMESTAMP_MS]
+                .parse::<u64>()
+                .expect("operator timestamp header");
+            let nonce = &headers[HEADER_OPERATOR_NONCE];
+            let signature_bytes = base64::engine::general_purpose::STANDARD
+                .decode(headers[HEADER_OPERATOR_SIGNATURE].as_bytes())
+                .expect("operator signature header should decode");
+            let signature = Signature::try_from_bytes(&signature_bytes)
+                .expect("operator signature header must pass checked admission");
+            let local_message = Client::operator_network_request_message(
+                &client.network_id,
+                &snapshot.method,
+                &snapshot.url,
+                &snapshot.body,
+                timestamp_ms,
+                nonce,
+            );
+            signature
+                .verify(operator_key_pair.public_key(), &local_message)
+                .expect("operator signature must bind the client's exact network");
+
+            let foreign_network =
+                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0xFD; Hash::LENGTH]),
+                ));
+            let foreign_message = Client::operator_network_request_message(
+                &foreign_network,
+                &snapshot.method,
+                &snapshot.url,
+                &snapshot.body,
+                timestamp_ms,
+                nonce,
+            );
+            assert!(
+                signature
+                    .verify(operator_key_pair.public_key(), &foreign_message)
+                    .is_err(),
+                "same endpoint on another genesis must not accept the operator signature"
             );
         }
     }
@@ -30284,7 +30778,7 @@ mod tests {
         let malformed_receipt = |settlement: &LaneBlockCommitment| NativeAmxReceipt {
             version: 2,
             source_id: [0xA5; Hash::LENGTH],
-            chain_id_hash: Hash::new(b"client-native-amx-chain"),
+            network_id: test_network_id(),
             plan_digest: Hash::new(b"client-native-amx-plan"),
             lane_id: settlement.lane_id,
             dataspace_id: settlement.dataspace_id,
@@ -30784,10 +31278,17 @@ mod tests {
     fn sorafs_pin_filter_sets_query_params() {
         let client = Client::new(config_factory());
         let url = join_torii_url(&client.torii_url, "v1/sorafs/pin");
+        let block_hash = "11".repeat(32);
+        let after_digest = "22".repeat(32);
         let filter = SorafsPinListFilter {
+            finalized: SorafsPinFinalizedAnchor {
+                expected_finalized_height: Some(7),
+                expected_finalized_block_hash_hex: Some(&block_hash),
+            },
             limit: Some(25),
-            offset: Some(5),
-            status: Some("approved"),
+            max_bytes: Some(16 * 1024),
+            after_digest_hex: Some(&after_digest),
+            status: Some(PinStatusKindV1::Approved),
         };
         let request = filter
             .apply(client.default_request(HttpMethod::GET, url))
@@ -30795,7 +31296,12 @@ mod tests {
             .expect("build request");
         assert_eq!(
             request.uri().query(),
-            Some("limit=25&offset=5&status=approved")
+            Some(
+                format!(
+                    "expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&limit=25&max_bytes=16384&after_digest_hex={after_digest}&status=approved"
+                )
+                .as_str()
+            )
         );
     }
 
@@ -32199,7 +32705,8 @@ mod tests {
             .expect("signature header should decode");
         let signature = Signature::try_from_bytes(&signature_bytes)
             .expect("operator-panel signature header must pass checked admission");
-        let signed_message = Client::operator_request_message(
+        let signed_message = Client::exact_network_request_message(
+            &client.network_id,
             &HttpMethod::GET,
             &snapshot.url,
             &[],
@@ -32799,13 +33306,36 @@ mod tests {
     }
 
     fn sample_da_pin_intent_with_location() -> DaPinIntentWithLocation {
+        let lane_id = LaneId::new(4);
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic client DA proof key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE6; 32])),
+            ),
+            owner: AccountId::new(key_pair.public_key().clone()),
+            lane_id,
+            epoch: 6,
+            sequence: 8,
+            payload_hash: BlobDigest::new([0xE7; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xE8; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic client DA proof authorization"),
+        });
         DaPinIntentWithLocation {
             intent: DaPinIntent::new(
-                LaneId::new(4),
+                lane_id,
                 6,
                 8,
                 StorageTicketId::new([0x70; 32]),
                 ManifestDigest::new([0x71; 32]),
+                authorization,
             ),
             location: DaCommitmentLocation {
                 block_height: 10,
@@ -32836,7 +33366,7 @@ mod tests {
 
     fn sccp_client_with_base_url(url: Url) -> Client {
         let mut client = client_with_base_url(url);
-        client.chain = ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        client.chain = ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
         client
     }
 
@@ -32886,7 +33416,7 @@ mod tests {
         }
     }
 
-    fn sample_privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
+    fn sample_privacy_capabilities() -> PrivacyExact12CapabilityManifestV1 {
         let snapshot = PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 42,
@@ -32903,9 +33433,8 @@ mod tests {
                 .collect(),
         };
         snapshot
-            .validate()
-            .expect("canonical privacy capability fixture");
-        snapshot
+            .exact12_capability_manifest_v1()
+            .expect("canonical privacy capability fixture")
     }
 
     fn sample_sccp_recent_messages() -> SccpRecentMessages {
@@ -32987,7 +33516,10 @@ mod tests {
         use iroha_data_model::isi::Instruction;
 
         let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
-            action: request.action.clone(),
+            anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+                network_id: test_network_id(),
+                action: request.action.clone(),
+            },
             window: request.window,
             mode: request.mode,
         };
@@ -32999,7 +33531,8 @@ mod tests {
         SccpRouteGovernanceDraftResponse {
             ok: true,
             proposal_id: hex::encode(
-                sccp_route_governance_proposal_id(&request.action).expect("proposal id"),
+                sccp_route_governance_proposal_id(test_network_id(), &request.action)
+                    .expect("proposal id"),
             ),
             tx_instructions: vec![SccpRouteGovernanceInstructionDraft {
                 wire_id,
@@ -33009,7 +33542,7 @@ mod tests {
     }
 
     #[test]
-    fn get_privacy_capabilities_decodes_one_canonical_typed_snapshot() {
+    fn get_privacy_capabilities_decodes_one_canonical_typed_manifest() {
         let payload = sample_privacy_capabilities();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = HttpResponse::builder()
@@ -33063,7 +33596,7 @@ mod tests {
     #[test]
     fn privacy_capability_clients_reject_structural_and_transport_adversaries() {
         let valid = sample_privacy_capabilities();
-        let invoke_json = |payload: &PrivacyCapabilitySnapshotV1| {
+        let invoke_json = |payload: &PrivacyExact12CapabilityManifestV1| {
             let response = json_response(
                 StatusCode::OK,
                 &norito::json::to_json(payload).expect("encode hostile privacy capabilities"),
@@ -33076,7 +33609,7 @@ mod tests {
 
         let mut wrong_version = valid.clone();
         wrong_version.version += 1;
-        let error = invoke_json(&wrong_version).expect_err("unknown snapshot version must reject");
+        let error = invoke_json(&wrong_version).expect_err("unknown manifest version must reject");
         assert!(
             error.to_string().contains("invalid privacy capabilities"),
             "{error}"
@@ -33635,7 +34168,8 @@ mod tests {
         wrong.mode = Some(iroha_data_model::isi::governance::VotingMode::Plain);
         let mut hostile = sccp_governance_draft_response(&wrong);
         hostile.proposal_id = hex::encode(
-            sccp_route_governance_proposal_id(&request.action).expect("same action proposal id"),
+            sccp_route_governance_proposal_id(test_network_id(), &request.action)
+                .expect("same action proposal id"),
         );
         let response = json_response(
             StatusCode::OK,
@@ -34233,7 +34767,7 @@ mod tests {
         };
         let client = sccp_client_with_base_url(base_url());
         let mut builder = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34362,15 +34896,19 @@ mod tests {
         };
 
         let mut candidate = request.clone();
-        let mut wrong_chain = TransactionBuilder::new(
-            ChainId::from("00000000-0000-0000-0000-000000000000"),
+        let mut wrong_network = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(
+                HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"wrong-client-network",
+                )),
+            ),
             canonical_payload.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        wrong_chain.set_creation_time(Duration::from_millis(canonical_payload.creation_time_ms));
-        let wrong_chain = wrong_chain.with_executable(canonical_payload.instructions.clone());
-        resign_destination_request(&mut candidate, &wrong_chain, &key_pair);
-        reject_without_http(&candidate, "wrong payload chain");
+        wrong_network.set_creation_time(Duration::from_millis(canonical_payload.creation_time_ms));
+        let wrong_network = wrong_network.with_executable(canonical_payload.instructions.clone());
+        resign_destination_request(&mut candidate, &wrong_network, &key_pair);
+        reject_without_http(&candidate, "wrong payload network");
 
         let attacker = KeyPair::try_from_seed(
             b"iroha:client:sccp:wrong-authority".to_vec(),
@@ -34378,7 +34916,7 @@ mod tests {
         )
         .expect("derive attacker key");
         let mut wrong_authority = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             iroha_data_model::account::AccountId::new(attacker.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34391,7 +34929,7 @@ mod tests {
         reject_without_http(&candidate, "wrong payload authority");
 
         let mut wrong_time = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             canonical_payload.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34438,7 +34976,7 @@ mod tests {
             payload: BridgeProofPayload::SccpDestination(wrong_destination),
         };
         let mut wrong_proof_builder = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             canonical_payload.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34588,7 +35126,7 @@ mod tests {
             payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
         };
         let mut builder = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34760,7 +35298,7 @@ mod tests {
             ),
         };
         let mut builder = TransactionBuilder::new(
-            client.chain.clone(),
+            client.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -34907,6 +35445,7 @@ mod tests {
 
     #[test]
     fn bridge_submit_response_rejects_unknown_missing_and_aliased_roles() {
+        let network_id = test_network_id();
         let expectation = SccpBridgeSubmitExpectation {
             authority: ALICE_ID.clone(),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
@@ -34952,7 +35491,7 @@ mod tests {
                 valid.clone(),
                 &expectation,
                 [2; 32],
-                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 Some([3; 32]),
             )
             .is_ok()
@@ -34968,7 +35507,7 @@ mod tests {
                 unknown,
                 &expectation,
                 [2; 32],
-                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 Some([3; 32]),
             )
             .expect_err("unknown response field")
@@ -34986,7 +35525,7 @@ mod tests {
                 missing,
                 &expectation,
                 [2; 32],
-                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 Some([3; 32]),
             )
             .expect_err("missing response field")
@@ -35004,7 +35543,7 @@ mod tests {
                 alias,
                 &expectation,
                 [2; 32],
-                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 Some([3; 32]),
             )
             .is_err()

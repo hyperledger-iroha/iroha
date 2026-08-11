@@ -129,6 +129,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("autonomous_reservation_inventory.rs"),
         Path("autonomous_reservation_classifier.rs"),
         Path("historical_autonomous_recovery.rs"),
+        Path("native_amx_participant_application_artifacts.rs"),
     ),
     Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
         Path("lane_geometry/bootstrap_path_safety.rs"),
@@ -232,10 +233,19 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
         Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
+        Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_exact_registry_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
+        Path("tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
         Path("v2_worker/exact_output_rollover_claim.rs"),
         Path("v2_worker/kura_replica_advert_refresh.rs"),
         Path("v2_worker/current_lane_output_rollover_claim.rs"),
+        Path("tests/v2_worker_equivocation_and_selected_serve_fixture.rs"),
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
@@ -253,8 +263,16 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("v2_runner/reply_route_retention.rs"),
         Path("v2_runner/merge_sidecar_recovery.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"): (
+        Path("tests/v2_runner_unsealed_00.rs"),
+        Path("tests/v2_runner_unsealed_01.rs"),
+        Path("tests/v2_runner_unsealed_02.rs"),
+        Path("tests/v2_runner_upstream_recovery.rs"),
+        Path("tests/v2_runner_lifecycle_startup_order.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
         Path("v2_apply/autonomous_recovery_types.rs"),
+        Path("v2_apply/historical_autonomous_recovery.rs"),
         Path("v2_apply/reconciliation_authority.rs"),
         Path("v2_apply/committed_carrier_cleanup.rs"),
         Path("v2_apply/error_recovery.rs"),
@@ -2731,6 +2749,30 @@ def test_production_trace_certificate_extracts_every_required_action() -> None:
             "bind_lane_reservation_startup_reconciliation_receipt",
         ),
         (
+            "publish_autonomous_lifecycle_bootstrap_cursor_stage",
+            "&authority.bootstrap.body.prepared_activate",
+        ),
+        (
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion",
+            "if bytes != authority.expected_bytes",
+        ),
+        (
+            "authenticate_autonomous_lifecycle_bootstrap_recovery",
+            "authority.stage != expected_stage",
+        ),
+        (
+            "authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody",
+            "AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue",
+        ),
+        (
+            "consume_autonomous_lifecycle_bootstrap_completion_fence",
+            "drop(authorization",
+        ),
+        (
+            "complete_autonomous_lifecycle_bootstrap",
+            "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence",
+        ),
+        (
             "apply_lane_reservation_reconciliation_plan",
             "revalidate_lane_reservation_startup_reconciliation_receipt",
         ),
@@ -2843,6 +2885,186 @@ def test_production_trace_certificate_rejects_roster_gated_lifecycle_process_gen
     assert "configured-role lifecycle process-generation claim" in message
     assert "contains forbidden exact code tokens" in message
     assert "local_validator_index" in message
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "iroha_data_model::NetworkId::default()",
+        "foreign_context.network_id",
+    ),
+)
+def test_production_trace_certificate_rejects_non_context_lifecycle_network_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    """The runner may not substitute or alias the authenticated context NetworkId."""
+
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate
+        for candidate in bindings
+        if candidate["id"] == "startup_snapshot_recovery_authorization"
+    )
+    claim_source = next(
+        source
+        for source in binding["supporting_sources"]
+        if source["symbol"] == "claim_runner_lifecycle_process_generation"
+    )
+    source_path = ROOT_DIR / claim_source["path"]
+    source = source_path.read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=claim_source["path"],
+        symbol=claim_source["symbol"],
+        impl_name=claim_source["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    assert item.source.count("context.network_id") == 1
+    mutated_item = item.source.replace("context.network_id", replacement, 1)
+    mutated_path = tmp_path / "non-context-lifecycle-network-id.rs"
+    mutated_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    claim_source["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert "configured-role lifecycle process-generation claim" in message
+    assert "context.network_id" in message
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "network_id: iroha_data_model::NetworkId",
+            "network_id: iroha_crypto::Hash",
+        ),
+        (
+            """network_id,
+            local_peer_id: local_peer_id.clone(),""",
+            """network_id: iroha_data_model::NetworkId::default(),
+            local_peer_id: local_peer_id.clone(),""",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_untyped_or_foreign_kura_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old: str,
+    new: str,
+) -> None:
+    """Kura must consume and return the same typed NetworkId claim."""
+
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate
+        for candidate in bindings
+        if candidate["id"] == "startup_snapshot_recovery_authorization"
+    )
+    claim_source = next(
+        source
+        for source in binding["supporting_sources"]
+        if source["role"]
+        == "typed Kura lifecycle process-generation claim propagation"
+    )
+    source_path = ROOT_DIR / claim_source["path"]
+    source = source_path.read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=claim_source["path"],
+        symbol=claim_source["symbol"],
+        impl_name=claim_source["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    assert item.source.count(old) == 1
+    mutated_item = item.source.replace(old, new, 1)
+    mutated_path = tmp_path / "foreign-kura-lifecycle-claim.rs"
+    mutated_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    claim_source["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert "typed Kura lifecycle process-generation claim propagation" in message
+    assert "missing exact code tokens" in message or "forbidden exact code tokens" in message
+
+
+def test_production_trace_certificate_rejects_missing_context_claim_revalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup recovery must reject a process claim from another NetworkId."""
+
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate
+        for candidate in bindings
+        if candidate["id"] == "startup_snapshot_recovery_authorization"
+    )
+    recovery_source = next(
+        source
+        for source in binding["supporting_sources"]
+        if source["symbol"] == "reconcile_autonomous_lifecycle_startup"
+    )
+    source_path = ROOT_DIR / recovery_source["path"]
+    source = source_path.read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=recovery_source["path"],
+        symbol=recovery_source["symbol"],
+        impl_name=recovery_source["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    exact_binding = "|| process_generation.network_id() != network_id\n"
+    assert item.source.count(exact_binding) == 1
+    mutated_item = item.source.replace(exact_binding, "|| false\n", 1)
+    mutated_path = tmp_path / "missing-context-claim-revalidation.rs"
+    mutated_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    recovery_source["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert "signed startup lifecycle recovery coordinator" in message
+    assert "process_generation.network_id() != network_id" in message
 
 
 def test_production_trace_certificate_rejects_reintroduced_open_action_debt(
@@ -3466,8 +3688,8 @@ def test_production_trace_certificate_rejects_disconnected_ready_qc_edges(
         ),
         (
             "commit_sink",
-            "sync_indexed_sidecar_initial_data",
-            "disconnect_indexed_sidecar_initial_data",
+            "sync_bound_progress_append_data",
+            "disconnect_bound_progress_append_data",
             "missing canonical commit sink tokens",
         ),
     ),

@@ -1,4 +1,229 @@
 #[test]
+#[allow(clippy::too_many_lines)]
+fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+
+    let install_lock = |adapter: &mut SumeragiV2Adapter, marker: u8| {
+        let locked_subject = subject(marker);
+        let locked_execution_commitment = execution_commitment(marker);
+        let wire_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: 0,
+        };
+        let wire_prepare = wire::QuorumCertificate {
+            round: wire_round,
+            proposal_round: wire_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: locked_subject,
+            execution_commitment: locked_execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![marker; 96],
+        };
+        let core_context = adapter.reducer.context().clone();
+        let prepare = adapter
+            .registry
+            .qc_to_core(&wire_prepare, &adapter.wire_context)
+            .expect("register lock certificate");
+        let local_validator = adapter
+            .registry
+            .validator_id(0)
+            .expect("local fixture validator");
+        let vote = reducer::Vote::new(
+            core_context.id(),
+            prepare.round(),
+            reducer::Phase::Commit,
+            prepare.subject(),
+            local_validator,
+        );
+        adapter.reducer = reducer::Reducer::recover(
+            core_context,
+            Some(local_validator),
+            reducer::Generation::new(u64::from(marker)),
+            [reducer::WalEntry::new(
+                reducer::PersistenceId::new(1),
+                reducer::WalRecord::LockAndCommit { prepare, vote },
+            )],
+        )
+        .expect("recover durable lock fixture");
+        (wire_round, locked_subject, locked_execution_commitment)
+    };
+    let admit_locked_roster =
+        |adapter: &mut SumeragiV2Adapter,
+         wire_round: wire::ConsensusRound,
+         locked_subject: wire::BlockSubject,
+         locked_execution_commitment: wire::ExecutionCommitment| {
+            let roster_len = adapter.wire_context.roster.len();
+            for signer in 0..roster_len {
+                let signer = u32::try_from(signer).expect("fixture signer index fits u32");
+                let payload = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                    round: wire_round,
+                    proposal_round: wire_round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject: locked_subject,
+                    execution_commitment: locked_execution_commitment,
+                    signer,
+                    signature: vec![u8::try_from(signer).expect("small fixture signer")],
+                });
+                let (outcome, admission) = adapter
+                    .admit_authenticated_payload(&payload)
+                    .expect("exact lock bypasses ordinary capacity");
+                assert!(outcome.is_none());
+                let admission = admission.expect("lock vote owns a capacity-bypass record");
+                assert!(
+                    adapter
+                        .ingress_equivocations
+                        .get(&admission.key)
+                        .expect("inserted lock admission")
+                        .capacity_bypass
+                );
+                adapter.record_ingress_delivery(admission);
+            }
+        };
+    let admit_timeout_roster =
+        |adapter: &mut SumeragiV2Adapter, wire_round: wire::ConsensusRound| {
+            let roster_len = adapter.wire_context.roster.len();
+            for signer in 0..roster_len {
+                let signer = u32::try_from(signer).expect("fixture signer index fits u32");
+                let payload = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round: wire_round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![0xE0 ^ u8::try_from(signer).expect("small fixture signer")],
+                });
+                let (outcome, admission) = adapter
+                    .admit_authenticated_payload(&payload)
+                    .expect("retained TimeoutVote bypasses ordinary capacity");
+                assert!(outcome.is_none());
+                let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
+                assert!(
+                    adapter
+                        .ingress_equivocations
+                        .get(&admission.key)
+                        .expect("inserted TimeoutVote admission")
+                        .capacity_bypass
+                );
+                adapter.record_ingress_delivery(admission);
+            }
+        };
+
+    let first_lock = install_lock(&mut adapter, 0xDB);
+    let ordinary_round = first_lock.0;
+    let ingress_context = adapter.wire_context.clone();
+    for index in 0..MAX_INGRESS_SEMANTIC_KEYS {
+        let proposer = u32::try_from(index).expect("semantic table bound fits u32");
+        adapter.ingress_equivocations.insert(
+            IngressSemanticKey::Proposal {
+                round: ordinary_round,
+                proposer,
+            },
+            IngressEquivocationRecord {
+                fingerprint: IngressFingerprint::Proposal(Hash::new(index.to_le_bytes())),
+                artifact: synthetic_ingress_proposal(
+                    &ingress_context,
+                    ordinary_round,
+                    proposer,
+                    index,
+                ),
+                equivocation_reported: false,
+                capacity_bypass: false,
+                admitted_at: Instant::now(),
+            },
+        );
+    }
+    admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
+    let roster_len = adapter.wire_context.roster.len();
+    admit_timeout_roster(&mut adapter, first_lock.0);
+    let adjacent_timeout_round = wire::ConsensusRound {
+        view: first_lock.0.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
+        ..first_lock.0
+    };
+    admit_timeout_roster(&mut adapter, adjacent_timeout_round);
+    assert_eq!(
+        adapter.ingress_equivocations.len(),
+        semantic_ingress_capacity(roster_len),
+        "ordinary, exact-lock, and bounded TimeoutVote owners realize the complete live semantic bound"
+    );
+    let ingress = adapter
+        .adapter_queue_statuses()
+        .into_iter()
+        .find(|queue| queue.queue == wire::SumeragiV2QueueKind::Ingress)
+        .expect("ingress queue status");
+    assert_eq!(
+        usize::try_from(ingress.depth).unwrap(),
+        semantic_ingress_capacity(roster_len)
+    );
+    assert_eq!(
+        usize::try_from(ingress.capacity).unwrap(),
+        semantic_ingress_capacity(roster_len)
+    );
+    assert_eq!(
+        adapter
+            .ingress_equivocations
+            .values()
+            .filter(|record| record.capacity_bypass)
+            .count(),
+        roster_len * 3
+    );
+    let same_view_equivocations = adapter.ingress_equivocations.clone();
+    let same_view_deliveries = adapter.ingress_deliveries.clone();
+    adapter.prune_ingress_records();
+    assert_eq!(adapter.ingress_equivocations, same_view_equivocations);
+    assert_eq!(adapter.ingress_deliveries, same_view_deliveries);
+
+    // The following lock-replacement half isolates durable-lock retention;
+    // view-advance retirement for these TimeoutVote owners is exercised by
+    // `full_normal_deferred_lane_cannot_drop_absolute_timeout`.
+    adapter
+        .ingress_equivocations
+        .retain(|key, _| !matches!(key, IngressSemanticKey::TimeoutVote { .. }));
+    adapter
+        .ingress_deliveries
+        .retain(|key, _| !matches!(key, IngressSemanticKey::TimeoutVote { .. }));
+    assert_eq!(
+        adapter.ingress_equivocations.len(),
+        MAX_INGRESS_SEMANTIC_KEYS + roster_len
+    );
+
+    let second_lock = install_lock(&mut adapter, 0xDC);
+    adapter.prune_ingress_records();
+    assert_eq!(
+        adapter.ingress_equivocations.len(),
+        MAX_INGRESS_SEMANTIC_KEYS
+    );
+    assert!(
+        adapter
+            .ingress_equivocations
+            .values()
+            .all(|record| !record.capacity_bypass)
+    );
+    assert!(adapter.ingress_deliveries.is_empty());
+
+    admit_locked_roster(&mut adapter, second_lock.0, second_lock.1, second_lock.2);
+    assert_eq!(
+        adapter.ingress_equivocations.len(),
+        MAX_INGRESS_SEMANTIC_KEYS + roster_len,
+        "capacity-bypass records from successive locks cannot accumulate"
+    );
+    assert_eq!(
+        adapter
+            .ingress_equivocations
+            .values()
+            .filter(|record| record.capacity_bypass)
+            .count(),
+        roster_len
+    );
+    let ingress = adapter
+        .adapter_queue_statuses()
+        .into_iter()
+        .find(|queue| queue.queue == wire::SumeragiV2QueueKind::Ingress)
+        .expect("ingress queue status after lock advance");
+    assert!(ingress.depth <= ingress.capacity);
+}
+
+#[test]
 fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -108,17 +333,14 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let AdapterEffect::EnterView {
         tag: converted_tag,
         certificate,
-        protected_body,
+        protected_lock,
     } = converted
     else {
         panic!("expected EnterView adapter effect");
     };
     assert_eq!(converted_tag, tag);
     assert_eq!(certificate.round, wire_round);
-    assert_eq!(
-        protected_body,
-        Some((carried_wire.round, carried_wire.subject))
-    );
+    assert_eq!(protected_lock, Some(carried_wire.clone()));
     assert_eq!(
         adapter.active_subject,
         Some((carried_reference.round(), carried_reference.subject()))
@@ -647,9 +869,9 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
     assert!(matches!(
         &installed_effects[0],
         AdapterEffect::EnterView {
-            protected_body: Some((round, subject)),
+            protected_lock: Some(protected_lock),
             ..
-        } if *round == wire_round && *subject == locked_subject
+        } if protected_lock == &wire_prepare
     ));
     assert!(matches!(
         &installed_effects[1],

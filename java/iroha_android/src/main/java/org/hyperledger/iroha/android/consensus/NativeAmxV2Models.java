@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
 
 /**
@@ -209,8 +210,8 @@ public final class NativeAmxV2Models {
       return unsigned64(delegate.getEpoch(), "attestation.epoch");
     }
 
-    public ConsensusHash chainIdHash() {
-      return new ConsensusHash(delegate.getChainIdHash());
+    public NetworkId networkId() {
+      return NetworkId.parse(delegate.getNetworkId().getLiteral());
     }
 
     public SourceId sourceId() {
@@ -702,8 +703,8 @@ public final class NativeAmxV2Models {
       return new SourceId(delegate.getSourceId());
     }
 
-    public ConsensusHash chainIdHash() {
-      return new ConsensusHash(delegate.getChainIdHash());
+    public NetworkId networkId() {
+      return NetworkId.parse(delegate.getNetworkId().getLiteral());
     }
 
     public ConsensusHash planDigest() {

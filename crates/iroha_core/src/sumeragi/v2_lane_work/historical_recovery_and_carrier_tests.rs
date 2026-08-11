@@ -304,7 +304,7 @@ fn fixed_view_zero_genesis_binds_under_a_later_proposal_lock() {
     let genesis_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
         .expect("deterministic genesis key");
     let genesis_transaction = TransactionBuilder::new(
-        ChainId::from("fixed-view-zero-genesis"),
+        crate::sumeragi::synthetic_network_id("fixed-view-zero-genesis"),
         AccountId::new(genesis_key.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -849,13 +849,11 @@ fn historical_recovery_diagnostics_are_typed_bounded_and_payload_free() {
 
     let mut stuck = diagnostics(1);
     let mut stuck_reports = 0;
-    for _ in 0
-        ..iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS
-            .get()
-            .saturating_mul(2)
+    for _ in 0..iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS
+        .get()
+        .saturating_mul(2)
     {
-        let observation =
-            stuck.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
+        let observation = stuck.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
         if observation.became_stuck {
             stuck_reports += 1;
         }
@@ -1010,8 +1008,7 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
     };
     let first_request_frames = request_frames(&first_requests);
     assert!(
-        !first_requests.is_empty()
-            && first_request_frames.len() == first_requests.len(),
+        !first_requests.is_empty() && first_request_frames.len() == first_requests.len(),
         "finality-bound recovery must emit only authenticated historical requests"
     );
     let identity = wait.identity();
@@ -1065,12 +1062,10 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
     let effect_capacity = adapter.limits.effect_capacity;
     adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("one blocking effect");
     let blocker = match &first_requests[0] {
-        V2LaneWorkEffect::PostLaneBlock { message, .. } => {
-            V2LaneWorkEffect::PostLaneBlock {
-                peer: adapter.local_peer.clone(),
-                message: message.clone(),
-            }
-        }
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => V2LaneWorkEffect::PostLaneBlock {
+            peer: adapter.local_peer.clone(),
+            message: message.clone(),
+        },
         _ => unreachable!("historical request fixture emitted only lane posts"),
     };
     assert!(adapter.push_effect(blocker));
@@ -1141,7 +1136,11 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
     assert!(adapter.historical_recovery_waits_snapshot().is_empty());
     assert!(adapter.historical_recovery_requests.is_empty());
     assert!(adapter.historical_recovery_request_owners.is_empty());
-    assert!(adapter.kura.lane_block_application_receipt_available(&proposal));
+    assert!(
+        adapter
+            .kura
+            .lane_block_application_receipt_available(&proposal)
+    );
 }
 
 #[test]
@@ -1200,12 +1199,8 @@ fn retained_sidecar_handoff_rejects_foreign_owner_and_wrong_successor() {
     } = certified_sidecar_server_fixture();
     let (service_owner, transport_owner) = durable_exact_output_handoff_owner_pair();
     adapter.exact_output_handoff_owner = transport_owner;
-    let service = service_for_history_context_with_handoff_owner(
-        kura,
-        context,
-        &validators,
-        service_owner,
-    );
+    let service =
+        service_for_history_context_with_handoff_owner(kura, context, &validators, service_owner);
     let (receipt, artifact) = durable_finality_fixture(&service, &validators);
     let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
         &artifact,
@@ -1316,11 +1311,7 @@ fn sidecar_server_allocations_require_roster_requester_but_not_roster_relay() {
     outsider_close.close_id = outsider_close.canonical_close_id();
     assert_eq!(
         adapter
-            .accept_certified_merge_sidecar_close(
-                outsider,
-                Some(outsider_route),
-                outsider_close,
-            )
+            .accept_certified_merge_sidecar_close(outsider, Some(outsider_route), outsider_close,)
             .expect("outsider close is rejected without local failure"),
         V2LaneIngressOutcome::Rejected
     );
@@ -1339,11 +1330,7 @@ fn sidecar_server_allocations_require_roster_requester_but_not_roster_relay() {
     let requester_route = routes.mint_via(requester.clone(), hub);
     assert_eq!(
         adapter
-            .accept_certified_merge_sidecar_for_test(
-                requester.clone(),
-                requester_route,
-                request,
-            )
+            .accept_certified_merge_sidecar_for_test(requester.clone(), requester_route, request,)
             .expect("roster requester via a non-roster hub is serviceable"),
         V2LaneIngressOutcome::Inserted
     );
@@ -1457,7 +1444,7 @@ fn sidecar_ingress_materializes_the_fair_scheduler_job_not_the_newest_request() 
 enum HistoricalSidecarFinality {
     Exact,
     Missing,
-    WrongChain,
+    WrongNetwork,
     WrongRoster,
 }
 
@@ -1573,9 +1560,8 @@ fn verified_finality_for_context(
         })
         .collect::<Vec<_>>();
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    commit_qc.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate historical sidecar finality");
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate historical sidecar finality");
     let artifact = wire::finality::V2FinalityArtifact::new(
         context.clone(),
         subject,
@@ -1627,8 +1613,9 @@ fn historical_sidecar_server_fixture(
     let mut finality_keys = keys;
     match finality_kind {
         HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing => {}
-        HistoricalSidecarFinality::WrongChain => {
-            finality_context.chain_id = "wrong-historical-sidecar-chain".into();
+        HistoricalSidecarFinality::WrongNetwork => {
+            finality_context.network_id =
+                crate::sumeragi::synthetic_network_id("wrong-historical-sidecar-network");
         }
         HistoricalSidecarFinality::WrongRoster => {
             finality_keys = (11_u8..=14)
@@ -1757,6 +1744,320 @@ fn advanced_responder_serves_exact_finalized_historical_merge_sidecar() {
                 )
         )
     }));
+}
+
+#[test]
+fn disjoint_successor_roster_serves_only_exact_historical_requester() {
+    let mut fixture =
+        historical_sidecar_server_fixture(HistoricalSidecarFinality::Exact, None, false);
+    let historical_roster = fixture
+        .finality
+        .height_context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let mut successor_roster = (0..historical_roster.len())
+        .map(|index| {
+            let seed = u8::try_from(index)
+                .expect("small successor roster index")
+                .saturating_add(0xC0);
+            wire::ValidatorPower {
+                validator: PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic disjoint sidecar successor")
+                        .public_key()
+                        .clone(),
+                ),
+                power: 1,
+            }
+        })
+        .collect::<Vec<_>>();
+    successor_roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    assert!(successor_roster.iter().all(|successor| {
+        historical_roster
+            .iter()
+            .all(|historical| historical != &successor.validator)
+    }));
+    let successor_peers = successor_roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    fixture
+        .adapter
+        .transition_merge_sidecar_responder_roster_for_test(&successor_peers)
+        .expect("persist the disjoint responder-generation fence");
+    fixture.adapter.context.roster = successor_roster;
+    fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
+        .expect("disjoint successor has valid equal-vote geometry");
+    fixture
+        .adapter
+        .context
+        .validate()
+        .expect("disjoint successor context remains valid");
+    assert!(!fixture.adapter.frozen_roster_contains(&fixture.requester));
+    assert!(
+        !fixture
+            .adapter
+            .frozen_roster_contains(&fixture.adapter.local_peer)
+    );
+
+    let current_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    assert!(fixture.request.service_generation < current_generation);
+    fixture
+        .adapter
+        .kura
+        .reset_merge_query_read_counters_for_test();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted,
+        "an exact stale historical request must receive the successor fence"
+    );
+    assert_eq!(
+        fixture.adapter.kura.merge_query_read_counters_for_test(),
+        (0, 0, 0),
+        "a stale generation is rate-gated and answered without a merge-entry lookup"
+    );
+    let stale_effects = fixture.adapter.drain_effects(usize::MAX);
+    assert!(stale_effects.iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. }
+                if matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::GenerationHint(hint)
+                        if hint.current_generation == current_generation
+                )
+        )
+    }));
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_request_gate_count_for_test(),
+        0,
+        "a stale predecessor request must not recreate predecessor ownership"
+    );
+
+    for index in 0..wire::MAX_VALIDATORS_PER_HEIGHT {
+        let seed = 0xD0_u8
+            .checked_add(u8::try_from(index).expect("bounded outsider index"))
+            .expect("outsider seed range");
+        let outsider = PeerId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic historical sidecar outsider")
+                .public_key()
+                .clone(),
+        );
+        assert!(!historical_roster.contains(&outsider));
+        assert!(!fixture.adapter.frozen_roster_contains(&outsider));
+        let mut outsider_request = fixture.request.clone();
+        outsider_request.service_generation = current_generation;
+        outsider_request.requester = outsider.clone();
+        outsider_request.request_id = outsider_request.canonical_request_id();
+        let outsider_hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut outsider_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            outsider_hub.clone(),
+            fixture.adapter.limits.reply_source_capacity.get(),
+        );
+        let outsider_route = outsider_routes.mint_via(outsider.clone(), outsider_hub);
+        assert_eq!(
+            fixture
+                .adapter
+                .accept_certified_merge_sidecar_for_test(
+                    outsider,
+                    outsider_route,
+                    outsider_request,
+                )
+                .expect("an exact-entry outsider is rejected without local failure"),
+            V2LaneIngressOutcome::Rejected
+        );
+    }
+    let expected_predecessor_requesters =
+        historical_roster.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(
+        fixture.adapter.predecessor_sidecar_requesters.as_ref(),
+        Some(&expected_predecessor_requesters),
+        "the allocation corridor is bound to the exact durable predecessor"
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_request_gate_count_for_test(),
+        0
+    );
+
+    fixture.request.service_generation = current_generation;
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted,
+        "the retried exact request must use the sole successor writer"
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_request_gate_count_for_test(),
+        1
+    );
+    assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. }
+                if matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.entry_hash == fixture.request.entry_hash
+                )
+        )
+    }));
+
+    let mut close = CertifiedMergeSidecarCloseV1 {
+        version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+        service_generation: current_generation,
+        stream_epoch: fixture.request.stream_epoch,
+        closed_through: fixture.request.semantic_sequence.get(),
+        close_id: Hash::prehashed([0; Hash::LENGTH]),
+        requester: fixture.requester.clone(),
+        responder: fixture.adapter.local_peer.clone(),
+    };
+    close.close_id = close.canonical_close_id();
+    let close_hub = PeerId::new(KeyPair::random().public_key().clone());
+    let mut close_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        close_hub.clone(),
+        fixture.adapter.limits.reply_source_capacity.get(),
+    );
+    let close_route = close_routes.mint_via(fixture.requester.clone(), close_hub);
+    assert_eq!(
+        fixture
+            .adapter
+            .accept_certified_merge_sidecar_close(
+                fixture.requester.clone(),
+                Some(close_route),
+                close,
+            )
+            .expect("the admitted historical stream can close in the successor generation"),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_request_gate_count_for_test(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .retained_outbound_bytes_for_test(),
+        0,
+        "the authenticated close releases the bounded response payload"
+    );
+
+    // Fill the rest of the complete predecessor committee first, then
+    // prove that every disjoint current-roster identity still owns a
+    // reserved responder slot. The former roster-sized transport table
+    // rejected the live roster at this boundary.
+    let mut reservation_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        PeerId::new(KeyPair::random().public_key().clone()),
+        fixture.adapter.limits.reply_source_capacity.get(),
+    );
+    for historical in historical_roster
+        .iter()
+        .filter(|historical| *historical != &fixture.requester)
+    {
+        let mut request = fixture.request.clone();
+        request.requester = historical.clone();
+        request.request_id = request.canonical_request_id();
+        let route = reservation_routes.mint(historical.clone());
+        let before = fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test();
+        let outcome = fixture
+            .adapter
+            .accept_certified_merge_sidecar_for_test(historical.clone(), route, request)
+            .expect("another exact predecessor requester remains serviceable");
+        assert_ne!(outcome, V2LaneIngressOutcome::Rejected);
+        assert_eq!(
+            fixture
+                .adapter
+                .merge_sidecars
+                .server_stream_count_for_test(),
+            before + 1
+        );
+    }
+    let current_context = &fixture.adapter.context;
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_matching(|requester| {
+                !current_context
+                    .roster
+                    .iter()
+                    .any(|entry| &entry.validator == requester)
+            }),
+        historical_roster.len()
+    );
+
+    for current in &successor_peers {
+        let mut request = fixture.request.clone();
+        request.requester = current.clone();
+        request.request_id = request.canonical_request_id();
+        let route = reservation_routes.mint(current.clone());
+        let before = fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test();
+        let outcome = fixture
+            .adapter
+            .accept_certified_merge_sidecar_for_test(current.clone(), route, request)
+            .expect("current-roster reservation remains serviceable");
+        assert_ne!(outcome, V2LaneIngressOutcome::Rejected);
+        assert_eq!(
+            fixture
+                .adapter
+                .merge_sidecars
+                .server_stream_count_for_test(),
+            before + 1
+        );
+    }
+    assert_eq!(
+        fixture
+            .adapter
+            .merge_sidecars
+            .server_stream_count_for_test(),
+        historical_roster.len() + successor_peers.len(),
+        "a complete predecessor and disjoint successor fit simultaneously"
+    );
 }
 
 #[test]

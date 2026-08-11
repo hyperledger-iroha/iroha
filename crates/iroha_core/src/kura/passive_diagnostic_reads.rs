@@ -65,11 +65,7 @@ impl Kura {
         lane_id: LaneId,
         lane_block_height: u64,
     ) -> Option<LaneBlockExecutionInputArtifact> {
-        self.read_lane_block_execution_input_with_repair_policy(
-            lane_id,
-            lane_block_height,
-            false,
-        )
+        self.read_lane_block_execution_input_with_repair_policy(lane_id, lane_block_height, false)
     }
 
     pub(crate) fn lane_block_execution_input_available_without_sidecar_repair(
@@ -121,10 +117,9 @@ impl Kura {
         if !self
             .lane_block_predecessor_application_receipt_available_without_sidecar_repair(proposal)
             || self.lane_block_application_receipt_available_without_sidecar_repair(proposal)
-            || self
-                .lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
-                    proposal,
-                )
+            || self.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+                proposal,
+            )
         {
             return None;
         }
@@ -331,8 +326,7 @@ impl Kura {
         if entry.epoch_id != epoch_id
             || self
                 .merge_carrier_for_entry_without_append_repair_under_prune_and_canonical_guards(
-                    entry_hash,
-                    &entry,
+                    entry_hash, &entry,
                 )
                 .ok()
                 .flatten()
@@ -423,7 +417,9 @@ impl Kura {
                 "lane block artifact",
             )
             .ok()?;
-            let mut pair = self.open_bound_progress_pair(&data_path, &index_path).ok()?;
+            let mut pair = self
+                .open_bound_progress_pair(&data_path, &index_path)
+                .ok()?;
             let candidates = match &mut pair {
                 BoundProgressPair::Absent(_) => Vec::new(),
                 BoundProgressPair::Present(bound) => {
@@ -513,8 +509,8 @@ impl Kura {
         let candidates = match &mut pair {
             BoundProgressPair::Absent(_) => Vec::new(),
             BoundProgressPair::Present(bound) => {
-                let Ok(heights) = self
-                    .bound_indexed_sidecar_height_range(bound, "certified lane block")
+                let Ok(heights) =
+                    self.bound_indexed_sidecar_height_range(bound, "certified lane block")
                 else {
                     return Vec::new();
                 };
@@ -554,13 +550,13 @@ impl Kura {
     fn validate_lane_new_view_certificate_for_artifact(
         artifact: &AutonomousLaneBlockArtifact,
         durable_certificate: &DurableLaneBlockNewViewCertificateV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         slot_path: &Path,
     ) -> Result<(LaneBlockProposalV1, LaneBlockProposalV1)> {
         let current = Self::validate_autonomous_lane_block_artifact(
             artifact,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(slot_path.to_path_buf(), message))?;
@@ -579,7 +575,7 @@ impl Kura {
             &target,
             &artifact.executable_payload,
             durable_certificate,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )
         .map_err(|err| {
@@ -596,7 +592,7 @@ impl Kura {
         entry: &LaneConfigEntry,
         lane_id: LaneId,
         lane_block_height: u64,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
         if let Some(pointer) =
@@ -616,7 +612,7 @@ impl Kura {
                 .read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
                     entry,
                     &pointer,
-                    expected_chain_id_hash,
+                    expected_network_id,
                     expected_epoch,
                     AutonomousLaneBlockViewStateReadMode::LatestReadOnly,
                 )
@@ -687,12 +683,11 @@ impl Kura {
         repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
                     artifact,
                     repair_missing_sidecars,
-                )
-            }
+                ),
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
@@ -716,12 +711,11 @@ impl Kura {
         repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
                     artifact,
                     repair_missing_sidecars,
-                )
-            }
+                ),
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
@@ -747,12 +741,11 @@ impl Kura {
         repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
                     artifact,
                     repair_missing_sidecars,
-                )
-            }
+                ),
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
                     artifact,

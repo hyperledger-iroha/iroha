@@ -20,8 +20,8 @@ use crate::{
     account::AccountId,
     asset::AssetId,
     isi::{
-        bridge::SccpRouteGovernanceActionV1,
         governance::{CouncilDerivationKind, VotingMode},
+        sorafs::SorafsProviderGovernanceActionV1,
     },
     musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
@@ -31,6 +31,9 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
+
+#[cfg(test)]
+use crate::isi::bridge::SccpRouteGovernanceActionV1;
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -425,6 +428,9 @@ pub enum ProposalKind {
     /// Enact one exact Musubi recovery, alias-retarget, takedown, or policy action.
     #[codec(index = 5)]
     MusubiRegistryGovernance(MusubiParliamentActionV1),
+    /// Establish, replace, or remove one `SoraFS` provider owner through governance.
+    #[codec(index = 6)]
+    SorafsProviderGovernance(SorafsProviderGovernanceProposal),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -465,8 +471,19 @@ pub struct RuntimeUpgradeProposal {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct SccpRouteGovernanceProposal {
-    /// Atomic closed SCCP registry action to execute on enactment.
-    pub action: Box<SccpRouteGovernanceActionV1>,
+    /// Complete network- and action-bound SCCP referendum preimage.
+    pub anchor: Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>,
+}
+
+/// Proposal payload for one closed `SoraFS` provider-owner transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsProviderGovernanceProposal {
+    /// Exact compare-and-set provider-owner action to execute on enactment.
+    pub action: Box<SorafsProviderGovernanceActionV1>,
 }
 
 /// Proposal payload for one governed validation-fee policy.
@@ -1007,6 +1024,9 @@ impl ProposalKind {
             Self::MusubiRegistryGovernance(_) => {
                 crate::governance_fingerprint::MUSUBI_REGISTRY_GOVERNANCE_V1
             }
+            Self::SorafsProviderGovernance(_) => {
+                crate::governance_fingerprint::SORAFS_PROVIDER_GOVERNANCE_V1
+            }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
     }
@@ -1138,6 +1158,9 @@ mod tests {
             ProposalKind::MusubiRegistryGovernance(_) => {
                 panic!("unexpected Musubi registry proposal")
             }
+            ProposalKind::SorafsProviderGovernance(_) => {
+                panic!("unexpected SoraFS provider-governance proposal")
+            }
         }
     }
 
@@ -1214,6 +1237,9 @@ mod tests {
             ProposalKind::MusubiRegistryGovernance(_) => {
                 panic!("unexpected Musubi registry proposal")
             }
+            ProposalKind::SorafsProviderGovernance(_) => {
+                panic!("unexpected SoraFS provider-governance proposal")
+            }
         }
     }
 
@@ -1221,7 +1247,7 @@ mod tests {
     fn sccp_route_governance_proposal_is_boxed_out_of_proposal_kind() {
         assert_eq!(
             core::mem::size_of::<SccpRouteGovernanceProposal>(),
-            core::mem::size_of::<Box<SccpRouteGovernanceActionV1>>()
+            core::mem::size_of::<Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>>()
         );
         assert!(
             core::mem::size_of::<ProposalKind>()

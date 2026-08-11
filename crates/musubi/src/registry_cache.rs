@@ -5,12 +5,15 @@
 //! requests.  It deliberately excludes endpoint URLs, credentials, bearer
 //! material, provider locations, timestamps, and filesystem paths.  A cache
 //! snapshot is published only after one successful graph collection observed a
-//! single chain, genesis block, finalized block, and index revision.
+//! single exact network, finalized block, and index revision.
 //!
 //! Torii's current finalized query pages do not carry a portable consensus
 //! inclusion proof.  Cache authenticity is therefore rooted in the online
 //! reader's validation plus the private, identity-checked user cache directory;
 //! the domain-separated snapshot commitment detects subsequent corruption.
+//! Linux and Android bind catalog reads to the retained cache-root descriptor
+//! through `/proc/self/fd`; other platforms reject offline catalog reads until
+//! an equivalent safe descriptor-rooted primitive is available.
 //! TODO: Verify and retain a portable finalized-state inclusion proof here once
 //! the public query contract exposes one.
 
@@ -18,14 +21,12 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt, fs,
-    fs::OpenOptions,
-    io::{self, Read},
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     musubi::{
         MUSUBI_MAX_RESOLUTION_NODES_V1, MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1,
         MusubiPackageIdV1, MusubiPackageSelectorV1, MusubiRegistrySnapshotV1,
@@ -38,7 +39,7 @@ use norito::{
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
@@ -85,8 +86,7 @@ struct CachedResolverPageV1 {
 /// Complete coherent set of pages consumed by one successful graph collection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ResolverIndexCacheSnapshotV1 {
-    chain_id: ChainId,
-    genesis_hash: [u8; 32],
+    network_id: NetworkId,
     account_chain_discriminant: u16,
     snapshot: MusubiRegistrySnapshotV1,
     ordered_pages: Vec<CachedOrderedPageV1>,
@@ -99,10 +99,7 @@ impl ResolverIndexCacheSnapshotV1 {
         reason = "cache snapshot admission validates every deployment, page-order, cursor, and coherence invariant in one fail-closed pass"
     )]
     fn validate(&self) -> Result<(), ResolverIndexCacheErrorV1> {
-        if self.chain_id.as_str().is_empty()
-            || self.genesis_hash.iter().all(|byte| *byte == 0)
-            || self.account_chain_discriminant == 0
-        {
+        if self.network_id.as_bytes()[31] & 1 != 1 || self.account_chain_discriminant == 0 {
             return Err(invalid("cache snapshot has an invalid deployment identity"));
         }
         self.snapshot
@@ -132,11 +129,7 @@ impl ResolverIndexCacheSnapshotV1 {
             page.response
                 .validate_for(&page.request)
                 .map_err(|error| invalid(error.reason()))?;
-            self.validate_anchor(
-                &page.response.chain_id,
-                page.response.genesis_hash,
-                page.response.snapshot,
-            )?;
+            self.validate_anchor(page.response.network_id, page.response.snapshot)?;
             validate_request_cursor(page.request.page.cursor.as_ref(), self.snapshot)?;
             for item in &page.response.items {
                 if !item
@@ -182,11 +175,7 @@ impl ResolverIndexCacheSnapshotV1 {
             page.response
                 .validate_for(&page.request)
                 .map_err(|error| invalid(error.reason()))?;
-            self.validate_anchor(
-                &page.response.chain_id,
-                page.response.genesis_hash,
-                page.response.snapshot,
-            )?;
+            self.validate_anchor(page.response.network_id, page.response.snapshot)?;
             validate_request_cursor(page.request.page.cursor.as_ref(), self.snapshot)?;
             row_occurrences = row_occurrences
                 .checked_add(page.response.items.len())
@@ -232,14 +221,10 @@ impl ResolverIndexCacheSnapshotV1 {
 
     fn validate_anchor(
         &self,
-        chain_id: &ChainId,
-        genesis_hash: [u8; 32],
+        network_id: NetworkId,
         snapshot: MusubiRegistrySnapshotV1,
     ) -> Result<(), ResolverIndexCacheErrorV1> {
-        if chain_id != &self.chain_id
-            || genesis_hash != self.genesis_hash
-            || snapshot != self.snapshot
-        {
+        if network_id != self.network_id || snapshot != self.snapshot {
             return Err(invalid(
                 "cached query pages do not share one exact finalized anchor",
             ));
@@ -269,8 +254,7 @@ impl ResolverIndexCacheSnapshotV1 {
     }
 
     fn is_not_older_than(&self, lock: &LockfileV1) -> bool {
-        self.chain_id == lock.chain_id
-            && self.genesis_hash == lock.genesis_hash
+        self.network_id == lock.network_id
             && (self.snapshot == lock.snapshot
                 || (self.snapshot.finalized_height > lock.snapshot.finalized_height
                     && self.snapshot.index_revision >= lock.snapshot.index_revision))
@@ -340,8 +324,7 @@ impl ResolverIndexCacheCatalogV1 {
         for entry in &self.snapshots {
             entry.validate()?;
             let deployment = (
-                entry.value.chain_id.as_str().to_owned(),
-                entry.value.genesis_hash,
+                entry.value.network_id,
                 entry.value.account_chain_discriminant,
             );
             let key = (deployment.clone(), entry.value.snapshot.finalized_height);
@@ -482,19 +465,14 @@ impl ResolverIndexCacheV1 {
             .filter(|snapshot| {
                 let compatible = previous.is_none_or(|lock| snapshot.is_not_older_than(lock));
                 if compatible {
-                    deployments.insert((
-                        snapshot.chain_id.as_str().to_owned(),
-                        snapshot.genesis_hash,
-                        snapshot.account_chain_discriminant,
-                    ));
+                    deployments.insert((snapshot.network_id, snapshot.account_chain_discriminant));
                 }
                 compatible
             })
             .collect::<Vec<_>>();
         if deployments.len() > 1 {
             return Err(ResolverIndexCacheErrorV1::OfflineMiss(
-                "resolver cache contains more than one chain/genesis/discriminant deployment"
-                    .to_owned(),
+                "resolver cache contains more than one network/discriminant deployment".to_owned(),
             ));
         }
         if snapshots.is_empty() {
@@ -517,37 +495,13 @@ impl ResolverIndexCacheV1 {
         &self,
     ) -> Result<Option<ResolverIndexCacheCatalogV1>, ResolverIndexCacheErrorV1> {
         self.validate_root()?;
-        let path = self.write_root.path().join(CACHE_FILE);
-        let mut options = OpenOptions::new();
-        options.read(true);
-        set_no_follow(&mut options);
-        let mut file = match options.open(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(io_error("open resolver cache", &path, source)),
+        let bytes = self
+            .write_root
+            .load_private_descriptor_rooted(Path::new(CACHE_FILE), MAX_CACHE_FILE_BYTES_USIZE_V1)
+            .map_err(ResolverIndexCacheErrorV1::AtomicWrite)?;
+        let Some(bytes) = bytes else {
+            return Ok(None);
         };
-        let before = file
-            .metadata()
-            .map_err(|source| io_error("inspect resolver cache", &path, source))?;
-        validate_private_regular_file(&path, &before)?;
-        if before.len() > MAX_CACHE_FILE_BYTES_V1 {
-            return Err(invalid("resolver cache file exceeds its V1 byte bound"));
-        }
-        let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
-        file.by_ref()
-            .take(MAX_CACHE_FILE_BYTES_V1 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|source| io_error("read resolver cache", &path, source))?;
-        if bytes.len() as u64 > MAX_CACHE_FILE_BYTES_V1 {
-            return Err(invalid("resolver cache grew beyond its V1 byte bound"));
-        }
-        let after = file
-            .metadata()
-            .map_err(|source| io_error("reinspect resolver cache", &path, source))?;
-        if !same_file_snapshot(&before, &after) {
-            return Err(invalid("resolver cache changed while it was read"));
-        }
-        self.validate_root()?;
         let catalog: ResolverIndexCacheCatalogV1 =
             norito::decode_canonical_with_limits(&bytes, CACHE_DECODE_LIMITS_V1)
                 .map_err(|error| ResolverIndexCacheErrorV1::Codec(error.to_string()))?;
@@ -592,28 +546,17 @@ impl<'a> RecordingResolverSourceV1<'a> {
         resolver_pages.sort_by_cached_key(|page| page.request.encode());
         let anchor = ordered_pages
             .first()
-            .map(|page| {
-                (
-                    page.response.chain_id.clone(),
-                    page.response.genesis_hash,
-                    page.response.snapshot,
-                )
-            })
+            .map(|page| (page.response.network_id, page.response.snapshot))
             .or_else(|| {
-                resolver_pages.first().map(|page| {
-                    (
-                        page.response.chain_id.clone(),
-                        page.response.genesis_hash,
-                        page.response.snapshot,
-                    )
-                })
+                resolver_pages
+                    .first()
+                    .map(|page| (page.response.network_id, page.response.snapshot))
             })
             .ok_or_else(|| invalid("successful graph collection captured no registry page"))?;
         let snapshot = ResolverIndexCacheSnapshotV1 {
-            chain_id: anchor.0,
-            genesis_hash: anchor.1,
+            network_id: anchor.0,
             account_chain_discriminant: self.inner.account_chain_discriminant(),
-            snapshot: anchor.2,
+            snapshot: anchor.1,
             ordered_pages,
             resolver_pages,
         };
@@ -994,18 +937,14 @@ where
 }
 
 fn same_anchor(left: &ResolverIndexCacheSnapshotV1, right: &ResolverIndexCacheSnapshotV1) -> bool {
-    left.chain_id == right.chain_id
-        && left.genesis_hash == right.genesis_hash
+    left.network_id == right.network_id
         && left.account_chain_discriminant == right.account_chain_discriminant
         && left.snapshot == right.snapshot
 }
 
-fn snapshot_key(
-    snapshot: &ResolverIndexCacheSnapshotV1,
-) -> (String, [u8; 32], u16, u64, [u8; 32], u64) {
+fn snapshot_key(snapshot: &ResolverIndexCacheSnapshotV1) -> (NetworkId, u16, u64, [u8; 32], u64) {
     (
-        snapshot.chain_id.as_str().to_owned(),
-        snapshot.genesis_hash,
+        snapshot.network_id,
         snapshot.account_chain_discriminant,
         snapshot.snapshot.finalized_height,
         snapshot.snapshot.finalized_block_hash,
@@ -1086,93 +1025,10 @@ fn validate_private_directory(
     Ok(())
 }
 
-fn validate_private_regular_file(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ResolverIndexCacheErrorV1> {
-    if !metadata.is_file() {
-        return Err(invalid(format!(
-            "`{}` is not a regular cache file",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    if metadata.nlink() != 1 || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(invalid(format!(
-            "`{}` is linked or not private",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        left.dev() == right.dev()
-            && left.ino() == right.ino()
-            && left.len() == right.len()
-            && left.mtime() == right.mtime()
-            && left.mtime_nsec() == right.mtime_nsec()
-            && left.ctime() == right.ctime()
-            && left.ctime_nsec() == right.ctime_nsec()
-            && left.nlink() == right.nlink()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (left, right);
-        false
-    }
-}
-
-fn set_no_follow(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    options.custom_flags(platform_no_follow_flag());
-    #[cfg(not(unix))]
-    let _ = options;
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn platform_no_follow_flag() -> i32 {
-    0o400000
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     use crate::{
         graph::resolve_workspace_offline_cached, resolver::ResolveModeV1, workspace::load_workspace,
     };
@@ -1185,6 +1041,20 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    fn network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("network id")
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn other_network_id() -> NetworkId {
+        "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
+            .parse()
+            .expect("other network id")
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     const APP: &str = r#"manifest-version = 1
 [package]
 namespace = "apps.sora"
@@ -1231,8 +1101,7 @@ exports = []
             request: request.clone(),
             response: MusubiOrderedPackagePageV1 {
                 query: request,
-                chain_id: "musubi-cache-test".parse().expect("chain"),
-                genesis_hash: [9; 32],
+                network_id: network_id(),
                 namespace_binding: binding(namespace),
                 items: Vec::<MusubiOrderedPackageEntryV1>::new(),
                 next_cursor: None,
@@ -1243,13 +1112,37 @@ exports = []
 
     fn image(namespace: &str, height: u64, byte: u8) -> ResolverIndexCacheSnapshotV1 {
         ResolverIndexCacheSnapshotV1 {
-            chain_id: "musubi-cache-test".parse().expect("chain"),
-            genesis_hash: [9; 32],
+            network_id: network_id(),
             account_chain_discriminant: 369,
             snapshot: snapshot(height, byte),
             ordered_pages: vec![ordered_page(namespace, height, byte)],
             resolver_pages: Vec::new(),
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn install_cache_ancestor_aba_hooks(
+        trusted_root: PathBuf,
+        alternate_root: PathBuf,
+        held_trusted_root: PathBuf,
+    ) {
+        let swap_trusted_root = trusted_root.clone();
+        let swap_alternate_root = alternate_root.clone();
+        let swap_held_root = held_trusted_root.clone();
+        crate::atomic_io::install_descriptor_root_read_test_hooks(
+            move || {
+                fs::rename(&swap_trusted_root, &swap_held_root)
+                    .expect("move genuine ancestor out of the pathname");
+                fs::rename(&swap_alternate_root, &swap_trusted_root)
+                    .expect("move alternate ancestor into the pathname");
+            },
+            move || {
+                fs::rename(&trusted_root, &alternate_root)
+                    .expect("move alternate ancestor back out of the pathname");
+                fs::rename(&held_trusted_root, &trusted_root)
+                    .expect("restore genuine ancestor before final validation");
+            },
+        );
     }
 
     #[test]
@@ -1281,6 +1174,7 @@ exports = []
         ));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn durable_cache_detects_tampering_and_offline_misses() {
         let temp = TempDir::new().expect("temp root");
@@ -1313,6 +1207,95 @@ exports = []
         ));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn descriptor_rooted_read_cannot_load_forged_bytes_from_an_aba_root() {
+        let temp = TempDir::new().expect("temp root");
+        let trusted_user_root = temp.path().join("trusted-cache");
+        let forged_user_root = temp.path().join("forged-cache");
+        let cache = ResolverIndexCacheV1::open(&trusted_user_root).expect("trusted empty cache");
+        let forged_cache =
+            ResolverIndexCacheV1::open(&forged_user_root).expect("forged fixture cache");
+        forged_cache
+            .publish(image("forged.sora", 99, 99))
+            .expect("publish structurally valid forged catalog");
+        assert_eq!(
+            forged_cache.sources(None).expect("forged source")[0].snapshot(),
+            snapshot(99, 99),
+            "the alternate bytes must be independently admissible"
+        );
+        drop(forged_cache);
+
+        install_cache_ancestor_aba_hooks(
+            trusted_user_root.clone(),
+            forged_user_root,
+            temp.path().join("trusted-cache-held-for-test"),
+        );
+        assert!(matches!(
+            cache.sources(None),
+            Err(ResolverIndexCacheErrorV1::OfflineMiss(reason))
+                if reason == "resolver cache is empty"
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn descriptor_rooted_read_cannot_observe_forged_absence_from_an_aba_root() {
+        let temp = TempDir::new().expect("temp root");
+        let trusted_user_root = temp.path().join("trusted-cache");
+        let empty_user_root = temp.path().join("empty-cache");
+        let cache = ResolverIndexCacheV1::open(&trusted_user_root).expect("trusted cache");
+        cache
+            .publish(image("apps.sora", 10, 10))
+            .expect("publish trusted catalog");
+        drop(ResolverIndexCacheV1::open(&empty_user_root).expect("empty alternate cache"));
+
+        install_cache_ancestor_aba_hooks(
+            trusted_user_root.clone(),
+            empty_user_root,
+            temp.path().join("trusted-cache-held-for-test"),
+        );
+        let sources = cache
+            .sources(None)
+            .expect("descriptor-rooted read sees retained genuine catalog");
+        assert_eq!(sources[0].snapshot(), snapshot(10, 10));
+
+        drop(cache);
+        let reopened = ResolverIndexCacheV1::open(&trusted_user_root)
+            .expect("restart binds the restored genuine root");
+        assert_eq!(
+            reopened.sources(None).expect("restart source")[0].snapshot(),
+            snapshot(10, 10)
+        );
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    #[test]
+    fn offline_cache_read_fails_closed_without_descriptor_rooted_open() {
+        let temp = TempDir::new().expect("temp root");
+        let cache = ResolverIndexCacheV1::open(&temp.path().join("cache")).expect("cache");
+        assert!(matches!(
+            cache.sources(None),
+            Err(ResolverIndexCacheErrorV1::AtomicWrite(error))
+                if error.code() == AtomicWriteErrorCode::UnsupportedPlatform
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn resolver_cache_open_fails_closed_without_a_safe_root_handle() {
+        let temp = TempDir::new().expect("temp root");
+        let error = ResolverIndexCacheV1::open(&temp.path().join("cache"))
+            .expect_err("non-Unix resolver cache must fail closed");
+        match &error {
+            ResolverIndexCacheErrorV1::Cache(CacheError::UnsupportedPlatform) => {}
+            ResolverIndexCacheErrorV1::AtomicWrite(error)
+                if error.code() == AtomicWriteErrorCode::UnsupportedPlatform => {}
+            _ => panic!("unexpected non-Unix cache-open error: {error}"),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn newest_snapshot_is_selected_without_mixing() {
         let temp = TempDir::new().expect("temp root");
@@ -1325,12 +1308,12 @@ exports = []
         assert_eq!(sources[1].snapshot(), snapshot(10, 10));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn same_finalized_block_requires_the_exact_locked_index_revision() {
         let stable = image("apps.sora", 10, 10);
         let lock = LockfileV1::new(
-            stable.chain_id.clone(),
-            stable.genesis_hash,
+            stable.network_id,
             stable.snapshot,
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
@@ -1359,6 +1342,7 @@ exports = []
         ));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn higher_finalized_height_cannot_roll_back_the_resolver_index_revision() {
         let temp = TempDir::new().expect("temp root");
@@ -1366,8 +1350,7 @@ exports = []
         let stable = image("apps.sora", 10, 10);
         cache.publish(stable.clone()).expect("stable snapshot");
         let lock = LockfileV1::new(
-            stable.chain_id.clone(),
-            stable.genesis_hash,
+            stable.network_id,
             stable.snapshot,
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
@@ -1422,6 +1405,7 @@ exports = []
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn offline_fresh_and_frozen_resolution_use_only_complete_cached_pages() {
         let temp = TempDir::new().expect("temp root");
@@ -1459,6 +1443,7 @@ exports = []
         assert_eq!(frozen.outcome.lockfile, fresh.outcome.lockfile);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn offline_source_rejects_ambiguous_deployments_and_snapshots_older_than_lock() {
         let temp = TempDir::new().expect("temp root");
@@ -1468,8 +1453,7 @@ exports = []
             .expect("first deployment");
 
         let stale_lock = LockfileV1::new(
-            "musubi-cache-test".parse().expect("chain"),
-            [9; 32],
+            network_id(),
             snapshot(20, 20),
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
@@ -1485,8 +1469,8 @@ exports = []
         ));
 
         let mut other = image("apps.sora", 11, 11);
-        other.chain_id = "other-cache-test".parse().expect("other chain");
-        other.ordered_pages[0].response.chain_id = other.chain_id.clone();
+        other.network_id = other_network_id();
+        other.ordered_pages[0].response.network_id = other.network_id;
         cache.publish(other).expect("second deployment");
         assert!(matches!(
             cache.sources(None),

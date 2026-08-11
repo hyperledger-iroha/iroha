@@ -3339,10 +3339,11 @@ pub(crate) fn validate_zk_x509_projection_trace_v1(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
+        block::BlockHeader,
         privacy::{
             PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyChallengeV1,
             PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyNullifierV1,
@@ -3437,7 +3438,9 @@ pub(crate) mod tests {
         };
         let mut statement = IrohaZkX509StarkP256StatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: ChainId::from("projection-air-test"),
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(raw(0x91))),
+                ),
                 action_index: 2,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
                 parameter_id: PrivacyParameterIdV1::new(raw(2)),

@@ -23,6 +23,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.crypto.Blake2b;
@@ -45,6 +46,9 @@ import org.junit.Test;
 public final class NoritoCodecAdapterTests {
 
   private static final String SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  private static final NetworkId TEST_NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<List<RawMetadataEntry>> RAW_METADATA_ADAPTER =
@@ -68,7 +72,8 @@ public final class NoritoCodecAdapterTests {
     javaCodecRejectsInvalidValidationFeePolicyMetadata();
     javaCodecEncodesMultisigSignatures();
     javaCodecRejectsMalformedSignedTransactions();
-    javaCodecEncodesChainIdLayout();
+    javaCodecEncodesNetworkIdLayout();
+    rejectsLegacyChainIdArchive();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
     javaCodecSupportsContractCallVariant();
@@ -84,7 +89,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] instructions = "android-instructions".getBytes();
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000001")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x01))
             .setCreationTimeMs(1_735_000_000_123L)
             .setExecutable(Executable.ivm(instructions))
@@ -97,7 +102,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
-    assert decoded.chainId().equals("00000001") : "Chain ID must round-trip";
+    assert decoded.networkId().equals(TEST_NETWORK_ID) : "NetworkId must round-trip";
     assert decoded.authority().equals(payload.authority()) : "Authority must round-trip";
     assert decoded.creationTimeMs() == 1_735_000_000_123L : "creation_time_ms must round-trip";
     assert Arrays.equals(instructions, decoded.executable().ivmBytes())
@@ -126,7 +131,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
-            .setChainId("fc56984b-2be7-431d-840e-21514d1883f0")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(1_735_369_000_000L)
             .setExecutable(Executable.instructions(List.of(transfer)))
@@ -170,7 +175,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setFeePayment(feePayment)
-            .setChainId("00000014")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x08))
             .setCreationTimeMs(1_735_333_333_123L)
             .setExecutable(Executable.ivm(new byte[] {0x05}))
@@ -204,7 +209,7 @@ public final class NoritoCodecAdapterTests {
     final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000002")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
             .setExecutable(Executable.ivm(new byte[] {0x01, 0x02, 0x03}))
@@ -216,7 +221,7 @@ public final class NoritoCodecAdapterTests {
 
     assert authority.equals(decoded.authority()) : "AccountId authority must round-trip";
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.network_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
     final NoritoDecoder authorityDecoder = canonicalDecoder(authorityField);
     final long controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder);
@@ -249,7 +254,7 @@ public final class NoritoCodecAdapterTests {
     final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000002")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
             .setExecutable(Executable.ivm(new byte[] {0x04, 0x05, 0x06}))
@@ -262,7 +267,7 @@ public final class NoritoCodecAdapterTests {
     assert authority.equals(decoded.authority()) : "Multisig authority must round-trip";
 
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.network_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
     final NoritoDecoder authorityDecoder = canonicalDecoder(authorityField);
     final long controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder);
@@ -518,7 +523,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000003")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x02))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
@@ -596,7 +601,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecRejectsMalformedSignedTransactions() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000003")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x12))
             .setCreationTimeMs(1_735_000_001_000L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
@@ -619,11 +624,10 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(() -> SignedTransactionEncoder.decodeVersioned(new byte[] {0x02}));
   }
 
-  private static void javaCodecEncodesChainIdLayout() throws NoritoException {
-    final String chainId = "00000003";
+  private static void javaCodecEncodesNetworkIdLayout() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId(chainId)
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x03))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
@@ -632,13 +636,46 @@ public final class NoritoCodecAdapterTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    final byte[] chainField = readField(decoder, "payload.chain_id");
-    final NoritoDecoder chainDecoder = canonicalDecoder(chainField);
-    final byte[] stringField = readField(chainDecoder, "payload.chain_id.string");
-    assert chainDecoder.remaining() == 0 : "ChainId must wrap a single string";
-    final String decodedChain =
-        decodeFieldPayload(stringField, NoritoAdapters.stringAdapter(), "payload.chain_id.string");
-    assert chainId.equals(decodedChain) : "ChainId must round-trip via layout inspection";
+    final byte[] networkIdField = readField(decoder, "payload.network_id");
+    final NoritoDecoder domainDecoder = canonicalDecoder(networkIdField);
+    assert NoritoAdapters.uint(32).decode(domainDecoder) == 0L
+        : "ordinary transaction must encode TransactionDomain::Network";
+    final byte[] networkHashField = readField(domainDecoder, "payload.network_id.value");
+    assert domainDecoder.remaining() == 0 : "TransactionDomain must not have trailing bytes";
+    assert Arrays.equals(TEST_NETWORK_ID.bytes(), networkHashField)
+        : "NetworkId must encode as the transparent 32-byte genesis hash";
+  }
+
+  @Test
+  public void transactionPayloadAdapterRejectsLegacyChainIdArchive() throws NoritoException {
+    rejectsLegacyChainIdArchive();
+  }
+
+  private static void rejectsLegacyChainIdArchive() throws NoritoException {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+            .setNetworkId(TEST_NETWORK_ID)
+            .setAuthority(sampleAuthority((byte) 0x43))
+            .setCreationTimeMs(1_735_000_000_790L)
+            .setExecutable(Executable.ivm(new byte[] {0x01}))
+            .build();
+    final NoritoJavaCodecAdapter adapter =
+        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+    final byte[] canonical = adapter.encodeTransaction(payload);
+    final NoritoDecoder decoder = canonicalDecoder(canonical);
+    final byte[][] fields = new byte[9][];
+    for (int index = 0; index < fields.length; index++) {
+      fields[index] = readField(decoder, "payload[" + index + "]");
+    }
+    assert decoder.remaining() == 0 : "Canonical payload must contain exactly nine fields";
+
+    final NoritoEncoder legacyChainId = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    NoritoAdapters.stringAdapter().encode(legacyChainId, TEST_NETWORK_ID.literal());
+    fields[0] = legacyChainId.toByteArray();
+    final byte[] legacyArchive = assemblePayload(NoritoCodec.DEFAULT_FLAGS, fields);
+
+    expectNoritoFailure(() -> adapter.decodeTransaction(legacyArchive));
   }
 
   private static void javaCodecSupportsInstructionsVariant() throws NoritoException {
@@ -648,7 +685,7 @@ public final class NoritoCodecAdapterTests {
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000009")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x04))
             .setCreationTimeMs(1_735_111_111_000L)
             .setExecutable(
@@ -693,7 +730,7 @@ public final class NoritoCodecAdapterTests {
 
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000011")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x05))
             .setCreationTimeMs(1_735_111_111_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
@@ -721,7 +758,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
-            .setChainId("00000015")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x09))
             .setCreationTimeMs(1_735_444_444_123L)
             .setContractCall(invocation)
@@ -789,7 +826,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
-            .setChainId("00000016")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x0A))
             .setCreationTimeMs(1_735_555_555_123L)
             .setBatch(items)
@@ -824,7 +861,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
-            .setChainId("fc56984b-2be7-431d-840e-21514d1883f0")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x0B))
             .setContractCall(
                 new ContractInvocation(
@@ -847,7 +884,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] ivmBytes = new byte[] {0x01, 0x02, 0x03, 0x04};
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setChainId("00000012")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x06))
             .setCreationTimeMs(1_735_222_222_123L)
             .setExecutable(Executable.ivm(ivmBytes))
@@ -857,7 +894,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.network_id");
     readField(decoder, "payload.authority");
     readField(decoder, "payload.creation_time_ms");
     final byte[] executableField = readField(decoder, "payload.executable");
@@ -891,7 +928,7 @@ public final class NoritoCodecAdapterTests {
         InstructionBox.fromWirePayload("iroha.custom.layout", wirePayload);
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000013")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(sampleAuthority((byte) 0x07))
             .setCreationTimeMs(1_735_222_333_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
@@ -901,7 +938,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.network_id");
     readField(decoder, "payload.authority");
     readField(decoder, "payload.creation_time_ms");
     final byte[] executableField = readField(decoder, "payload.executable");
@@ -954,7 +991,7 @@ public final class NoritoCodecAdapterTests {
 
   private static byte[] executableField(final byte[] encoded) {
     final NoritoDecoder decoder = canonicalDecoder(encoded);
-    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.network_id");
     readField(decoder, "payload.authority");
     readField(decoder, "payload.creation_time_ms");
     return readField(decoder, "payload.executable");
@@ -987,7 +1024,7 @@ public final class NoritoCodecAdapterTests {
 
   private static Map<String, String> rawMetadata(final byte[] encoded) {
     final NoritoDecoder payloadDecoder = canonicalDecoder(encoded);
-    readField(payloadDecoder, "payload.chain_id");
+    readField(payloadDecoder, "payload.network_id");
     readField(payloadDecoder, "payload.authority");
     readField(payloadDecoder, "payload.creation_time_ms");
     readField(payloadDecoder, "payload.executable");

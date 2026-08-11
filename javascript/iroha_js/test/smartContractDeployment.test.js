@@ -13,6 +13,7 @@ import {
   buildUploadSmartContractCodeChunkInstruction,
 } from "../src/instructionBuilders.js";
 import { computeIvmArtifactHashes } from "../src/ivmArtifact.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
@@ -45,6 +46,9 @@ const PRIVATE_KEY = Buffer.from(
   "hex",
 );
 const PUBLIC_KEY = Buffer.from(ed25519.getPublicKey(PRIVATE_KEY));
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY = AccountAddress.fromAccount({
   algorithm: "ed25519",
   publicKey: PUBLIC_KEY,
@@ -52,15 +56,6 @@ const AUTHORITY = AccountAddress.fromAccount({
 const AUTHORITY_FEE_PAYMENT = Object.freeze({
   payer: "authority",
   chargeLimits: Object.freeze([]),
-});
-const ARTIFACT_ADMISSION_VERIFIER = await createStaticArtifactAdmissionVerifier({
-  ok: true,
-  code_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
-  abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex,
-  header_len: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
-  code_offset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
-  entrypoint_count: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
-  manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
 });
 function deploymentFixture() {
   return {
@@ -119,7 +114,7 @@ test("current smart-contract deployment instructions round-trip through Norito",
     buildCancelSmartContractCodeUploadInstruction({ codeHash: codeHashHex }),
     buildCommitContractDeploymentInstruction({
       expectedDeployNonce: 7,
-      contractAddress: "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
+      contractAddress: "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp",
       codeHash: codeHashHex,
       contractAlias: "demo::universal",
       leaseExpiryMs: 123_456,
@@ -173,17 +168,29 @@ test("artifact preparation verifies the authenticated CNTR envelope before uploa
 test("contract-address derivation matches the pinned current-Rust V1 vector", () => {
   assert.equal(
     deriveContractAddress({
-      chainId: "pk3",
+      networkId: NETWORK_ID,
       chainDiscriminant: 753,
       authority: AUTHORITY,
       deployNonce: 7,
       dataspaceId: 0,
     }),
-    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
+    "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp",
   );
 });
 
-test("contract-address derivation commits the exact full chain identity", () => {
+test("contract-address derivation separates equal chain names by exact genesis identity", () => {
+  const foreignBytes = NETWORK_ID.toBytes();
+  foreignBytes[0] ^= 1;
+  const firstDeployment = { chainName: "pk3", networkId: NETWORK_ID };
+  const secondDeployment = {
+    chainName: "pk3",
+    networkId: NetworkId.fromBytes(foreignBytes),
+  };
+  assert.equal(firstDeployment.chainName, secondDeployment.chainName);
+  assert.notDeepEqual(
+    firstDeployment.networkId.toBytes(),
+    secondDeployment.networkId.toBytes(),
+  );
   const common = {
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -191,8 +198,23 @@ test("contract-address derivation commits the exact full chain identity", () => 
     dataspaceId: 0,
   };
   assert.notEqual(
-    deriveContractAddress({ ...common, chainId: "pk3-alpha" }),
-    deriveContractAddress({ ...common, chainId: "pk3-beta" }),
+    deriveContractAddress({ ...common, networkId: firstDeployment.networkId }),
+    deriveContractAddress({ ...common, networkId: secondDeployment.networkId }),
+  );
+});
+
+test("contract-address derivation rejects retired chainId input", () => {
+  assert.throws(
+    () =>
+      deriveContractAddress({
+        networkId: NETWORK_ID,
+        chainId: "pk3",
+        chainDiscriminant: 753,
+        authority: AUTHORITY,
+        deployNonce: 7,
+        dataspaceId: 0,
+      }),
+    /unsupported fields: chainId/u,
   );
 });
 
@@ -212,7 +234,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     codeHash: codeHashHex,
   });
   const payloadBytes = buildBrowserInstructionTransactionPayload({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     instructions: [instruction],
@@ -221,6 +243,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     nonce: 1,
   });
   const signable = validateBrowserInstructionTransactionSignable({
+    networkId: NETWORK_ID,
     payloadBytes,
     payloadHashHex: browserTransactionPayloadHashHex(payloadBytes),
     authority: AUTHORITY,
@@ -275,7 +298,7 @@ test("browser deployment retains the existing key locally and commits every step
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     feePayment: AUTHORITY_FEE_PAYMENT,
@@ -284,7 +307,7 @@ test("browser deployment retains the existing key locally and commits every step
     nonceForStep: (_step, sequence) => sequence + 1,
     readNodeCapabilities(input) {
       assert.deepEqual(input, {
-        chainId: "pk3",
+        networkId: NETWORK_ID,
         chainDiscriminant: "753",
       });
       return {
@@ -338,18 +361,13 @@ test("browser deployment retains the existing key locally and commits every step
   assert.match(registeredManifest.provenance.signature, /^[0-9A-F]{128}$/u);
   assert.equal(
     result.contractAddress,
-    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
+    "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp",
   );
   assert.equal(result.observedBlockHeight, "10");
   assert.equal(result.observedBlockHash, hashLiteral("ab".repeat(32)));
   assert.equal(result.observedBlockHashHex, "ab".repeat(32));
   assert.equal(result.ledgerTimeMs, "123456");
-  assert.deepEqual(result.artifactAdmission, {
-    verifierSha256Hex: ARTIFACT_ADMISSION_VERIFIER.verifierSha256Hex,
-    headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
-    codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
-    entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
-  });
+  assert.equal(Object.hasOwn(result, "artifactAdmission"), false);
   assert.equal(result.transactions.length, 4);
 });
 
@@ -361,7 +379,7 @@ test("browser deployment rejects retired pre-release options before callbacks", 
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     feePayment: AUTHORITY_FEE_PAYMENT,
@@ -393,30 +411,7 @@ test("browser deployment rejects retired pre-release options before callbacks", 
       ...options,
       [retiredVerifierOption]: {},
     }),
-    /must come from instantiateIvmArtifactAdmissionWasm/u,
-  );
-  const rejectingVerifier = await createStaticArtifactAdmissionVerifier({
-    ok: false,
-    error: "invalid contract artifact: disallowed syscall 0xfe0000 at pc 0",
-  });
-  const forbiddenArtifact = Buffer.from(fixture.artifactBytes);
-  forbiddenArtifact.set(
-    [0x00, 0x00, 0xfe, 0x62],
-    CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
-  );
-  const forbiddenCodeHash =
-    computeIvmArtifactHashes(forbiddenArtifact).codeHashHex;
-  const forbiddenManifest = structuredClone(fixture.manifest);
-  forbiddenManifest.code_hash = hashLiteral(forbiddenCodeHash);
-  await assert.rejects(
-    deploySmartContractBrowser({
-      ...options,
-      artifactAdmissionVerifier: rejectingVerifier,
-      artifactBytes: forbiddenArtifact,
-      compilerCodeHash: forbiddenCodeHash,
-      manifest: forbiddenManifest,
-    }),
-    /shared IVM artifact admission rejected deployment:.*disallowed syscall 0xfe0000/u,
+    /deployment options contains unsupported fields: artifactAdmissionVerifier/u,
   );
   assert.equal(externalCalls, 0);
 });
@@ -428,7 +423,7 @@ test("browser deployment stops without exact persisted Applied finality and auth
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     feePayment: AUTHORITY_FEE_PAYMENT,
@@ -489,7 +484,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     feePayment: AUTHORITY_FEE_PAYMENT,
@@ -541,7 +536,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     feePayment: AUTHORITY_FEE_PAYMENT,
@@ -563,6 +558,33 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
     },
   };
 
+  for (const field of ["chain", "chain_id", "chainId"]) {
+    await assert.rejects(
+      deploySmartContractBrowser({
+        ...base,
+        [field]: "pk3",
+        contractAlias: "demo::universal",
+        readDeploymentState: () => deploymentState(),
+      }),
+      new RegExp(`deployment options contains unsupported fields: ${field}`, "u"),
+    );
+  }
+  for (const networkId of [
+    NETWORK_ID.literal,
+    NETWORK_ID.toBytes(),
+    { literal: NETWORK_ID.literal, toBytes: () => NETWORK_ID.toBytes() },
+  ]) {
+    await assert.rejects(
+      deploySmartContractBrowser({
+        ...base,
+        networkId,
+        contractAlias: "demo::universal",
+        readDeploymentState: () => deploymentState(),
+      }),
+      /deployment options\.networkId must be a NetworkId/u,
+    );
+  }
+
   await assert.rejects(
     deploySmartContractBrowser({
       ...base,
@@ -573,7 +595,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   );
 
   const wrongDataspaceAddress = deriveContractAddress({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     chainDiscriminant: 753,
     authority: AUTHORITY,
     deployNonce: 6,

@@ -143,8 +143,8 @@ _TERMINAL_FULL_ARTIFACT_KEYS = {
     "nlink",
 }
 _PREBUILT_BINARY_SPECS = (
-    ("irohad", "release/irohad"),
-    ("irohad_message_control", "message-control/release/irohad"),
+    ("irohad", "release/iroha3d"),
+    ("irohad_message_control", "message-control/release/iroha3d"),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
 )
@@ -1759,7 +1759,7 @@ def _validate_terminal_release_evidence(
     )
     require_inventory(
         prebuilt_root / "release",
-        {"irohad", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami"},
         "terminal prebuilt release directory",
         containment_root=artifact_root,
         expected_mode=_TOOL_MODE,
@@ -1773,7 +1773,7 @@ def _validate_terminal_release_evidence(
     )
     require_inventory(
         prebuilt_root / "message-control" / "release",
-        {"irohad"},
+        {"iroha3d"},
         "terminal prebuilt message-control release directory",
         containment_root=artifact_root,
         expected_mode=_TOOL_MODE,

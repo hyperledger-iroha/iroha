@@ -14,6 +14,7 @@ import {
 import { ToriiClient } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
+import { networkIdBytes } from "./networkId.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -92,6 +93,26 @@ function normalizeAuthority(authority) {
 function resolveNativeBinding() {
   // Allow tests to inject a fake binding.
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+}
+
+const RETIRED_TRANSACTION_DOMAIN_FIELDS = Object.freeze([
+  "chain",
+  "chainId",
+  "chain_id",
+]);
+
+function transactionNetworkIdBytes(input, context) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  for (const field of RETIRED_TRANSACTION_DOMAIN_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(input, field)) {
+      throw new TypeError(
+        `${context}.${field} is unsupported; provide the nominal networkId field`,
+      );
+    }
+  }
+  return Buffer.from(networkIdBytes(input.networkId, `${context}.networkId`));
 }
 
 function composeAssetHoldingIdFromDefinitionAndAccount(
@@ -571,28 +592,36 @@ export function hashInstructionBatch(instructions, options = {}) {
 }
 
 /**
- * Re-sign a Norito-encoded transaction with the provided Ed25519 private key.
+ * Re-sign a Norito-encoded ordinary transaction for one exact NetworkId with
+ * the provided Ed25519 private key. Foreign-network and genesis payloads are
+ * rejected by the native boundary before signing.
+ * @param {import("./networkId.js").NetworkId} networkId
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.
  * @returns {Buffer}
  */
-export function resignSignedTransaction(signedTransaction, privateKey) {
+export function resignSignedTransaction(networkId, signedTransaction, privateKey) {
   const native = resolveNativeBinding();
   if (!native || typeof native.signTransaction !== "function") {
     throw new Error("native binding 'signTransaction' is unavailable");
   }
+  const expectedNetworkId = Buffer.from(
+    networkIdBytes(networkId, "networkId"),
+  );
   const txBuffer = toBuffer(signedTransaction);
   const keyBuffer = toBuffer(privateKey);
   if (keyBuffer.byteLength !== 32 && keyBuffer.byteLength !== 64) {
     throw new Error("private key must be a 32- or 64-byte Ed25519 key");
   }
-  return Buffer.from(native.signTransaction(txBuffer, keyBuffer));
+  return Buffer.from(
+    native.signTransaction(expectedNetworkId, txBuffer, keyBuffer),
+  );
 }
 
 /**
  * Build and sign a RegisterDomain transaction via the native helper.
  * @param {{
- *   chainId: string,
+ *   networkId: import("./networkId.js").NetworkId,
  *   authority: string,
  *   domainId: string,
  *   feePayment: object,
@@ -606,6 +635,7 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildRegisterDomainTransaction(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.buildRegisterDomainTransaction !== "function") {
     throw new Error(
@@ -613,7 +643,6 @@ export function buildRegisterDomainTransaction(input) {
     );
   }
   const {
-    chainId,
     authority,
     domainId,
     feePayment,
@@ -635,7 +664,7 @@ export function buildRegisterDomainTransaction(input) {
         : JSON.stringify(metadata);
 
   const result = native.buildRegisterDomainTransaction(
-    chainId,
+    networkId,
     canonicalAuthority,
     domainId,
     feePaymentIntentToNoritoJson(feePayment),
@@ -663,7 +692,7 @@ export function buildRegisterDomainTransaction(input) {
 /**
  * Build and sign a transaction from arbitrary instruction payloads.
  * @param {{
- *   chainId: string,
+ *   networkId: import("./networkId.js").NetworkId,
  *   authority: string,
  *   instructions: Array<object | string>,
  *   feePayment: object,
@@ -677,13 +706,13 @@ export function buildRegisterDomainTransaction(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildTransaction(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.buildTransaction !== "function") {
     throw new Error("native binding 'build_transaction' is unavailable");
   }
 
   const {
-    chainId,
     authority,
     instructions,
     feePayment,
@@ -708,7 +737,7 @@ export function buildTransaction(input) {
   const canonicalAuthority = normalizeAuthority(authority);
 
   const result = native.buildTransaction(
-    chainId,
+    networkId,
     canonicalAuthority,
     normalizedInstructions,
     feePaymentIntentToNoritoJson(feePayment),
@@ -738,12 +767,13 @@ export function buildTransaction(input) {
 /**
  * Build and sign one ordered, atomic mix of native instructions and deployed
  * contract calls. Instruction-only callers should keep using
- * {@link buildTransaction} to preserve the legacy executable wire tag.
+ * {@link buildTransaction} for the canonical native-instruction executable.
  *
  * @param {object} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildExecutableBatchTransaction(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (
     !native ||
@@ -754,7 +784,6 @@ export function buildExecutableBatchTransaction(input) {
     );
   }
   const {
-    chainId,
     authority,
     entries,
     feePayment,
@@ -772,7 +801,7 @@ export function buildExecutableBatchTransaction(input) {
     containsContractCall,
   );
   const result = native.buildExecutableBatchTransaction(
-    chainId,
+    networkId,
     normalizeAuthority(authority),
     serialized,
     feePaymentJson,
@@ -803,7 +832,7 @@ export function buildExecutableBatchTransaction(input) {
  * calling {@link signQuotedTransactionPayload}.
  *
  * @param {{
- *   chainId: string,
+ *   networkId: import("./networkId.js").NetworkId,
  *   authority: string,
  *   instructions: Array<object | string>,
  *   feePayment: object,
@@ -815,12 +844,12 @@ export function buildExecutableBatchTransaction(input) {
  * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer}}
  */
 export function buildTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.buildTransactionPayload !== "function") {
     throw new Error("native binding 'build_transaction_payload' is unavailable");
   }
   const {
-    chainId,
     authority,
     instructions,
     feePayment,
@@ -830,7 +859,7 @@ export function buildTransactionPayload(input) {
     nonce = null,
   } = input;
   const result = native.buildTransactionPayload(
-    chainId,
+    networkId,
     normalizeAuthority(authority),
     serializeInstructionPayloads(instructions, "instructions"),
     feePaymentIntentToNoritoJson(feePayment),
@@ -857,6 +886,7 @@ export function buildTransactionPayload(input) {
 
 /** Build an exact unsigned ordered mixed executable-batch payload. */
 export function buildExecutableBatchTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (
     !native ||
@@ -867,7 +897,6 @@ export function buildExecutableBatchTransactionPayload(input) {
     );
   }
   const {
-    chainId,
     authority,
     entries,
     feePayment,
@@ -879,7 +908,7 @@ export function buildExecutableBatchTransactionPayload(input) {
   const { serialized, containsContractCall } =
     serializeExecutableBatchEntries(entries);
   const result = native.buildExecutableBatchTransactionPayload(
-    chainId,
+    networkId,
     normalizeAuthority(authority),
     serialized,
     requireExecutableBatchGasLimit(feePayment, containsContractCall),
@@ -910,6 +939,7 @@ export function buildExecutableBatchTransactionPayload(input) {
  * payer or exact sponsor program and revision.
  *
  * @param {{
+ *   networkId: import("./networkId.js").NetworkId,
  *   payload: object | {payload?: object, payloadJson?: string},
  *   quotedFeePayment: object | string,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -918,6 +948,7 @@ export function buildExecutableBatchTransactionPayload(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.signQuotedTransactionPayload !== "function") {
     throw new Error(
@@ -937,6 +968,7 @@ export function signQuotedTransactionPayload(input) {
         ? JSON.stringify(quoted)
         : feePaymentIntentToNoritoJson(quoted);
   const result = native.signQuotedTransactionPayload(
+    networkId,
     payloadJson,
     quotedFeePaymentJson,
     toBuffer(input?.privateKey),
@@ -983,6 +1015,7 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
     signal: options.signal,
   });
   const signed = signQuotedTransactionPayload({
+    networkId: draftInput.networkId,
     payload: draft,
     quotedFeePayment: quote.intent,
     privateKey,
@@ -994,16 +1027,17 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
 const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024;
 const SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
 
-function normalizeSorafsPinRegisterEpoch(value) {
-  const epoch = ToriiClient._normalizeUnsignedInteger(
-    value,
-    "submittedEpoch",
-    { allowZero: true },
-  );
-  if (!Number.isSafeInteger(epoch)) {
-    throw new TypeError("submittedEpoch must be a safe uint64 integer");
+function rejectRetiredSorafsPinRegisterEpoch(input) {
+  if (
+    input !== null &&
+    typeof input === "object" &&
+    (Object.prototype.hasOwnProperty.call(input, "submittedEpoch") ||
+      Object.prototype.hasOwnProperty.call(input, "submitted_epoch"))
+  ) {
+    throw new TypeError(
+      "RegisterPinManifest no longer accepts a submitted epoch; consensus time is authoritative",
+    );
   }
-  return epoch;
 }
 
 function normalizeSorafsPinRegisterSegment(value, context) {
@@ -1046,13 +1080,13 @@ function normalizeSorafsPinRegisterSuccessor(value) {
  *
  * @param {{
  *   manifestPayload: ArrayBufferView | ArrayBuffer | Buffer,
- *   submittedEpoch: number | string | bigint,
  *   alias?: {namespace: string, name: string, proof: ArrayBufferView | ArrayBuffer | Buffer} | null,
  *   successorOf?: string | ArrayBufferView | ArrayBuffer | Buffer | null
  * }} input
  * @returns {{RegisterPinManifest: object}}
  */
 export function buildRegisterPinManifestInstruction(input) {
+  rejectRetiredSorafsPinRegisterEpoch(input);
   const manifestPayload = toBuffer(input?.manifestPayload, "manifestPayload");
   if (
     manifestPayload.length === 0 ||
@@ -1085,7 +1119,6 @@ export function buildRegisterPinManifestInstruction(input) {
   return {
     RegisterPinManifest: {
       manifest_payload: manifestPayload.toString("base64"),
-      submitted_epoch: normalizeSorafsPinRegisterEpoch(input?.submittedEpoch),
       alias,
       successor_of: normalizeSorafsPinRegisterSuccessor(input?.successorOf),
     },
@@ -1101,6 +1134,7 @@ export function buildRegisterPinManifestInstruction(input) {
  * @returns {Promise<{signedTransaction: Buffer, hash: Buffer, draft: object, quote: object}>}
  */
 export function buildRegisterPinManifestTransaction(client, input, options = {}) {
+  rejectRetiredSorafsPinRegisterEpoch(input);
   if (input && Object.prototype.hasOwnProperty.call(input, "instructions")) {
     throw new TypeError(
       "buildRegisterPinManifestTransaction fixes instructions to one RegisterPinManifest",
@@ -1108,14 +1142,12 @@ export function buildRegisterPinManifestTransaction(client, input, options = {})
   }
   const {
     manifestPayload,
-    submittedEpoch,
     alias = null,
     successorOf = null,
     ...transactionInput
   } = input ?? {};
   const instruction = buildRegisterPinManifestInstruction({
     manifestPayload,
-    submittedEpoch,
     alias,
     successorOf,
   });
@@ -1142,21 +1174,23 @@ export function buildApplySccpRouteGovernanceInstruction(action) {
 /**
  * Build and sign a transaction containing one `ApplySccpRouteGovernance` instruction.
  */
-export function buildApplySccpRouteGovernanceTransaction({
-  chainId,
-  authority,
-  feePayment,
-  action,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildApplySccpRouteGovernanceTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    action,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildApplySccpRouteGovernanceInstruction(action);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -1174,7 +1208,7 @@ export function buildApplySccpRouteGovernanceTransaction({
  * `/v1/fees/quote`.
  *
  * @param {{
- *   chainId: string,
+ *   networkId: import("./networkId.js").NetworkId,
  *   authority: string,
  *   proved: object | string,
  *   attachment: object | string,
@@ -1187,6 +1221,7 @@ export function buildApplySccpRouteGovernanceTransaction({
  * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer, attachment: object, attachmentJson: string}}
  */
 export function buildIvmProvedTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (
     !native ||
@@ -1198,7 +1233,6 @@ export function buildIvmProvedTransactionPayload(input) {
   }
 
   const {
-    chainId,
     authority,
     proved,
     attachment,
@@ -1215,7 +1249,7 @@ export function buildIvmProvedTransactionPayload(input) {
     "attachment",
   );
   const result = native.buildIvmProvedTransactionPayload(
-    chainId,
+    networkId,
     canonicalAuthority,
     provedPayload,
     attachmentPayload,
@@ -1247,6 +1281,7 @@ export function buildIvmProvedTransactionPayload(input) {
  * Apply a quote to an exact proved-IVM draft, reattach its proof, and sign it.
  *
  * @param {{
+ *   networkId: import("./networkId.js").NetworkId,
  *   payload: object | {payload?: object, payloadJson?: string, attachment?: object | string},
  *   attachment?: object | string,
  *   quotedFeePayment: object | string,
@@ -1256,6 +1291,7 @@ export function buildIvmProvedTransactionPayload(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedIvmProvedTransactionPayload(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (
     !native ||
@@ -1279,6 +1315,7 @@ export function signQuotedIvmProvedTransactionPayload(input) {
         ? JSON.stringify(quoted)
         : feePaymentIntentToNoritoJson(quoted);
   const result = native.signQuotedIvmProvedTransactionPayload(
+    networkId,
     payloadJson,
     normalizeJsonObjectPayload(attachment, "attachment"),
     quotedFeePaymentJson,
@@ -1302,7 +1339,7 @@ export function signQuotedIvmProvedTransactionPayload(input) {
 /**
  * Build and sign a transaction whose executable is `Executable::IvmProved`.
  * @param {{
- *   chainId: string,
+ *   networkId: import("./networkId.js").NetworkId,
  *   authority: string,
  *   proved: object | string,
  *   attachment: object | string,
@@ -1316,6 +1353,7 @@ export function signQuotedIvmProvedTransactionPayload(input) {
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildIvmProvedTransaction(input) {
+  const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding();
   if (!native || typeof native.buildIvmProvedTransaction !== "function") {
     throw new Error(
@@ -1324,7 +1362,6 @@ export function buildIvmProvedTransaction(input) {
   }
 
   const {
-    chainId,
     authority,
     proved,
     attachment,
@@ -1348,7 +1385,7 @@ export function buildIvmProvedTransaction(input) {
     "transaction metadata",
   );
   const result = native.buildIvmProvedTransaction(
-    chainId,
+    networkId,
     canonicalAuthority,
     provedPayload,
     attachmentPayload,
@@ -2192,13 +2229,8 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
       )
     : null;
   const authority = normalizeAuthority(record.authority);
-  const chainIdValue = readExclusiveInputAlias(
-    record, ["chainId", "chain_id"], "input.chainId",
-  );
-  const chainId = normalizeNonEmptyString(chainIdValue, "input.chainId");
-  if (chainId !== chainIdValue) {
-    throw new TypeError("input.chainId must not contain surrounding whitespace");
-  }
+  transactionNetworkIdBytes(record, "input");
+  const networkId = record.networkId;
   const expectedCodeHashHex = normalizeIvmCodeHashHex(
     readExclusiveInputAlias(
       record,
@@ -2372,6 +2404,13 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     gasLimit,
   };
   const requestOptions = signal === undefined ? {} : { signal };
+  const canonicalRequestOptions = {
+    ...requestOptions,
+    canonicalAuth: {
+      accountId: authority,
+      privateKey,
+    },
+  };
   const simulation = await client.simulateContractCall(
     simulationRequest,
     requestOptions,
@@ -2424,7 +2463,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
 
   const code = await client.getContractCodeBytes(
     expectedCodeHashHex,
-    requestOptions,
+    canonicalRequestOptions,
   );
   if (code === null || code === undefined) {
     throw new Error(
@@ -2456,7 +2495,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     bytecode: deployedBytecode,
     gasLimit,
   };
-  const derived = await client.deriveIvmProved(proofRequest, requestOptions);
+  const derived = await client.deriveIvmProved(proofRequest, canonicalRequestOptions);
   assertIvmProvedBytecodeBinding(
     derived?.proved,
     deployedBytecode,
@@ -2471,7 +2510,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   const proofJob = await client.proveIvmAndWait(
     proofRequest,
     {
-      ...requestOptions,
+      ...canonicalRequestOptions,
       ...(proofIntervalMs === undefined
         ? {}
         : { intervalMs: proofIntervalMs }),
@@ -2499,7 +2538,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
 
   throwIfSubmissionAborted(signal);
   const feeQuoteDraft = buildIvmProvedTransactionPayload({
-    chainId,
+    networkId,
     authority,
     proved: proofJob.proved,
     attachment: proofJob.attachment,
@@ -2520,6 +2559,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   });
   throwIfSubmissionAborted(signal);
   const built = signQuotedIvmProvedTransactionPayload({
+    networkId,
     payload: { payloadJson: feeQuotePayloadJson },
     attachment: feeQuoteAttachmentJson,
     quotedFeePayment: feeQuote.intent,
@@ -2648,26 +2688,28 @@ export function buildPrecommitTriggerAction(options) {
  * Convenience helper to build a transaction with a single `Mint::Asset` instruction.
  * Additional transaction parameters mirror {@link buildTransaction}.
  */
-export function buildMintAssetTransaction({
-  chainId,
-  authority,
-  feePayment,
-  assetHoldingId,
-  assetId,
-  quantity,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildMintAssetTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    assetHoldingId,
+    assetId,
+    quantity,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildMintAssetInstruction({
     assetHoldingId: assetHoldingId ?? assetId,
     quantity,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -2684,26 +2726,28 @@ export function buildMintAssetTransaction({
  * Convenience helper to build a transaction with a single `Burn::Asset` instruction.
  * Additional transaction parameters mirror {@link buildTransaction}.
  */
-export function buildBurnAssetTransaction({
-  chainId,
-  authority,
-  feePayment,
-  assetHoldingId,
-  assetId,
-  quantity,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildBurnAssetTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    assetHoldingId,
+    assetId,
+    quantity,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildBurnAssetInstruction({
     assetHoldingId: assetHoldingId ?? assetId,
     quantity,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -2719,25 +2763,27 @@ export function buildBurnAssetTransaction({
 /**
  * Build a transaction containing a `Burn::TriggerRepetitions` instruction.
  */
-export function buildBurnTriggerTransaction({
-  chainId,
-  authority,
-  feePayment,
-  triggerId,
-  repetitions,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildBurnTriggerTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    triggerId,
+    repetitions,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildBurnTriggerRepetitionsInstruction({
     triggerId,
     repetitions,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -2753,25 +2799,27 @@ export function buildBurnTriggerTransaction({
 /**
  * Build a transaction containing a `Mint::TriggerRepetitions` instruction.
  */
-export function buildMintTriggerTransaction({
-  chainId,
-  authority,
-  feePayment,
-  triggerId,
-  repetitions,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildMintTriggerTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    triggerId,
+    repetitions,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildMintTriggerRepetitionsInstruction({
     triggerId,
     repetitions,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -2787,28 +2835,30 @@ export function buildMintTriggerTransaction({
 /**
  * Build a transaction containing a `Transfer::Asset` instruction.
  */
-export function buildTransferAssetTransaction({
-  chainId,
-  authority,
-  feePayment,
-  sourceAssetHoldingId,
-  sourceAssetId,
-  quantity,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildTransferAssetTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    sourceAssetHoldingId,
+    sourceAssetId,
+    quantity,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildTransferAssetInstruction({
     sourceAssetHoldingId: sourceAssetHoldingId ?? sourceAssetId,
     quantity,
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -2880,22 +2930,24 @@ function buildRegisterAccountInstructions({ account, transfers = [] }) {
 /**
  * Build a transaction containing a multisig registration (custom instruction).
  */
-export function buildRegisterMultisigTransaction({
-  chainId,
-  authority,
-  feePayment,
-  accountId,
-  spec,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterMultisigTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    accountId,
+    spec,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterMultisigInstruction({ accountId, spec });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3053,20 +3105,22 @@ function normalizeTransferSpecs(value, context, options) {
  * Build a transaction that first mints an asset and then transfers part of it.
  * Accepts either a single transfer descriptor or an array of transfers.
  */
-export function buildMintAndTransferTransaction({
-  chainId,
-  authority,
-  feePayment,
-  mint,
-  transfer,
-  transfers,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildMintAndTransferTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    mint,
+    transfer,
+    transfers,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   if (!mint || typeof mint !== "object") {
     throw new TypeError("mint options are required");
   }
@@ -3104,7 +3158,7 @@ export function buildMintAndTransferTransaction({
     );
   }
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions,
@@ -3120,20 +3174,22 @@ export function buildMintAndTransferTransaction({
 /**
  * Build a transaction that registers a domain and optionally mints an asset.
  */
-export function buildRegisterDomainAndMintTransaction({
-  chainId,
-  authority,
-  feePayment,
-  domain,
-  mint,
-  mints,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterDomainAndMintTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    domain,
+    mint,
+    mints,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   if (!domain || typeof domain !== "object") {
     throw new TypeError("domain registration parameters are required");
   }
@@ -3151,7 +3207,7 @@ export function buildRegisterDomainAndMintTransaction({
     mints: mintSpecs,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions,
@@ -3167,20 +3223,22 @@ export function buildRegisterDomainAndMintTransaction({
 /**
  * Build a transaction that registers a new account and optionally transfers an asset.
  */
-export function buildRegisterAccountAndTransferTransaction({
-  chainId,
-  authority,
-  feePayment,
-  account,
-  transfer,
-  transfers,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterAccountAndTransferTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    account,
+    transfer,
+    transfers,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   if (!account || typeof account !== "object") {
     throw new TypeError("account registration parameters are required");
   }
@@ -3198,7 +3256,7 @@ export function buildRegisterAccountAndTransferTransaction({
     transfers: transferSpecs,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions,
@@ -3214,27 +3272,29 @@ export function buildRegisterAccountAndTransferTransaction({
 /**
  * Build a transaction containing a `Transfer::AssetDefinition` instruction.
  */
-export function buildTransferAssetDefinitionTransaction({
-  chainId,
-  authority,
-  feePayment,
-  sourceAccountId,
-  assetDefinitionId,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildTransferAssetDefinitionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    sourceAccountId,
+    assetDefinitionId,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildTransferAssetDefinitionInstruction({
     sourceAccountId,
     assetDefinitionId,
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3250,20 +3310,22 @@ export function buildTransferAssetDefinitionTransaction({
 /**
  * Build a transaction that registers an asset definition and optionally mints to an account.
  */
-export function buildRegisterAssetDefinitionAndMintTransaction({
-  chainId,
-  authority,
-  feePayment,
-  assetDefinition,
-  mint,
-  mints,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterAssetDefinitionAndMintTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    assetDefinition,
+    mint,
+    mints,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
   }
@@ -3291,7 +3353,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
     mints: mintSpecs,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions,
@@ -3308,22 +3370,24 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
  * Build a transaction that registers an asset definition, mints, and optionally transfers it.
  * Supports either a single `transfer` descriptor or an array of `transfers` for batching.
  */
-export function buildRegisterAssetDefinitionMintAndTransferTransaction({
-  chainId,
-  authority,
-  feePayment,
-  assetDefinition,
-  mint,
-  mints,
-  transfer,
-  transfers,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterAssetDefinitionMintAndTransferTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    assetDefinition,
+    mint,
+    mints,
+    transfer,
+    transfers,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
   }
@@ -3379,7 +3443,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
   }
 
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions,
@@ -3395,27 +3459,29 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
 /**
  * Build a transaction containing a `Transfer::Domain` instruction.
  */
-export function buildTransferDomainTransaction({
-  chainId,
-  authority,
-  feePayment,
-  sourceAccountId,
-  domainId,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildTransferDomainTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    sourceAccountId,
+    domainId,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildTransferDomainInstruction({
     sourceAccountId,
     domainId,
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3431,27 +3497,29 @@ export function buildTransferDomainTransaction({
 /**
  * Build a transaction containing a `Transfer::Nft` instruction.
  */
-export function buildTransferNftTransaction({
-  chainId,
-  authority,
-  feePayment,
-  sourceAccountId,
-  nftId,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildTransferNftTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    sourceAccountId,
+    nftId,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildTransferNftInstruction({
     sourceAccountId,
     nftId,
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3467,22 +3535,24 @@ export function buildTransferNftTransaction({
 /**
  * Build a transaction containing a `RegisterRwa` instruction.
  */
-export function buildRegisterRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwa,
-  rwaJson,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwa,
+    rwaJson,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3498,21 +3568,23 @@ export function buildRegisterRwaTransaction({
 /**
  * Build a transaction containing a `TransferRwa` instruction.
  */
-export function buildTransferRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  sourceAccountId,
-  rwaId,
-  quantity,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildTransferRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    sourceAccountId,
+    rwaId,
+    quantity,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildTransferRwaInstruction({
     sourceAccountId,
     rwaId,
@@ -3520,7 +3592,7 @@ export function buildTransferRwaTransaction({
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3536,22 +3608,24 @@ export function buildTransferRwaTransaction({
 /**
  * Build a transaction containing a `MergeRwas` instruction.
  */
-export function buildMergeRwasTransaction({
-  chainId,
-  authority,
-  feePayment,
-  merge,
-  mergeJson,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildMergeRwasTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    merge,
+    mergeJson,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildMergeRwasInstruction({ merge, mergeJson });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3567,22 +3641,24 @@ export function buildMergeRwasTransaction({
 /**
  * Build a transaction containing a `RedeemRwa` instruction.
  */
-export function buildRedeemRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  quantity,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRedeemRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    quantity,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3598,21 +3674,23 @@ export function buildRedeemRwaTransaction({
 /**
  * Build a transaction containing a `FreezeRwa` instruction.
  */
-export function buildFreezeRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildFreezeRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildFreezeRwaInstruction({ rwaId });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3628,21 +3706,23 @@ export function buildFreezeRwaTransaction({
 /**
  * Build a transaction containing an `UnfreezeRwa` instruction.
  */
-export function buildUnfreezeRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildUnfreezeRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildUnfreezeRwaInstruction({ rwaId });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3658,22 +3738,24 @@ export function buildUnfreezeRwaTransaction({
 /**
  * Build a transaction containing a `HoldRwa` instruction.
  */
-export function buildHoldRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  quantity,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildHoldRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    quantity,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildHoldRwaInstruction({ rwaId, quantity });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3689,22 +3771,24 @@ export function buildHoldRwaTransaction({
 /**
  * Build a transaction containing a `ReleaseRwa` instruction.
  */
-export function buildReleaseRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  quantity,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildReleaseRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    quantity,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3720,27 +3804,29 @@ export function buildReleaseRwaTransaction({
 /**
  * Build a transaction containing a `ForceTransferRwa` instruction.
  */
-export function buildForceTransferRwaTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  quantity,
-  destinationAccountId,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildForceTransferRwaTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    quantity,
+    destinationAccountId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildForceTransferRwaInstruction({
     rwaId,
     quantity,
     destinationAccountId,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3756,27 +3842,29 @@ export function buildForceTransferRwaTransaction({
 /**
  * Build a transaction containing a `SetRwaControls` instruction.
  */
-export function buildSetRwaControlsTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  controls,
-  controlsJson,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildSetRwaControlsTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    controls,
+    controlsJson,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildSetRwaControlsInstruction({
     rwaId,
     controls,
     controlsJson,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3792,23 +3880,25 @@ export function buildSetRwaControlsTransaction({
 /**
  * Build a transaction containing a `SetRwaKeyValue` instruction.
  */
-export function buildSetRwaKeyValueTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  key,
-  value,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildSetRwaKeyValueTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    key,
+    value,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3824,22 +3914,24 @@ export function buildSetRwaKeyValueTransaction({
 /**
  * Build a transaction containing a `RemoveRwaKeyValue` instruction.
  */
-export function buildRemoveRwaKeyValueTransaction({
-  chainId,
-  authority,
-  feePayment,
-  rwaId,
-  key,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRemoveRwaKeyValueTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    rwaId,
+    key,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3855,21 +3947,23 @@ export function buildRemoveRwaKeyValueTransaction({
 /**
  * Build a transaction containing a `Kaigi::CreateKaigi` instruction.
  */
-export function buildCreateKaigiTransaction({
-  chainId,
-  authority,
-  feePayment,
-  call,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildCreateKaigiTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    call,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildCreateKaigiInstruction(call);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3885,21 +3979,23 @@ export function buildCreateKaigiTransaction({
 /**
  * Build a transaction containing a `Kaigi::JoinKaigi` instruction.
  */
-export function buildJoinKaigiTransaction({
-  chainId,
-  authority,
-  feePayment,
-  join,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildJoinKaigiTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    join,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildJoinKaigiInstruction(join);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3915,21 +4011,23 @@ export function buildJoinKaigiTransaction({
 /**
  * Build a transaction containing a `Kaigi::LeaveKaigi` instruction.
  */
-export function buildLeaveKaigiTransaction({
-  chainId,
-  authority,
-  feePayment,
-  leave,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildLeaveKaigiTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    leave,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildLeaveKaigiInstruction(leave);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3945,21 +4043,23 @@ export function buildLeaveKaigiTransaction({
 /**
  * Build a transaction containing a `Kaigi::EndKaigi` instruction.
  */
-export function buildEndKaigiTransaction({
-  chainId,
-  authority,
-  feePayment,
-  end,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildEndKaigiTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    end,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildEndKaigiInstruction(end);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -3972,387 +4072,32 @@ export function buildEndKaigiTransaction({
   });
 }
 
-function normalizeInlineVerifyingKeyRecord(value, context) {
-  const record =
-    value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  if (!record) {
-    throw new TypeError(`${context}.verifyingKey must be an object`);
-  }
-  const inlineKey = record.inline_key ?? record.inlineKey ?? null;
-  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
-    throw new TypeError(`${context}.verifyingKey.inline_key must be present`);
-  }
-  const bytesBase64 = String(
-    inlineKey.bytes_b64 ?? inlineKey.bytesBase64 ?? "",
-  ).trim();
-  if (!bytesBase64) {
-    throw new TypeError(
-      `${context}.verifyingKey.inline_key.bytes_b64 must be present`,
-    );
-  }
-  const backend = normalizeExactMetadataString(
-    record.id?.backend ?? record.backend,
-    `${context}.verifyingKey.id.backend`,
-  );
-  const circuitId = normalizeExactMetadataString(
-    record.record?.circuit_id ?? record.circuit_id ?? record.circuitId,
-    `${context}.verifyingKey.record.circuit_id`,
-  );
-  return {
-    record,
-    backend,
-    circuitId,
-    bytes: Buffer.from(bytesBase64, "base64"),
-  };
-}
-
-function normalizeExactMetadataString(value, context) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a string`);
-  }
-  if (!value.trim()) {
-    throw new TypeError(`${context} must be present`);
-  }
-  if (value.trim() !== value) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
-  return value;
-}
-
-function normalizeWholeNumberLiteral(value, context) {
-  const normalized = String(value ?? "");
-  if (normalized.trim() !== normalized) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
-  if (!/^\d+$/.test(normalized)) {
-    throw new TypeError(`${context} must be a whole-number string`);
-  }
-  return normalized;
-}
-
-function normalizeFixed32HexInput(value, context) {
-  if (typeof value === "string") {
-    if (value.trim() !== value) {
-      throw new TypeError(`${context} must not contain surrounding whitespace`);
-    }
-    const normalized = value.replace(/^0x/i, "").toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(normalized)) {
-      throw new TypeError(`${context} must be a 32-byte hex string`);
-    }
-    return normalized;
-  }
-  const buffer = toNamedBuffer(value, context);
-  if (buffer.length !== 32) {
-    throw new TypeError(`${context} must be 32 bytes`);
-  }
-  return Buffer.from(buffer).toString("hex");
-}
-
-function normalizeConfidentialInputDiversifierHex(input, index) {
-  const context = `inputs[${index}].diversifier`;
-  if (input?.diversifier_hex !== undefined || input?.diversifier !== undefined) {
-    throw new TypeError(`${context} must use canonical diversifierHex`);
-  }
-  if (input?.diversifierHex === undefined) {
-    throw new TypeError(`${context} is required`);
-  }
-  return normalizeFixed32HexInput(input.diversifierHex, context);
-}
-
-function toNamedBuffer(value, context) {
-  if (Buffer.isBuffer(value)) {
-    return value;
-  }
-  if (ArrayBuffer.isView(value)) {
-    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (value instanceof ArrayBuffer) {
-    return Buffer.from(value);
-  }
-  throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
-}
-
-/**
- * Build a confidential transfer v2 proof envelope.
- */
-export function buildConfidentialTransferProofV2({
-  chainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialTransferProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialTransferProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialTransferProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedOutputs = Array.isArray(outputs)
-    ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          output?.amount,
-          `outputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          output?.rhoHex ?? output?.rho,
-          `outputs[${index}].rho`,
-        ),
-        ownerTagHex: normalizeFixed32HexInput(
-          output?.ownerTagHex ?? output?.owner_tag_hex ?? output?.ownerTag,
-          `outputs[${index}].ownerTag`,
-        ),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialTransferProofV2(
-    normalizeExactMetadataString(chainId, "confidentialTransferProofV2.chainId"),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialTransferProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    outputCommitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build a confidential unshield v2 proof envelope.
- */
-export function buildConfidentialUnshieldProofV2({
-  chainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialUnshieldProofV2(
-    normalizeExactMetadataString(chainId, "confidentialUnshieldProofV2.chainId"),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build a confidential unshield v3 proof envelope with optional private change.
- */
-export function buildConfidentialUnshieldProofV3({
-  chainId,
-  assetDefinitionId,
-  spendKey,
-  treeCommitments,
-  inputs,
-  outputs,
-  publicAmount,
-  rootHintHex,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV3 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV3",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = Array.isArray(inputs)
-    ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          input?.amount,
-          `inputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          input?.rhoHex ?? input?.rho,
-          `inputs[${index}].rho`,
-        ),
-        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
-        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
-      }))
-    : [];
-  const normalizedOutputs = Array.isArray(outputs)
-    ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(
-          output?.amount,
-          `outputs[${index}].amount`,
-        ),
-        rhoHex: normalizeFixed32HexInput(
-          output?.rhoHex ?? output?.rho,
-          `outputs[${index}].rho`,
-        ),
-      }))
-    : [];
-  const normalizedTreeCommitments = Array.isArray(treeCommitments)
-    ? treeCommitments.map((entry, index) =>
-        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
-      )
-    : [];
-  const result = native.buildConfidentialUnshieldProofV3(
-    normalizeExactMetadataString(chainId, "confidentialUnshieldProofV3.chainId"),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV3.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    outputCommitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
+export {
+  buildConfidentialTransferProofV2,
+  buildConfidentialUnshieldProofV2,
+  buildConfidentialUnshieldProofV3,
+} from "./confidentialProofBuilders.js";
 
 /**
  * Build a transaction containing a `Kaigi::RecordKaigiUsage` instruction.
  */
-export function buildRecordKaigiUsageTransaction({
-  chainId,
-  authority,
-  feePayment,
-  usage,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRecordKaigiUsageTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    usage,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRecordKaigiUsageInstruction(usage);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4368,21 +4113,23 @@ export function buildRecordKaigiUsageTransaction({
 /**
  * Build a transaction containing a `Kaigi::SetKaigiRelayManifest` instruction.
  */
-export function buildSetKaigiRelayManifestTransaction({
-  chainId,
-  authority,
-  feePayment,
-  manifest,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildSetKaigiRelayManifestTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    manifest,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildSetKaigiRelayManifestInstruction(manifest);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4398,21 +4145,23 @@ export function buildSetKaigiRelayManifestTransaction({
 /**
  * Build a transaction containing a `Kaigi::RegisterKaigiRelay` instruction.
  */
-export function buildRegisterKaigiRelayTransaction({
-  chainId,
-  authority,
-  feePayment,
-  relay,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterKaigiRelayTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    relay,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterKaigiRelayInstruction(relay);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4428,21 +4177,23 @@ export function buildRegisterKaigiRelayTransaction({
 /**
  * Build a transaction containing a `ProposeDeployContract` instruction.
  */
-export function buildProposeDeployContractTransaction({
-  chainId,
-  authority,
-  feePayment,
-  proposal,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildProposeDeployContractTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    proposal,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildProposeDeployContractInstruction(proposal);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4458,24 +4209,26 @@ export function buildProposeDeployContractTransaction({
 /**
  * Build a transaction containing a `ProposeSccpRouteGovernance` instruction.
  */
-export function buildProposeSccpRouteGovernanceTransaction({
-  chainId,
-  authority,
-  feePayment,
-  proposal,
-  action,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildProposeSccpRouteGovernanceTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    proposal,
+    action,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildProposeSccpRouteGovernanceInstruction(
     proposal ?? { action },
   );
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4491,21 +4244,23 @@ export function buildProposeSccpRouteGovernanceTransaction({
 /**
  * Build a transaction containing a `CastZkBallot` instruction.
  */
-export function buildCastZkBallotTransaction({
-  chainId,
-  authority,
-  feePayment,
-  ballot,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildCastZkBallotTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    ballot,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildCastZkBallotInstruction(ballot);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4521,21 +4276,23 @@ export function buildCastZkBallotTransaction({
 /**
  * Build a transaction containing a `CastPlainBallot` instruction.
  */
-export function buildCastPlainBallotTransaction({
-  chainId,
-  authority,
-  feePayment,
-  ballot,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildCastPlainBallotTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    ballot,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildCastPlainBallotInstruction(ballot);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4551,21 +4308,23 @@ export function buildCastPlainBallotTransaction({
 /**
  * Build a transaction containing an `EnactReferendum` instruction.
  */
-export function buildEnactReferendumTransaction({
-  chainId,
-  authority,
-  feePayment,
-  enactment,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildEnactReferendumTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    enactment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildEnactReferendumInstruction(enactment);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4581,21 +4340,23 @@ export function buildEnactReferendumTransaction({
 /**
  * Build a transaction containing a `FinalizeReferendum` instruction.
  */
-export function buildFinalizeReferendumTransaction({
-  chainId,
-  authority,
-  feePayment,
-  finalization,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildFinalizeReferendumTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    finalization,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildFinalizeReferendumInstruction(finalization);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4611,21 +4372,23 @@ export function buildFinalizeReferendumTransaction({
 /**
  * Build a transaction containing a `PersistCouncilForEpoch` instruction.
  */
-export function buildPersistCouncilForEpochTransaction({
-  chainId,
-  authority,
-  feePayment,
-  record,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildPersistCouncilForEpochTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    record,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildPersistCouncilForEpochInstruction(record);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4638,21 +4401,23 @@ export function buildPersistCouncilForEpochTransaction({
   });
 }
 
-export function buildRegisterZkAssetTransaction({
-  chainId,
-  authority,
-  feePayment,
-  registration,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterZkAssetTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    registration,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterZkAssetInstruction(registration);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4665,22 +4430,24 @@ export function buildRegisterZkAssetTransaction({
   });
 }
 
-export function buildScheduleConfidentialPolicyTransitionTransaction({
-  chainId,
-  authority,
-  feePayment,
-  transition,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildScheduleConfidentialPolicyTransitionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    transition,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction =
     buildScheduleConfidentialPolicyTransitionInstruction(transition);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4693,22 +4460,24 @@ export function buildScheduleConfidentialPolicyTransitionTransaction({
   });
 }
 
-export function buildCancelConfidentialPolicyTransitionTransaction({
-  chainId,
-  authority,
-  feePayment,
-  cancellation,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildCancelConfidentialPolicyTransitionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    cancellation,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction =
     buildCancelConfidentialPolicyTransitionInstruction(cancellation);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4721,21 +4490,23 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
   });
 }
 
-export function buildCreateElectionTransaction({
-  chainId,
-  authority,
-  feePayment,
-  election,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildCreateElectionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    election,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildCreateElectionInstruction(election);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4748,21 +4519,23 @@ export function buildCreateElectionTransaction({
   });
 }
 
-export function buildSubmitBallotTransaction({
-  chainId,
-  authority,
-  feePayment,
-  ballot,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildSubmitBallotTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    ballot,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildSubmitBallotInstruction(ballot);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4775,21 +4548,23 @@ export function buildSubmitBallotTransaction({
   });
 }
 
-export function buildFinalizeElectionTransaction({
-  chainId,
-  authority,
-  feePayment,
-  finalization,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildFinalizeElectionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    finalization,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildFinalizeElectionInstruction(finalization);
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4805,21 +4580,23 @@ export function buildFinalizeElectionTransaction({
 /**
  * Build a transaction containing a `RegisterSmartContractCode` instruction.
  */
-export function buildRegisterSmartContractCodeTransaction({
-  chainId,
-  authority,
-  feePayment,
-  manifest,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterSmartContractCodeTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    manifest,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4835,25 +4612,27 @@ export function buildRegisterSmartContractCodeTransaction({
 /**
  * Build a transaction containing a `RegisterSmartContractBytes` instruction.
  */
-export function buildRegisterSmartContractBytesTransaction({
-  chainId,
-  authority,
-  feePayment,
-  codeHash,
-  code,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRegisterSmartContractBytesTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    codeHash,
+    code,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRegisterSmartContractBytesInstruction({
     codeHash,
     code,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4869,25 +4648,27 @@ export function buildRegisterSmartContractBytesTransaction({
 /**
  * Build a transaction containing a `RemoveSmartContractBytes` instruction.
  */
-export function buildRemoveSmartContractBytesTransaction({
-  chainId,
-  authority,
-  feePayment,
-  codeHash,
-  reason = null,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
+export function buildRemoveSmartContractBytesTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    codeHash,
+    reason = null,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash,
     reason,
   });
   return buildTransaction({
-    chainId,
+    networkId,
     authority,
     feePayment,
     instructions: [instruction],
@@ -4904,7 +4685,7 @@ export function buildRemoveSmartContractBytesTransaction({
  * Submit a signed transaction and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} [options]
+ * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, networkId?: import("./networkId.js").NetworkId, privateKey?: ArrayBufferView | ArrayBuffer | Buffer }} [options]
  * @returns {Promise<{hash: string, submission: any, status?: any}>}
  */
 export async function submitSignedTransaction(
@@ -4915,14 +4696,25 @@ export async function submitSignedTransaction(
   if (!(client instanceof ToriiClient)) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
+  for (const field of RETIRED_TRANSACTION_DOMAIN_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(options, field)) {
+      throw new TypeError(
+        `options.${field} is unsupported; provide networkId when re-signing`,
+      );
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(options, "scope")) {
     throw new TypeError(
       "options.scope is unsupported; finality waits always use global scope",
     );
   }
   let txBuffer = toBuffer(signedTransaction);
-  if (options.privateKey) {
-    txBuffer = resignSignedTransaction(txBuffer, options.privateKey);
+  if (Object.prototype.hasOwnProperty.call(options, "privateKey")) {
+    txBuffer = resignSignedTransaction(
+      options.networkId,
+      txBuffer,
+      options.privateKey,
+    );
   }
   const hashHex = hashSignedTransaction(txBuffer);
   const submission = await client.submitTransaction(txBuffer);
@@ -4995,3 +4787,9 @@ function toBuffer(value, context = "signedTransaction") {
   }
   throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
 }
+
+// Retained privacy builders must invoke this guard with native-validated
+// canonical manifest bytes before constructing any proof-bearing transaction.
+export {
+  requirePrivacyExact12CapabilityAdmissionV1,
+} from "./privacyCapabilityAdmission.js";

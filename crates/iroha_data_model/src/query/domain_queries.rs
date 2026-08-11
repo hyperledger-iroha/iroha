@@ -1111,7 +1111,7 @@ pub mod sorafs {
                 OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
                 OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
             },
-            pin_registry::{ManifestDigest, PinManifestFinalizedCursorV1},
+            pin_registry::{ManifestDigest, PinManifestFinalizedCursorV1, PinStatusKindV1},
             proof_ledger::{
                 ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
                 ProofOutcomeKindV1,
@@ -1139,6 +1139,21 @@ pub mod sorafs {
             pub digest: ManifestDigest,
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<PinManifestFinalizedCursorV1>,
+        }
+
+        /// Fetch a finalized exclusive-keyset page of bounded pin-manifest summaries.
+        #[derive(Copy)]
+        pub struct FindSorafsPinManifests {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<PinManifestFinalizedCursorV1>,
+            /// Optional closed lifecycle filter backed by a consensus-maintained index.
+            pub status: Option<PinStatusKindV1>,
+            /// Exclusive manifest-digest cursor.
+            pub after_digest: Option<ManifestDigest>,
+            /// Requested row count, checked against the hard query ceiling.
+            pub limit: u32,
+            /// Requested encoded-page byte ceiling, checked against the hard query ceiling.
+            pub max_bytes: u32,
         }
 
         /// Fetch the active authoritative `SoraFS` orderbook policy.
@@ -1599,6 +1614,16 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsPinManifests {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find finalized SoraFS pin manifests with row limit {} and byte limit {}",
+                self.limit, self.max_bytes
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsOrderbookPolicy {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find active SoraFS orderbook policy")
@@ -2050,17 +2075,18 @@ pub mod sorafs {
             FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
             FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
-            FindSorafsOrderbookTrades, FindSorafsPinManifest, FindSorafsPopAuditDigestBySequence,
-            FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
-            FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
-            FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
-            FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks, FindSorafsReputationJournalAuthorityPolicy,
-            FindSorafsReputationJournalEventBySourceId, FindSorafsReputationJournalEvents,
-            FindSorafsReserveAppealById, FindSorafsReserveAppeals, FindSorafsReserveEvents,
-            FindSorafsReserveMovementById, FindSorafsReserveMovements, FindSorafsReservePolicy,
-            FindSorafsReserveProviderById, FindSorafsReserveProviders,
+            FindSorafsOrderbookTrades, FindSorafsPinManifest, FindSorafsPinManifests,
+            FindSorafsPopAuditDigestBySequence, FindSorafsPopCommitmentRootByVersion,
+            FindSorafsPopCredentialCommitmentByDigest, FindSorafsPopIssuerPolicy,
+            FindSorafsPopRegistryStatus, FindSorafsPopRevocationByNonceCommitment,
+            FindSorafsPopRevocationPublicationByVersion, FindSorafsProofOutcome,
+            FindSorafsProofOutcomeEvents, FindSorafsProviderOwner, FindSorafsRepairEvents,
+            FindSorafsRepairStatus, FindSorafsRepairTask, FindSorafsRepairTasks,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReputationJournalEvents, FindSorafsReserveAppealById,
+            FindSorafsReserveAppeals, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+            FindSorafsReserveMovements, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsReserveProviders,
         };
     }
 }
@@ -2081,6 +2107,19 @@ impl SingularQuery for sorafs::prelude::FindSorafsProviderOwner {
 impl seal::SingularQuery for sorafs::prelude::FindSorafsPinManifest {}
 impl SingularQuery for sorafs::prelude::FindSorafsPinManifest {
     type Output = crate::sorafs::pin_registry::PinManifestFinalizedRecordV1;
+
+    fn dyn_encode(&self) -> Vec<u8> {
+        self.encode()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl seal::SingularQuery for sorafs::prelude::FindSorafsPinManifests {}
+impl SingularQuery for sorafs::prelude::FindSorafsPinManifests {
+    type Output = crate::sorafs::pin_registry::PinManifestPageV1;
 
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()

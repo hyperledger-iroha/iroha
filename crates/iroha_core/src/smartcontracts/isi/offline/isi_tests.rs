@@ -2,9 +2,9 @@
 mod tests {
     use core::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        Registrable,
+        ChainId, NetworkId, Registrable,
         account::Account,
         asset::{Asset, AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
@@ -36,6 +36,41 @@ mod tests {
     };
 
     const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
+
+    fn test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
+    }
+
+    #[test]
+    fn redemption_context_rejects_same_label_foreign_genesis() {
+        let first_display_label = ChainId::from("shared-offline-display-label");
+        let second_display_label = ChainId::from("shared-offline-display-label");
+        assert_eq!(first_display_label, second_display_label);
+
+        let live_network = test_network_id(b"shared-label-live-offline-genesis");
+        let foreign_network = test_network_id(b"shared-label-foreign-offline-genesis");
+        assert_ne!(live_network, foreign_network);
+        ensure_kagemusha_v4_redemption_live_context(
+            &live_network,
+            &foreign_network,
+            &live_network,
+            2,
+            2,
+            2,
+        )
+        .expect_err("a same-label foreign genesis must fail the exact-network gate");
+        ensure_kagemusha_v4_redemption_live_context(
+            &live_network,
+            &live_network,
+            &live_network,
+            2,
+            2,
+            2,
+        )
+        .expect("the exact live NetworkId must pass the domain gate");
+    }
 
     #[test]
     fn anchor_drawdown_is_canonical_bounded_and_cross_anchor() {
@@ -106,7 +141,7 @@ mod tests {
         let amount = iroha_data_model::offline::KagemushaScaledAmountV2::new(100, 0)
             .expect("positive anchor amount");
         let note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
-            chain_id: transaction.chain_id().clone(),
+            network_id: *transaction.network_id(),
             asset: asset.definition().clone(),
             note_commitment: [0x48; 32],
             spend_nullifier: [0x49; 32],
@@ -114,7 +149,7 @@ mod tests {
         };
         let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
             version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            chain_id: transaction.chain_id().clone(),
+            network_id: *transaction.network_id(),
             payer: ALICE_ID.clone(),
             asset,
             asset_scale: 0,
@@ -549,8 +584,9 @@ mod tests {
         .build(&ALICE_ID);
         let source_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
         let chain_id = ChainId::from("offline-holding-limit-test");
+        let network_id = test_network_id(b"offline-holding-limit-test-network");
         let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-            &chain_id,
+            &network_id,
             &definition_id,
         );
         let escrow_asset = AssetId::new(definition_id.clone(), escrow_account.clone());
@@ -569,11 +605,12 @@ mod tests {
             assets,
             [],
         );
-        let mut state = State::new_with_chain(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id,
+            network_id,
         );
         let mut settlement = iroha_config::parameters::actual::Settlement::default();
         settlement
@@ -626,6 +663,7 @@ mod tests {
     #[test]
     fn offline_use_lazily_materializes_deterministic_escrow_for_any_asset() {
         let chain_id = ChainId::from("universal-offline-test");
+        let network_id = test_network_id(b"universal-offline-test-network");
         let domain_id = DomainId::try_new("ordinary", "universal").expect("ordinary test domain");
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
@@ -646,11 +684,12 @@ mod tests {
             [Asset::new(source_asset.clone(), Quantity::from(10_u32))],
             [],
         );
-        let state = State::new_with_chain(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id,
+            network_id,
         );
         let mut block = state.block(offline_test_header());
         let mut state_transaction = block.transaction();
@@ -672,7 +711,7 @@ mod tests {
         .expect("offline use should need no asset flag or configured catalog");
 
         let expected = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-            state_transaction.chain_id(),
+            state_transaction.network_id(),
             &definition_id,
         );
         assert_eq!(

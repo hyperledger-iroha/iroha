@@ -2517,7 +2517,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         })
         .collect::<Vec<_>>();
     let context = HeightContext {
-        chain_id: ChainId::from("native-frontier-token-test"),
+        network_id: crate::sumeragi::synthetic_network_id("native-frontier-token-test"),
         protocol_version: PROTOCOL_VERSION,
         height: block.header().height().get(),
         epoch: 0,

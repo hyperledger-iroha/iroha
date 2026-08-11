@@ -68,6 +68,7 @@ struct RuntimeProviderCatalogWireV1 {
     magic: [u8; 8],
     version: u16,
     chain_id: String,
+    network_id: NetworkId,
     bindings: Vec<RuntimeProviderBindingWireV1>,
 }
 
@@ -270,8 +271,9 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// Export this sanitized provider projection as an exact canonical V1
     /// broker handoff artifact.
     ///
-    /// Only the chain identity and public binding fields already held by this
-    /// type are serialized. Credentials, private keys, tokens, vendor
+    /// Only the display-chain identity, exact genesis-derived network identity,
+    /// and public binding fields already held by this type are serialized.
+    /// Credentials, private keys, tokens, vendor
     /// connection settings, and the full daemon configuration are not inputs
     /// to this API.
     ///
@@ -335,6 +337,7 @@ impl RuntimeProviderCatalogWireV1 {
             magic: RUNTIME_PROVIDER_CATALOG_MAGIC_V1,
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: bindings.chain_id().to_owned(),
+            network_id: *bindings.network_id(),
             bindings: projected,
         };
         // Reconstruct once before export. This prevents an internally
@@ -369,6 +372,7 @@ impl RuntimeProviderCatalogWireV1 {
             .collect::<Result<Vec<_>, _>>()?;
         let reconstructed = IrohaRuntimeProviderBindingsV1 {
             chain_id: self.chain_id,
+            network_id: self.network_id,
             bindings,
         };
         validate_catalog_relationships(&reconstructed)?;
@@ -1549,6 +1553,15 @@ const fn provider_ingest_algorithm_from_wire(wire: u8) -> Option<iroha_crypto::A
 mod tests {
     use super::*;
 
+    #[derive(Encode)]
+    struct RetiredRuntimeProviderCatalogWireV1 {
+        magic: [u8; 8],
+        version: u16,
+        chain_id: String,
+        network_id: Option<NetworkId>,
+        bindings: Vec<RuntimeProviderBindingWireV1>,
+    }
+
     fn generic_catalog() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "sorafs-catalog-test",
@@ -1601,6 +1614,7 @@ mod tests {
         });
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "sorafs-catalog-test".to_owned(),
+            network_id: runtime_provider_test_network_id(),
             bindings,
         }
     }
@@ -1843,7 +1857,12 @@ mod tests {
 
     #[test]
     fn canonical_catalog_roundtrip_is_byte_stable() {
-        let catalog = generic_catalog();
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA7; 32])
+        ));
+        let catalog = generic_catalog().with_network_id_for_test(network_id);
         let first = catalog
             .export_canonical_v1()
             .expect("export canonical catalog");
@@ -1851,11 +1870,22 @@ mod tests {
             .export_canonical_v1()
             .expect("repeat canonical export");
         assert_eq!(first, second);
+        let other_network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA8; 32]),
+        ));
+        let other_network = generic_catalog()
+            .with_network_id_for_test(other_network_id)
+            .export_canonical_v1()
+            .expect("export same-label catalog for another network");
+        assert_ne!(first, other_network);
         assert!(first.len() <= RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1);
 
         let decoded = IrohaRuntimeProviderBindingsV1::load_canonical_v1(&first)
             .expect("load canonical catalog");
         assert_eq!(decoded, catalog);
+        assert_eq!(decoded.network_id(), &network_id);
         assert_eq!(
             decoded
                 .export_canonical_v1()
@@ -2386,11 +2416,32 @@ mod tests {
     }
 
     #[test]
+    fn loader_rejects_retired_optional_network_catalog_schema() {
+        let wire = canonical_wire();
+        for network_id in [None, Some(wire.network_id)] {
+            let retired = RetiredRuntimeProviderCatalogWireV1 {
+                magic: wire.magic,
+                version: wire.version,
+                chain_id: wire.chain_id.clone(),
+                network_id,
+                bindings: wire.bindings.clone(),
+            };
+            let bytes = norito::encode_canonical(&retired).expect("encode retired catalog fixture");
+            assert_eq!(
+                IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
+                Err(IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding),
+                "retired optional-network encoding must fail closed for {network_id:?}",
+            );
+        }
+    }
+
+    #[test]
     fn loader_rejects_empty_duplicate_and_noncanonical_order() {
         let empty = RuntimeProviderCatalogWireV1 {
             magic: RUNTIME_PROVIDER_CATALOG_MAGIC_V1,
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: "sorafs-catalog-test".to_owned(),
+            network_id: runtime_provider_test_network_id(),
             bindings: Vec::new(),
         };
         let bytes = norito::encode_canonical(&empty).expect("encode empty fixture");
@@ -2436,6 +2487,7 @@ mod tests {
             magic: RUNTIME_PROVIDER_CATALOG_MAGIC_V1,
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: "sorafs-catalog-test".to_owned(),
+            network_id: runtime_provider_test_network_id(),
             bindings: vec![second, first],
         };
         let bytes = norito::encode_canonical(&reversed).expect("encode reversed fixture");

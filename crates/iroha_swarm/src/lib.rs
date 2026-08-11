@@ -808,9 +808,13 @@ mod tests {
             );
         }
         assert_eq!(
-            output.matches("exec irohad").count(),
+            output.matches("exec iroha3d").count(),
             peer_count,
             "the manifest must contain validators only: {output}"
+        );
+        assert!(
+            !output.contains("exec irohad"),
+            "the retired irohad executable name must not appear: {output}"
         );
         assert_eq!(
             output.matches("tail -c 1").count(),

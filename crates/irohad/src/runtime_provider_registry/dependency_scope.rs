@@ -109,6 +109,15 @@ pub(super) fn dependency_is_present(
         Slot::SoracloudHfInferenceCredentialProvider => {
             deps.soracloud_hf_inference_credential_provider.is_some()
         }
+        Slot::MusubiProviderAttestationClockSeal => {
+            deps.sorafs_musubi_provider_attestation_clock_seal.is_some()
+        }
+        Slot::MusubiProviderAttestationApprovalSigner => deps
+            .sorafs_musubi_provider_attestation_approval_signer
+            .is_some(),
+        Slot::MusubiProviderAttestationAuthenticatedInventory => {
+            deps.sorafs_musubi_provider_attestation_inventory.is_some()
+        }
     }
 }
 
@@ -141,6 +150,7 @@ pub(super) fn has_unrequested_dependency(
                 .soracloud_hf_inference_credential_provider
                 .is_some(),
         )
+        || has_unrequested_musubi_provider_attestation_dependency(bindings, dependencies)
 }
 
 fn dependency_is_unrequested(
@@ -465,9 +475,436 @@ fn has_unrequested_provider_ingest_dependency(
     )
 }
 
+fn has_unrequested_musubi_provider_attestation_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> bool {
+    use IrohaRuntimeProviderSlotV1 as Slot;
+
+    dependency_is_unrequested(
+        bindings,
+        Slot::MusubiProviderAttestationClockSeal,
+        dependencies
+            .sorafs_musubi_provider_attestation_clock_seal
+            .is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
+        Slot::MusubiProviderAttestationApprovalSigner,
+        dependencies
+            .sorafs_musubi_provider_attestation_approval_signer
+            .is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
+        Slot::MusubiProviderAttestationAuthenticatedInventory,
+        dependencies
+            .sorafs_musubi_provider_attestation_inventory
+            .is_some(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MUSUBI_PROVIDER_ATTESTATION_SLOTS: [IrohaRuntimeProviderSlotV1; 3] = [
+        IrohaRuntimeProviderSlotV1::MusubiProviderAttestationClockSeal,
+        IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
+        IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,
+    ];
+
+    #[derive(Clone, Debug)]
+    struct AttestationProviderMetadata {
+        handle: String,
+        handle_after_first: Option<String>,
+        handle_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        qualification_after_first: bool,
+        qualification_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        unavailable: bool,
+    }
+
+    impl AttestationProviderMetadata {
+        fn from_binding(binding: &IrohaRuntimeProviderBindingV1) -> Self {
+            Self {
+                handle: binding.handle().to_owned(),
+                handle_after_first: None,
+                handle_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                revision: binding.revision().expect("qualified fixture revision"),
+                policy_digest: binding
+                    .policy_digest()
+                    .expect("qualified fixture policy digest"),
+                qualification_after_first: false,
+                qualification_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                unavailable: false,
+            }
+        }
+
+        fn with_drift(mut self, drift: AttestationProviderDrift) -> Self {
+            match drift {
+                AttestationProviderDrift::Handle => {
+                    self.handle = "hsm://sorafs/provider-attestation/substituted".to_owned();
+                }
+                AttestationProviderDrift::HandleAfterSnapshot => {
+                    self.handle_after_first =
+                        Some("hsm://sorafs/provider-attestation/substituted".to_owned());
+                }
+                AttestationProviderDrift::Revision => {
+                    self.revision = self.revision.saturating_add(1);
+                }
+                AttestationProviderDrift::PolicyDigest => {
+                    self.policy_digest[0] ^= 0xFF;
+                }
+                AttestationProviderDrift::QualificationAfterSnapshot => {
+                    self.qualification_after_first = true;
+                }
+                AttestationProviderDrift::Unavailable => self.unavailable = true,
+            }
+            self
+        }
+
+        fn observed_handle(&self) -> &str {
+            let call = self
+                .handle_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call > 0 {
+                self.handle_after_first.as_deref().unwrap_or(&self.handle)
+            } else {
+                &self.handle
+            }
+        }
+
+        fn observed_qualification(&self) -> (u64, [u8; 32]) {
+            let call = self
+                .qualification_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let revision = if self.qualification_after_first && call > 0 {
+                self.revision.saturating_add(1)
+            } else {
+                self.revision
+            };
+            (revision, self.policy_digest)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum AttestationProviderDrift {
+        Handle,
+        HandleAfterSnapshot,
+        Revision,
+        PolicyDigest,
+        QualificationAfterSnapshot,
+        Unavailable,
+    }
+
+    #[derive(Debug)]
+    struct ClockSeal(AttestationProviderMetadata);
+
+    impl sorafs_node::MusubiProviderAttestationClockSealV1 for ClockSeal {
+        fn runtime_handle(&self) -> &str {
+            self.0.observed_handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::MusubiProviderAttestationClockSealQualificationV1,
+            sorafs_node::MusubiProviderAttestationClockSealErrorV1,
+        > {
+            if self.0.unavailable {
+                Err(sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable)
+            } else {
+                let (revision, policy_digest) = self.0.observed_qualification();
+                Ok(
+                    sorafs_node::MusubiProviderAttestationClockSealQualificationV1::new(
+                        revision,
+                        policy_digest,
+                    ),
+                )
+            }
+        }
+
+        fn load_latest<'a>(
+            &'a self,
+            _scope_digest: [u8; 32],
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<
+                Option<sorafs_node::MusubiProviderAttestationClockSealRecordV1>,
+                sorafs_node::MusubiProviderAttestationClockSealErrorV1,
+            >,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable)
+            })
+        }
+
+        fn compare_and_swap<'a>(
+            &'a self,
+            _scope_digest: [u8; 32],
+            _expected: Option<[u8; 32]>,
+            _next: &'a sorafs_node::MusubiProviderAttestationClockSealRecordV1,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<(), sorafs_node::MusubiProviderAttestationClockSealErrorV1>,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable)
+            })
+        }
+    }
+
+    struct ApprovalSigner {
+        metadata: AttestationProviderMetadata,
+        authority: iroha_data_model::account::AccountId,
+        policy: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1,
+        malformed_qualification: bool,
+    }
+
+    impl ApprovalSigner {
+        fn new(metadata: AttestationProviderMetadata) -> Self {
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![0x91; 32],
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("derive provider-attestation signer fixture key");
+            Self {
+                metadata,
+                authority: iroha_data_model::account::AccountId::new(key_pair.public_key().clone()),
+                policy:
+                    iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [0x92; 32],
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: [0x93; 32],
+                    },
+                malformed_qualification: false,
+            }
+        }
+    }
+
+    impl sorafs_node::MusubiProviderAttestationSignerV1 for ApprovalSigner {
+        fn runtime_handle(&self) -> &str {
+            self.metadata.observed_handle()
+        }
+
+        fn authority(&self) -> &iroha_data_model::account::AccountId {
+            &self.authority
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::MusubiProviderAttestationSignerQualificationV1,
+            sorafs_node::MusubiProviderAttestationSignerErrorV1,
+        > {
+            if self.metadata.unavailable {
+                Err(sorafs_node::MusubiProviderAttestationSignerErrorV1::Unavailable)
+            } else {
+                let (revision, policy_digest) = self.metadata.observed_qualification();
+                let mut qualification =
+                    sorafs_node::MusubiProviderAttestationSignerQualificationV1::new(
+                        revision,
+                        policy_digest,
+                        self.policy,
+                        self.authority.clone(),
+                        [0x94; 32],
+                    );
+                if self.malformed_qualification {
+                    qualification.version = qualification.version.saturating_add(1);
+                }
+                Ok(qualification)
+            }
+        }
+
+        fn signer_policy(
+            &self,
+        ) -> iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1
+        {
+            self.policy
+        }
+
+        fn current_eligibility(
+            &self,
+        ) -> Result<
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1,
+            sorafs_node::MusubiProviderAttestationSignerErrorV1,
+        > {
+            Ok(self.policy)
+        }
+
+        fn approve<'a>(
+            &'a self,
+            _request: &'a sorafs_node::ProviderIngestMusubiAttestationApprovalRequestV1,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<
+                iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1,
+                sorafs_node::MusubiProviderAttestationSignerErrorV1,
+            >,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationSignerErrorV1::Unavailable)
+            })
+        }
+    }
+
+    struct Inventory(AttestationProviderMetadata);
+
+    impl sorafs_node::MusubiProviderAttestationInventorySinkV1 for Inventory {
+        fn put<'a>(
+            &'a self,
+            _item: sorafs_node::MusubiProviderAttestationInventoryItemV1,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<u64, sorafs_node::MusubiProviderAttestationInventoryErrorV1>,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationInventoryErrorV1::Unavailable)
+            })
+        }
+    }
+
+    impl sorafs_node::MusubiProviderAttestationInventoryReaderV1 for Inventory {
+        fn get<'a>(
+            &'a self,
+            _scope: &'a sorafs_node::MusubiProviderAttestationInventoryScopeV1,
+            _key: iroha_data_model::musubi::MusubiProviderBundleAttestationKeyV1,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<
+                Option<sorafs_node::MusubiProviderAttestationInventoryReadbackV1>,
+                sorafs_node::MusubiProviderAttestationInventoryErrorV1,
+            >,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationInventoryErrorV1::Unavailable)
+            })
+        }
+
+        fn inventory<'a>(
+            &'a self,
+            _scope: &'a sorafs_node::MusubiProviderAttestationInventoryScopeV1,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<
+                Option<sorafs_node::MusubiProviderAttestationInventoryV1>,
+                sorafs_node::MusubiProviderAttestationInventoryErrorV1,
+            >,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationInventoryErrorV1::Unavailable)
+            })
+        }
+    }
+
+    impl sorafs_node::MusubiProviderAttestationInventoryRuntimeV1 for Inventory {
+        fn runtime_handle(&self) -> &str {
+            self.0.observed_handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::MusubiProviderAttestationInventoryQualificationV1,
+            sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1,
+        > {
+            if self.0.unavailable {
+                Err(sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable)
+            } else {
+                let (revision, policy_digest) = self.0.observed_qualification();
+                Ok(
+                    sorafs_node::MusubiProviderAttestationInventoryQualificationV1::new(
+                        revision,
+                        policy_digest,
+                    ),
+                )
+            }
+        }
+
+        fn check_readiness<'a>(
+            &'a self,
+        ) -> sorafs_node::ProviderIngestFutureV1<
+            'a,
+            Result<(), sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1>,
+        > {
+            Box::pin(async {
+                Err(sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable)
+            })
+        }
+    }
+
+    fn attestation_metadata(
+        bindings: &IrohaRuntimeProviderBindingsV1,
+        slot: IrohaRuntimeProviderSlotV1,
+        drift: Option<(IrohaRuntimeProviderSlotV1, AttestationProviderDrift)>,
+    ) -> AttestationProviderMetadata {
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.slot() == slot)
+            .expect("fixture binding must exist");
+        let metadata = AttestationProviderMetadata::from_binding(binding);
+        match drift {
+            Some((drift_slot, drift)) if drift_slot == slot => metadata.with_drift(drift),
+            Some(_) | None => metadata,
+        }
+    }
+
+    fn musubi_provider_attestation_dependencies_with_drift(
+        bindings: &IrohaRuntimeProviderBindingsV1,
+        mask: u8,
+        drift: Option<(IrohaRuntimeProviderSlotV1, AttestationProviderDrift)>,
+    ) -> IrohaRuntimeDeps {
+        use IrohaRuntimeProviderSlotV1 as Slot;
+
+        let mut dependencies = IrohaRuntimeDeps::default();
+        if mask & 0b001 != 0 {
+            dependencies = dependencies.with_sorafs_musubi_provider_attestation_clock_seal(
+                std::sync::Arc::new(ClockSeal(attestation_metadata(
+                    bindings,
+                    Slot::MusubiProviderAttestationClockSeal,
+                    drift,
+                ))),
+            );
+        }
+        if mask & 0b010 != 0 {
+            dependencies = dependencies.with_sorafs_musubi_provider_attestation_approval_signer(
+                std::sync::Arc::new(ApprovalSigner::new(attestation_metadata(
+                    bindings,
+                    Slot::MusubiProviderAttestationApprovalSigner,
+                    drift,
+                ))),
+            );
+        }
+        if mask & 0b100 != 0 {
+            dependencies = dependencies.with_sorafs_musubi_provider_attestation_inventory(
+                std::sync::Arc::new(Inventory(attestation_metadata(
+                    bindings,
+                    Slot::MusubiProviderAttestationAuthenticatedInventory,
+                    drift,
+                ))),
+            );
+        }
+        dependencies
+    }
+
+    fn musubi_provider_attestation_dependencies(
+        bindings: &IrohaRuntimeProviderBindingsV1,
+        mask: u8,
+    ) -> IrohaRuntimeDeps {
+        musubi_provider_attestation_dependencies_with_drift(bindings, mask, None)
+    }
+
+    struct FixedRegistry(IrohaRuntimeDeps);
+
+    impl IrohaRuntimeProviderRegistryV1 for FixedRegistry {
+        fn resolve(
+            &self,
+            _bindings: &IrohaRuntimeProviderBindingsV1,
+        ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
+            Ok(self.0.clone())
+        }
+    }
 
     fn bindings_for(slots: &[IrohaRuntimeProviderSlotV1]) -> IrohaRuntimeProviderBindingsV1 {
         let bindings = slots
@@ -486,6 +923,7 @@ mod tests {
             .collect();
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "runtime-scope-chain".to_owned(),
+            network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
             bindings,
         }
     }
@@ -537,5 +975,165 @@ mod tests {
             Slot::PotrProviderSigner,
             false,
         ));
+    }
+
+    #[test]
+    fn enabled_musubi_provider_attestation_rejects_every_missing_effect_combination() {
+        let bindings = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
+
+        for mask in 0_u8..0b111 {
+            let dependencies = musubi_provider_attestation_dependencies(&bindings, mask);
+            assert!(
+                bindings
+                    .iter()
+                    .any(|binding| !dependency_is_present(&dependencies, binding.slot())),
+                "effect mask {mask:03b} must be incomplete"
+            );
+            assert!(
+                !has_unrequested_dependency(&bindings, &dependencies),
+                "every attached effect in mask {mask:03b} was requested"
+            );
+            assert_eq!(dependencies.is_empty(), mask == 0);
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(dependencies))),
+                Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+            ));
+        }
+        let complete = musubi_provider_attestation_dependencies(&bindings, 0b111);
+        assert!(
+            bindings
+                .iter()
+                .all(|binding| dependency_is_present(&complete, binding.slot()))
+        );
+        assert!(!has_unrequested_dependency(&bindings, &complete));
+        assert!(!complete.is_empty());
+    }
+
+    #[test]
+    fn disabled_musubi_provider_attestation_rejects_every_extra_effect_combination() {
+        let bindings = bindings_for(&[]);
+
+        for mask in 1_u8..=0b111 {
+            let configured = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
+            let dependencies = musubi_provider_attestation_dependencies(&configured, mask);
+            assert!(
+                has_unrequested_dependency(&bindings, &dependencies),
+                "disabled journal must reject extra effect mask {mask:03b}"
+            );
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(dependencies))),
+                Err(IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
+            ));
+        }
+    }
+
+    #[test]
+    fn musubi_provider_attestation_qualification_requires_exact_deployment_metadata() {
+        let bindings = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
+        let exact = musubi_provider_attestation_dependencies(&bindings, 0b111);
+        assert!(resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(exact))).is_ok());
+
+        for slot in MUSUBI_PROVIDER_ATTESTATION_SLOTS {
+            for drift in [
+                AttestationProviderDrift::Revision,
+                AttestationProviderDrift::PolicyDigest,
+            ] {
+                let dependencies = musubi_provider_attestation_dependencies_with_drift(
+                    &bindings,
+                    0b111,
+                    Some((slot, drift)),
+                );
+                assert!(matches!(
+                    resolve_runtime_deps_from_bindings(
+                        &bindings,
+                        Some(&FixedRegistry(dependencies))
+                    ),
+                    Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+                ));
+            }
+
+            let substituted = musubi_provider_attestation_dependencies_with_drift(
+                &bindings,
+                0b111,
+                Some((slot, AttestationProviderDrift::Handle)),
+            );
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(substituted))),
+                Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+            ));
+
+            let unavailable = musubi_provider_attestation_dependencies_with_drift(
+                &bindings,
+                0b111,
+                Some((slot, AttestationProviderDrift::Unavailable)),
+            );
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(unavailable))),
+                Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+            ));
+
+            let handle_drift = musubi_provider_attestation_dependencies_with_drift(
+                &bindings,
+                0b111,
+                Some((slot, AttestationProviderDrift::HandleAfterSnapshot)),
+            );
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(handle_drift))),
+                Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+            ));
+
+            let qualification_drift = musubi_provider_attestation_dependencies_with_drift(
+                &bindings,
+                0b111,
+                Some((slot, AttestationProviderDrift::QualificationAfterSnapshot)),
+            );
+            assert!(matches!(
+                resolve_runtime_deps_from_bindings(
+                    &bindings,
+                    Some(&FixedRegistry(qualification_drift))
+                ),
+                Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+            ));
+        }
+
+        let mut malformed_dependencies = musubi_provider_attestation_dependencies(&bindings, 0b111);
+        let signer_metadata = attestation_metadata(
+            &bindings,
+            IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
+            None,
+        );
+        let mut malformed_signer = ApprovalSigner::new(signer_metadata);
+        malformed_signer.malformed_qualification = true;
+        malformed_dependencies.sorafs_musubi_provider_attestation_approval_signer =
+            Some(std::sync::Arc::new(malformed_signer));
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(
+                &bindings,
+                Some(&FixedRegistry(malformed_dependencies))
+            ),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+    }
+
+    #[test]
+    fn musubi_provider_attestation_binding_catalog_is_all_or_none() {
+        assert!(validate_musubi_provider_attestation_binding_set(&bindings_for(&[])).is_ok());
+        assert!(
+            validate_musubi_provider_attestation_binding_set(&bindings_for(
+                &MUSUBI_PROVIDER_ATTESTATION_SLOTS
+            ))
+            .is_ok()
+        );
+        for mask in 1_u8..0b111 {
+            let slots = MUSUBI_PROVIDER_ATTESTATION_SLOTS
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, slot)| (mask & (1 << index) != 0).then_some(slot))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                validate_musubi_provider_attestation_binding_set(&bindings_for(&slots)),
+                Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+            ));
+        }
     }
 }

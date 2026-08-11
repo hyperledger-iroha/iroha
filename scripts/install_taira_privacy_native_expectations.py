@@ -822,6 +822,31 @@ def _replace_zero_integer(source: str, name: str, kind: str, value: int) -> str:
     return source.replace(declaration, f"pub(crate) const {name}: {kind} = {value};")
 
 
+def _require_bootstrap_pin_sources(profile: str, readiness: str) -> None:
+    """Require the unique wholly open source state before invoking native code."""
+
+    declaration = f"pub(crate) const {KAT_BYTES_PIN}: u32 = 0;"
+    if profile.count(declaration) != 1:
+        raise InstallError(
+            f"{KAT_BYTES_PIN} must have exactly one all-zero declaration"
+        )
+    for name in (KAT_SHA256_PIN, EXPECTATIONS_NORITO_PIN, EXPECTATIONS_JSON_PIN):
+        declaration = f"pub(crate) const {name}: [u8; 32] = [0; 32];"
+        if profile.count(declaration) != 1:
+            raise InstallError(f"{name} must have exactly one all-zero declaration")
+    for name in OBSERVATION_PINS.values():
+        declaration = f"pub(crate) const {name}: u64 = 0;"
+        if readiness.count(declaration) != 1:
+            raise InstallError(f"{name} must have exactly one all-zero declaration")
+    declaration = (
+        f"pub(crate) const {RESOURCE_CERTIFICATE_PIN}: [u8; 32] = [0; 32];"
+    )
+    if readiness.count(declaration) != 1:
+        raise InstallError(
+            f"{RESOURCE_CERTIFICATE_PIN} must have exactly one all-zero declaration"
+        )
+
+
 def _create_new_file(path: Path, encoded: bytes, mode: int) -> None:
     descriptor = os.open(
         path,
@@ -1576,6 +1601,22 @@ def install(
     if _sha256(cargo_lock_bytes) != authenticated_cargo_lock_sha256:
         raise InstallError("Cargo.lock does not match its authenticated origin digest")
 
+    # Snapshot and validate the wholly open source state before executing the
+    # external native verifier. Any populated or partial source pin permanently
+    # closes this installer invocation, even when the verifier is malicious.
+    profile_bytes = _stable_regular_bytes(
+        profile_path, "ZK-X509 profile source", MAX_SOURCE_BYTES
+    )
+    readiness_bytes = _stable_regular_bytes(
+        readiness_path, "X.509 readiness-certificate source", MAX_SOURCE_BYTES
+    )
+    try:
+        profile_source = profile_bytes.decode("utf-8")
+        readiness_source = readiness_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise InstallError("X.509 source pin files must be UTF-8") from error
+    _require_bootstrap_pin_sources(profile_source, readiness_source)
+
     capture_paths = (
         captured_expectations_norito,
         captured_expectations_json,
@@ -1629,18 +1670,6 @@ def install(
         != exact12_bytes
     ):
         raise InstallError("exact12 matrix changed during native validation")
-
-    profile_bytes = _stable_regular_bytes(
-        profile_path, "ZK-X509 profile source", MAX_SOURCE_BYTES
-    )
-    readiness_bytes = _stable_regular_bytes(
-        readiness_path, "X.509 readiness-certificate source", MAX_SOURCE_BYTES
-    )
-    try:
-        profile_source = profile_bytes.decode("utf-8")
-        readiness_source = readiness_bytes.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise InstallError("X.509 source pin files must be UTF-8") from error
 
     patched_profile = _replace_zero_integer(
         profile_source,

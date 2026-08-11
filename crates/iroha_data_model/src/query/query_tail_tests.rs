@@ -23,12 +23,19 @@ mod certified_merge_inclusion_tests {
         assert_eq!(decoded, *committed);
     }
 
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(
+            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x15; Hash::LENGTH],
+            )),
+        )
+    }
+
     fn certified_merge_fixture() -> (CertifiedMergeLedgerReference, CommittedTransaction) {
         let key_pair = KeyPair::random();
-        let chain_id: crate::ChainId = "merge-query-proof".parse().expect("chain id");
         let authority = AccountId::new(key_pair.public_key().clone());
         let signed = TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62,7 +69,7 @@ mod certified_merge_inclusion_tests {
                 7,
                 5,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                Hash::new(b"chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&validators),
                 validators,
@@ -396,6 +403,10 @@ mod tests {
             height: 7,
             block_hash: [0xB7; 32],
         };
+        let pin_cursor = crate::sorafs::pin_registry::PinManifestFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0xC7; 32],
+        };
         let repair_cursor = crate::sorafs::moderation_ledger::RepairFinalizedCursorV1 {
             height: 8,
             block_hash: [0xA8; 32],
@@ -498,6 +509,19 @@ mod tests {
             sorafs::prelude::FindSorafsPopRevocationByNonceCommitment::new([0x22; 32]).into(),
             sorafs::prelude::FindSorafsPopAuditDigestBySequence::new(4).into(),
             sorafs::prelude::FindSorafsPopRegistryStatus.into(),
+            sorafs::prelude::FindSorafsPinManifest::new(
+                crate::sorafs::pin_registry::ManifestDigest::new([0x24; 32]),
+                Some(pin_cursor),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsPinManifests::new(
+                Some(pin_cursor),
+                Some(crate::sorafs::pin_registry::PinStatusKindV1::Approved),
+                Some(crate::sorafs::pin_registry::ManifestDigest::new([0x25; 32])),
+                25,
+                16 * 1024,
+            )
+            .into(),
             sorafs::prelude::FindSorafsRepairTask::new("REP-1".to_owned(), Some(repair_cursor))
                 .into(),
             sorafs::prelude::FindSorafsRepairTasks::new(Some(repair_cursor), Some([0x23; 32]), 25)

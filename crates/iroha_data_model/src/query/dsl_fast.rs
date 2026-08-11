@@ -1002,6 +1002,12 @@ mod codec_tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]))
     }
 
+    fn test_network_id() -> dm::NetworkId {
+        dm::NetworkId::from_genesis_hash(HashOf::<block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
+    }
+
     fn dummy_proof_entry() -> MerkleProof<transaction::TransactionEntrypoint> {
         MerkleProof::from_audit_path(0, vec![])
     }
@@ -1034,9 +1040,8 @@ mod codec_tests {
         ok: bool,
         metadata: dm::Metadata,
     ) -> query::CommittedTransaction {
-        let chain: dm::ChainId = "test-chain".parse().expect("chain id");
         let mut builder = signed::TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority.id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

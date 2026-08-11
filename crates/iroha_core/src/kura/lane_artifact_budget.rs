@@ -174,7 +174,7 @@ impl Kura {
             }
             let bundle = Self::decode_autonomous_lane_merge_bundle(
                 &execution.source_bundle,
-                execution.autonomous_chain_id_hash,
+                execution.autonomous_network_id,
                 execution.autonomous_epoch,
             )
             .map_err(|message| {

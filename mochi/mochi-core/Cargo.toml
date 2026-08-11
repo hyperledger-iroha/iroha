@@ -24,8 +24,6 @@ test-support = []
 
 [dependencies]
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
-iroha_config = { workspace = true }
-iroha_core = { workspace = true }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }

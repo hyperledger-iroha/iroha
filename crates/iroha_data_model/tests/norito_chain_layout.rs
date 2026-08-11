@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
-    ChainId, Level,
+    Level,
     account::AccountId,
     block::{SignedBlock, decode_framed_signed_block},
     isi::{InstructionBox, Log},
@@ -60,15 +60,13 @@ fn fixed_private_key() -> PrivateKey {
 fn sample_transaction(instruction_count: usize) -> SignedTransaction {
     let private_key = fixed_private_key();
     let authority = AccountId::new(fixed_public_key());
-    let chain: ChainId = "norito-chain-layout-test".parse().expect("chain id");
     let instructions = (0..instruction_count)
         .map(|index| {
             InstructionBox::from(Log::new(Level::INFO, format!("layout instruction {index}")))
         })
         .collect::<Vec<_>>();
 
-    TransactionBuilder::new(
-        chain,
+    TransactionBuilder::new_genesis(
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

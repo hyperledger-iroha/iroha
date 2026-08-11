@@ -10,6 +10,7 @@ public sealed class SignedQueryBuilder
 {
     private const byte SignedQueryVersion = 1;
 
+    private readonly byte[] networkIdBytes;
     private ManagedSingularQueryKind? singularQueryKind;
     private string? subjectAccountId;
     private string? dataspaceAlias;
@@ -31,12 +32,16 @@ public sealed class SignedQueryBuilder
     private ulong? dataspaceId;
     private ulong? dataspaceOwnerId;
 
-    public SignedQueryBuilder(string authorityAccountId)
+    public SignedQueryBuilder(string authorityAccountId, string networkId)
     {
         AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
+        networkIdBytes = SignedQueryRequestContext.DecodeNetworkId(networkId, nameof(networkId));
+        NetworkId = networkId;
     }
 
     public string AuthorityAccountId { get; }
+
+    public string NetworkId { get; }
 
     public SignedQueryBuilder FindExecutorDataModel()
     {
@@ -191,6 +196,20 @@ public sealed class SignedQueryBuilder
 
     public SignedQueryEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
+        var (creationTimeMilliseconds, nonce) = SignedQueryRequestContext.CreateFresh();
+        return BuildSigned(
+            privateKeySeed,
+            creationTimeMilliseconds,
+            SignedQueryRequestContext.DefaultTimeToLiveMilliseconds,
+            nonce);
+    }
+
+    public SignedQueryEnvelope BuildSigned(
+        ReadOnlySpan<byte> privateKeySeed,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
+    {
         if (!singularQueryKind.HasValue)
         {
             throw new InvalidOperationException("Queries must select a singular request before signing.");
@@ -199,11 +218,15 @@ public sealed class SignedQueryBuilder
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
-        var payloadBytes = EncodeQueryRequestWithAuthority(context);
+        var payloadBytes = EncodeQueryRequestWithAuthority(
+            context,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce);
         var payloadHash = IrohaHash.Hash(payloadBytes);
         var signatureBytes = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
-        var signedQuery = new OfflineNoritoWriter();
+        var signedQuery = new CanonicalNoritoWriter();
         signedQuery.WriteField(context.EncodeConstVec(signatureBytes));
         signedQuery.WriteField(payloadBytes);
         var signedQueryBytes = signedQuery.ToArray();
@@ -215,12 +238,20 @@ public sealed class SignedQueryBuilder
         return new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, payloadBytes, signatureBytes);
     }
 
-    private byte[] EncodeQueryRequestWithAuthority(TransactionEncodingContext context)
+    private byte[] EncodeQueryRequestWithAuthority(
+        TransactionEncodingContext context,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAccountId(AuthorityAccountId));
-        writer.WriteField(EncodeQueryRequest(context));
-        return writer.ToArray();
+        return SignedQueryRequestContext.EncodePayload(
+            context,
+            networkIdBytes,
+            AuthorityAccountId,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce,
+            EncodeQueryRequest(context));
     }
 
     private byte[] EncodeQueryRequest(TransactionEncodingContext context)
@@ -256,7 +287,7 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindAliasesByAccountId(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeAccountId(RequireSelected(subjectAccountId, nameof(subjectAccountId))));
         writer.WriteField(context.EncodeOptionalString(dataspaceAlias));
         writer.WriteField(context.EncodeOptionalString(domain));
@@ -265,7 +296,7 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindAssetById(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeAssetId(
             RequireSelected(assetDefinitionId, nameof(assetDefinitionId)),
             RequireSelected(subjectAccountId, nameof(subjectAccountId)),
@@ -275,21 +306,21 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindAssetDefinitionById(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeAssetDefinitionId(RequireSelected(assetDefinitionId, nameof(assetDefinitionId))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindContractManifestByCodeHash(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeHashLiteral(RequireSelected(codeHash, nameof(codeHash))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindProofRecordById(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeString(RequireSelected(proofBackend, nameof(proofBackend))));
         writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(proofHash, nameof(proofHash)), expectedLength: 32));
         return writer.ToArray();
@@ -297,7 +328,7 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindTwitterBindingByHash(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeString(RequireSelected(twitterPepperId, nameof(twitterPepperId))));
         writer.WriteField(context.EncodeHashLiteral(RequireSelected(twitterBindingDigest, nameof(twitterBindingDigest))));
         return writer.ToArray();
@@ -305,42 +336,42 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindDomainId(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeName(RequireSelected(domain, nameof(domain))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDomainCommittee(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeString(RequireSelected(committeeId, nameof(committeeId))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByTicket(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(storageTicket, nameof(storageTicket)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByManifest(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(manifestDigest, nameof(manifestDigest)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByAlias(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeString(RequireSelected(pinAlias, nameof(pinAlias))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByLaneEpochSequence(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeUInt32(RequireSelected(laneId, nameof(laneId))));
         writer.WriteField(context.EncodeUInt64(RequireSelected(pinEpoch, nameof(pinEpoch))));
         writer.WriteField(context.EncodeUInt64(RequireSelected(pinSequence, nameof(pinSequence))));
@@ -349,14 +380,14 @@ public sealed class SignedQueryBuilder
 
     private byte[] EncodeFindSorafsProviderOwner(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(providerId, nameof(providerId)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDataspaceNameOwnerById(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeUInt64(RequireSelected(dataspaceOwnerId, nameof(dataspaceOwnerId))));
         return writer.ToArray();
     }
@@ -374,7 +405,7 @@ public sealed class SignedQueryBuilder
 
     private static byte[] EncodeEnumVariant(uint discriminant, params byte[][] fields)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(discriminant);
         foreach (var field in fields)
         {

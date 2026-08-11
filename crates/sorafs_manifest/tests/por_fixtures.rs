@@ -23,6 +23,7 @@ fn read_fixture(path: &str) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
 
+#[cfg(unix)]
 fn seed_generator_inputs(root: &Path) {
     for directory in [
         "por",
@@ -60,6 +61,7 @@ fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
         .expect("run deterministic SoraFS fixture generator")
 }
 
+#[cfg(unix)]
 fn assert_generator_success(output: &std::process::Output, mode: &str) {
     assert!(
         output.status.success(),
@@ -69,12 +71,14 @@ fn assert_generator_success(output: &std::process::Output, mode: &str) {
     );
 }
 
+#[cfg(unix)]
 fn regenerate_fixtures(root: &Path) {
     seed_generator_inputs(root);
     let write = run_generator(root, &["--write"]);
     assert_generator_success(&write, "--write");
 }
 
+#[cfg(unix)]
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap_or_else(|error| {
         panic!(
@@ -128,6 +132,7 @@ fn por_fixture_generator_requires_exactly_one_explicit_mode() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() {
     let root = tempdir().expect("create adversarial fixture directory");
@@ -386,6 +391,7 @@ fn moderation_governance_node_fixture_is_typed_and_signed() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn governance_sdk_fixture_regeneration_is_byte_identical() {
     const INVENTORIED_FILES: [&str; 26] = [
@@ -441,6 +447,7 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
     const INVENTORIED_FILES: [&str; 27] = [

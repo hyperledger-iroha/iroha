@@ -101,7 +101,7 @@
           "native_amx_receipts": [
             {
               "authority_context_height": 40,
-              "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+              "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
               "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
               "dataspace_id": 11,
               "lane_block_height": 42,
@@ -211,7 +211,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -824,7 +824,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -1368,7 +1368,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -1981,7 +1981,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -2430,7 +2430,7 @@
             },
             {
               "authority_context_height": 40,
-              "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+              "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
               "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
               "dataspace_id": 11,
               "lane_block_height": 42,
@@ -2540,7 +2540,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -3153,7 +3153,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -3697,7 +3697,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -4310,7 +4310,7 @@
                     ],
                     "body": {
                       "authority_context_height": 40,
-                      "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                      "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                       "coordinator_dataspace_id": 11,
                       "coordinator_lane_block_view": 9,
                       "coordinator_lane_id": 7,
@@ -4827,7 +4827,7 @@
       "native_amx_receipts": [
         {
           "authority_context_height": 40,
-          "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+          "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
           "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
           "dataspace_id": 11,
           "lane_block_height": 42,
@@ -4937,7 +4937,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -5550,7 +5550,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -6094,7 +6094,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -6707,7 +6707,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -7156,7 +7156,7 @@
         },
         {
           "authority_context_height": 40,
-          "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+          "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
           "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
           "dataspace_id": 11,
           "lane_block_height": 42,
@@ -7266,7 +7266,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -7879,7 +7879,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -8423,7 +8423,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -9036,7 +9036,7 @@
                 ],
                 "body": {
                   "authority_context_height": 40,
-                  "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                  "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                   "coordinator_dataspace_id": 11,
                   "coordinator_lane_block_view": 9,
                   "coordinator_lane_id": 7,
@@ -10774,7 +10774,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -11387,7 +11387,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -11935,7 +11935,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -12548,7 +12548,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -13089,7 +13089,7 @@
                 "native_amx_receipts": [
                   {
                     "authority_context_height": 40,
-                    "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                    "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                     "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
                     "dataspace_id": 11,
                     "lane_block_height": 42,
@@ -13199,7 +13199,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -13812,7 +13812,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -14356,7 +14356,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -14969,7 +14969,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -15418,7 +15418,7 @@
                   },
                   {
                     "authority_context_height": 40,
-                    "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                    "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                     "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
                     "dataspace_id": 11,
                     "lane_block_height": 42,
@@ -15528,7 +15528,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -16141,7 +16141,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -16685,7 +16685,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -17298,7 +17298,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -17916,7 +17916,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -18529,7 +18529,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -19077,7 +19077,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -19690,7 +19690,7 @@
               ],
               "body": {
                 "authority_context_height": 40,
-                "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_block_view": 9,
                 "coordinator_lane_id": 7,
@@ -20231,7 +20231,7 @@
                 "native_amx_receipts": [
                   {
                     "authority_context_height": 40,
-                    "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                    "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                     "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
                     "dataspace_id": 11,
                     "lane_block_height": 42,
@@ -20341,7 +20341,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -20954,7 +20954,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -21498,7 +21498,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -22111,7 +22111,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -22560,7 +22560,7 @@
                   },
                   {
                     "authority_context_height": 40,
-                    "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                    "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                     "coordinator_proposal_hash": "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
                     "dataspace_id": 11,
                     "lane_block_height": 42,
@@ -22670,7 +22670,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -23283,7 +23283,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -23827,7 +23827,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,
@@ -24440,7 +24440,7 @@
                           ],
                           "body": {
                             "authority_context_height": 40,
-                            "chain_id_hash": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
+                            "network_id": "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628",
                             "coordinator_dataspace_id": 11,
                             "coordinator_lane_block_view": 9,
                             "coordinator_lane_id": 7,

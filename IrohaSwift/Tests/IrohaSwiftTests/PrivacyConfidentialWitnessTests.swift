@@ -24,7 +24,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
     func testTransferWitnessRejectsPublicAmountAndMissingOutput() throws {
         let input = try note()
         let publicAmount = try PrivacyConfidentialWitnessV1(
-            chainId: "taira",
+            networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
             treeCommitments: [bytes(2)],
@@ -43,7 +43,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         let input = try note()
         XCTAssertThrowsError(
             try PrivacyConfidentialWitnessV1(
-                chainId: "taira",
+                networkId: TestNetworkIds.canonical,
                 assetDefinitionId: "xor#taira",
                 spendKey: bytes(1),
                 treeCommitments: [bytes(2)],
@@ -77,7 +77,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
 
     private func transferWitness() throws -> PrivacyConfidentialWitnessV1 {
         try PrivacyConfidentialWitnessV1(
-            chainId: "taira",
+            networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
             treeCommitments: [bytes(2)],
@@ -91,7 +91,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
 
     private func unshieldWitness() throws -> PrivacyConfidentialWitnessV1 {
         try PrivacyConfidentialWitnessV1(
-            chainId: "taira",
+            networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
             treeCommitments: [bytes(2)],

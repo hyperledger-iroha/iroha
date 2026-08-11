@@ -64,11 +64,17 @@ pub(crate) fn validate_committed_public_balance_scope(
     let execution_dataspace = coherent_execution_dataspace(state_transaction)?;
     match (definition.balance_scope_policy(), scope) {
         (AssetBalancePolicy::Global, AssetBalanceScope::Global) => {
-            ensure_global_asset_write_on_authoritative_route(
-                state_transaction,
-                definition_id,
-                operation,
-            )?;
+            if let Some(route) = execution_dataspace
+                && route != DataSpaceId::UNIVERSAL
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "global public balance scope {operation} must execute on the universal coordinator; current route is {}",
+                        route.as_u64(),
+                    )
+                    .into(),
+                ));
+            }
         }
         (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
             if dataspace == DataSpaceId::UNIVERSAL {

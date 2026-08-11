@@ -710,15 +710,34 @@ fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
         .and_then(|schema| schema.get("$ref"))
         .and_then(Value::as_str);
     assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+    assert!(prove_post.get("security").is_some(), "prove POST auth");
+    assert_eq!(
+        prove_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .and_then(|headers| headers.get("Cache-Control"))
+            .and_then(Value::as_object)
+            .and_then(|header| header.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str),
+        Some("private, no-store")
+    );
     let job_path = paths
         .get("/v1/zk/ivm/prove/{job_id}")
         .and_then(Value::as_object)
         .expect("prove job path");
     for method in ["get", "delete"] {
-        let pattern = job_path
+        let operation = job_path
             .get(method)
             .and_then(Value::as_object)
-            .and_then(|operation| operation.get("parameters"))
+            .expect("prove job operation");
+        let pattern = operation
+            .get("parameters")
             .and_then(Value::as_array)
             .and_then(|parameters| parameters.first())
             .and_then(Value::as_object)
@@ -727,6 +746,24 @@ fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
             .and_then(|schema| schema.get("pattern"))
             .and_then(Value::as_str);
         assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{method} path id");
+        assert!(operation.get("security").is_some(), "{method} job auth");
+        assert_eq!(
+            operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .and_then(|headers| headers.get("Cache-Control"))
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("private, no-store"),
+            "{method} cache policy"
+        );
     }
 
     let schemas = doc
@@ -835,6 +872,28 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             && !schemas.contains_key("GovernanceZkPublicInputsV1"),
         "legacy ZK ballot schemas must not enter the first-release OpenAPI"
     );
+    let capabilities_path = iroha_torii_shared::uri::GOV_CAPABILITIES;
+    let capabilities_operation = openapi_operation(&document, capabilities_path, "get");
+    assert_eq!(
+        operation_response_schema_ref(capabilities_operation, "200", capabilities_path),
+        "#/components/schemas/GovernanceCapabilitiesV1"
+    );
+    let capability_properties = schemas
+        .get("GovernanceCapabilitiesV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .expect("governance capabilities properties");
+    assert_eq!(
+        capability_properties
+            .get("network_id")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str),
+        Some("#/components/schemas/NetworkId")
+    );
+    assert!(!capability_properties.contains_key("chain_id"));
+    assert!(!capability_properties.contains_key("genesis_hash"));
 
     let cases: [(&str, &str, &[&str]); 9] = [
         (
@@ -863,11 +922,11 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
                 "amount",
                 "authority",
                 "backend",
-                "chain_id",
                 "direction",
                 "duration_blocks",
                 "election_id",
                 "envelope_b64",
+                "network_id",
                 "nullifier",
                 "owner",
                 "root_hint",
@@ -876,7 +935,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         (
             "/v1/gov/ballots/zk-v1/ballot-proof",
             "GovernanceZkBallotProofRequestV1",
-            &["authority", "ballot", "chain_id", "election_id"],
+            &["authority", "ballot", "election_id", "network_id"],
         ),
         (
             "/v1/gov/ballots/plain",
@@ -884,9 +943,9 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             &[
                 "amount",
                 "authority",
-                "chain_id",
                 "direction",
                 "duration_blocks",
+                "network_id",
                 "owner",
                 "referendum_id",
             ],
@@ -894,7 +953,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         (
             "/v1/gov/parliament/ballots",
             "GovernanceParliamentBallotRequestV1",
-            &["authority", "body", "chain_id", "decision", "proposal_id"],
+            &["authority", "body", "decision", "network_id", "proposal_id"],
         ),
         (
             "/v1/gov/finalize",
@@ -912,6 +971,40 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             &["authority", "namespaces"],
         ),
     ];
+
+    for path in [
+        "/v1/gov/ballots/zk-v1",
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "/v1/gov/ballots/plain",
+        "/v1/gov/parliament/ballots",
+    ] {
+        let operation = openapi_operation(&document, path, "post");
+        assert!(
+            operation.get("x-iroha-canonical-auth-v1").is_some(),
+            "POST {path} must publish canonical one-shot authentication"
+        );
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            description.contains("exact-network request authority"),
+            "POST {path} must document exact-network authentication"
+        );
+        let headers = operation_header_requirements(operation);
+        for expected in [
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+            "X-Iroha-Witness",
+        ] {
+            assert!(
+                headers.iter().any(|(name, _required)| name == expected),
+                "POST {path} must document canonical auth header `{expected}`"
+            );
+        }
+    }
 
     for (path, schema_name, expected_properties) in cases {
         let request_ref = paths
@@ -964,30 +1057,30 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             &[
                 "authority",
                 "backend",
-                "chain_id",
                 "election_id",
                 "envelope_b64",
+                "network_id",
             ][..],
         ),
         (
             "GovernanceZkBallotProofRequestV1",
-            &["authority", "ballot", "chain_id", "election_id"][..],
+            &["authority", "ballot", "election_id", "network_id"][..],
         ),
         (
             "GovernancePlainBallotRequestV1",
             &[
                 "amount",
                 "authority",
-                "chain_id",
                 "direction",
                 "duration_blocks",
+                "network_id",
                 "owner",
                 "referendum_id",
             ][..],
         ),
         (
             "GovernanceParliamentBallotRequestV1",
-            &["authority", "body", "chain_id", "decision", "proposal_id"][..],
+            &["authority", "body", "decision", "network_id", "proposal_id"][..],
         ),
         (
             "GovernanceFinalizeRequestV1",
@@ -1189,27 +1282,31 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         );
     }
 
-    for (schema_name, fields) in [
-        ("GovernanceZkBallotEnvelopeRequestV1", &["chain_id"][..]),
-        ("GovernanceZkBallotProofRequestV1", &["chain_id"][..]),
-        ("GovernancePlainBallotRequestV1", &["chain_id"][..]),
-        ("GovernanceParliamentBallotRequestV1", &["chain_id"][..]),
+    for schema_name in [
+        "GovernanceZkBallotEnvelopeRequestV1",
+        "GovernanceZkBallotProofRequestV1",
+        "GovernancePlainBallotRequestV1",
+        "GovernanceParliamentBallotRequestV1",
     ] {
-        for field in fields {
-            assert_eq!(
-                schemas
-                    .get(schema_name)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("properties"))
-                    .and_then(Value::as_object)
-                    .and_then(|properties| properties.get(*field))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("pattern"))
-                    .and_then(Value::as_str),
-                Some(GOVERNANCE_EXACT_TOKEN_PATTERN),
-                "{schema_name}.{field} must publish the runtime's exact token grammar"
-            );
-        }
+        let properties = schemas
+            .get(schema_name)
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("missing `{schema_name}` properties"));
+        assert_eq!(
+            properties
+                .get("network_id")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NetworkId"),
+            "{schema_name}.network_id must use the exact typed network identity"
+        );
+        assert!(
+            !properties.contains_key("chain_id"),
+            "{schema_name} must reject the retired chain_id key"
+        );
     }
 
     for (schema_name, field) in [

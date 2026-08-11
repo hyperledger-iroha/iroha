@@ -72,18 +72,13 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
     public let trustedCheckpointHeight: UInt64
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         recipient: String,
         chainDiscriminant: UInt16,
         receiverDeviceID: String,
         assetDefinitionID: String,
         trustedCheckpointHeight: UInt64
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(
-            chainID,
-            field: "lineageQuery.chainID",
-            maximum: 256
-        )
         _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
             recipient,
             field: "lineageQuery.recipient",
@@ -98,7 +93,7 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
               let archive = try NoritoNativeBridge.shared
                   .kagemushaRecipientLineageQueryCreateV2(
                       chainDiscriminant: chainDiscriminant,
-                      chainID: Data(chainID.utf8),
+                      networkID: networkID,
                       recipient: Data(recipient.utf8),
                       receiverDeviceID: Data(receiverDeviceID.utf8),
                       assetDefinitionID: Data(assetDefinitionID.utf8),
@@ -464,6 +459,8 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
 public struct KagemushaTopUpAnchor: Equatable, Sendable {
     private let archive: Data
     private let anchorDigest: Data
+    /// Exact genesis-derived network identity authenticated by the anchor.
+    public let networkId: NetworkId
     /// Operation identity authenticated by the finalized anchor.
     public let operationId: String
     /// Transaction hash authenticated by the finalized anchor.
@@ -487,6 +484,7 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
         )
         self.archive = Data(wireValue.noritoArchive)
         self.anchorDigest = Data(wireValue.anchorDigest)
+        self.networkId = wireValue.networkID
         self.operationId = wireValue.topUpOperationID.hexLowercased()
         self.finalizedTransactionHash = wireValue.finalizedTransactionHash.hexLowercased()
         self.finalizedBlockHeight = wireValue.finalizedHeight
@@ -595,8 +593,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
     public let snapshotVersion: UInt64?
     public let dataspace: UInt64?
     public let lane: UInt32?
-    public let nextMinHandleEra: UInt64?
-    public let nextMinSubNonce: UInt64?
+    public let activeHandleEra: UInt64?
+    public let nextHandleCounter: UInt64?
 
     public init(
         code: String? = nil,
@@ -604,8 +602,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
         snapshotVersion: UInt64? = nil,
         dataspace: UInt64? = nil,
         lane: UInt32? = nil,
-        nextMinHandleEra: UInt64? = nil,
-        nextMinSubNonce: UInt64? = nil
+        activeHandleEra: UInt64? = nil,
+        nextHandleCounter: UInt64? = nil
     ) throws {
         self.code = try code.map {
             try KagemushaOperationValidation.exactText($0, field: "error.details.axt.code")
@@ -616,8 +614,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
         self.snapshotVersion = snapshotVersion
         self.dataspace = dataspace
         self.lane = lane
-        self.nextMinHandleEra = nextMinHandleEra
-        self.nextMinSubNonce = nextMinSubNonce
+        self.activeHandleEra = activeHandleEra
+        self.nextHandleCounter = nextHandleCounter
     }
 }
 
@@ -1136,12 +1134,12 @@ public enum KagemushaOperationCodec {
             compact: compact,
             decode: { try $0.readUInt32LE() }
         )
-        let nextMinHandleEra = try readOptionalScalarField(
+        let activeHandleEra = try readOptionalScalarField(
             &reader,
             compact: compact,
             decode: { try $0.readUInt64LE() }
         )
-        let nextMinSubNonce = try readOptionalScalarField(
+        let nextHandleCounter = try readOptionalScalarField(
             &reader,
             compact: compact,
             decode: { try $0.readUInt64LE() }
@@ -1152,8 +1150,8 @@ public enum KagemushaOperationCodec {
             snapshotVersion: snapshotVersion,
             dataspace: dataspace,
             lane: lane,
-            nextMinHandleEra: nextMinHandleEra,
-            nextMinSubNonce: nextMinSubNonce
+            activeHandleEra: activeHandleEra,
+            nextHandleCounter: nextHandleCounter
         )
     }
 

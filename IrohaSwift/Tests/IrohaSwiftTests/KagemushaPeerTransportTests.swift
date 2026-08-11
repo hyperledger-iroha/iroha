@@ -150,8 +150,8 @@ final class KagemushaPeerTransportTests: XCTestCase {
         let message = try IrohaPeerKagemushaAdapterV1.wrap(.receiveRequest(offer))
 
         XCTAssertEqual(
-            projection.request.payload.chainID,
-            "fc56984b-2be7-431d-840e-21514d1883f0"
+            projection.request.payload.networkID,
+            TestNetworkIds.canonical
         )
         XCTAssertEqual(
             projection.request.payload.assetDefinitionID,

@@ -1,4 +1,3 @@
-
 #[test]
 fn finalized_remote_only_block_retains_header_across_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");

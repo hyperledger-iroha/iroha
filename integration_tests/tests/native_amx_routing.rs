@@ -41,7 +41,7 @@ use iroha::{
             },
             sorafs::{
                 CompleteReplicationOrder, IssueReplicationOrder, RegisterPinManifest,
-                RegisterProviderOwner, SetProviderIngestCompletionAuthority,
+                SetProviderIngestCompletionAuthority,
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -105,8 +105,7 @@ use iroha_core::{da::proof_policy_bundle, kura::Kura};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::sorafs::{
-    CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder, CanRegisterSorafsPin,
-    CanRegisterSorafsProviderOwner,
+    CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
@@ -496,10 +495,24 @@ fn musubi_fault_replica_providers() -> [ProviderId; 3] {
 }
 
 fn musubi_fault_localnet_builder() -> NetworkBuilder {
-    localnet_builder().with_genesis_instruction(Grant::account_permission(
-        Permission::from(CanRegisterSorafsProviderOwner),
-        ALICE_ID.clone(),
-    ))
+    let owner = ALICE_ID
+        .canonical_i105()
+        .expect("canonical SoraFS provider owner");
+    let provider_owners = musubi_fault_replica_providers()
+        .into_iter()
+        .map(|provider| {
+            (
+                hex::encode(provider.as_bytes()),
+                TomlValue::String(owner.clone()),
+            )
+        })
+        .collect::<Table>();
+    localnet_builder().with_config_layer(move |layer| {
+        layer.write(
+            ["governance", "sorafs_provider_owners"],
+            TomlValue::Table(provider_owners.clone()),
+        );
+    })
 }
 
 fn musubi_fault_package() -> MusubiPackageIdV1 {
@@ -679,7 +692,7 @@ fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinali
 
 fn musubi_fault_provider_attestations(
     client: &Client,
-    genesis_hash: [u8; 32],
+    _genesis_hash: [u8; 32],
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
     order_id: ReplicationOrderId,
@@ -691,8 +704,7 @@ fn musubi_fault_provider_attestations(
             let payload = MusubiProviderBundleVerificationPayloadV1 {
                 version: MUSUBI_REGISTRY_VERSION_V1,
                 binding: MusubiProviderBundleVerificationBindingV1 {
-                    chain_id: client.chain.clone(),
-                    genesis_block_hash: genesis_hash,
+                    network_id: client.network_id,
                     provider_id: provider,
                     completed_by: client.account.clone(),
                     completion_authority: musubi_fault_completion_authority(
@@ -965,7 +977,7 @@ fn musubi_fault_snapshot_and_time(
 
 fn musubi_fault_staging_receipt(
     client: &Client,
-    genesis_block_hash: [u8; 32],
+    _genesis_block_hash: [u8; 32],
     latest_time_ms: u64,
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
@@ -974,8 +986,7 @@ fn musubi_fault_staging_receipt(
     let payload = MusubiSeedIngressReceiptPayloadV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
         binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: client.chain.clone(),
-            genesis_block_hash,
+            network_id: client.network_id,
             publisher: client.account.clone(),
             ingress_broker: client.account.clone(),
             seed_provider: musubi_fault_provider(),
@@ -1020,15 +1031,8 @@ async fn prepare_selectable_musubi_publication(
     context: &str,
 ) -> Result<SelectableMusubiPublicationFixture> {
     let providers = musubi_fault_replica_providers();
-    let mut provider_instructions = Vec::with_capacity(providers.len() * 2);
+    let mut provider_instructions = Vec::with_capacity(providers.len());
     for provider in providers {
-        provider_instructions.push(
-            Box::new(RegisterProviderOwner::new(
-                provider,
-                submitter.account.clone(),
-            ))
-            .into_instruction_box(),
-        );
         provider_instructions.push(InstructionBox::from(
             SetProviderIngestCompletionAuthority::new(
                 provider,
@@ -1121,7 +1125,6 @@ async fn prepare_selectable_musubi_publication(
             pin_manifest
                 .encode()
                 .wrap_err("encode selectable Musubi pin manifest")?,
-            1,
             None,
             None,
         ))],
@@ -1143,13 +1146,16 @@ async fn prepare_selectable_musubi_publication(
         .validate()
         .wrap_err("validate selectable Musubi replication order")?;
     let issue_transaction = submitter.build_transaction(
-        [InstructionBox::from(IssueReplicationOrder::new(
-            replication_order,
-            norito::encode_canonical(&canonical_order)
-                .wrap_err("encode selectable Musubi replication order")?,
-            2,
-            MUSUBI_FAULT_RETENTION_EPOCH,
-        ))],
+        [InstructionBox::from(
+            IssueReplicationOrder::new(
+                replication_order,
+                norito::encode_canonical(&canonical_order)
+                    .wrap_err("encode selectable Musubi replication order")?,
+                2,
+                MUSUBI_FAULT_RETENTION_EPOCH,
+            )
+            .for_musubi_archive(commitment.archive_id()),
+        )],
         FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );

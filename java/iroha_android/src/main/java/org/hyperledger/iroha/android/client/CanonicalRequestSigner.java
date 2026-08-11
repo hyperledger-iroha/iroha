@@ -14,6 +14,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /**
  * Builds canonical request signatures for Torii app endpoints.
@@ -28,8 +30,10 @@ public final class CanonicalRequestSigner {
   public static final String BODY_TIMESTAMP_MS = "timestamp_ms";
   public static final String BODY_NONCE = "nonce";
   public static final String BODY_SIGNATURE_BASE64 = "signature_base64";
-  public static final String BODY_WITNESS_BASE64 = "witness_base64";
+  private static final String BODY_WITNESS_BASE64 = "witness_base64";
   private static final SecureRandom NONCE_RANDOM = new SecureRandom();
+  private static final byte[] NETWORK_DOMAIN =
+      "iroha.app.request.network.v1\0".getBytes(StandardCharsets.UTF_8);
 
   private CanonicalRequestSigner() {}
 
@@ -95,22 +99,22 @@ public final class CanonicalRequestSigner {
   }
 
   /**
-   * Build canonical request bytes for signing with freshness metadata.
+   * Build canonical request bytes bound to an exact network and freshness metadata.
    */
   public static byte[] canonicalRequestSignatureMessage(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final byte[] body,
       final long timestampMs,
       final String nonce) {
     requireExactNonBlank(nonce, "nonce");
-    final String rendered =
-        new String(canonicalRequestMessage(method, uri, body), StandardCharsets.UTF_8)
-            + "\n"
-            + timestampMs
-            + "\n"
-            + nonce;
-    return rendered.getBytes(StandardCharsets.UTF_8);
+    Objects.requireNonNull(networkId, "networkId");
+    return concat(
+        NETWORK_DOMAIN,
+        networkId.bytes(),
+        canonicalRequestMessage(method, uri, body),
+        ("\n" + timestampMs + "\n" + nonce).getBytes(StandardCharsets.UTF_8));
   }
 
   /**
@@ -127,19 +131,21 @@ public final class CanonicalRequestSigner {
    * Build body-auth canonical request bytes plus freshness metadata.
    */
   public static byte[] canonicalBodyAuthSignatureMessage(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
       final long timestampMs,
       final String nonce) {
     return canonicalRequestSignatureMessage(
-        method, uri, unsignedBodyAuthJson(bodyFields), timestampMs, nonce);
+        networkId, method, uri, unsignedBodyAuthJson(bodyFields), timestampMs, nonce);
   }
 
   /**
    * Build the top-level fields required for single-signature body auth with callback signing.
    */
   public static Map<String, Object> buildBodySignatureFields(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
@@ -150,6 +156,7 @@ public final class CanonicalRequestSigner {
       throw new IllegalArgumentException("canonicalAuth is required");
     }
     return buildBodySignatureFields(
+        networkId,
         method,
         uri,
         bodyFields,
@@ -160,6 +167,7 @@ public final class CanonicalRequestSigner {
   }
 
   private static Map<String, Object> buildBodySignatureFields(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
@@ -170,7 +178,7 @@ public final class CanonicalRequestSigner {
     final Map<String, Object> unsigned =
         bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
     final byte[] message =
-        canonicalBodyAuthSignatureMessage(method, uri, unsigned, timestampMs, nonce);
+        canonicalBodyAuthSignatureMessage(networkId, method, uri, unsigned, timestampMs, nonce);
     final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
     final Map<String, Object> fields = new LinkedHashMap<>();
     fields.put(BODY_ACCOUNT_ID, accountId);
@@ -184,6 +192,7 @@ public final class CanonicalRequestSigner {
    * Return a copy of {@code bodyFields} carrying single-signature body auth.
    */
   public static Map<String, Object> withBodySignature(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
@@ -192,23 +201,9 @@ public final class CanonicalRequestSigner {
       final String nonce) {
     final Map<String, Object> body = new LinkedHashMap<>(bodyFields);
     body.remove(BODY_WITNESS_BASE64);
-    body.putAll(buildBodySignatureFields(method, uri, body, canonicalAuth, timestampMs, nonce));
-    return body;
-  }
-
-  /**
-   * Return a copy of {@code bodyFields} carrying a prebuilt multisig witness body auth proof.
-   */
-  public static Map<String, Object> withBodyWitness(
-      final Map<String, Object> bodyFields,
-      final String accountId,
-      final long timestampMs,
-      final String nonce,
-      final String witnessBase64) {
-    requireExactNonBlank(witnessBase64, "witnessBase64");
-    final Map<String, Object> body =
-        bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
-    body.put(BODY_WITNESS_BASE64, witnessBase64);
+    body.putAll(
+        buildBodySignatureFields(
+            networkId, method, uri, body, canonicalAuth, timestampMs, nonce));
     return body;
   }
 
@@ -216,11 +211,13 @@ public final class CanonicalRequestSigner {
    * Build canonical signing headers including freshness metadata.
    */
   public static Map<String, String> buildHeaders(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
     return buildHeaders(
+        networkId,
         method,
         uri,
         body,
@@ -233,6 +230,7 @@ public final class CanonicalRequestSigner {
    * Build canonical signing headers with explicit freshness metadata.
    */
   public static Map<String, String> buildHeaders(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final byte[] body,
@@ -243,6 +241,7 @@ public final class CanonicalRequestSigner {
       throw new IllegalArgumentException("canonicalAuth is required");
     }
     return buildHeaders(
+        networkId,
         method,
         uri,
         body,
@@ -253,6 +252,7 @@ public final class CanonicalRequestSigner {
   }
 
   private static Map<String, String> buildHeaders(
+      final NetworkId networkId,
       final String method,
       final URI uri,
       final byte[] body,
@@ -263,7 +263,7 @@ public final class CanonicalRequestSigner {
     requireExactNonBlank(accountId, "accountId");
     requireExactNonBlank(nonce, "nonce");
     final byte[] message =
-        canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce);
+        canonicalRequestSignatureMessage(networkId, method, uri, body, timestampMs, nonce);
     final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
     final Map<String, String> headers = new HashMap<>();
     headers.put(HEADER_ACCOUNT, accountId);
@@ -309,6 +309,20 @@ public final class CanonicalRequestSigner {
         || Character.isWhitespace(value.charAt(value.length() - 1))) {
       throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
     }
+  }
+
+  private static byte[] concat(final byte[]... parts) {
+    int length = 0;
+    for (final byte[] part : parts) {
+      length = Math.addExact(length, part.length);
+    }
+    final byte[] joined = new byte[length];
+    int offset = 0;
+    for (final byte[] part : parts) {
+      System.arraycopy(part, 0, joined, offset, part.length);
+      offset += part.length;
+    }
+    return joined;
   }
 
   private static boolean isAllWhitespace(final String value) {

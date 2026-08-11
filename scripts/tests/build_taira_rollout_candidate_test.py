@@ -32,7 +32,7 @@ def _write(path: Path, payload: bytes) -> str:
 
 def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
     bundle = tmp_path / "bundle"
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     supervisor = tmp_path / "taira_peer_supervisor.py"
     binary_sha = _write(binary, b"native-macos-arm64-validator\n")
     supervisor_sha = _write(supervisor, b"native-supervisor\n")
@@ -194,7 +194,7 @@ def test_pack_deploy_payload_is_closed_deterministic_and_receipt_bound(
         for row in manifest["inventory"]
     )
     assert any(
-        row["kind"] == "file" and row["mode"] == "0500" and row["path"] == "bin/irohad"
+        row["kind"] == "file" and row["mode"] == "0500" and row["path"] == "bin/iroha3d"
         for row in manifest["inventory"]
     )
 

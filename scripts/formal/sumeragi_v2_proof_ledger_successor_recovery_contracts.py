@@ -825,7 +825,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             core_context,
             (
                 ".map(|certificate| self.register_parent_qc(certificate))",
-                "reducer::HeightContext::new( context_id, chain_id, context.height, parent_commit,",
+                "reducer::HeightContext::new( context_id, network_id, context.height, parent_commit,",
             ),
         )
         require_order(
@@ -1072,8 +1072,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "kura.v2_finality_artifact(height)?",
                 "let context = &artifact.height_context",
                 "let proofs_of_possession = &artifact.validator_set_pops",
-                "authenticate_certified_body_request(",
-                "verify_historical_quorum_certificate(",
+                "authenticate_certified_body_request_with_validator_pops(",
+                "let request = authenticated.request()",
                 "request.subject != artifact.subject",
                 "let Some(responder_position)",
                 ".position(|entry| entry.validator == responder_peer)",
@@ -2339,6 +2339,8 @@ def _async_historical_recovery_source_fidelity_errors(
         "HistoricalCommitDecisionResponseEvidence": (
             "/\\ candidate.evidence \\in asyncSentItems "
             '/\\ candidate.evidence.kind = "CommitCertificateResponse" '
+            "/\\ candidate.evidence.source = "
+            "candidate.evidence.envelope.request.envelope.recipient "
             "/\\ candidate.evidence.envelope.recipient = candidate.node "
             "/\\ candidate.evidence.envelope.qc = qc "
             "/\\ CommitCertificateRequestAuthorized( "

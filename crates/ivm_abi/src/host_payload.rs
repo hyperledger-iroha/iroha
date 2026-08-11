@@ -4,6 +4,7 @@
 //! and ledger host all use one nominal Norito schema at every protocol
 //! boundary.
 
+use iroha_data_model::NetworkId;
 use norito::core::DecodeLimits;
 use norito::{Decode, Encode};
 
@@ -85,8 +86,8 @@ pub struct VrfVerifyRequest {
     pub pk: Vec<u8>,
     /// Proof/signature bytes.
     pub proof: Vec<u8>,
-    /// Chain identifier.
-    pub chain_id: Vec<u8>,
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
     /// Input message bytes.
     pub input: Vec<u8>,
 }

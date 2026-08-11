@@ -10,6 +10,7 @@ from typing import Optional
 
 from iroha_python import (
     Ed25519KeyPair,
+    NetworkId,
     TransactionConfig,
     TransactionDraft,
     authority_fee_payment,
@@ -52,7 +53,11 @@ def build_sample_transaction(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build and optionally submit a sample transaction")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080", help="Torii base URL")
-    parser.add_argument("--chain-id", default="dev-chain", help="Target chain id")
+    parser.add_argument(
+        "--network-id",
+        required=True,
+        help="Exact canonical checksummed genesis-derived NetworkId literal",
+    )
     parser.add_argument(
         "--authority",
         required=True,
@@ -132,8 +137,13 @@ def main() -> None:
             parser.error("--fee-program and --fee-program-revision require --fee-payer sponsor")
         requested_fee_payment = authority_fee_payment(charge_limits=[])
 
+    try:
+        network_id = NetworkId.parse(args.network_id)
+    except ValueError as exc:
+        parser.error(f"--network-id must be canonical: {exc}")
+
     config = TransactionConfig(
-        chain_id=args.chain_id,
+        network_id=network_id,
         authority=args.authority,
         fee_payment=requested_fee_payment,
         ttl_ms=args.ttl_ms,

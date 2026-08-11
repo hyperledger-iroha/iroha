@@ -35,7 +35,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - `crates/` – Rust crates implementing Iroha components. Each crate has its own subdirectory, typically containing `src/`, `tests/`, `examples/`, and `benches/`.
   - Important crates include:
     - `iroha` – top-level library aggregating core functionality.
-    - `irohad` – daemon binary providing the node implementation.
+    - `irohad` – daemon crate providing the `iroha3d` node executable.
     - `ivm` – the Iroha Virtual Machine.
     - `iroha_cli` – command-line interface for interacting with a node.
     - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.

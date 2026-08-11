@@ -1584,6 +1584,7 @@ impl Execute for AggregateOracleFeed {
 
         let record = FeedEventRecord {
             event: output.into_feed_event(),
+            recorded_at_ms: state_transaction.block_unix_timestamp_ms(),
             evidence_hashes: self.evidence_hashes,
         };
 

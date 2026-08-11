@@ -9,7 +9,6 @@ namespace Hyperledger.Iroha.Transactions;
 
 internal sealed class TransactionEncodingContext
 {
-    private const ushort DefaultNetworkPrefix = AccountAddress.DefaultChainDiscriminant;
     private const byte AssetDefinitionVersion = 1;
 
     private static readonly Dictionary<CurveId, ulong> PublicKeyMultihashCodes = new()
@@ -30,23 +29,25 @@ internal sealed class TransactionEncodingContext
 
     public string AuthorityAccountId { get; }
 
-    public byte[] EncodeChainId(string chainId)
+    public byte[] EncodeNetworkDomain(NetworkId networkId)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))));
+        ArgumentNullException.ThrowIfNull(networkId);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt32LittleEndian(0);
+        writer.WriteField(networkId.AsSpan());
         return writer.ToArray();
     }
 
     public byte[] EncodeAccountId(string accountId)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeAccountController(accountId));
         return writer.ToArray();
     }
 
     public byte[] EncodeAccountController(string accountId)
     {
-        var parsed = AccountAddress.Parse(CanonicalizeDefaultAccountId(accountId), DefaultNetworkPrefix);
+        var parsed = AccountAddress.Parse(CanonicalizeAccountId(accountId));
         if (parsed.CurveIdentifier is null || parsed.PublicKey.Length == 0)
         {
             throw new ArgumentException("Multisig account controllers are not yet supported by the managed transaction encoder.", nameof(accountId));
@@ -60,7 +61,7 @@ internal sealed class TransactionEncodingContext
         var multihash = FormatPublicKeyMultihash(multihashCode, parsed.PublicKey);
         var keyPayload = EncodeString(multihash);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(0);
         writer.WriteField(keyPayload);
         return writer.ToArray();
@@ -69,8 +70,8 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeString(string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength((ulong)bytes.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteCompactLength((ulong)bytes.Length);
         writer.WriteBytes(bytes);
         return writer.ToArray();
     }
@@ -82,7 +83,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeOptionalString(string? value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (value is null)
         {
             writer.WriteByte(0);
@@ -102,14 +103,14 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeUInt32(uint value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(value);
         return writer.ToArray();
     }
 
     public byte[] EncodeUInt64(ulong value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt64LittleEndian(value);
         return writer.ToArray();
     }
@@ -133,7 +134,7 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeOption<T>(T? value, Func<T, byte[]> encoder)
         where T : struct
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (!value.HasValue)
         {
             writer.WriteByte(0);
@@ -148,16 +149,16 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeEmptyMetadata()
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength(0);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength(0);
         return writer.ToArray();
     }
 
     public byte[] EncodeMetadata(IReadOnlyDictionary<string, JsonNode?> metadata)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         var orderedKeys = metadata.Keys.OrderBy(static key => key, StringComparer.Ordinal).ToArray();
-        writer.WriteLength((ulong)orderedKeys.Length);
+        writer.WriteSequenceLength((ulong)orderedKeys.Length);
         foreach (var key in orderedKeys)
         {
             var entry = EncodeMetadataEntry(key, metadata[key]);
@@ -174,11 +175,11 @@ internal sealed class TransactionEncodingContext
             ? Array.Empty<byte>()
             : value.Mantissa.ToByteArray(isUnsigned: false, isBigEndian: false);
 
-        var mantissa = new OfflineNoritoWriter();
+        var mantissa = new CanonicalNoritoWriter();
         mantissa.WriteUInt32LittleEndian((uint)mantissaBytes.Length);
         mantissa.WriteBytes(mantissaBytes);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(mantissa.ToArray());
         writer.WriteField(EncodeUInt32((uint)value.Scale));
         return writer.ToArray();
@@ -186,11 +187,11 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeConstVec(ReadOnlySpan<byte> bytes)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength((ulong)bytes.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)bytes.Length);
         foreach (var value in bytes)
         {
-            writer.WriteLength(1);
+            writer.WriteCompactLength(1);
             writer.WriteByte(value);
         }
 
@@ -201,7 +202,7 @@ internal sealed class TransactionEncodingContext
     {
         var framedInstruction = instruction.EncodeFramedPayload(this);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeString(instruction.WireId));
         writer.WriteField(EncodeBytesVec(framedInstruction));
         return writer.ToArray();
@@ -209,14 +210,14 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeInstructionsExecutable(IReadOnlyList<TransactionInstruction> instructions)
     {
-        var instructionsWriter = new OfflineNoritoWriter();
-        instructionsWriter.WriteLength((ulong)instructions.Count);
+        var instructionsWriter = new CanonicalNoritoWriter();
+        instructionsWriter.WriteSequenceLength((ulong)instructions.Count);
         foreach (var instruction in instructions)
         {
             instructionsWriter.WriteField(EncodeInstruction(instruction));
         }
 
-        var executable = new OfflineNoritoWriter();
+        var executable = new CanonicalNoritoWriter();
         executable.WriteUInt32LittleEndian(0);
         executable.WriteField(instructionsWriter.ToArray());
         return executable.ToArray();
@@ -229,11 +230,11 @@ internal sealed class TransactionEncodingContext
             throw new ArgumentException("Executable batches must contain at least one item.", nameof(entries));
         }
 
-        var sequence = new OfflineNoritoWriter();
-        sequence.WriteLength((ulong)entries.Count);
+        var sequence = new CanonicalNoritoWriter();
+        sequence.WriteSequenceLength((ulong)entries.Count);
         foreach (var entry in entries)
         {
-            var item = new OfflineNoritoWriter();
+            var item = new CanonicalNoritoWriter();
             switch (entry)
             {
                 case TransactionBatchEntry.InstructionEntry instruction:
@@ -250,7 +251,7 @@ internal sealed class TransactionEncodingContext
             sequence.WriteField(item.ToArray());
         }
 
-        var executable = new OfflineNoritoWriter();
+        var executable = new CanonicalNoritoWriter();
         executable.WriteUInt32LittleEndian(4);
         executable.WriteField(sequence.ToArray());
         return executable.ToArray();
@@ -258,11 +259,11 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeContractInvocation(TransactionContractInvocation invocation)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeString(invocation.ContractAddress));
         writer.WriteField(invocation.ExpectedCodeHashSpan);
         writer.WriteField(EncodeString(invocation.Entrypoint));
-        var arguments = new OfflineNoritoWriter();
+        var arguments = new CanonicalNoritoWriter();
         if (invocation.HasArguments)
         {
             arguments.WriteByte(1);
@@ -278,7 +279,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeAssetId(string assetDefinitionId, string accountId, ulong? dataspaceId = null)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeAccountId(accountId));
         writer.WriteField(EncodeAssetDefinitionAddress(assetDefinitionId));
         writer.WriteField(EncodeAssetBalanceScope(dataspaceId));
@@ -294,7 +295,7 @@ internal sealed class TransactionEncodingContext
     {
         ArgumentNullException.ThrowIfNull(feePayment);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(feePayment.PayerTag);
         writer.WriteField(feePayment switch
         {
@@ -315,7 +316,7 @@ internal sealed class TransactionEncodingContext
             throw new ArgumentException($"Invalid NFT id `{nftId}`.", nameof(nftId));
         }
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeName(exactNftId[(separatorIndex + 1)..]));
         writer.WriteField(EncodeName(exactNftId[..separatorIndex]));
         return writer.ToArray();
@@ -329,28 +330,29 @@ internal sealed class TransactionEncodingContext
     public void EnsureAuthorityMatchesPrivateKey(ReadOnlySpan<byte> privateKeySeed)
     {
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
-        var expected = AccountAddress.FromPublicKey(publicKey, "ed25519").ToI105(DefaultNetworkPrefix);
-        if (!string.Equals(expected, AuthorityAccountId, StringComparison.Ordinal))
+        var authority = AccountAddress.Parse(AuthorityAccountId);
+        if (authority.CurveIdentifier != CurveId.Ed25519
+            || !authority.PublicKey.AsSpan().SequenceEqual(publicKey))
         {
             throw new InvalidOperationException(
-                $"The signing key derives account `{expected}`, but the transaction authority is `{AuthorityAccountId}`.");
+                $"The signing key does not control transaction authority `{AuthorityAccountId}`.");
         }
     }
 
     private byte[] EncodeBytesVec(ReadOnlySpan<byte> bytes)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength((ulong)bytes.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)bytes.Length);
         writer.WriteBytes(bytes);
         return writer.ToArray();
     }
 
     private byte[] EncodeMetadataEntry(string key, JsonNode? value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeString(key));
         var jsonString = EncodeJson(value);
-        var jsonField = new OfflineNoritoWriter();
+        var jsonField = new CanonicalNoritoWriter();
         jsonField.WriteField(jsonString);
         writer.WriteField(jsonField.ToArray());
         return writer.ToArray();
@@ -460,10 +462,10 @@ internal sealed class TransactionEncodingContext
         var payload = DecodeBase58(exactLiteral, nameof(literal));
         var uuidBytes = payload.AsSpan(1, 16);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         foreach (var value in uuidBytes)
         {
-            writer.WriteLength(1);
+            writer.WriteCompactLength(1);
             writer.WriteByte(value);
         }
 
@@ -472,7 +474,7 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeAssetBalanceScope(ulong? dataspaceId)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (!dataspaceId.HasValue)
         {
             writer.WriteUInt32LittleEndian(0);
@@ -480,7 +482,7 @@ internal sealed class TransactionEncodingContext
         }
 
         writer.WriteUInt32LittleEndian(1);
-        var dataspaceWriter = new OfflineNoritoWriter();
+        var dataspaceWriter = new CanonicalNoritoWriter();
         dataspaceWriter.WriteUInt64LittleEndian(dataspaceId.Value);
         writer.WriteField(dataspaceWriter.ToArray());
         return writer.ToArray();
@@ -491,25 +493,12 @@ internal sealed class TransactionEncodingContext
         var exact = RequireExactNonBlank(accountId, paramName);
         try
         {
-            return AccountAddress.Parse(exact, DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
+            _ = AccountAddress.Parse(exact);
+            return exact;
         }
         catch (AccountAddressException exception)
         {
             throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
-        }
-    }
-
-    private static string CanonicalizeDefaultAccountId(string accountId)
-    {
-        try
-        {
-            return AccountAddress.Parse(
-                RequireExactNonBlank(accountId, nameof(accountId)),
-                DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
-        }
-        catch (AccountAddressException exception)
-        {
-            throw new ArgumentException("Account id must be a canonical I105 account id.", nameof(accountId), exception);
         }
     }
 
@@ -583,7 +572,7 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeAuthorityFeePayment(AuthorityFeePaymentIntent payment)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeFeeChargeLimits(payment.ChargeLimits));
         writer.WriteField(EncodeOption(payment.GasLimit, EncodeUInt64));
         return writer.ToArray();
@@ -591,7 +580,7 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeSponsorFeePayment(SponsorFeePaymentIntent payment)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeFeeSponsorProgramId(payment.ProgramId));
         writer.WriteField(EncodeUInt64(payment.ProgramRevision));
         writer.WriteField(EncodeFeeChargeLimits(payment.ChargeLimits));
@@ -601,7 +590,7 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeFeeSponsorProgramId(FeeSponsorProgramId programId)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeAccountId(programId.Sponsor));
         writer.WriteField(EncodeName(programId.Name));
         return writer.ToArray();
@@ -609,8 +598,8 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeFeeChargeLimits(IReadOnlyList<FeeChargeLimit> limits)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength((ulong)limits.Count);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)limits.Count);
         foreach (var limit in limits)
         {
             writer.WriteField(EncodeFeeChargeLimit(limit));
@@ -620,7 +609,7 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeFeeChargeLimit(FeeChargeLimit limit)
     {
-        var kind = new OfflineNoritoWriter();
+        var kind = new CanonicalNoritoWriter();
         kind.WriteUInt32LittleEndian(limit.Kind switch
         {
             FeeChargeKind.Nexus => 0,
@@ -628,7 +617,7 @@ internal sealed class TransactionEncodingContext
             _ => throw new ArgumentOutOfRangeException(nameof(limit), "Unknown fee charge kind."),
         });
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(kind.ToArray());
         writer.WriteField(EncodeAssetDefinitionId(limit.AssetDefinitionId));
         writer.WriteField(EncodeQuantity(NumericV1.QuantityValue.ParseCanonical(limit.MaxAmount)));

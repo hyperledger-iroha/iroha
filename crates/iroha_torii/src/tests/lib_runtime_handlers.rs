@@ -9,5 +9,6 @@ pub(crate) mod tests_runtime_handlers {
     include!("lib_runtime_handlers/part_6.rs");
     include!("lib_runtime_handlers/part_7.rs");
     include!("lib_runtime_handlers/part_8.rs");
+    include!("lib_runtime_handlers/sccp_auth_helpers.rs");
     include!("lib_runtime_handlers/part_9.rs");
 }

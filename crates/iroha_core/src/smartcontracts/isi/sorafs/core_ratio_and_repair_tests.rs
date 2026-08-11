@@ -77,8 +77,21 @@ fn checked_keypair_helpers_preserve_requested_algorithm() {
     assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
 }
 
+fn block_header_at_epoch(epoch: u64) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        nonzero!(1_u64),
+        None,
+        None,
+        None,
+        epoch
+            .checked_mul(1_000)
+            .expect("test consensus epoch must fit milliseconds"),
+        0,
+    )
+}
+
 pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+    block_header_at_epoch(5)
 }
 
 fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {

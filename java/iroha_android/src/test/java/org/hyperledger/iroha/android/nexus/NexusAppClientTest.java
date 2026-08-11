@@ -22,6 +22,7 @@ import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.PipelineStatusOptions;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -39,6 +40,9 @@ public final class NexusAppClientTest {
   private static final byte[] WALLET_SIGNATURE = fixtureExpectedBytes("wallet_signature_hex");
   private static final FeePaymentIntent TEST_FEE_PAYMENT =
       FeePaymentIntent.authority(Collections.emptyList());
+  private static final NetworkId TEST_NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
   private static final String ACCOUNT_ID =
       "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
   private static final String DESTINATION_ACCOUNT_ID =
@@ -79,7 +83,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, "sample-app", null, null, null, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, "sample-app", null, null, null, PUBLIC_KEY, Collections.emptyMap()),
             connect,
             null,
             torii);
@@ -112,7 +116,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, null, Collections.emptyMap()));
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, null, Collections.emptyMap()));
 
     final NexusAppError error =
         expectNexusError(() -> client.buildTransferDraft(sampleInput()));
@@ -127,7 +131,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()));
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()));
 
     final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
     final byte[] fixtureSignature = hexToBytes(string(expected, "wallet_signature_hex"));
@@ -153,7 +157,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             torii);
@@ -184,7 +188,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient());
@@ -276,7 +280,7 @@ public final class NexusAppClientTest {
       final SignatureConnect connect = new SignatureConnect(WALLET_SIGNATURE);
       final NexusAppClient client =
           new NexusAppClient(
-              new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+              new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
               connect,
               null,
               null);
@@ -299,7 +303,7 @@ public final class NexusAppClientTest {
       final SignatureConnect connect = new SignatureConnect(WALLET_SIGNATURE, algorithm);
       final NexusAppClient client =
           new NexusAppClient(
-              new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+              new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
               connect,
               null,
               null);
@@ -315,7 +319,7 @@ public final class NexusAppClientTest {
   public void awaitApprovalRejectsMissingAccountAndSigningKey() {
     final NexusAppClient missingAccount =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             new ApprovalConnect(new NexusApprovedAccount("", null)),
             null,
             null);
@@ -327,7 +331,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient missingKey =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             new ApprovalConnect(new NexusApprovedAccount(ACCOUNT_ID, null)),
             null,
             null);
@@ -339,7 +343,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient invalidKey =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             new ApprovalConnect(new NexusApprovedAccount(ACCOUNT_ID, filled(0x01, 31))),
             null,
             null);
@@ -351,7 +355,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient mixedTorsionKey =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             new ApprovalConnect(new NexusApprovedAccount(ACCOUNT_ID, filled(0x11, 32))),
             null,
             null);
@@ -370,7 +374,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, PUBLIC_KEY, Collections.emptyMap()),
             connect,
             null,
             new FakeToriiClient());
@@ -400,7 +404,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient());
@@ -418,7 +422,7 @@ public final class NexusAppClientTest {
     final NexusAppClient draftClient =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient());
@@ -428,7 +432,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient mismatchClient =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient("f".repeat(64), null, null));
@@ -438,7 +442,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient submitFailureClient =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient(null, new RuntimeException("down"), null));
@@ -448,7 +452,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient statusFailureClient =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient(null, null, new RuntimeException("timeout")));
@@ -458,7 +462,7 @@ public final class NexusAppClientTest {
 
     final NexusAppClient committedOnlyClient =
         new NexusAppClient(
-            new NexusAppConfig("test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
+            new NexusAppConfig(TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, null, null, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient(null, null, null, "Committed"));
@@ -473,7 +477,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             torii);
@@ -504,7 +508,7 @@ public final class NexusAppClientTest {
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
             null,
             null,
             new FakeToriiClient());
@@ -756,7 +760,6 @@ public final class NexusAppClientTest {
           Map.of(
               "hash", hashHex,
               "status", status,
-              "summary", statusKind,
               "scope", "global",
               "resolved_from", "Applied".equals(statusKind) ? "state" : "cache"));
     }

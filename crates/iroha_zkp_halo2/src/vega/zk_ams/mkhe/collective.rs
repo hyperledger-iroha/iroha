@@ -14,23 +14,29 @@ use super::{
         verify_zk_ams_mkhe_active_collective_public_key_v1,
         zk_ams_mkhe_active_collective_public_a_v1,
     },
-    active_exact_binding::{
-        PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1,
-        mint_collective_secret_binding_from_verified_cpk_v1,
-    },
+    active_exact_binding::{PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1},
     checked_coefficient_work, checked_ring_multiplication_work,
-    cpk_relation::{VerifiedZkAmsMkheCpkContributionV1, ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1},
+    cpk_relation::{
+        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, derive_active_collective_public_a_limb_v1,
+    },
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
         zk_ams_mkhe_security_certificate_v1,
     },
-    packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1, packed_plaintext_to_rns_v1},
+    packing::{
+        ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1, packed_plaintext_to_rns_v1,
+        rns_polynomial_digest,
+    },
     persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
+    phase23_rns_link::ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
     wire::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
         ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheWireBindingV1, governed_roster_digest,
     },
 };
+
+#[cfg(test)]
+use super::active_exact_binding::mint_test_state_owned_collective_secret_binding_v1;
 use crate::vega::{
     VegaT256PointV1 as Point,
     bulletproof_t256::{
@@ -40,9 +46,11 @@ use crate::vega::{
     sponge::{Keccak256, keccak256},
 };
 
-const COLLECTIVE_CIPHERTEXT_DOMAIN_V1: &[u8] =
+pub(super) const COLLECTIVE_CIPHERTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.compact-collective-ciphertext";
 const COLLECTIVE_PARTY_SHARE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key-share";
+const COLLECTIVE_PARTY_SHARE_ACTIVE_ADMISSION_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.collective-public-key-share.active-admission";
 const COLLECTIVE_PUBLIC_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key";
 const COLLECTIVE_ENCRYPTION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-encryption";
 const COLLECTIVE_ADD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-add";
@@ -52,11 +60,48 @@ const COLLECTIVE_AUTOMORPHISM_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collecti
 const COLLECTIVE_MULTIPLY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-multiply";
 const COLLECTIVE_LEVEL_ONE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-level-one";
 
+fn clear_secret_bytes_v1(bytes: &mut [u8]) {
+    let bytes = core::hint::black_box(bytes);
+    bytes.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *bytes);
+}
+
+fn clear_secret_i8_slice_v1(values: &mut [i8]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+fn clear_secret_i64_slice_v1(values: &mut [i64]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+fn clear_secret_u64_slice_v1(values: &mut [u64]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+fn clear_secret_canonical_plaintext_v1(values: &mut [[u8; 32]]) {
+    let values = core::hint::black_box(values);
+    for value in values.iter_mut() {
+        clear_secret_bytes_v1(value);
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
 struct ZeroizingRns(RnsPolynomial);
 
 impl Drop for ZeroizingRns {
     fn drop(&mut self) {
-        self.0.coefficients.fill(0);
+        clear_secret_u64_slice_v1(&mut self.0.coefficients);
     }
 }
 
@@ -64,7 +109,7 @@ struct ZeroizingSecretCoefficients(Vec<i64>);
 
 impl Drop for ZeroizingSecretCoefficients {
     fn drop(&mut self) {
-        self.0.fill(0);
+        clear_secret_i64_slice_v1(&mut self.0);
     }
 }
 
@@ -109,10 +154,7 @@ impl ZeroizingT256MembershipCoefficientsV1 {
 
 impl Drop for ZeroizingT256MembershipCoefficientsV1 {
     fn drop(&mut self) {
-        let coefficients = core::hint::black_box(&mut self.0);
-        coefficients.fill(0);
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut *coefficients);
+        clear_secret_i8_slice_v1(&mut self.0);
     }
 }
 
@@ -157,9 +199,7 @@ struct ZeroizingCanonicalPlaintext(Vec<[u8; 32]>);
 
 impl Drop for ZeroizingCanonicalPlaintext {
     fn drop(&mut self) {
-        for coefficient in &mut self.0 {
-            coefficient.fill(0);
-        }
+        clear_secret_canonical_plaintext_v1(&mut self.0);
     }
 }
 
@@ -167,7 +207,7 @@ struct ZeroizingEntropyProbe([u8; 32]);
 
 impl Drop for ZeroizingEntropyProbe {
     fn drop(&mut self) {
-        self.0.fill(0);
+        clear_secret_bytes_v1(&mut self.0);
     }
 }
 
@@ -175,7 +215,7 @@ struct ZeroizingRandomByte([u8; 1]);
 
 impl Drop for ZeroizingRandomByte {
     fn drop(&mut self) {
-        self.0.fill(0);
+        clear_secret_bytes_v1(&mut self.0);
     }
 }
 
@@ -267,13 +307,11 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveEncryptionOpeningV1 {
 
 impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
     fn drop(&mut self) {
-        for coefficient in &mut self.canonical_plaintext.0 {
-            coefficient.fill(0);
-        }
-        self.plaintext_lift.0.coefficients.fill(0);
-        self.ephemeral.coefficients.fill(0);
-        self.error_zero.coefficients.fill(0);
-        self.error_one.coefficients.fill(0);
+        clear_secret_canonical_plaintext_v1(&mut self.canonical_plaintext.0);
+        clear_secret_u64_slice_v1(&mut self.plaintext_lift.0.coefficients);
+        clear_secret_i64_slice_v1(&mut self.ephemeral.coefficients);
+        clear_secret_i64_slice_v1(&mut self.error_zero.coefficients);
+        clear_secret_i64_slice_v1(&mut self.error_one.coefficients);
 
         #[cfg(test)]
         if let Some(audit) = &self.drop_audit {
@@ -307,9 +345,9 @@ const PERSISTENT_BLINDING_STATE_BYTES_V1: usize =
 
 /// One fallible entropy request whose named bytes are erased on every exit.
 ///
-/// The scalar reduction necessarily receives one by-value array copy. Rust
-/// cannot guarantee erasure of that compiler-managed temporary, but this
-/// owner covers the complete caller-visible buffer across errors and unwinds.
+/// Scalar reduction borrows the fixed array, avoiding an unmanaged array copy;
+/// this owner covers the complete caller-visible buffer across errors and
+/// unwinds.
 struct PersistentSecretCommitmentBlindingEntropyV1([u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1]);
 
 impl PersistentSecretCommitmentBlindingEntropyV1 {
@@ -321,8 +359,8 @@ impl PersistentSecretCommitmentBlindingEntropyV1 {
         &mut self.0
     }
 
-    fn expose_copy(&self) -> [u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1] {
-        self.0
+    fn as_array(&self) -> &[u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1] {
+        &self.0
     }
 }
 
@@ -363,7 +401,7 @@ impl PersistentSecretCommitmentBlindingsV1 {
                 random
                     .fill_bytes(entropy.as_mut_slice())
                     .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-                *blinding = Scalar::from_uniform_le_bytes(entropy.expose_copy());
+                *blinding = Scalar::from_uniform_le_bytes_ref(entropy.as_array());
                 if !blinding.is_zero() {
                     accepted = true;
                     break;
@@ -536,7 +574,7 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     /// Borrow the retained blindings for the complete sibling CPK relation.
     /// Absence of a connected consumer remains a release blocker; it is never
     /// permission to resample or accept an independently supplied opening.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) const fn persistent_secret_commitment_blindings(
         &self,
     ) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
@@ -559,14 +597,11 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         self.key_material_digest
     }
 
-    /// Validate the complete state/share axes and lend the exact state-owned
-    /// persistent commitment opening to one sibling CPK operation.
+    /// Lend the validated exact state-owned commitment opening to a sibling.
     ///
-    /// The narrowed coefficient copy is always erased before this call
-    /// returns. This boundary does not accept caller-supplied openings or
-    /// provide any resampling path.
+    /// The narrowed copy is erased; caller openings and resampling are rejected.
     #[allow(dead_code)]
-    pub(super) fn with_validated_cpk_secret_opening_v1<T>(
+    fn with_validated_cpk_secret_opening_v1<T>(
         &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         share: &ZkAmsMkheCollectivePublicKeyShareV1,
@@ -607,41 +642,19 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         )
     }
 
-    /// Admit and retain the sole persistent commitment capability for this
-    /// state-owned share by consuming a complete native CPK relation.
-    ///
-    /// The relation is rebound to the exact canonical `b_i` payload here.
-    /// Membership-only receipts, raw commitment digests, and a capability for
-    /// another state/share cannot enter the persistent runtime graph.
+    /// Admit the move-only party binding atomically emitted with the verified set.
     #[allow(dead_code)]
-    pub(super) fn admit_verified_cpk_contribution(
+    pub(super) fn admit_verified_cpk_binding(
         &mut self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         share: &ZkAmsMkheCollectivePublicKeyShareV1,
-        contribution: VerifiedZkAmsMkheCpkContributionV1,
+        binding: VerifiedPersistentWitnessBindingV1,
     ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
         let party_index = usize::from(self.party_index);
         let expected_commitments = self.with_validated_cpk_secret_opening_v1(
             roster,
             share,
             commit_persistent_secret_opening_v1,
-        )?;
-        let party_b_payload_blake3 = cpk_party_b_payload_blake3_v1(&share.party_public_b)?;
-        let source = contribution
-            .into_collective_binding_source(
-                roster,
-                self.transcript_digest,
-                party_index,
-                party_b_payload_blake3,
-            )
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-        ensure_state_owned_cpk_commitments_v1(source.commitments(), &expected_commitments)?;
-        let binding = mint_collective_secret_binding_from_verified_cpk_v1(
-            roster,
-            self.transcript_digest,
-            party_index,
-            self.public_share_digest,
-            source,
         )?;
         binding.validate_for(
             roster,
@@ -650,6 +663,7 @@ impl ZkAmsMkheCollectivePartyStateV1 {
             self.public_share_digest,
             PersistentWitnessConsumerV1::CollectivePublicKey,
         )?;
+        ensure_state_owned_cpk_commitments_v1(binding.commitments(), &expected_commitments)?;
         self.persistent_secret_binding = Some(binding);
         let binding = self
             .persistent_secret_binding
@@ -686,10 +700,57 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         )?;
         Ok(binding)
     }
+
+    #[cfg(test)]
+    pub(super) fn admit_test_state_owned_cpk_binding(
+        &mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let commitments = self.with_validated_cpk_secret_opening_v1(
+            roster,
+            share,
+            commit_persistent_secret_opening_v1,
+        )?;
+        let binding = mint_test_state_owned_collective_secret_binding_v1(
+            roster,
+            self.security_certificate_digest,
+            self.transcript_digest,
+            usize::from(self.party_index),
+            self.public_share_digest,
+            commitments,
+        )?;
+        self.admit_verified_cpk_binding(roster, share, binding)?;
+        Ok(())
+    }
 }
 
+/// Private, non-codec proof that this exact share and its complete active-proof
+/// evidence passed the native verifier before leaving the generator.
+///
+/// This capability is intentionally neither publicly constructible nor
+/// cloneable in production. The complete CPK verifier later supplies the
+/// independent move-only relation authority; this admission prevents callers
+/// from pairing that authority with substituted legacy proof bytes when the
+/// native-equivalent share digest is derived by the compact path.
+#[cfg_attr(test, derive(Clone))]
+#[derive(Debug, PartialEq, Eq)]
+struct VerifiedCollectivePublicKeyShareActiveAdmissionV1 {
+    _seal: VerifiedCollectivePublicKeyShareActiveAdmissionSealV1,
+    evidence_digest: [u8; 32],
+}
+
+#[cfg_attr(test, derive(Clone))]
+#[derive(Debug, PartialEq, Eq)]
+struct VerifiedCollectivePublicKeyShareActiveAdmissionSealV1;
+
 /// One proof-carrying share of the exact eight-party collective public key.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The share is move-only in production because it contains the private active
+/// admission capability used by bounded complete-CPK consumers. Unit tests may
+/// clone malformed fixtures solely to exercise hostile validation paths.
+#[cfg_attr(test, derive(Clone))]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectivePublicKeyShareV1 {
     version: u8,
     profile_digest: [u8; 32],
@@ -704,6 +765,7 @@ pub struct ZkAmsMkheCollectivePublicKeyShareV1 {
     party_public_b: ZkAmsMkheRnsPolynomialWireV1,
     proof: ZkAmsMkheActiveRkgProofV1,
     digest: [u8; 32],
+    active_admission: Option<VerifiedCollectivePublicKeyShareActiveAdmissionV1>,
 }
 
 impl ZkAmsMkheCollectivePublicKeyShareV1 {
@@ -741,6 +803,20 @@ impl ZkAmsMkheCollectivePublicKeyShareV1 {
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+
+    /// Build a structurally valid hostile fixture whose proof/authentication
+    /// bytes came from another admitted share. The ordinary share digest is
+    /// deliberately recomputed while the private admission is left untouched,
+    /// so bounded consumers must reject specifically at that seal.
+    #[cfg(test)]
+    pub(super) fn splice_active_proof_for_test(
+        &mut self,
+        other: &Self,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.proof = other.proof.clone();
+        self.digest = collective_public_key_share_digest(self)?;
+        Ok(())
     }
 }
 
@@ -936,9 +1012,19 @@ pub fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSour
         party_public_b,
         proof,
         digest: [0; 32],
+        active_admission: None,
     };
     share.digest = collective_public_key_share_digest(&share)?;
-    validate_collective_public_key_share(roster, transcript_digest, party_index, &share)?;
+    validate_collective_public_key_share_unsealed_v1(
+        roster,
+        transcript_digest,
+        party_index,
+        &share,
+    )?;
+    share.active_admission = Some(mint_collective_public_key_share_active_admission_v1(
+        &share,
+    )?);
+    validate_collective_public_key_share_active_admission_v1(&share)?;
     let persistent_secret_commitment_blindings =
         PersistentSecretCommitmentBlindingsV1::sample(random)?;
     let state = ZkAmsMkheCollectivePartyStateV1 {
@@ -1024,6 +1110,23 @@ fn validate_collective_public_key_share(
     party_index: usize,
     share: &ZkAmsMkheCollectivePublicKeyShareV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_collective_public_key_share_unsealed_v1(
+        roster,
+        transcript_digest,
+        party_index,
+        share,
+    )?;
+    validate_collective_public_key_share_active_admission_v1(share)
+}
+
+/// Replay the complete native active proof. This is the only minting gate for
+/// [`VerifiedCollectivePublicKeyShareActiveAdmissionV1`].
+fn validate_collective_public_key_share_unsealed_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    transcript_digest: [u8; 32],
+    party_index: usize,
+    share: &ZkAmsMkheCollectivePublicKeyShareV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
     roster.validate()?;
     let security_certificate_digest = release_security_certificate_digest()?;
     let expected_party = roster
@@ -1093,6 +1196,203 @@ fn collective_public_key_share_digest(
     Ok(hash.finalize())
 }
 
+/// Digest every byte whose native admission is represented by the private
+/// capability. The ordinary share digest binds the complete public statement;
+/// the evidence stream additionally binds the raw proof and authentication
+/// bytes which are deliberately not all present in that legacy digest.
+fn collective_public_key_share_active_admission_digest_v1(
+    share: &ZkAmsMkheCollectivePublicKeyShareV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let recomputed_share_digest = collective_public_key_share_digest(share)?;
+    if share.digest == [0; 32] || share.digest != recomputed_share_digest {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(COLLECTIVE_PARTY_SHARE_ACTIVE_ADMISSION_DOMAIN_V1);
+    hash.update(&share.digest);
+    share.proof.write_evidence_chunks(|chunk| {
+        hash.update(chunk);
+        Ok(())
+    })?;
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(digest)
+}
+
+fn mint_collective_public_key_share_active_admission_v1(
+    share: &ZkAmsMkheCollectivePublicKeyShareV1,
+) -> Result<VerifiedCollectivePublicKeyShareActiveAdmissionV1, ZkAmsMkheErrorV1> {
+    Ok(VerifiedCollectivePublicKeyShareActiveAdmissionV1 {
+        _seal: VerifiedCollectivePublicKeyShareActiveAdmissionSealV1,
+        evidence_digest: collective_public_key_share_active_admission_digest_v1(share)?,
+    })
+}
+
+fn validate_collective_public_key_share_active_admission_v1(
+    share: &ZkAmsMkheCollectivePublicKeyShareV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let admission = share
+        .active_admission
+        .as_ref()
+        .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    if admission.evidence_digest != collective_public_key_share_active_admission_digest_v1(share)? {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
+}
+
+/// Validate the compact public data paired with a complete verified CPK receipt.
+///
+/// The CPK receipt, rather than the legacy active-RKG proof, is the move-only
+/// authority for the native `b_i = -a*s_i + t*e_i` relation. This helper still
+/// requires the private admission minted only after that exact proof passed the
+/// native verifier, and recomputes its digest over all raw proof/authentication
+/// evidence. Thus substituted legacy proof bytes cannot alter a supposedly
+/// native-equivalent share digest without replaying the allocation-heavy proof
+/// verifier inside this bounded path.
+pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    transcript_digest: [u8; 32],
+    party_index: usize,
+    share: &ZkAmsMkheCollectivePublicKeyShareV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    roster.validate()?;
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let expected_party = roster
+        .participants()
+        .get(party_index)
+        .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)?
+        .party();
+    if transcript_digest == [0; 32]
+        || share.version != MKHE_VERSION_V1
+        || share.profile_digest != roster.profile_digest()
+        || share.security_certificate_digest != release_security_certificate_digest()?
+        || share.roster_digest != roster.roster_digest()
+        || share.key_material_digest != roster.key_material_digest()
+        || share.epoch != roster.epoch()
+        || share.transcript_digest != transcript_digest
+        || usize::from(share.party_index) != party_index
+        || share.party != expected_party
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    share.public_a.encoded_len()?;
+    share.party_public_b.encoded_len()?;
+    share.proof.evidence_encoded_len()?;
+    if share
+        .public_a
+        .residues()
+        .iter()
+        .all(|residue| *residue == 0)
+        || share
+            .party_public_b
+            .residues()
+            .iter()
+            .all(|residue| *residue == 0)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    for limb in 0..profile.moduli.len() {
+        let start = limb
+            .checked_mul(profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let end = start
+            .checked_add(profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let expected =
+            derive_active_collective_public_a_limb_v1(&profile, roster, transcript_digest, limb)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        if share.public_a.residues().get(start..end) != Some(expected.as_slice()) {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+    }
+    let digest = collective_public_key_share_digest(share)?;
+    if digest == [0; 32] || share.digest != digest {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    validate_collective_public_key_share_active_admission_v1(share)?;
+    Ok(digest)
+}
+
+/// Derive the native collective-key digest from one bounded aggregate buffer.
+///
+/// The output is exactly [`collective_public_key_digest`] for the same ordered
+/// shares. Common `a` is derived one limb at a time and no aggregate-key object
+/// or second complete RNS polynomial is constructed.
+pub(super) fn collective_public_key_digest_from_bounded_cpk_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    transcript_digest: [u8; 32],
+    aggregate_b: &[u64],
+    share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    roster.validate()?;
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let coefficient_count = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if transcript_digest == [0; 32]
+        || aggregate_b.len() != coefficient_count
+        || aggregate_b.iter().all(|residue| *residue == 0)
+        || share_digests.contains(&[0; 32])
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    for (limb, residues) in aggregate_b.chunks_exact(profile.ring_degree).enumerate() {
+        if residues
+            .iter()
+            .any(|residue| *residue >= profile.moduli[limb])
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+    }
+    let mut hash = Keccak256::new();
+    hash.update(COLLECTIVE_PUBLIC_KEY_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&roster.profile_digest());
+    hash.update(&release_security_certificate_digest()?);
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.key_material_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&transcript_digest);
+    for participant in roster.participants() {
+        hash.update(&participant.party().to_bytes());
+    }
+    hash.update(
+        &u32::try_from(coefficient_count)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    for limb in 0..profile.moduli.len() {
+        let public_a =
+            derive_active_collective_public_a_limb_v1(&profile, roster, transcript_digest, limb)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        for residue in public_a {
+            hash.update(&residue.to_be_bytes());
+        }
+    }
+    hash.update(
+        &u32::try_from(coefficient_count)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    for residue in aggregate_b {
+        hash.update(&residue.to_be_bytes());
+    }
+    for share_digest in share_digests {
+        hash.update(&share_digest);
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(digest)
+}
+
 fn collective_public_key_digest(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     profile: &BgvProfile,
@@ -1136,7 +1436,7 @@ fn update_wire_polynomial_hash(
 }
 
 /// BLAKE3 content address of the exact direct-object party-`b` framing.
-fn cpk_party_b_payload_blake3_v1(
+pub(super) fn cpk_party_b_payload_blake3_v1(
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     polynomial.encoded_len()?;
@@ -1422,30 +1722,22 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
 }
 
 impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
-    /// Validate the exact release encryption context and lend the opening to
-    /// one sibling proof adapter for the duration of a single call.
+    /// Consume and validate one exact release encryption opening for the
+    /// sealed Phase-23 native-BGV verifier.
     ///
-    /// No witness reference is returned or stored outside the adapter call.
-    /// The canonical T256 coefficients are included so a proof layer can
-    /// derive an exact digit decomposition without reconstructing it from CRT
-    /// residues. The fourth witness argument is the zeroizing effective error
-    /// `e0' = e0 - 1[M > (t-1)/2]` matching the canonical natural lift; the
-    /// sampled centered-lift `e0` never crosses this sibling boundary.
-    #[allow(dead_code, clippy::type_complexity)]
-    pub(super) fn with_validated_proof_witness_v1<T>(
-        &self,
+    /// The unconstructible sibling permit limits safe production calls to the
+    /// private Phase-23 verifier. No callback or witness reference crosses
+    /// this boundary, and `self` is zeroized on success, error, or unwind.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn verify_and_consume_phase23_native_bgv_opening_v1(
+        self,
+        _permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
         key: &ZkAmsMkheCollectivePublicKeyV1,
         layout: ZkAmsT256PackingLayoutV1,
         plaintext: &ZkAmsT256PackedPlaintextV1,
         ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-        adapter: impl FnOnce(
-            &[[u8; 32]],
-            &RnsPolynomial,
-            &SecretPolynomial,
-            &SecretPolynomial,
-            &SecretPolynomial,
-        ) -> Result<T, ZkAmsMkheErrorV1>,
-    ) -> Result<T, ZkAmsMkheErrorV1> {
+        expected_rns_binding_digest: [u8; 32],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         key.validate(&profile)?;
         if key.security_certificate_digest != release_security_certificate_digest()?
@@ -1483,13 +1775,23 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
             &self.canonical_plaintext.0,
             &self.error_zero,
         )?;
-        adapter(
-            &self.canonical_plaintext.0,
-            &self.plaintext_lift.0,
-            &self.ephemeral,
-            &effective_error_zero,
-            &self.error_one,
-        )
+        if expected_rns_binding_digest == [0; 32]
+            || self.canonical_plaintext.0.as_slice() != plaintext.coefficients.as_slice()
+            || self.canonical_plaintext.0.len() != profile.ring_degree
+            || self.plaintext_lift.0.coefficients.len()
+                != profile
+                    .ring_degree
+                    .checked_mul(profile.moduli.len())
+                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            || rns_polynomial_digest(&profile, &self.plaintext_lift.0)?
+                != expected_rns_binding_digest
+            || self.ephemeral.coefficients.len() != profile.ring_degree
+            || effective_error_zero.coefficients.len() != profile.ring_degree
+            || self.error_one.coefficients.len() != profile.ring_degree
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -2591,7 +2893,10 @@ fn update_rns_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vega::{MaskedRelaxedRandomErrorV1, sponge::shake256};
+    use crate::vega::{
+        MaskedRelaxedRandomErrorV1, sponge::shake256,
+        zk_ams::mkhe::manifest::ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
+    };
 
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
@@ -2645,6 +2950,63 @@ mod tests {
                 written += take;
             }
             Ok(())
+        }
+    }
+
+    struct BufferedExerciseRandom {
+        state: [u8; 32],
+        counter: u64,
+        block: [u8; 64],
+        cursor: usize,
+    }
+
+    impl BufferedExerciseRandom {
+        fn new(label: &[u8]) -> Self {
+            Self {
+                state: keccak256(label),
+                counter: 0,
+                block: [0; 64],
+                cursor: 64,
+            }
+        }
+
+        fn refill(&mut self) {
+            let mut frame = Vec::with_capacity(40);
+            frame.extend_from_slice(&self.state);
+            frame.extend_from_slice(&self.counter.to_be_bytes());
+            self.block.copy_from_slice(&shake256(&frame, 64));
+            self.state = keccak256(&self.block);
+            self.counter = self.counter.wrapping_add(1);
+            self.cursor = 0;
+        }
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for BufferedExerciseRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            let mut written = 0;
+            while written < destination.len() {
+                if self.cursor == self.block.len() {
+                    self.refill();
+                }
+                let take = (destination.len() - written).min(self.block.len() - self.cursor);
+                destination[written..written + take]
+                    .copy_from_slice(&self.block[self.cursor..self.cursor + take]);
+                self.cursor += take;
+                written += take;
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for BufferedExerciseRandom {
+        fn drop(&mut self) {
+            clear_secret_bytes_v1(&mut self.state);
+            clear_secret_bytes_v1(&mut self.block);
+            self.counter = 0;
+            self.cursor = 0;
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            let _ = core::hint::black_box(&mut self.counter);
+            let _ = core::hint::black_box(&mut self.cursor);
         }
     }
 
@@ -2858,6 +3220,80 @@ mod tests {
         key.digest = collective_public_key_digest(&key, &profile).unwrap();
         key.validate(&profile).unwrap();
         (key, aggregate_secret)
+    }
+
+    fn release_native_bgv_test_key() -> ZkAmsMkheCollectivePublicKeyV1 {
+        let profile = release_profile_v1();
+        profile.validate().expect("release profile validates");
+        let parties = test_parties();
+        let mut public_a_coefficients = vec![0_u64; profile.ring_degree];
+        public_a_coefficients[0] = 1;
+        public_a_coefficients[1] = 2;
+        let mut collective_public_b_coefficients = vec![0_u64; profile.ring_degree];
+        collective_public_b_coefficients[0] = 3;
+        collective_public_b_coefficients[1] = 5;
+        let epoch = 23;
+        let mut key = ZkAmsMkheCollectivePublicKeyV1 {
+            version: MKHE_VERSION_V1,
+            profile_digest: profile.digest().expect("release profile digest"),
+            security_certificate_digest: release_security_certificate_digest()
+                .expect("release security certificate"),
+            roster_digest: governed_roster_digest(
+                profile.digest().expect("release profile digest"),
+                epoch,
+                &parties.parties,
+            ),
+            key_material_digest: [0x91; 32],
+            epoch,
+            transcript_digest: [0x92; 32],
+            parties,
+            public_a: RnsPolynomial::from_unsigned(&profile, &public_a_coefficients)
+                .expect("release public a"),
+            collective_public_b: RnsPolynomial::from_unsigned(
+                &profile,
+                &collective_public_b_coefficients,
+            )
+            .expect("release collective public b"),
+            share_digests: core::array::from_fn(|index| [index as u8 + 1; 32]),
+            digest: [0; 32],
+        };
+        key.digest = collective_public_key_digest(&key, &profile).expect("release key digest");
+        key.validate(&profile).expect("release test key validates");
+        key
+    }
+
+    fn release_packed_slots(first: u64) -> Vec<[u8; 32]> {
+        let mut slots = vec![[0_u8; 32]; ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1];
+        slots[0][24..].copy_from_slice(&first.to_be_bytes());
+        slots
+    }
+
+    fn release_native_bgv_encryption_fixture(
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        label: &[u8],
+    ) -> (
+        ZkAmsT256PackingLayoutV1,
+        ZkAmsT256PackedPlaintextV1,
+        ZkAmsMkheCollectiveCiphertextV1,
+        ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ) {
+        let layout = super::super::packing::zk_ams_t256_packing_layout_v1(1)
+            .expect("one-slot release layout");
+        let plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
+            layout,
+            0,
+            &release_packed_slots(7),
+        )
+        .expect("canonical release packed plaintext");
+        let (ciphertext, opening) = encrypt_zk_ams_mkhe_collective_packed_with_opening_v1(
+            key,
+            layout,
+            &plaintext,
+            11,
+            &mut BufferedExerciseRandom::new(label),
+        )
+        .expect("release native BGV encryption with opening");
+        (layout, plaintext, ciphertext, opening)
     }
 
     fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
@@ -3360,6 +3796,93 @@ mod tests {
                 },
             )
             .unwrap();
+    }
+
+    #[test]
+    #[ignore = "release-size 38-limb native BGV opening exercise; not KAT/readiness evidence"]
+    fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
+        let key = release_native_bgv_test_key();
+
+        let (layout, plaintext, ciphertext, opening) =
+            release_native_bgv_encryption_fixture(&key, b"native-bgv-capability-success");
+        super::super::phase23_rns_link::
+            test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
+                &key,
+                layout,
+                &plaintext,
+                &ciphertext,
+                opening,
+            )
+            .expect("native BGV opening is verified and consumed in process");
+        drop(plaintext);
+        drop(ciphertext);
+
+        let (layout, original_plaintext, ciphertext, opening) =
+            release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-plaintext");
+        let changed_plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
+            layout,
+            0,
+            &release_packed_slots(8),
+        )
+        .expect("different canonical packed plaintext");
+        assert_ne!(changed_plaintext.digest, original_plaintext.digest);
+        assert!(
+            matches!(
+                super::super::phase23_rns_link::
+                    test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
+                        &key,
+                        layout,
+                        &changed_plaintext,
+                        &ciphertext,
+                        opening,
+                    ),
+                Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+            ),
+            "a stale opening must not authorize changed packed content"
+        );
+        drop(changed_plaintext);
+        drop(original_plaintext);
+        drop(ciphertext);
+
+        let (original_layout, original_plaintext, ciphertext, opening) =
+            release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-layout");
+        let changed_layout = super::super::packing::zk_ams_t256_packing_layout_v1(65_537)
+            .expect("different canonical two-chunk layout");
+        assert_ne!(changed_layout.digest, original_layout.digest);
+        let changed_layout_plaintext =
+            super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
+                changed_layout,
+                0,
+                &release_packed_slots(7),
+            )
+            .expect("canonical first chunk under changed layout");
+        assert!(
+            matches!(
+                super::super::phase23_rns_link::
+                    test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
+                        &key,
+                        changed_layout,
+                        &changed_layout_plaintext,
+                        &ciphertext,
+                        opening,
+                    ),
+                Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+            ),
+            "a stale opening must not authorize a different canonical layout"
+        );
+        drop(changed_layout_plaintext);
+        drop(original_plaintext);
+        drop(ciphertext);
+
+        let receipt_audit =
+            super::super::receipt_capability_audit::zk_ams_mkhe_receipt_capability_audit_v1();
+        assert_eq!(receipt_audit.blocker_mask, 0xff);
+        assert!(!receipt_audit.release_available);
+        let readiness = super::super::manifest::zk_ams_mkhe_readiness_v1()
+            .expect("readiness remains queryable");
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0xff);
+        assert!(!readiness.receipt_capability_gate);
+        assert!(!readiness.is_ready());
     }
 
     #[test]

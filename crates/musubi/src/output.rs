@@ -435,9 +435,9 @@ fn redact_json_value(value: &Value) -> Value {
 }
 
 fn is_exact_public_string(key: &str, value: &Value) -> bool {
-    // `ChainId` is validated public ASCII identity. Its grammar permits `:`, so values such as
-    // `token:dev` can resemble a secret assignment even though altering them would corrupt the
-    // deployment identity carried by a machine-readable receipt.
+    // `ChainId` is a validated public display/configuration label. Its grammar permits `:`, so
+    // values such as `token:dev` can resemble a secret assignment even though redacting them
+    // would corrupt generic machine-readable display metadata. Security domains use `NetworkId`.
     key == "chain_id"
         && value
             .as_str()
@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn json_data_preserves_exact_public_chain_identity_without_weakening_other_redaction() {
+    fn json_data_preserves_public_chain_display_label_without_weakening_other_redaction() {
         let output = CommandOutput::success(
             "publish",
             "published",

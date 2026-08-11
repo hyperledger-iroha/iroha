@@ -1029,7 +1029,7 @@ Entrypoint callback target referenced by a trigger declaration.
 
 ## `iroha_data_model::isi::sorafs::ApprovePinManifest`
 
-> Schema summary: struct fields: digest: ManifestDigest, approved_epoch: u64, council_envelope: Option<Vec<u8>>, council_envelope_digest: Option<Array<u8, 32>>.
+> Schema summary: struct fields: digest: ManifestDigest, council_envelope: Option<Vec<u8>>, council_envelope_digest: Option<Array<u8, 32>>.
 
 - Rust type: `iroha_data_model::isi::sorafs::ApprovePinManifest`
 - Schema hash: `1583c5673581a22cad86e51ca49aa514`
@@ -1039,7 +1039,6 @@ Entrypoint callback target referenced by a trigger declaration.
 | Field | Type |
 |-------|------|
 | `digest` | `ManifestDigest` |
-| `approved_epoch` | `u64` |
 | `council_envelope` | `Option<Vec<u8>>` |
 | `council_envelope_digest` | `Option<Array<u8, 32>>` |
 
@@ -1160,7 +1159,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::RegisterPinManifest`
 
-> Schema summary: struct fields: manifest_payload: Vec<u8>, submitted_epoch: u64, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
+> Schema summary: struct fields: manifest_payload: Vec<u8>, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterPinManifest`
 - Schema hash: `61eb8eda15dad63ec8e3b35b58cfaa36`
@@ -1170,7 +1169,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `manifest_payload` | `Vec<u8>` |
-| `submitted_epoch` | `u64` |
 | `alias` | `Option<ManifestAliasBinding>` |
 | `successor_of` | `Option<ManifestDigest>` |
 
@@ -1202,7 +1200,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::RetirePinManifest`
 
-> Schema summary: struct fields: digest: ManifestDigest, retired_epoch: u64, reason: Option<String>.
+> Schema summary: struct fields: digest: ManifestDigest, reason: Option<String>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RetirePinManifest`
 - Schema hash: `6da0ff52a6d999ecbd39aef38443f1a3`
@@ -1212,7 +1210,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `digest` | `ManifestDigest` |
-| `retired_epoch` | `u64` |
 | `reason` | `Option<String>` |
 
 ## `iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments`
@@ -1689,6 +1686,24 @@ Alias binding payload approved alongside a manifest.
 | `ballot_proof` | `ProofAttachment` |
 | `nullifier` | `Array<u8, 32>` |
 
+## `iroha_data_model::isi::zk::Unshield`
+
+> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: Quantity, inputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
+
+- Rust type: `iroha_data_model::isi::zk::Unshield`
+- Schema hash: `1cb55ecc7fd92625b2bee33e491a4a0c`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `asset` | `AssetDefinitionId` |
+| `to` | `AccountId` |
+| `public_amount` | `Quantity` |
+| `inputs` | `Vec<Array<u8, 32>>` |
+| `proof` | `ProofAttachment` |
+| `root_hint` | `Option<Array<u8, 32>>` |
+
 ## `iroha_data_model::isi::zk::VerifyProof`
 
 > Schema summary: struct fields: attachment: ProofAttachment.
@@ -1701,6 +1716,23 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `attachment` | `ProofAttachment` |
+
+## `iroha_data_model::isi::zk::ZkTransfer`
+
+> Schema summary: struct fields: asset: AssetDefinitionId, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
+
+- Rust type: `iroha_data_model::isi::zk::ZkTransfer`
+- Schema hash: `47144daf134fc01da511d50f913c7b80`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `asset` | `AssetDefinitionId` |
+| `inputs` | `Vec<Array<u8, 32>>` |
+| `outputs` | `Vec<Array<u8, 32>>` |
+| `proof` | `ProofAttachment` |
+| `root_hint` | `Option<Array<u8, 32>>` |
 
 ## `zk::CancelConfidentialPolicyTransition`
 

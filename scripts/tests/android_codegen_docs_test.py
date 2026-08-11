@@ -78,7 +78,6 @@ def test_manifest_tables_are_inlined(tmp_path: Path) -> None:
                 "kind": "struct",
                 "fields": [
                     {"name": "manifest_payload", "type": "Vec<u8>"},
-                    {"name": "submitted_epoch", "type": "u64"},
                     {"name": "alias", "type": "Option<ManifestAliasBinding>"},
                     {"name": "successor_of", "type": "Option<ManifestDigest>"},
                 ],

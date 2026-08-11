@@ -4,7 +4,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    AssetDefinitionId, ChainId,
+    AssetDefinitionId, NetworkId,
     account::AccountId,
     privacy::{
         PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_reserved_v1,
@@ -80,7 +80,7 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
-pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=chain-id:utf8|part6=action-class:utf8|part7=policy-digest:bytes32";
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
 
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
@@ -532,8 +532,8 @@ pub struct StarkFriOpenProofV1 {
 ///
 /// The consensus statement is carried without a second, partially overlapping
 /// action schema. `genesis_hash` is supplied by the trusted ledger context and
-/// prevents the same proof from being replayed on a chain that happens to use
-/// the same textual chain identifier.
+/// duplicates the exact genesis-derived network identity so inconsistent
+/// trusted-context construction fails closed before proof verification.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.zk-ace.public-inputs.v1")]
 #[cfg_attr(
@@ -671,7 +671,7 @@ pub fn derive_zk_ace_identity_commitment(
 pub fn derive_zk_ace_replay_nullifier(
     replay_secret: &[u8; 32],
     authorization_digest: &[u8; 32],
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     action_class: &str,
     domain_tag: &str,
 ) -> [u8; 32] {
@@ -680,7 +680,7 @@ pub fn derive_zk_ace_replay_nullifier(
         &[
             replay_secret,
             authorization_digest,
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             action_class.as_bytes(),
             domain_tag.as_bytes(),
         ],
@@ -702,7 +702,7 @@ pub fn derive_zk_ace_transfer_digest(
     to: &AccountId,
     asset: &AssetDefinitionId,
     amount: u128,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     action_class: &str,
     policy_hash: &[u8; 32],
 ) -> Result<[u8; 32], ZkAceTransferDigestErrorV1> {
@@ -723,7 +723,7 @@ pub fn derive_zk_ace_transfer_digest(
             to_literal.as_bytes(),
             &asset_bytes,
             &amount_bytes,
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             action_class.as_bytes(),
             policy_hash,
         ],
@@ -752,10 +752,18 @@ mod tests {
         thread,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 
     use super::*;
-    use crate::{account::address::ChainDiscriminantGuard, domain::DomainId, name::Name};
+    use crate::{
+        account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId, name::Name,
+    };
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -775,9 +783,7 @@ mod tests {
         let from = account(0x42);
         let to = account(0x43);
         let asset = asset_definition_id();
-        let chain_id: ChainId = "unregistered-zk-ace-chain"
-            .parse()
-            .expect("opaque chain id");
+        let network_id = network_id(0x45);
         let policy_hash = [0x44; 32];
         let amount = 123u128;
         let action_class = ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER;
@@ -787,7 +793,7 @@ mod tests {
             &to,
             &asset,
             amount,
-            &chain_id,
+            &network_id,
             action_class,
             &policy_hash,
         )
@@ -806,7 +812,7 @@ mod tests {
                 to_canonical.as_bytes(),
                 &asset_bytes,
                 &amount_bytes,
-                chain_id.as_str().as_bytes(),
+                network_id.as_bytes(),
                 action_class.as_bytes(),
                 &policy_hash,
             ],
@@ -821,7 +827,7 @@ mod tests {
                 let from = &from;
                 let to = &to;
                 let asset = &asset;
-                let chain_id = &chain_id;
+                let network_id = &network_id;
                 handles.push(scope.spawn(move || {
                     let _guard = ChainDiscriminantGuard::enter(discriminant);
                     let source_display = from.to_string();
@@ -831,7 +837,7 @@ mod tests {
                         to,
                         asset,
                         amount,
-                        chain_id,
+                        network_id,
                         action_class,
                         &policy_hash,
                     )
@@ -1419,7 +1425,7 @@ mod tests {
         let identity_blinding = [0x22; 32];
         let replay_secret = [0x33; 32];
         let policy_hash = [0x44; 32];
-        let chain_id: ChainId = "boi-test-chain".parse().expect("chain id");
+        let network_id = network_id(0x45);
         let from = account(1);
         let to = account(2);
         let asset = asset_definition_id();
@@ -1433,7 +1439,7 @@ mod tests {
             &to,
             &asset,
             17,
-            &chain_id,
+            &network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             &policy_hash,
         )
@@ -1441,7 +1447,7 @@ mod tests {
         let replay_nullifier = derive_zk_ace_replay_nullifier(
             &replay_secret,
             &tx_digest,
-            &chain_id,
+            &network_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );

@@ -4,13 +4,13 @@
 use std::{
     borrow::Cow,
     net::SocketAddr,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -32,7 +32,7 @@ use iroha_core::{
     telemetry::{StateTelemetry, Telemetry},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     SignedQuery,
     account::rekey::{AccountAlias, AccountAliasDomain},
@@ -50,7 +50,7 @@ use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     BenchRateLimiter, ContractActivityGetParamsForBench, MaybeTelemetry, NoritoJson, NoritoQuery,
-    QueryOptions, ResponseFormat, accept_transaction_for_ingress_for_bench,
+    QueryOptions, ResponseFormat, SignedQueryAdmission, accept_transaction_for_ingress_for_bench,
     filter::{
         AggregateFn, AggregateMetric, AggregateSpec, FieldPath, FilterExpr, Order, Pagination,
         QueryEnvelope, Selector, SortKey,
@@ -71,11 +71,53 @@ fn direct_metrics_telemetry() -> MaybeTelemetry {
     MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator)
 }
 
+fn benchmark_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xA5; Hash::LENGTH]),
+    ))
+}
+
+fn benchmark_signed_query_admission() -> Arc<SignedQueryAdmission> {
+    Arc::new(
+        SignedQueryAdmission::new(
+            benchmark_network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(12),
+            NonZeroUsize::new(1_048_576).expect("nonzero benchmark replay capacity"),
+        )
+        .expect("valid benchmark signed-query admission"),
+    )
+}
+
+fn authorize_benchmark_query(
+    request: QueryRequest,
+    authority: AccountId,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("benchmark clock follows Unix epoch")
+        .as_millis()
+        .try_into()
+        .expect("benchmark query creation time fits u64");
+    let mut nonce = [0_u8; 32];
+    nonce[24..].copy_from_slice(&NEXT_NONCE.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    request.with_authority(
+        benchmark_network_id(),
+        authority,
+        creation_time_ms,
+        NonZeroU64::new(10_000).expect("nonzero benchmark query TTL"),
+        nonce,
+    )
+}
+
 fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
     let authority = AccountId::new(key_pair.public_key().clone());
-    QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_benchmark_query(
+        QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn deterministic_key_pair_with_algorithm(label: &str, algorithm: Algorithm) -> KeyPair {
@@ -128,7 +170,6 @@ fn query_load_contract_authority_id(index: usize) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
 }
 
-const CONTRACT_ACTIVITY_CHAIN_ID: &str = "query-load-contract-activity";
 const CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS: u64 = 1_710_000_000_000;
 const CONTRACT_ACTIVITY_MATCH_ALIAS: &str = "dlmm_router";
 const CONTRACT_ACTIVITY_MATCH_ADDRESS: &str = "irohac1queryloadcontractdlmmrouter";
@@ -186,7 +227,7 @@ fn contract_activity_metadata(index: usize) -> Metadata {
 }
 
 fn contract_activity_accepted_transaction(
-    chain_id: &ChainId,
+    network_id: NetworkId,
     index: usize,
 ) -> AcceptedTransaction<'static> {
     let authority_index = if index.is_multiple_of(4) {
@@ -198,7 +239,7 @@ fn contract_activity_accepted_transaction(
     let authority = AccountId::new(key_pair.public_key().clone());
     let metadata = contract_activity_metadata(index);
     let mut builder = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -221,11 +262,9 @@ fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadP
     if profile.committed_transactions == 0 {
         return;
     }
-    let chain_id: ChainId = CONTRACT_ACTIVITY_CHAIN_ID
-        .parse()
-        .expect("contract activity chain id");
+    let network_id = *state.network_id_ref();
     let transactions = (0..profile.committed_transactions)
-        .map(|index| contract_activity_accepted_transaction(&chain_id, index))
+        .map(|index| contract_activity_accepted_transaction(network_id, index))
         .collect();
     let leader = deterministic_bls_key_pair("contract-activity-leader");
     let unverified = BlockBuilder::new(transactions)
@@ -348,9 +387,7 @@ fn signed_find_domains_query(
             ..QueryParams::default()
         },
     );
-    QueryRequest::Start(iter)
-        .with_authority(authority.clone())
-        .sign(key_pair)
+    authorize_benchmark_query(QueryRequest::Start(iter), authority.clone()).sign(key_pair)
 }
 
 #[derive(Clone)]
@@ -508,12 +545,14 @@ fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
     let query_store = fixture.query_store.clone();
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
+    let signed_query_admission = benchmark_signed_query_admission();
     Router::new().route(
         "/query",
         post(move |body: Bytes| {
             let query_store = query_store.clone();
             let state = Arc::clone(&state);
             let telemetry = telemetry.clone();
+            let signed_query_admission = Arc::clone(&signed_query_admission);
             async move {
                 let Ok(query) = SignedQuery::decode_all_versioned(body.as_ref()) else {
                     return (
@@ -525,6 +564,7 @@ fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
                 match handle_queries_with_opts(
                     query_store,
                     state,
+                    signed_query_admission,
                     query,
                     telemetry,
                     NoritoQuery(QueryOptions {
@@ -896,8 +936,7 @@ async fn run_signed_http_operation(
     let body = send_http_request(router.clone(), &start_template).await;
     let mut cursor = response_body_cursor(&body).expect("first batch exposes stored cursor");
     for _ in 0..continuation_depth {
-        let signed = QueryRequest::Continue(cursor)
-            .with_authority(authority.clone())
+        let signed = authorize_benchmark_query(QueryRequest::Continue(cursor), authority.clone())
             .sign(key_pair.as_ref());
         let template = HttpRequestTemplate::norito("/query", signed.encode_versioned());
         let body = send_http_request(router.clone(), &template).await;
@@ -986,8 +1025,7 @@ async fn run_signed_socket_operation(
     let body = send_socket_request(&client, &base_url, &start_template).await;
     let mut cursor = response_body_cursor(&body).expect("first batch exposes stored cursor");
     for _ in 0..continuation_depth {
-        let signed = QueryRequest::Continue(cursor)
-            .with_authority(authority.clone())
+        let signed = authorize_benchmark_query(QueryRequest::Continue(cursor), authority.clone())
             .sign(key_pair.as_ref());
         let template = HttpRequestTemplate::norito("/query", signed.encode_versioned());
         let body = send_socket_request(&client, &base_url, &template).await;
@@ -1070,12 +1108,14 @@ async fn run_signed_socket_profile(
 
 fn bench_signed_query_verify(c: &mut Criterion) {
     let key_pair = deterministic_key_pair("signed-query-verify");
+    let admission = benchmark_signed_query_admission();
     c.bench_function("torii_signed_query_verify_find_parameters", |b| {
         b.iter_batched(
             || signed_find_parameters(&key_pair),
             |signed_query| {
                 let verified =
-                    verify_signed_query_request_for_bench(signed_query).expect("query verifies");
+                    verify_signed_query_request_for_bench(signed_query, admission.as_ref())
+                        .expect("query verifies");
                 std::hint::black_box(verified);
             },
             BatchSize::SmallInput,
@@ -1093,6 +1133,7 @@ fn bench_query_find_parameters(c: &mut Criterion) {
         query_store.clone(),
     ));
     let telemetry = direct_metrics_telemetry();
+    let admission = benchmark_signed_query_admission();
 
     c.bench_function("torii_query_find_parameters_norito", |b| {
         b.iter_batched(
@@ -1102,6 +1143,7 @@ fn bench_query_find_parameters(c: &mut Criterion) {
                     .block_on(handle_queries_with_opts(
                         query_store.clone(),
                         Arc::clone(&query_state),
+                        Arc::clone(&admission),
                         signed_query,
                         telemetry.clone(),
                         NoritoQuery(QueryOptions::default()),
@@ -1116,16 +1158,12 @@ fn bench_query_find_parameters(c: &mut Criterion) {
 }
 
 fn bench_transaction_admission(c: &mut Criterion) {
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-admission");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1137,7 +1175,7 @@ fn bench_transaction_admission(c: &mut Criterion) {
                 let index = counter.fetch_add(1, Ordering::Relaxed);
                 let instruction = Log::new(Level::INFO, format!("torii-hot-path-bench-{index}"));
                 TransactionBuilder::new(
-                    chain_id.as_ref().clone(),
+                    network_id,
                     tx_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1145,13 +1183,9 @@ fn bench_transaction_admission(c: &mut Criterion) {
                 .sign(tx_key_pair.private_key())
             },
             |tx| {
-                let accepted = accept_transaction_for_ingress_for_bench(
-                    Arc::clone(&chain_id),
-                    Arc::clone(&tx_state),
-                    tx,
-                    &telemetry,
-                )
-                .expect("transaction admission succeeds");
+                let accepted =
+                    accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
+                        .expect("transaction admission succeeds");
                 std::hint::black_box(accepted.hash());
             },
             BatchSize::SmallInput,
@@ -1161,16 +1195,12 @@ fn bench_transaction_admission(c: &mut Criterion) {
 
 fn bench_transaction_handle_enqueue(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_enqueue_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-handle-enqueue");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1190,7 +1220,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
                 let instruction =
                     Log::new(Level::INFO, format!("torii-hot-path-enqueue-bench-{index}"));
                 let tx = TransactionBuilder::new(
-                    chain_id.as_ref().clone(),
+                    network_id,
                     tx_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1203,7 +1233,6 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
             |(queue, tx)| {
                 let decision = runtime
                     .block_on(handle_transaction_with_metrics_for_bench(
-                        Arc::clone(&chain_id),
                         queue,
                         Arc::clone(&tx_state),
                         tx,
@@ -1219,16 +1248,12 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
 }
 
 fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_sustained_enqueue_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-enqueue-sustained-pressure");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1247,7 +1272,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
             format!("torii-hot-path-sustained-enqueue-bench-{index}"),
         );
         TransactionBuilder::new(
-            chain_id.as_ref().clone(),
+            network_id,
             tx_authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1263,13 +1288,9 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         for _ in 0..backlog {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let tx = make_tx(index);
-            let accepted = accept_transaction_for_ingress_for_bench(
-                Arc::clone(&chain_id),
-                Arc::clone(&tx_state),
-                tx,
-                &telemetry,
-            )
-            .expect("prefill transaction admission succeeds");
+            let accepted =
+                accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
+                    .expect("prefill transaction admission succeeds");
             queue
                 .push(accepted, tx_state.view())
                 .expect("prefill enqueue succeeds");
@@ -1286,7 +1307,6 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                     },
                     |tx| {
                         let accepted = accept_transaction_for_ingress_for_bench(
-                            Arc::clone(&chain_id),
                             Arc::clone(&tx_state),
                             tx,
                             &telemetry,

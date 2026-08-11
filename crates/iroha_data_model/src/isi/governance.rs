@@ -20,7 +20,7 @@ pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 use crate::{
-    isi::bridge::SccpRouteGovernanceActionV1,
+    isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
     runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
@@ -29,6 +29,9 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
+
+#[cfg(test)]
+use crate::isi::bridge::SccpRouteGovernanceActionV1;
 
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
@@ -175,8 +178,8 @@ impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 /// Propose one closed SCCP registry action through governance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeSccpRouteGovernance {
-    /// Atomic closed registry action to execute if enacted.
-    pub action: SccpRouteGovernanceActionV1,
+    /// Complete network- and action-bound referendum preimage.
+    pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
     /// Optional referendum window override (inclusive).
     pub window: Option<AtWindow>,
     /// Optional voting mode for the referendum created by this proposal (default Zk).
@@ -184,6 +187,19 @@ pub struct ProposeSccpRouteGovernance {
 }
 
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
+
+/// Propose one closed `SoraFS` provider-owner transition through governance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+pub struct ProposeSorafsProviderGovernance {
+    /// Exact compare-and-set owner transition to execute if enacted.
+    pub action: SorafsProviderGovernanceActionV1,
+    /// Optional referendum window override (inclusive).
+    pub window: Option<AtWindow>,
+    /// Optional voting mode for the referendum created by this proposal (default ZK).
+    pub mode: Option<VotingMode>,
+}
+
+impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
 
 /// Propose one validation-fee policy through SORA Parliament.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
@@ -312,6 +328,33 @@ pub struct EnactReferendum {
 }
 
 impl crate::seal::Instruction for EnactReferendum {}
+
+/// Enact a finalized threshold referendum for one exact SCCP route action.
+///
+/// Unlike the generic referendum instruction, this surface carries the full
+/// closed preimage and Core checks it against the stored proposal, exact
+/// [`NetworkId`], and canonical referendum id before applying any registry
+/// mutation.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct EnactSccpRouteGovernance {
+    /// Canonical identifier derived from the complete SCCP anchor.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub referendum_id: [u8; 32],
+    /// Full network- and action-bound preimage approved by the referendum.
+    pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+    /// Exact finalized enactment window.
+    pub at_window: AtWindow,
+}
+
+impl crate::seal::Instruction for EnactSccpRouteGovernance {}
 
 /// Finalize a referendum: compute tally and emit Approved/Rejected events
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
@@ -575,7 +618,13 @@ impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
 });
 
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
-    action: SccpRouteGovernanceActionV1,
+    anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+    window: Option<AtWindow>,
+    mode: Option<VotingMode>,
+});
+
+impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
+    action: SorafsProviderGovernanceActionV1,
     window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
@@ -629,6 +678,12 @@ impl_governance_decode_from_slice!(EnactReferendum {
     at_window: AtWindow,
 });
 
+impl_governance_decode_from_slice!(EnactSccpRouteGovernance {
+    referendum_id: [u8; 32],
+    anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+    at_window: AtWindow,
+});
+
 impl_governance_decode_from_slice!(FinalizeReferendum {
     referendum_id: String,
     proposal_id: [u8; 32],
@@ -667,7 +722,7 @@ impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
 
@@ -718,6 +773,26 @@ mod tests {
             asset_key: "xor".to_owned(),
             revision: 1,
         })
+    }
+
+    fn sccp_route_anchor() -> crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
+        crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"SCCP governance instruction fixture network",
+                )),
+            ),
+            action: sccp_route_action(),
+        }
+    }
+
+    fn sorafs_provider_action() -> SorafsProviderGovernanceActionV1 {
+        SorafsProviderGovernanceActionV1::Establish(
+            crate::isi::sorafs::EstablishSorafsProviderOwnerV1 {
+                provider_id: crate::sorafs::capacity::ProviderId::new([0x51; 32]),
+                owner: account(1),
+            },
+        )
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -861,7 +936,7 @@ mod tests {
     #[test]
     fn sccp_route_governance_proposal_roundtrip() {
         let ins = ProposeSccpRouteGovernance {
-            action: sccp_route_action(),
+            anchor: sccp_route_anchor(),
             window: Some(window()),
             mode: Some(VotingMode::Plain),
         };
@@ -869,6 +944,19 @@ mod tests {
         let mut cur = enc.as_slice();
         let dec = ProposeSccpRouteGovernance::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
+    }
+
+    #[test]
+    fn sorafs_provider_governance_proposal_roundtrip() {
+        let instruction = ProposeSorafsProviderGovernance {
+            action: sorafs_provider_action(),
+            window: Some(window()),
+            mode: Some(VotingMode::Zk),
+        };
+        let encoded = instruction.encode();
+        let decoded = ProposeSorafsProviderGovernance::decode(&mut encoded.as_slice())
+            .expect("decode SoraFS provider-governance proposal");
+        assert_eq!(instruction, decoded);
     }
 
     #[test]
@@ -923,9 +1011,14 @@ mod tests {
             mode: Some(VotingMode::Plain),
         });
         assert_slice_roundtrip(ProposeSccpRouteGovernance {
-            action: sccp_route_action(),
+            anchor: sccp_route_anchor(),
             window: Some(window()),
             mode: Some(VotingMode::Plain),
+        });
+        assert_slice_roundtrip(ProposeSorafsProviderGovernance {
+            action: sorafs_provider_action(),
+            window: Some(window()),
+            mode: Some(VotingMode::Zk),
         });
         assert_slice_roundtrip(CastZkBallot {
             election_id: "referendum-1".to_owned(),
@@ -1009,6 +1102,14 @@ mod tests {
                 manifest: runtime_manifest(),
                 window: Some(window()),
                 mode: Some(VotingMode::Plain),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            ProposeSorafsProviderGovernance {
+                action: sorafs_provider_action(),
+                window: Some(window()),
+                mode: Some(VotingMode::Zk),
             },
         );
         assert_registry_decodes(

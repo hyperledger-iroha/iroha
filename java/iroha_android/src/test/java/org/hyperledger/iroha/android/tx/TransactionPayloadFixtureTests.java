@@ -28,6 +28,8 @@ import org.junit.Test;
 public final class TransactionPayloadFixtureTests {
 
   private static final String SAMPLE_AUTHORITY = sampleAuthority((byte) 0x11);
+  private static final String TEST_NETWORK_ID =
+      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 
   @Test
   public void validatePayloadFixtures() throws Exception {
@@ -50,7 +52,7 @@ public final class TransactionPayloadFixtureTests {
     executable.put("Instructions", instructions);
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("chain", "00000001");
+    payload.put("network_id", TEST_NETWORK_ID);
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", 100_000L);
@@ -94,7 +96,7 @@ public final class TransactionPayloadFixtureTests {
     executable.put("Instructions", instructions);
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("chain", "00000001");
+    payload.put("network_id", TEST_NETWORK_ID);
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", 100_000L);
@@ -159,6 +161,48 @@ public final class TransactionPayloadFixtureTests {
   }
 
   @Test
+  public void transactionFixtureSchemasRejectChainChainIdAndChainIdSnakeCase() {
+    for (final String legacyField : Arrays.asList("chain", "chainId", "chain_id")) {
+      final Map<String, Object> legacyTopLevel = ttlFixture(100_000L, 100_000L);
+      legacyTopLevel.put(legacyField, "legacy");
+      assertThrowsContaining(
+          () -> TransactionPayloadFixtures.Fixture.fromObject(legacyTopLevel),
+          "unknown top-level field '" + legacyField + "'",
+          "legacy top-level " + legacyField + " field must be rejected");
+
+      final Map<String, Object> legacyPayload = ttlFixture(100_000L, 100_000L);
+      @SuppressWarnings("unchecked")
+      final Map<String, Object> nestedLegacy =
+          (Map<String, Object>) legacyPayload.get("payload");
+      nestedLegacy.put(legacyField, "legacy");
+      assertThrowsContaining(
+          () -> TransactionPayloadFixtures.Fixture.fromObject(legacyPayload),
+          "unknown payload field '" + legacyField + "'",
+          "legacy payload " + legacyField + " field must be rejected");
+    }
+  }
+
+  @Test
+  public void fixtureLoaderRejectsNonCanonicalNetworkIdentity() {
+    final Map<String, Object> lowercaseTopLevel = ttlFixture(100_000L, 100_000L);
+    lowercaseTopLevel.put("network_id", TEST_NETWORK_ID.toLowerCase(java.util.Locale.ROOT));
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(lowercaseTopLevel),
+        "canonical network hash identity",
+        "top-level network_id must use canonical hash text");
+
+    final Map<String, Object> lowercasePayload = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> nestedLowercase =
+        (Map<String, Object>) lowercasePayload.get("payload");
+    nestedLowercase.put("network_id", TEST_NETWORK_ID.toLowerCase(java.util.Locale.ROOT));
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(lowercasePayload),
+        "canonical network hash identity",
+        "payload network_id must use canonical hash text");
+  }
+
+  @Test
   public void fixtureLoaderRequiresPayloadBase64AndStructuredPayload() {
     final Map<String, Object> missingPayloadBase64 = ttlFixture(100_000L, 100_000L);
     missingPayloadBase64.remove("payload_base64");
@@ -212,8 +256,8 @@ public final class TransactionPayloadFixtureTests {
     for (TransactionPayloadFixtures.Fixture fixture : TransactionPayloadFixtures.load(path)) {
       final String name = fixture.name();
       final TransactionPayload payload = fixture.toPayload();
-      assert Objects.equals(fixture.chain(), payload.chainId())
-          : name + ": chain mismatch vs fixture metadata";
+      assert Objects.equals(fixture.networkId(), payload.networkId())
+          : name + ": network_id mismatch vs fixture metadata";
       assert Objects.equals(fixture.authority(), payload.authority())
           : name + ": authority mismatch vs fixture metadata";
       assert fixture.creationTimeMs() == payload.creationTimeMs()
@@ -274,8 +318,8 @@ public final class TransactionPayloadFixtureTests {
 
   private static void assertPayloadEquals(
       final String name, final TransactionPayload expected, final TransactionPayload actual) {
-    assert Objects.equals(expected.chainId(), actual.chainId())
-        : name + ": chain mismatch";
+    assert Objects.equals(expected.networkId(), actual.networkId())
+        : name + ": network_id mismatch";
     assert Objects.equals(expected.authority(), actual.authority())
         : name + ": authority mismatch";
     assert expected.creationTimeMs() == actual.creationTimeMs()
@@ -384,7 +428,7 @@ public final class TransactionPayloadFixtureTests {
   private static Map<String, Object> ttlFixture(
       final Object topLevelTtl, final Object payloadTtl) {
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("chain", "00000001");
+    payload.put("network_id", TEST_NETWORK_ID);
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", payloadTtl);
@@ -404,7 +448,7 @@ public final class TransactionPayloadFixtureTests {
       final String name, final Map<String, Object> payload) {
     final Map<String, Object> fixture = new LinkedHashMap<>();
     fixture.put("name", name);
-    fixture.put("chain", payload.get("chain"));
+    fixture.put("network_id", payload.get("network_id"));
     fixture.put("authority", payload.get("authority"));
     fixture.put("creation_time_ms", payload.get("creation_time_ms"));
     fixture.put("time_to_live_ms", payload.get("time_to_live_ms"));

@@ -13,6 +13,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
+    NetworkId,
     block::BlockHeader,
     da::{
         commitment::{
@@ -640,6 +641,8 @@ fn default_retention_policy() -> RetentionPolicy {
 /// Returns an error if signature generation fails (should be infallible under
 /// normal conditions).
 pub fn build_da_request(
+    network_id: NetworkId,
+    owner: AccountId,
     payload_bytes: Vec<u8>,
     params: &DaIngestParams,
     metadata: ExtraMetadata,
@@ -652,6 +655,8 @@ pub fn build_da_request(
         BlobDigest::from_hash(hasher.finalize())
     });
     DaIngestRequestIntentV1 {
+        network_id,
+        owner,
         client_blob_id,
         lane_id: params.lane_id,
         epoch: params.epoch,
@@ -662,6 +667,7 @@ pub fn build_da_request(
         retention_policy: params.retention_policy.clone(),
         chunk_size: params.chunk_size,
         total_size: payload_bytes.len() as u64,
+        payload_hash: BlobDigest::from_hash(blake3::hash(&payload_bytes)),
         compression: Compression::Identity,
         norito_manifest: manifest_bytes,
         payload: payload_bytes,
@@ -1266,6 +1272,8 @@ mod tests {
         let params = sample_ingest_params(None);
         let payload = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let request = build_da_request(
+            crate::client::test_network_id(),
+            AccountId::new(key_pair.public_key().clone()),
             payload.clone(),
             &params,
             ExtraMetadata { items: Vec::new() },
@@ -1286,6 +1294,8 @@ mod tests {
         let override_digest = BlobDigest::new([0xAB; 32]);
         let params = sample_ingest_params(Some(override_digest));
         let request = build_da_request(
+            crate::client::test_network_id(),
+            AccountId::new(key_pair.public_key().clone()),
             vec![0x01, 0x02],
             &params,
             ExtraMetadata { items: Vec::new() },

@@ -208,7 +208,7 @@ fn certified_view_change_resets_set_b_fallback() {
         .collect();
     let context = HeightContext::new(
         ContextId::repeat(0x67),
-        ChainId::repeat(0x68),
+        NetworkId::repeat(0x68),
         2,
         Some(CertificateRef::new(
             ContextId::repeat(0x69),
@@ -293,7 +293,7 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         .collect();
     let context = HeightContext::new(
         ContextId::repeat(0x70),
-        ChainId::repeat(0x71),
+        NetworkId::repeat(0x71),
         2,
         Some(CertificateRef::new(
             ContextId::repeat(0x72),

@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -234,6 +235,28 @@ public final class AliasNoritoCodec {
         @Override
         public String decode(final NoritoDecoder decoder) {
           return decodeField(decoder, STRING);
+        }
+      };
+
+  private static final TypeAdapter<NetworkId> NETWORK_ID_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final NetworkId value) {
+          encoder.writeBytes(value.bytes());
+        }
+
+        @Override
+        public NetworkId decode(final NoritoDecoder decoder) {
+          if (decoder.remaining() != NetworkId.BYTE_LENGTH) {
+            throw new IllegalArgumentException(
+                "NetworkId must contain exactly " + NetworkId.BYTE_LENGTH + " bytes");
+          }
+          return NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH));
+        }
+
+        @Override
+        public int fixedSize() {
+          return NetworkId.BYTE_LENGTH;
         }
       };
 
@@ -926,7 +949,7 @@ public final class AliasNoritoCodec {
                 final AliasSetupModels.AliasTransactionPlanBodyV1 value) {
               encodeField(encoder, U8, (long) value.version());
               encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
-              encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+              encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId());
               encodeField(encoder, ANCHOR_ADAPTER, value.anchor());
               encodeField(encoder, RESOURCE_LIST, value.resources());
               encodeField(encoder, INSTRUCTION_LIST, value.instructions());
@@ -942,7 +965,7 @@ public final class AliasNoritoCodec {
               return new AliasSetupModels.AliasTransactionPlanBodyV1(
                   Math.toIntExact(decodeField(decoder, U8)),
                   decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                  decodeField(decoder, CHAIN_ID_ADAPTER),
+                  decodeField(decoder, NETWORK_ID_ADAPTER),
                   decodeField(decoder, ANCHOR_ADAPTER),
                   decodeField(decoder, RESOURCE_LIST),
                   decodeField(decoder, INSTRUCTION_LIST),
@@ -991,7 +1014,7 @@ public final class AliasNoritoCodec {
               encodeField(encoder, U8, (long) value.version());
               encodeField(encoder, ONBOARDING_REQUEST_ADAPTER, value.request());
               encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
-              encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+              encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId());
               encodeField(encoder, ANCHOR_ADAPTER, value.anchor());
               encodeField(encoder, PLAN_RESOURCE_ADAPTER, value.resource());
               encodeField(encoder, ACQUISITION_ADAPTER, value.acquisition());
@@ -1010,7 +1033,7 @@ public final class AliasNoritoCodec {
                   Math.toIntExact(decodeField(decoder, U8)),
                   decodeField(decoder, ONBOARDING_REQUEST_ADAPTER),
                   decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                  decodeField(decoder, CHAIN_ID_ADAPTER),
+                  decodeField(decoder, NETWORK_ID_ADAPTER),
                   decodeField(decoder, ANCHOR_ADAPTER),
                   decodeField(decoder, PLAN_RESOURCE_ADAPTER),
                   decodeField(decoder, ACQUISITION_ADAPTER),
@@ -1030,7 +1053,7 @@ public final class AliasNoritoCodec {
                 final NoritoEncoder encoder, final AliasLifecycleTransactionPlanBodyV1 value) {
               encodeField(encoder, U8, (long) value.version());
               encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
-              encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+              encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId());
               encodeField(encoder, ANCHOR_ADAPTER, value.anchor());
               encodeField(encoder, LIFECYCLE_OPERATION_ADAPTER, value.operation());
               encodeField(encoder, U32, (long) value.disposition().ordinal());
@@ -1047,7 +1070,7 @@ public final class AliasNoritoCodec {
               return new AliasLifecycleTransactionPlanBodyV1(
                   Math.toIntExact(decodeField(decoder, U8)),
                   decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                  decodeField(decoder, CHAIN_ID_ADAPTER),
+                  decodeField(decoder, NETWORK_ID_ADAPTER),
                   decodeField(decoder, ANCHOR_ADAPTER),
                   decodeField(decoder, LIFECYCLE_OPERATION_ADAPTER),
                   enumAt(

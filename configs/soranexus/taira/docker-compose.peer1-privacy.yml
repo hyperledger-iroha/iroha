@@ -9,6 +9,7 @@ services:
     entrypoint:
       - /opt/iroha/configs/soranexus/taira/taira-validator-peer1-privacy.sh
     environment:
+      TAIRA_NETWORK_ID: ${TAIRA_NETWORK_ID:?set the genesis expected-hash NetworkId}
       TAIRA_BOOTLE_LANTERN_EXPECTED_POLICY_RECORD_DIGEST: ${TAIRA_BOOTLE_LANTERN_EXPECTED_POLICY_RECORD_DIGEST:?set the reviewed export-public policy record digest}
       TAIRA_BOOTLE_LANTERN_EXPECTED_QUALIFICATION_POLICY_DIGEST: ${TAIRA_BOOTLE_LANTERN_EXPECTED_QUALIFICATION_POLICY_DIGEST:?set the reviewed export-public qualification digest}
     volumes:

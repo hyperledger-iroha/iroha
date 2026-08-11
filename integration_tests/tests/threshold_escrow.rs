@@ -477,7 +477,7 @@ async fn setup_ledger_for_sample(
                 ALICE_ID.clone(),
             );
             let tx = TransactionBuilder::new(
-                client.chain.clone(),
+                client.network_id,
                 BOB_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

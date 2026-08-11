@@ -11,8 +11,10 @@ Normal startup is bound to both:
 - the configured `genesis.public_key`; and
 - one exact signed-genesis consensus-header hash.
 
-`genesis.expected_hash` is mandatory and supplies the exact hash independently
-of any block body. A locally provisioned signed `genesis.file`, when present,
+Exactly one of inline `genesis.expected_hash` or canonical one-line
+`genesis.expected_hash_file` is mandatory and supplies the exact hash independently
+of any block body. Production templates use `/run/iroha/genesis.expected_hash`,
+the same public file selected by client `network_id_file`. A locally provisioned signed `genesis.file`, when present,
 must agree with it. Configuration normalization rejects a missing or malformed
 hash before startup reads a genesis body from the artifact or Kura. This
 ordering means an on-disk or operator-provisioned block can satisfy a trust root
@@ -89,11 +91,16 @@ artifact and replay invariants.
 
 1. Distribute the same signed genesis artifact and configured public key to
    every node before first start.
-2. Record its exact consensus-header hash as the mandatory
-   `genesis.expected_hash` on every node. Kagami prints this value after signing,
-   `--expected-hash-out` provides a machine-readable copy, and generated
-   localnets persist it in `genesis.expected_hash`, decode the signed body back,
-   and check the same value in every peer config. Use normal seedless
+2. Record its exact consensus-header hash through exactly one of
+   `genesis.expected_hash` or `genesis.expected_hash_file` on every node. Kagami prints this value after signing.
+   `--expected-hash-out <name>.expected_hash` writes the canonical one-line value
+   and atomically publishes `<name>.identity.toml`, which binds the same exact
+   hash as client `network_id` and validator `genesis.expected_hash` in one
+   artifact. Production validators and clients consume that same one-line file
+   through `expected_hash_file` and `network_id_file`; deployment renderers consume the paired artifact instead of
+   assembling the two security domains independently. Generated localnets also
+   decode the signed body back and check the same value in every peer config.
+   Use normal seedless
    `kagami docker` generation so the same prepared validator bundle and all
    three operator-approved files are validated before Compose is written.
 3. Verify the external artifact and configured hash are identical before first

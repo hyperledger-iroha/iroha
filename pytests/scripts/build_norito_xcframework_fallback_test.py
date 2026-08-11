@@ -45,7 +45,8 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
             "$IPHONESIMULATOR_SDKROOT",
             "$SIM_X64_TRIPLE",
         ),
-        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_TRIPLE"),
+        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_ARM_TRIPLE"),
+        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_X64_TRIPLE"),
     )
     for call, (profile, sdkroot, triple) in zip(calls, expected_slices, strict=True):
         assert len(call) == 5

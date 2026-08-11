@@ -431,7 +431,7 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
             '"pre-WSV Native AMX participant evidence publication"',
             '"failed live Native prepublication must not stage WSV"',
             "prepublish_native_amx_participant_application_evidence(",
-            "durable_carrier.as_ref(),\n                None,",
+            "durable_carrier.as_ref(), None)",
             '"live merge prepublication requires its exact staged witness"',
             "durable_carrier.as_ref(),\n                Some(&entry),",
             "live_prepublication.authenticates_state_frontiers",

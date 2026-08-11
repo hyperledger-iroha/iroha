@@ -291,6 +291,44 @@ impl StorageSchedulersRuntime {
         F: FnOnce() -> Result<T, E>,
         T: AsRef<[u8]>,
     {
+        self.try_run_fetch_with_failure_accounting(requested_bytes, provider, false, work)
+    }
+
+    /// Attempt a fetch and conservatively charge the requested bytes when verified work fails.
+    ///
+    /// Use this boundary when the inner operation can consume bytes before discovering an
+    /// integrity failure but cannot safely expose a partial buffer. Charging the complete
+    /// admitted request prevents repeated corrupt reads from refunding and bypassing the local
+    /// byte-rate budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same admission errors as [`Self::try_run_fetch`]. Inner work errors are
+    /// preserved, while their accounting uses `requested_bytes` rather than zero.
+    pub fn try_run_fetch_charging_failures<F, T, E>(
+        &self,
+        requested_bytes: u64,
+        provider: Option<&str>,
+        work: F,
+    ) -> Result<Result<T, E>, SchedulerAdmissionError>
+    where
+        F: FnOnce() -> Result<T, E>,
+        T: AsRef<[u8]>,
+    {
+        self.try_run_fetch_with_failure_accounting(requested_bytes, provider, true, work)
+    }
+
+    fn try_run_fetch_with_failure_accounting<F, T, E>(
+        &self,
+        requested_bytes: u64,
+        provider: Option<&str>,
+        charge_failure: bool,
+        work: F,
+    ) -> Result<Result<T, E>, SchedulerAdmissionError>
+    where
+        F: FnOnce() -> Result<T, E>,
+        T: AsRef<[u8]>,
+    {
         let provider_key = provider.unwrap_or(LOCAL_PROVIDER_LABEL);
         let mut scope =
             FetchScope::try_new(&self.inner, provider_key.to_string(), requested_bytes)?;
@@ -299,6 +337,7 @@ impl StorageSchedulersRuntime {
         let elapsed = start.elapsed();
         match &result {
             Ok(buffer) => scope.complete(buffer.as_ref().len() as u64, elapsed),
+            Err(_) if charge_failure => scope.complete(requested_bytes, elapsed),
             Err(_) => scope.complete(0, elapsed),
         }
         scope.finish();
@@ -1157,6 +1196,39 @@ mod tests {
             })
             .expect("permit must be released after work failure")
             .expect("second work succeeds");
+    }
+
+    #[test]
+    fn verified_fetch_failure_charges_the_admitted_byte_budget() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            fetch_global_bytes_per_sec: 32,
+            ..StorageSchedulerConfig::default()
+        });
+        let work_error = runtime
+            .try_run_fetch_charging_failures(
+                32,
+                Some("provider-a"),
+                || -> Result<Vec<u8>, &'static str> { Err("integrity failure") },
+            )
+            .expect("scheduler admits verified read")
+            .expect_err("verified read failure is preserved");
+        assert_eq!(work_error, "integrity failure");
+
+        let global_rate = runtime
+            .inner
+            .fetch
+            .global_rate
+            .as_ref()
+            .expect("configured global byte budget");
+        assert_eq!(
+            global_rate
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tokens,
+            0,
+            "failed verified work must not refund the admitted bytes"
+        );
     }
 
     #[test]

@@ -17,8 +17,10 @@ Example usage:
 ```bash
 python -m iroha_python.examples.connect_flow \\
   --base-url http://127.0.0.1:8080 \\
-  --sid demo-session-id \\
-  --chain-id dev-chain \\
+  --network-id '<exact-checksummed-network-id>' \\
+  --sid '<derived-base64url-sid>' \\
+  --app-public-key '<32-byte-x25519-public-key-hex>' \\
+  --nonce '<16-byte-nonce-hex>' \\
   --auth-token admin-token
 ```
 """
@@ -44,6 +46,7 @@ from iroha_python import (
     ConnectPreviewBootstrapResult,
     ConnectSessionInfo,
     ConnectStatusSnapshot,
+    NetworkId,
     bootstrap_connect_preview_session,
     connect_public_key_from_private,
     create_connect_session_preview,
@@ -56,14 +59,16 @@ _DEFAULT_METHODS = ("SIGN_REQUEST_TX",)
 
 
 def _decode_sid(value: str) -> bytes:
-    """Decode a Connect SID from hex or base64url."""
+    """Decode one canonical unpadded 32-byte Connect SID."""
 
-    value = value.strip()
-    if value.startswith("0x"):
-        return bytes.fromhex(value[2:])
-    # Pad base64url if necessary
+    if not value or value != value.strip() or "=" in value:
+        raise ValueError("SID must be exact unpadded base64url")
     pad = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + pad)
+    decoded = base64.urlsafe_b64decode(value + pad)
+    canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+    if len(decoded) != 32 or canonical != value:
+        raise ValueError("SID must be canonical base64url for exactly 32 bytes")
+    return decoded
 
 
 def _print_session_info(info: ConnectSessionInfo) -> None:
@@ -177,7 +182,7 @@ def _preview_summary_payload(result: ConnectPreviewBootstrapResult) -> Dict[str,
 
     preview = result.preview
     payload: Dict[str, Any] = {
-        "chain_id": preview.chain_id,
+        "network_id": preview.network_id.literal,
         "node": preview.node,
         "sid_base64url": preview.sid_base64url,
         "nonce_hex": preview.nonce.hex(),
@@ -210,7 +215,7 @@ def _print_preview_result(result: ConnectPreviewBootstrapResult) -> None:
 
     preview = result.preview
     print("Connect preview generated:")
-    print(f"  Chain ID:       {preview.chain_id}")
+    print(f"  Network ID:     {preview.network_id.literal}")
     if preview.node:
         print(f"  Node:           {preview.node}")
     print(f"  SID (base64url): {preview.sid_base64url}")
@@ -230,7 +235,7 @@ def build_connect_open_frame(
     session: ConnectSessionInfo,
     *,
     app_public_key: bytes,
-    chain_id: str,
+    network_id: NetworkId,
     methods: List[str],
     events: List[str],
     sequence: int = 1,
@@ -239,9 +244,11 @@ def build_connect_open_frame(
     """Construct a `ConnectFrame` carrying an `Open` control."""
 
     sid_bytes = _decode_sid(session.sid)
+    if app_public_key != session.app_public_key or network_id != session.network_id:
+        raise ValueError("Open inputs must match the registered exact Connect session")
     control = ConnectControlOpen(
         app_public_key=app_public_key,
-        chain_id=chain_id,
+        network_id=network_id,
         permissions=ConnectPermissions(methods=methods, events=events),
         metadata=metadata,
     )
@@ -260,8 +267,12 @@ def _run_preview_mode(args: argparse.Namespace, parser: argparse.ArgumentParser)
         parser.error("--status-only cannot be combined with --mode=preview")
     if args.write_app_metadata_template:
         parser.error("--write-app-metadata-template cannot be combined with --mode=preview")
-    if not args.chain_id:
-        parser.error("--chain-id is required when --mode=preview")
+    if not args.network_id:
+        parser.error("--network-id is required when --mode=preview")
+    try:
+        network_id = NetworkId.parse(args.network_id)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     node = args.preview_node or args.node
     nonce_bytes: Optional[bytes] = None
@@ -302,7 +313,7 @@ def _run_preview_mode(args: argparse.Namespace, parser: argparse.ArgumentParser)
         )
         result = bootstrap_connect_preview_session(
             client,
-            chain_id=args.chain_id,
+            network_id=network_id,
             node=node,
             nonce=nonce_bytes,
             app_key_pair=app_key_pair,
@@ -311,7 +322,7 @@ def _run_preview_mode(args: argparse.Namespace, parser: argparse.ArgumentParser)
         )
     else:
         preview = create_connect_session_preview(
-            chain_id=args.chain_id,
+            network_id=network_id,
             node=node,
             nonce=nonce_bytes,
             app_key_pair=app_key_pair,
@@ -342,8 +353,9 @@ def main() -> None:
         default="http://127.0.0.1:8080",
         help="Torii base URL (default: %(default)s)",
     )
-    parser.add_argument("--sid", help="Session identifier (hex or base64url)")
-    parser.add_argument("--chain-id", help="Chain identifier for the Connect request")
+    parser.add_argument("--sid", help="Canonical unpadded base64url session identifier")
+    parser.add_argument("--network-id", help="Exact checksummed NetworkId for the deployment")
+    parser.add_argument("--nonce", help="Hex-encoded 16-byte Connect session nonce")
     parser.add_argument(
         "--node",
         default="http://127.0.0.1:8080",
@@ -375,7 +387,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--app-public-key",
-        help="Hex-encoded Ed25519 public key for the application. Defaults to zeros.",
+        help="Hex-encoded 32-byte X25519 public key for the application.",
     )
     parser.add_argument(
         "--sequence",
@@ -475,7 +487,8 @@ def main() -> None:
     if args.status_only:
         if (
             args.sid
-            or args.chain_id
+            or args.network_id
+            or args.nonce
             or args.app_public_key
             or args.app_name
             or args.app_url
@@ -496,8 +509,14 @@ def main() -> None:
             parser.error("--app-name is required when specifying --app-url or --app-icon-hash")
         if not args.sid:
             parser.error("--sid is required (provide --sid or use --write-app-metadata-template)")
-        if not args.chain_id:
-            parser.error("--chain-id is required (provide --chain-id or use --write-app-metadata-template)")
+        if not args.network_id:
+            parser.error("--network-id is required")
+        if not args.app_public_key:
+            parser.error("--app-public-key is required")
+        if not args.nonce:
+            parser.error("--nonce is required")
+        if args.sequence != 1:
+            parser.error("Connect Open sequence must be exactly 1")
 
     client = create_torii_client(
         args.base_url,
@@ -520,11 +539,23 @@ def main() -> None:
     if args.status_only:
         return
 
+    try:
+        network_id = NetworkId.parse(args.network_id)
+        app_public_key = _parse_fixed_length_hex(
+            args.app_public_key, field="--app-public-key", expected_length=32
+        )
+        nonce = _parse_fixed_length_hex(args.nonce, field="--nonce", expected_length=16)
+        sid_bytes = _decode_sid(args.sid)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     session_info = client.create_connect_session_info(
         {
             "sid": args.sid,
+            "network_id": network_id.literal,
+            "app_pk": base64.urlsafe_b64encode(app_public_key).rstrip(b"=").decode("ascii"),
+            "nonce": base64.urlsafe_b64encode(nonce).rstrip(b"=").decode("ascii"),
             "node": args.node,
-            "role": "app",
         }
     )
     _print_session_info(session_info)
@@ -540,10 +571,8 @@ def main() -> None:
         )
         print(f"Status JSON written to {destination}")
 
-    if args.app_public_key:
-        app_public_key = bytes.fromhex(args.app_public_key)
-    else:
-        app_public_key = b"\x00" * 32
+    if _decode_sid(session_info.sid) != sid_bytes:
+        raise RuntimeError("Torii substituted the registered Connect SID")
 
     if args.app_metadata_file:
         try:
@@ -563,7 +592,7 @@ def main() -> None:
     frame = build_connect_open_frame(
         session_info,
         app_public_key=app_public_key,
-        chain_id=args.chain_id,
+        network_id=session_info.network_id,
         methods=list(dict.fromkeys(args.methods)),
         events=list(dict.fromkeys(args.events)),
         sequence=args.sequence,

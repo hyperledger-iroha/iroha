@@ -2088,6 +2088,7 @@ with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
 chain = source.get("chain")
+network_id = source.get("network_id")
 account = source.get("account") or {}
 public_key = account.get("public_key")
 private_key = account.get("private_key")
@@ -2106,6 +2107,8 @@ if chain != expected_chain_id:
         "write canary config must target the expected Taira chain "
         f"`{expected_chain_id}`"
     )
+if not isinstance(network_id, str) or not network_id:
+    raise SystemExit("write canary config is missing a top-level `network_id` value")
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
@@ -2123,6 +2126,7 @@ if not isinstance(nonce, bool):
 
 lines = [
     f'chain = "{chain}"',
+    f'network_id = "{network_id}"',
     f'torii_url = "{target_torii_url.rstrip("/")}/"',
 ]
 

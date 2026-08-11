@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
@@ -24,6 +25,7 @@ public final class AliasPlanApply {
   public static TransactionPayload buildTransactionPayload(
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
@@ -34,6 +36,7 @@ public final class AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasEnsureInstructionFrameCodec.INSTANCE,
+        networkId,
         chainDiscriminant,
         feePayment,
         creationTimeMs,
@@ -47,6 +50,7 @@ public final class AliasPlanApply {
       final AliasTransactionPlanV1 plan,
       final AliasPlanBodyNoritoEncoder bodyEncoder,
       final AliasEnsureInstructionFrameCodec frameCodec,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
@@ -56,10 +60,15 @@ public final class AliasPlanApply {
         || plan == null
         || bodyEncoder == null
         || frameCodec == null
+        || networkId == null
         || feePayment == null) {
       throw new IllegalArgumentException("alias plan apply arguments must not be null");
     }
     if (creationTimeMs < 0) throw new IllegalArgumentException("creationTimeMs must not be negative");
+    if (!plan.body().networkId().equals(networkId)) {
+      throw new IllegalArgumentException(
+          "alias setup plan NetworkId does not match the trusted transaction network");
+    }
     if (plan.body().validUntilMs() <= creationTimeMs) {
       throw new IllegalArgumentException("alias setup plan has expired");
     }
@@ -74,7 +83,7 @@ public final class AliasPlanApply {
       instructions.add(InstructionBox.fromWirePayload(frame.wireId(), frame.framedPayload()));
     }
     return TransactionPayload.builder()
-        .setChainId(plan.body().chainId())
+        .setNetworkId(networkId)
         .setAuthority(plan.body().authority())
         .setCreationTimeMs(creationTimeMs)
         .setInstructions(instructions)
@@ -90,6 +99,7 @@ public final class AliasPlanApply {
       final IrohaClient client,
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final NetworkId networkId,
       final AliasPlanBodyNoritoEncoder bodyEncoder,
       final AliasEnsureInstructionFrameCodec frameCodec,
       final int chainDiscriminant,
@@ -109,6 +119,7 @@ public final class AliasPlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            networkId,
             chainDiscriminant,
             feePayment,
             creationTimeMs,
@@ -122,6 +133,7 @@ public final class AliasPlanApply {
       final IrohaClient client,
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
@@ -134,6 +146,7 @@ public final class AliasPlanApply {
         client,
         request,
         plan,
+        networkId,
         DefaultAliasPlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasEnsureInstructionFrameCodec.INSTANCE,
         chainDiscriminant,

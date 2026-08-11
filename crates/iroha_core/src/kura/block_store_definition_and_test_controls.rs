@@ -842,9 +842,7 @@ impl BlockStore {
             .swap(false, Ordering::AcqRel)
         {
             return Err(Error::IO(
-                std::io::Error::other(
-                    "injected crash after deterministic commit-marker temp sync",
-                ),
+                std::io::Error::other("injected crash after deterministic commit-marker temp sync"),
                 temporary_path.to_path_buf(),
             ));
         }

@@ -24,7 +24,7 @@ public enum PrivacyProtocolIdV1 : uint
     PqMaspStarkV0 = 11,
 }
 
-/// <summary>Stable ABI-21 result of validating one typed local compiled-profile catalog.</summary>
+/// <summary>Stable ABI-22 result of validating one typed local compiled-profile catalog.</summary>
 public enum PrivacyCompiledProfileCatalogValidationStatusV1
 {
     Valid = 0,
@@ -38,7 +38,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1
     InvalidCatalog = 8,
 }
 
-/// <summary>Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle.</summary>
+/// <summary>Stable ABI-22 result of validating the Rust-derived exact-12 fixture bundle.</summary>
 public enum PrivacyExact12FixtureValidationStatusV1
 {
     Valid = 0,
@@ -221,7 +221,7 @@ public static class PrivacyNative
     public const int PrivacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024;
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
-    public const uint RequiredBridgeAbiVersion = 21;
+    public const uint RequiredBridgeAbiVersion = 22;
     // Do not inherit the comparatively small worker stacks used by foreign managed runtimes.
     private const int NativeWorkerStackBytes = 16 * 1024 * 1024;
     private const string LibraryName = "connect_norito_bridge";
@@ -473,6 +473,48 @@ public static class PrivacyNative
                 "Native exact-12 privacy fixture validation returned an unknown status.");
         }
         return (PrivacyExact12FixtureValidationStatusV1)code;
+    }
+
+    /// <summary>
+    /// Strictly validate canonical committed Exact12 manifest bytes and compare every complete
+    /// compiled-profile result with this ABI-22 binary's native-validated local catalog.
+    /// </summary>
+    /// <remarks>
+    /// A valid result is a structural and local-tuple prerequisite only. This method cannot mint
+    /// network authority; only the authenticated Torii fetch can issue a manifest model usable by
+    /// <see cref="PrivacyExact12CapabilityAdmissionV1.RequireExact12CapabilityTupleV1"/>.
+    /// </remarks>
+    public static PrivacyExact12CapabilityManifestValidationStatusV1
+        ValidateExact12CapabilityManifestV1(byte[] archive)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        if (archive.Length == 0)
+        {
+            return PrivacyExact12CapabilityManifestValidationStatusV1.Empty;
+        }
+        if (archive.Length > PrivacyExact12CapabilityManifestV1.MaxArchiveBytes)
+        {
+            return PrivacyExact12CapabilityManifestValidationStatusV1.ArchiveTooLarge;
+        }
+        if (!IsAvailable())
+        {
+            return PrivacyExact12CapabilityManifestValidationStatusV1.NativeUnavailable;
+        }
+
+        try
+        {
+            var catalog = CompiledProfileCatalogV1().NoritoBytes;
+            PrivacyExact12CapabilityManifestCodecV1.Validate(archive, catalog);
+            return PrivacyExact12CapabilityManifestValidationStatusV1.Valid;
+        }
+        catch (PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException)
+        {
+            return PrivacyExact12CapabilityManifestValidationStatusV1.LocalCompiledTupleMismatch;
+        }
+        catch (PrivacyExact12CapabilityManifestException)
+        {
+            return PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest;
+        }
     }
 
     private static T RunWithNativeStack<T>(Func<T> action)

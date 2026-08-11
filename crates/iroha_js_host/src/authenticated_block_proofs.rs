@@ -3,14 +3,14 @@
 //! The JavaScript SDK's pure Merkle helper deliberately cannot establish a
 //! trust anchor. This module accepts the exact executed block wire and Torii's
 //! canonical finality/proof archives, verifies Sumeragi-v2 finality under an
-//! application-pinned chain context, and only then asks the data model to
+//! application-pinned network context, and only then asks the data model to
 //! derive its non-serializable `TrustedBlockProofAnchor` capability.
 
 use std::{fmt, str::FromStr as _};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         SignedBlock,
         consensus_v2::{HeightContext, HeightContextId},
@@ -43,8 +43,8 @@ const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
 pub struct JsAuthenticatedBlockProofInputV1 {
     /// Exact bridge ABI version. The first release requires `1`.
     pub version: u8,
-    /// Application-pinned canonical chain identifier.
-    pub chain_id: String,
+    /// Application-pinned exact genesis-derived network identity.
+    pub network_id: String,
     /// Application-pinned, marked 32-byte `HeightContextId`.
     pub trusted_context_id: Buffer,
     /// Application-selected, marked 32-byte transaction entrypoint hash.
@@ -85,7 +85,7 @@ pub struct JsAuthenticatedBlockProofVerdictV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerificationErrorCode {
     UnsupportedVersion,
-    InvalidChainId,
+    InvalidNetworkId,
     InvalidContextId,
     InvalidEntryHash,
     EmptyInput,
@@ -101,7 +101,7 @@ impl VerificationErrorCode {
     const fn as_str(self) -> &'static str {
         match self {
             Self::UnsupportedVersion => "unsupported_version",
-            Self::InvalidChainId => "invalid_chain_id",
+            Self::InvalidNetworkId => "invalid_network_id",
             Self::InvalidContextId => "invalid_context_id",
             Self::InvalidEntryHash => "invalid_entry_hash",
             Self::EmptyInput => "empty_input",
@@ -143,7 +143,7 @@ impl fmt::Display for VerificationError {
 
 struct RawVerificationInputV1<'a> {
     version: u8,
-    chain_id: &'a str,
+    network_id: &'a str,
     trusted_context_id: &'a [u8],
     expected_entry_hash: &'a [u8],
     previous_finality_proof_norito: Option<&'a [u8]>,
@@ -193,7 +193,7 @@ pub async fn block_proofs_verify_authenticated_v1(
     tokio::task::spawn_blocking(move || {
         verify_raw_v1(RawVerificationInputV1 {
             version: input.version,
-            chain_id: &input.chain_id,
+            network_id: &input.network_id,
             trusted_context_id: input.trusted_context_id.as_ref(),
             expected_entry_hash: input.expected_entry_hash.as_ref(),
             previous_finality_proof_norito: input.previous_finality_proof_norito.as_deref(),
@@ -226,12 +226,18 @@ fn verify_raw_v1(
         ));
     }
 
-    let chain_id = ChainId::from_str(input.chain_id).map_err(|error| {
+    let network_id = NetworkId::from_str(input.network_id).map_err(|error| {
         VerificationError::new(
-            VerificationErrorCode::InvalidChainId,
-            format!("chain_id is not canonical: {error}"),
+            VerificationErrorCode::InvalidNetworkId,
+            format!("network_id is not canonical: {error}"),
         )
     })?;
+    if network_id.to_string() != input.network_id {
+        return Err(VerificationError::new(
+            VerificationErrorCode::InvalidNetworkId,
+            "network_id must use the canonical lowercase genesis-hash encoding",
+        ));
+    }
     let trusted_context_id = parse_height_context_id(input.trusted_context_id)?;
     let expected_entry_hash = parse_entry_hash(input.expected_entry_hash)?;
     let previous_finality = input
@@ -240,7 +246,8 @@ fn verify_raw_v1(
         .transpose()?;
     let finality = decode_finality_proof(input.finality_proof_norito, "finality_proof_norito")?;
 
-    let mut finality_verifier = BridgeFinalityVerifier::with_context(chain_id, trusted_context_id);
+    let mut finality_verifier =
+        BridgeFinalityVerifier::with_context(network_id, trusted_context_id);
     if let Some(previous) = previous_finality.as_ref() {
         finality_verifier.verify(previous).map_err(|error| {
             VerificationError::new(
@@ -458,7 +465,8 @@ mod tests {
 
     use super::*;
 
-    const FIXTURE_CHAIN_ID: &str = "authenticated-block-proofs-v1";
+    const FIXTURE_NETWORK_ID: &str =
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5";
 
     struct Fixture {
         block: SignedBlock,
@@ -477,9 +485,11 @@ mod tests {
     fn make_fixture() -> Fixture {
         let transaction_key = checked_keypair(Algorithm::Ed25519);
         let alternate_transaction_key = checked_keypair(Algorithm::Ed25519);
-        let chain_id: ChainId = FIXTURE_CHAIN_ID.parse().expect("fixture chain id");
+        let network_id: NetworkId = FIXTURE_NETWORK_ID
+            .parse()
+            .expect("fixture network identity");
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             AccountId::new(transaction_key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -487,7 +497,7 @@ mod tests {
         .expect("fixture transaction signature");
         let entry_hash = transaction.hash_as_entrypoint();
         let alternate_transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             AccountId::new(alternate_transaction_key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -538,7 +548,7 @@ mod tests {
             Hash::new(&executed_block_wire),
         );
         let (artifact, finality_keys) =
-            finalized_artifact_for_block(&block, chain_id, execution_commitment, None, 1);
+            finalized_artifact_for_block(&block, network_id, execution_commitment, None, 1);
         let trusted_context_id = *artifact.context_id().0.as_ref();
         let finality = BridgeFinalityProof {
             version: BRIDGE_FINALITY_PROOF_VERSION_V1,
@@ -558,7 +568,7 @@ mod tests {
 
     fn finalized_artifact_for_block(
         block: &SignedBlock,
-        chain_id: ChainId,
+        network_id: NetworkId,
         execution_commitment: ExecutionCommitment,
         parent_commit_qc: Option<QuorumCertificate>,
         height: u64,
@@ -584,7 +594,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = HeightContext {
-            chain_id,
+            network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -692,7 +702,7 @@ mod tests {
             .encode_wire()
             .expect("encode successor fixture block wire");
         let context = HeightContext {
-            chain_id: parent_artifact.height_context.chain_id.clone(),
+            network_id: parent_artifact.height_context.network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: parent_artifact.height_context.epoch,
@@ -744,7 +754,7 @@ mod tests {
             finality_artifact: artifact,
         };
         let mut verifier = BridgeFinalityVerifier::with_context(
-            parent_artifact.height_context.chain_id.clone(),
+            parent_artifact.height_context.network_id,
             parent_artifact.context_id(),
         );
         verifier.verify(parent).expect("fixture parent verifies");
@@ -758,7 +768,7 @@ mod tests {
         finality: &BridgeFinalityProof,
         block: &SignedBlock,
         block_proofs: &BlockProofs,
-        chain_id: &str,
+        network_id: &str,
         trusted_context_id: &[u8],
     ) -> Result<AuthenticatedBlockProofVerdictV1, VerificationError> {
         verify_typed_with_expected(
@@ -766,7 +776,7 @@ mod tests {
             finality,
             block,
             block_proofs,
-            chain_id,
+            network_id,
             trusted_context_id,
             &fixture.block_proofs.entry_hash,
         )
@@ -777,7 +787,7 @@ mod tests {
         finality: &BridgeFinalityProof,
         block: &SignedBlock,
         block_proofs: &BlockProofs,
-        chain_id: &str,
+        network_id: &str,
         trusted_context_id: &[u8],
         expected_entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Result<AuthenticatedBlockProofVerdictV1, VerificationError> {
@@ -790,7 +800,7 @@ mod tests {
             norito::encode_canonical(block_proofs).expect("encode block proofs");
         verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id,
+            network_id,
             trusted_context_id,
             expected_entry_hash: expected_entry_hash.as_ref(),
             previous_finality_proof_norito: previous_bytes.as_deref(),
@@ -809,7 +819,7 @@ mod tests {
             &fixture.finality,
             &fixture.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect("valid authenticated block proof");
@@ -834,7 +844,7 @@ mod tests {
             norito::encode_canonical(&forged_qc).expect("encode forged finality fixture");
         let preflight_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,
@@ -868,7 +878,7 @@ mod tests {
             finality,
             &fixture.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect_err("forged finality must fail closed");
@@ -876,20 +886,20 @@ mod tests {
     }
 
     #[test]
-    fn wrong_chain_context_header_height_and_wire_fail_closed() {
+    fn wrong_network_context_header_height_and_wire_fail_closed() {
         let fixture = make_fixture();
 
-        let wrong_chain = verify_typed(
+        let wrong_network = verify_typed(
             &fixture,
             None,
             &fixture.finality,
             &fixture.block,
             &fixture.block_proofs,
-            "another-chain",
+            "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5",
             &fixture.trusted_context_id,
         )
-        .expect_err("wrong chain must fail");
-        assert_eq!(wrong_chain.code, VerificationErrorCode::FinalityRejected);
+        .expect_err("wrong network must fail");
+        assert_eq!(wrong_network.code, VerificationErrorCode::FinalityRejected);
 
         let wrong_context = Hash::new(b"untrusted height context");
         let wrong_context = verify_typed(
@@ -898,7 +908,7 @@ mod tests {
             &fixture.finality,
             &fixture.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             wrong_context.as_ref(),
         )
         .expect_err("wrong context must fail");
@@ -919,7 +929,7 @@ mod tests {
             &fixture.finality,
             &other.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect_err("another canonical block wire must fail");
@@ -936,7 +946,7 @@ mod tests {
             &fixture.finality,
             &fixture.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect_err("stale proof must fail");
@@ -951,7 +961,7 @@ mod tests {
             &height_three,
             &fixture.block,
             &fixture.block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect_err("skipped proof must fail");
@@ -969,7 +979,7 @@ mod tests {
                 &fixture.finality,
                 &fixture.block,
                 proofs,
-                FIXTURE_CHAIN_ID,
+                FIXTURE_NETWORK_ID,
                 &fixture.trusted_context_id,
             )
             .expect("valid finality with invalid BlockProofs returns a verdict");
@@ -1014,7 +1024,7 @@ mod tests {
             &fixture.finality,
             &fixture.block,
             &fixture.alternate_block_proofs,
-            FIXTURE_CHAIN_ID,
+            FIXTURE_NETWORK_ID,
             &fixture.trusted_context_id,
         )
         .expect("valid finality with a substituted proof returns a verdict");
@@ -1037,7 +1047,7 @@ mod tests {
         unmarked_context[Hash::LENGTH - 1] &= !1;
         let context_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &unmarked_context,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,
@@ -1052,7 +1062,7 @@ mod tests {
         unmarked_entry_hash[Hash::LENGTH - 1] &= !1;
         let entry_hash_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: &unmarked_entry_hash,
             previous_finality_proof_norito: None,
@@ -1068,7 +1078,7 @@ mod tests {
 
         let wire_preflight_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,
@@ -1086,7 +1096,7 @@ mod tests {
         noncanonical_finality.push(0);
         let finality_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,
@@ -1104,7 +1114,7 @@ mod tests {
         noncanonical_proofs.push(0);
         let proof_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,
@@ -1122,7 +1132,7 @@ mod tests {
             .expect("deframe fixture wire");
         let wire_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-            chain_id: FIXTURE_CHAIN_ID,
+            network_id: FIXTURE_NETWORK_ID,
             trusted_context_id: &fixture.trusted_context_id,
             expected_entry_hash: fixture.block_proofs.entry_hash.as_ref(),
             previous_finality_proof_norito: None,

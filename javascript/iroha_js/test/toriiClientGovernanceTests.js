@@ -1,12 +1,69 @@
 // Governance and protected-namespace Torii client regression registrations.
 
+export function buildIntegrationGovernancePlainBallotPayload(
+  overrides,
+  { defaultAuthority, networkId },
+) {
+  if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return null;
+  }
+  const normalizeString = (value) => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? null : trimmed;
+  };
+  const referendumId = normalizeString(overrides.referendumId);
+  if (!referendumId) {
+    return null;
+  }
+  const authority = normalizeString(overrides.authority) ?? defaultAuthority;
+  const owner = normalizeString(overrides.owner) ?? defaultAuthority;
+  if (Object.prototype.hasOwnProperty.call(overrides, "chainId")) {
+    throw new Error(
+      "governance ballot chainId is retired; configure exact NETWORK_ID instead",
+    );
+  }
+  const durationBlocksRaw = overrides.durationBlocks ?? 10;
+  const durationBlocks =
+    typeof durationBlocksRaw === "number"
+      ? durationBlocksRaw
+      : Number.parseInt(String(durationBlocksRaw), 10);
+  if (!Number.isFinite(durationBlocks) || durationBlocks <= 0) {
+    throw new Error("governance ballot durationBlocks must be a positive integer");
+  }
+  const amountRaw = overrides.amount ?? "1";
+  const amountText =
+    typeof amountRaw === "number" && Number.isFinite(amountRaw)
+      ? amountRaw.toString()
+      : normalizeString(String(amountRaw));
+  if (!amountText) {
+    throw new Error("governance ballot amount must be a non-empty string or number");
+  }
+  const direction = normalizeString(overrides.direction ?? "Aye") ?? "Aye";
+  return {
+    authority,
+    networkId,
+    referendumId,
+    owner,
+    amount: amountText,
+    durationBlocks,
+    direction,
+  };
+}
+
 export function registerToriiClientGovernanceTests({
   assert,
   BASE_URL,
   FIXTURE_ALICE_ID,
   FIXTURE_BOB_ID,
   FIXTURE_CAROL_ID,
+  GOVERNANCE_NETWORK_ID,
+  GOVERNANCE_LOCAL_SIGNING_CONTEXT,
   GOVERNANCE_PROPOSAL_ID,
+  LocalSigningContext,
+  NetworkId,
   SAMPLE_ACCOUNT_FORMS,
   SEED_11_ED25519_PUBLIC_KEY_HEX,
   ToriiClient,
@@ -20,6 +77,281 @@ export function registerToriiClientGovernanceTests({
   test,
   toriiFixtures,
 }) {
+  test("governance helpers validate options", async () => {
+    const client = new ToriiClient(BASE_URL);
+    const finalizePayload = {
+      referendumId: "ab".repeat(32),
+      proposalId: "ab".repeat(32),
+    };
+    const enactPayload = { proposalId: "cd".repeat(32) };
+
+    await assert.rejects(
+      () => client.getGovernanceCouncilCurrent("invalid"),
+      /getGovernanceCouncilCurrent options must be an object/,
+    );
+    await assert.rejects(
+      () => client.governanceFinalizeReferendum(finalizePayload, { signal: "nope" }),
+      /governanceFinalizeReferendum options.signal must be an AbortSignal/,
+    );
+    await assert.rejects(
+      () => client.governanceFinalizeReferendum(finalizePayload, { extra: true }),
+      /governanceFinalizeReferendum options contains unsupported fields: extra/,
+    );
+    await assert.rejects(
+      () => client.governanceEnactProposal(enactPayload, { signal: "nope" }),
+      /governanceEnactProposal options.signal must be an AbortSignal/,
+    );
+    await assert.rejects(
+      () => client.governanceEnactProposal(enactPayload, { extra: true }),
+      /governanceEnactProposal options contains unsupported fields: extra/,
+    );
+    const optionTypeCases = [
+      [
+        "getGovernanceProposal",
+        () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, "invalid"),
+        /getGovernanceProposal options must be an object/,
+      ],
+      [
+        "getGovernanceReferendum",
+        () => client.getGovernanceReferendum("ref-1", "invalid"),
+        /getGovernanceReferendum options must be an object/,
+      ],
+      [
+        "getGovernanceTally",
+        () => client.getGovernanceTally("ref-1", "invalid"),
+        /getGovernanceTally options must be an object/,
+      ],
+    ];
+    for (const [_label, invoke, error] of optionTypeCases) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, error);
+    }
+    const invalidSignalCases = [
+      [
+        "getGovernanceProposal",
+        () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, { signal: "nope" }),
+        /getGovernanceProposal options.signal must be an AbortSignal/,
+      ],
+      [
+        "getGovernanceReferendum",
+        () => client.getGovernanceReferendum("ref-1", { signal: "nope" }),
+        /getGovernanceReferendum options.signal must be an AbortSignal/,
+      ],
+      [
+        "getGovernanceTally",
+        () => client.getGovernanceTally("ref-1", { signal: "nope" }),
+        /getGovernanceTally options.signal must be an AbortSignal/,
+      ],
+    ];
+    for (const [_label, invoke, error] of invalidSignalCases) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, error);
+    }
+    const extraFieldCases = [
+      [
+        "getGovernanceProposal",
+        () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, { extra: true }),
+        /getGovernanceProposal options contains unsupported fields: extra/,
+      ],
+      [
+        "getGovernanceReferendum",
+        () => client.getGovernanceReferendum("ref-1", { extra: true }),
+        /getGovernanceReferendum options contains unsupported fields: extra/,
+      ],
+      [
+        "getGovernanceTally",
+        () => client.getGovernanceTally("ref-1", { extra: true }),
+        /getGovernanceTally options contains unsupported fields: extra/,
+      ],
+    ];
+    for (const [_label, invoke, error] of extraFieldCases) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, error);
+    }
+  });
+
+  test("governance id validation surfaces structured errors", async () => {
+    const client = new ToriiClient(BASE_URL);
+    const cases = [
+      [
+        "getGovernanceProposal",
+        () => client.getGovernanceProposal("  "),
+        "proposalId",
+      ],
+      [
+        "getGovernanceReferendum",
+        // @ts-expect-error intentionally invalid type for validation path
+        () => client.getGovernanceReferendum(null),
+        "referendumId",
+      ],
+      [
+        "getGovernanceTally",
+        () => client.getGovernanceTally(undefined),
+        "referendumId",
+      ],
+    ];
+    for (const [label, invoke, path] of cases) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, (error) => {
+        assert.ok(error instanceof ValidationError, `${label} should surface ValidationError`);
+        assert.equal(error.code, ValidationErrorCode.INVALID_STRING);
+        assert.equal(error.path, path);
+        return true;
+      });
+    }
+  });
+
+  test("governance GET identifiers use canonical unreserved path segments", async () => {
+    const capturedUrls = [];
+    const fetchImpl = async (url) => {
+      capturedUrls.push(url);
+      return createResponse({ status: 404 });
+    };
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+    assert.equal(await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID), null);
+    assert.equal(await client.getGovernanceReferendum("ref.one~1"), null);
+    assert.equal(await client.getGovernanceTally("ref_two-2"), null);
+    assert.equal(await client.getGovernanceLocks("Ref3"), null);
+    assert.deepEqual(capturedUrls, [
+      `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`,
+      `${BASE_URL}/v1/gov/referenda/ref.one~1`,
+      `${BASE_URL}/v1/gov/tally/ref_two-2`,
+      `${BASE_URL}/v1/gov/locks/Ref3`,
+    ]);
+  });
+
+  test("governance GET identifiers reject aliases before transport", async () => {
+    let dispatched = false;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        dispatched = true;
+        throw new Error("invalid governance identifier reached transport");
+      },
+    });
+    const invalidCalls = [
+      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID.toUpperCase()),
+      () => client.getGovernanceProposal(`0x${GOVERNANCE_PROPOSAL_ID}`),
+      () => client.getGovernanceProposal(` ${GOVERNANCE_PROPOSAL_ID}`),
+      () => client.getGovernanceProposal("proposal/segment"),
+      () => client.getGovernanceReferendum(" ref-1"),
+      () => client.getGovernanceReferendum("ref 1"),
+      () => client.getGovernanceReferendum("ref/1"),
+      () => client.getGovernanceReferendum(".hidden"),
+      () => client.getGovernanceReferendum("ref%31"),
+      () => client.getGovernanceReferendum("投票"),
+      () => client.getGovernanceTally("ref\t1"),
+      () => client.getGovernanceTally("a".repeat(129)),
+      () => client.getGovernanceLocks("ref\u00001"),
+    ];
+
+    for (const invoke of invalidCalls) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, ValidationError);
+    }
+    assert.equal(dispatched, false);
+  });
+
+  test("governance draft identifiers reject noncanonical selector aliases", async () => {
+    let dispatched = false;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        dispatched = true;
+        throw new Error("invalid governance selector reached transport");
+      },
+    });
+    const invalidSelectors = [
+      "ref/1",
+      ".hidden",
+      "ref%31",
+      "投票",
+      "a".repeat(129),
+    ];
+    for (const selector of invalidSelectors) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () =>
+          client.governanceFinalizeReferendum({
+            referendumId: selector,
+            proposalId: "ab".repeat(32),
+          }),
+        /exact lowercase 32-byte hex string/u,
+      );
+      const calls = [
+        () =>
+          client.governanceSubmitPlainBallot({
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: selector,
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          }),
+        () =>
+          client.governanceSubmitZkBallotV1({
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            electionId: selector,
+            backend: "halo2/ipa",
+            envelope: [1],
+          }),
+        () =>
+          client.governanceSubmitZkBallotProofV1({
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            electionId: selector,
+            ballot: { backend: "halo2/ipa", envelopeBytes: "AQ==" },
+          }),
+      ];
+      for (const invoke of calls) {
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(invoke, /RFC 3986/u);
+      }
+    }
+    assert.equal(dispatched, false);
+  });
+
+  test("integration governance ballot support pins the exact NetworkId", () => {
+    const payload = buildIntegrationGovernancePlainBallotPayload(
+      { referendumId: "ref-1" },
+      {
+        defaultAuthority: FIXTURE_ALICE_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+      },
+    );
+    assert.deepEqual(payload, {
+      authority: FIXTURE_ALICE_ID,
+      networkId: GOVERNANCE_NETWORK_ID,
+      referendumId: "ref-1",
+      owner: FIXTURE_ALICE_ID,
+      amount: "1",
+      durationBlocks: 10,
+      direction: "Aye",
+    });
+    assert.throws(
+      () => buildIntegrationGovernancePlainBallotPayload(
+        { referendumId: "ref-1", chainId: "retired" },
+        {
+          defaultAuthority: FIXTURE_ALICE_ID,
+          networkId: GOVERNANCE_NETWORK_ID,
+        },
+      ),
+      /chainId is retired/u,
+    );
+  });
+
+  const governanceBallotOptions = (authority, options = {}) => ({
+    ...options,
+    canonicalAuth: {
+      accountId: authority,
+      privateKey: Buffer.alloc(32, 0x33),
+    },
+  });
+  const governanceBallotClient = (options = {}) => new ToriiClient(BASE_URL, {
+    ...options,
+    localSigningContext: GOVERNANCE_LOCAL_SIGNING_CONTEXT,
+  });
   test("getGovernanceProposalTyped parses DeployContract variant", async () => {
     const fetchImpl = async (url) => {
       assert.equal(url, `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`);
@@ -990,8 +1322,12 @@ export function registerToriiClientGovernanceTests({
 
   test("governanceSubmitPlainBallot normalizes amount and direction", async () => {
     let capturedBody;
-    const client = new ToriiClient(BASE_URL, {
+    let capturedInit;
+    let fetchCalls = 0;
+    const client = governanceBallotClient({
       fetchImpl: async (url, init) => {
+        fetchCalls += 1;
+        capturedInit = init;
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
@@ -1000,24 +1336,131 @@ export function registerToriiClientGovernanceTests({
         });
       },
     });
-    const ballot = await client.governanceSubmitPlainBallot({
-      authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
-      referendumId: "ref-plain",
-      owner: FIXTURE_ALICE_ID,
-      amount: 500n,
-      durationBlocks: "600",
-      direction: "Nay",
-    });
+    const ballot = await client.governanceSubmitPlainBallot(
+      {
+        authority: FIXTURE_ALICE_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        referendumId: "ref-plain",
+        owner: FIXTURE_ALICE_ID,
+        amount: 500n,
+        durationBlocks: "600",
+        direction: "Nay",
+      },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
     assert.equal(capturedBody.amount, "500");
     assert.equal(capturedBody.duration_blocks, "600");
     assert.equal(capturedBody.direction, "Nay");
+    assert.equal(capturedBody.network_id, GOVERNANCE_NETWORK_ID.literal);
+    assert.equal(capturedBody.chain_id, undefined);
+    assert.equal(capturedInit.redirect, "error");
+    assert.equal(fetchCalls, 1);
     assert.equal(ballot.accepted, true);
+  });
+
+  test("governance ballots reject retired identity keys and unbound authentication", async () => {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("invalid ballot identity reached fetch");
+      },
+    });
+    const payload = {
+      authority: FIXTURE_ALICE_ID,
+      networkId: GOVERNANCE_NETWORK_ID,
+      referendumId: "ref-plain",
+      owner: FIXTURE_ALICE_ID,
+      amount: "1",
+      durationBlocks: 1,
+      direction: "Aye",
+    };
+    await assert.rejects(
+      () => client.governanceSubmitPlainBallot(payload),
+      /canonicalAuth is required/u,
+    );
+    await assert.rejects(
+      () =>
+        client.governanceSubmitPlainBallot(
+          payload,
+          governanceBallotOptions(FIXTURE_BOB_ID),
+        ),
+      /canonicalAuth\.accountId must equal the exact payload authority/u,
+    );
+    await assert.rejects(
+      () =>
+        client.governanceSubmitPlainBallot(
+          { ...payload, chainId: "same-label" },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+      /unsupported fields: chainId/u,
+    );
+    assert.equal(fetchCalls, 0);
+  });
+
+  test("governance ballots reject a different genesis under the same display label", async () => {
+    let fetchCalls = 0;
+    const foreignBytes = GOVERNANCE_NETWORK_ID.toBytes();
+    foreignBytes[foreignBytes.length - 1] ^= 0x02;
+    const foreignNetworkId = NetworkId.fromBytes(foreignBytes);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("foreign-network ballot reached fetch");
+      },
+      localSigningContext: new LocalSigningContext(foreignNetworkId),
+    });
+    await assert.rejects(
+      () =>
+        client.governanceSubmitPlainBallot(
+          {
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: "same-label-different-genesis",
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+      /networkId must equal the client's exact LocalSigningContext/u,
+    );
+    assert.equal(fetchCalls, 0);
+  });
+
+  test("governance ballot authentication is one-shot on redirect responses", async () => {
+    let fetchCalls = 0;
+    const client = governanceBallotClient({
+      fetchImpl: async (_url, init) => {
+        fetchCalls += 1;
+        assert.equal(init.redirect, "error");
+        return createResponse({ status: 307 });
+      },
+      maxRetries: 5,
+    });
+    await assert.rejects(
+      () =>
+        client.governanceSubmitPlainBallot(
+          {
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: "ref-plain",
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+      /HTTP 307/u,
+    );
+    assert.equal(fetchCalls, 1);
   });
 
   test("governance ballots reject noncanonical direction aliases before fetch", async () => {
     let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async () => {
         fetchCalls += 1;
         return createResponse({ status: 204 });
@@ -1025,7 +1468,7 @@ export function registerToriiClientGovernanceTests({
     });
     const base = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       referendumId: "ref-plain",
       owner: FIXTURE_ALICE_ID,
       amount: "500",
@@ -1045,7 +1488,7 @@ export function registerToriiClientGovernanceTests({
     let capturedUrl;
     let capturedBody;
     let capturedSignal;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (url, init) => {
         capturedUrl = url;
         capturedBody = JSON.parse(init.body);
@@ -1061,19 +1504,19 @@ export function registerToriiClientGovernanceTests({
     const ballot = await client.governanceSubmitParliamentBallot(
       {
         authority: FIXTURE_ALICE_ID,
-        chainId: "chain-0",
+        networkId: GOVERNANCE_NETWORK_ID,
         proposalId: `blake2b32:${"AB".repeat(32)}`,
         body: "policy-jury",
         decision: "approve",
       },
-      { signal: controller.signal },
+      governanceBallotOptions(FIXTURE_ALICE_ID, { signal: controller.signal }),
     );
 
     assert.equal(capturedUrl, `${BASE_URL}/v1/gov/parliament/ballots`);
     assert.equal(capturedSignal, controller.signal);
     assert.deepEqual(capturedBody, {
       authority: FIXTURE_ALICE_ID,
-      chain_id: "chain-0",
+      network_id: GOVERNANCE_NETWORK_ID.literal,
       proposal_id: "ab".repeat(32),
       body: "policy-jury",
       decision: "approve",
@@ -1083,7 +1526,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governanceSubmitParliamentBallot rejects noncanonical decision aliases before fetch", async () => {
     let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async () => {
         fetchCalls += 1;
         throw new Error("fetch must not run for an invalid Parliament ballot");
@@ -1091,7 +1534,7 @@ export function registerToriiClientGovernanceTests({
     });
     const base = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       proposalId: "ab".repeat(32),
       body: "policy-jury",
     };
@@ -1113,7 +1556,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governance mutations reject private-key aliases and unknown fields before fetch", async () => {
     let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async () => {
         fetchCalls += 1;
         throw new Error("fetch must not run for an invalid governance mutation");
@@ -1121,7 +1564,7 @@ export function registerToriiClientGovernanceTests({
     });
     const proofRequest = {
       authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       electionId: "ref-zk",
       ballot: {
         backend: "halo2/ipa",
@@ -1142,7 +1585,7 @@ export function registerToriiClientGovernanceTests({
         name: "plain ballot",
         payload: {
           authority: FIXTURE_ALICE_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           referendumId: "ref-plain",
           owner: FIXTURE_ALICE_ID,
           amount: "42",
@@ -1155,7 +1598,7 @@ export function registerToriiClientGovernanceTests({
         name: "Parliament ballot",
         payload: {
           authority: FIXTURE_ALICE_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           proposalId: "33".repeat(32),
           body: "policy-jury",
           decision: "approve",
@@ -1166,7 +1609,7 @@ export function registerToriiClientGovernanceTests({
         name: "zk-v1 ballot",
         payload: {
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           backend: "halo2/ipa",
           envelope: [4, 5],
@@ -1293,7 +1736,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governance mutation DTOs reject alternate keys instead of shadowing canonical fields", async () => {
     let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async () => {
         fetchCalls += 1;
         throw new Error("alternate governance DTO key reached transport");
@@ -1311,7 +1754,7 @@ export function registerToriiClientGovernanceTests({
     };
     const plain = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       referendumId: "ref-plain",
       owner: FIXTURE_ALICE_ID,
       amount: "42",
@@ -1320,7 +1763,7 @@ export function registerToriiClientGovernanceTests({
     };
     const parliament = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       proposalId: "33".repeat(32),
       body: "policy-jury",
       decision: "approve",
@@ -1334,7 +1777,7 @@ export function registerToriiClientGovernanceTests({
     };
     const zkV1 = {
       authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       electionId: "ref-zk",
       backend: "halo2/ipa",
       envelope: [4, 5],
@@ -1347,7 +1790,7 @@ export function registerToriiClientGovernanceTests({
     };
     const proofRequest = {
       authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       electionId: "ref-zk",
       ballot,
     };
@@ -1390,16 +1833,26 @@ export function registerToriiClientGovernanceTests({
         alias,
         () => client.governanceProposeDeployContract({ ...deploy, [alias]: "shadow" }),
       ]),
-      ...["chain_id", "referendum_id", "duration_blocks"].map((alias) => [
-        alias,
-        () => client.governanceSubmitPlainBallot({ ...plain, [alias]: "shadow" }),
-      ]),
-      ...["chain_id", "proposal_id"].map((alias) => [
-        alias,
-        () => client.governanceSubmitParliamentBallot({ ...parliament, [alias]: "shadow" }),
-      ]),
       ...[
         "chain_id",
+        "genesis_hash",
+        "genesisHash",
+        "referendum_id",
+        "duration_blocks",
+      ].map((alias) => [
+          alias,
+          () => client.governanceSubmitPlainBallot({ ...plain, [alias]: "shadow" }),
+        ]),
+      ...["chain_id", "genesis_hash", "genesisHash", "proposal_id"].map(
+        (alias) => [
+          alias,
+          () => client.governanceSubmitParliamentBallot({ ...parliament, [alias]: "shadow" }),
+        ],
+      ),
+      ...[
+        "chain_id",
+        "genesis_hash",
+        "genesisHash",
         "election_id",
         "envelope_b64",
         "envelopeB64",
@@ -1413,13 +1866,15 @@ export function registerToriiClientGovernanceTests({
         alias,
         () => client.governanceSubmitZkBallotV1({ ...zkV1, [alias]: "shadow" }),
       ]),
-      ...["chain_id", "election_id"].map((alias) => [
-        alias,
-        () => client.governanceSubmitZkBallotProofV1({
-          ...proofRequest,
-          [alias]: "shadow",
-        }),
-      ]),
+      ...["chain_id", "genesis_hash", "genesisHash", "election_id"].map(
+        (alias) => [
+          alias,
+          () => client.governanceSubmitZkBallotProofV1({
+            ...proofRequest,
+            [alias]: "shadow",
+          }),
+        ],
+      ),
     ];
     for (const [alias, invoke] of topLevelCases) {
       // eslint-disable-next-line no-await-in-loop
@@ -1459,7 +1914,7 @@ export function registerToriiClientGovernanceTests({
   test("governanceSubmitPlainBallot dispatches zero as a canonical decimal string", async () => {
     let capturedBody;
     let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (_url, init) => {
         fetchCalls += 1;
         capturedBody = JSON.parse(init.body);
@@ -1471,15 +1926,18 @@ export function registerToriiClientGovernanceTests({
       },
     });
 
-    await client.governanceSubmitPlainBallot({
-      authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
-      referendumId: "ref-zero",
-      owner: FIXTURE_ALICE_ID,
-      amount: "1",
-      durationBlocks: 0,
-      direction: "Abstain",
-    });
+    await client.governanceSubmitPlainBallot(
+      {
+        authority: FIXTURE_ALICE_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        referendumId: "ref-zero",
+        owner: FIXTURE_ALICE_ID,
+        amount: "1",
+        durationBlocks: 0,
+        direction: "Abstain",
+      },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
 
     assert.equal(fetchCalls, 1);
     assert.equal(capturedBody.duration_blocks, "0");
@@ -1487,7 +1945,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governanceSubmitPlainBallot accepts canonical fractional Quantity amounts", async () => {
     let capturedBody;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (_url, init) => {
         capturedBody = JSON.parse(init.body);
         return createResponse({
@@ -1497,22 +1955,25 @@ export function registerToriiClientGovernanceTests({
         });
       },
     });
-    await client.governanceSubmitPlainBallot({
-      authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
-      referendumId: "ref-plain-decimal",
-      owner: FIXTURE_ALICE_ID,
-      amount: "12.5",
-      durationBlocks: 1,
-      direction: "Aye",
-    });
+    await client.governanceSubmitPlainBallot(
+      {
+        authority: FIXTURE_ALICE_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        referendumId: "ref-plain-decimal",
+        owner: FIXTURE_ALICE_ID,
+        amount: "12.5",
+        durationBlocks: 1,
+        direction: "Aye",
+      },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
     assert.equal(capturedBody.amount, "12.5");
   });
 
   test("governanceSubmitPlainBallot enforces canonical lossless Quantity input", async () => {
     let fetchCalls = 0;
     let capturedBody;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (_url, init) => {
         fetchCalls += 1;
         capturedBody = JSON.parse(init.body);
@@ -1526,14 +1987,17 @@ export function registerToriiClientGovernanceTests({
     const maximumAmount = (1n << 511n) - 1n;
     const payload = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       referendumId: "ref-plain-bounds",
       owner: FIXTURE_ALICE_ID,
       durationBlocks: 1,
       direction: "Aye",
     };
 
-    await client.governanceSubmitPlainBallot({ ...payload, amount: maximumAmount });
+    await client.governanceSubmitPlainBallot(
+      { ...payload, amount: maximumAmount },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
     assert.equal(capturedBody.amount, maximumAmount.toString());
     assert.equal(fetchCalls, 1);
 
@@ -1563,7 +2027,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
     let observedSignal;
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (url, init) => {
         observedSignal = init?.signal;
         return createResponse({
@@ -1577,14 +2041,14 @@ export function registerToriiClientGovernanceTests({
     await client.governanceSubmitPlainBallot(
       {
         authority: FIXTURE_ALICE_ID,
-        chainId: "chain-0",
+        networkId: GOVERNANCE_NETWORK_ID,
         referendumId: "ref-plain",
         owner: FIXTURE_ALICE_ID,
         amount: "5000",
         durationBlocks: 1_000,
         direction: "Aye",
       },
-      { signal: controller.signal },
+      governanceBallotOptions(FIXTURE_ALICE_ID, { signal: controller.signal }),
     );
     assert.equal(observedSignal, controller.signal);
   });
@@ -1663,7 +2127,7 @@ export function registerToriiClientGovernanceTests({
     );
     const ballotPayload = {
       authority: FIXTURE_ALICE_ID,
-      chainId: "chain-1",
+      networkId: GOVERNANCE_NETWORK_ID,
       referendumId: "ref-1",
       owner: FIXTURE_ALICE_ID,
       amount: "10",
@@ -1702,7 +2166,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governance ZK-v1 routes encode envelopes and hints", async () => {
     const calls = [];
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (url, init) => {
         calls.push({ url, body: JSON.parse(init.body) });
         return createResponse({
@@ -1712,19 +2176,22 @@ export function registerToriiClientGovernanceTests({
         });
       },
     });
-    const zkV1Result = await client.governanceSubmitZkBallotV1({
-      authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
-      electionId: "ref-zk",
-      backend: "halo2/ipa",
-      envelope: [4, 5],
-      rootHint: `blake2b32:${"Ab".repeat(32)}`,
-      owner: SAMPLE_ACCOUNT_FORMS.i105,
-      amount: "18446744073709551616.25",
-      durationBlocks: 0,
-      direction: "Aye",
-      nullifier: Buffer.alloc(32, 0xff),
-    });
+    const zkV1Result = await client.governanceSubmitZkBallotV1(
+      {
+        authority: FIXTURE_BOB_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        electionId: "ref-zk",
+        backend: "halo2/ipa",
+        envelope: [4, 5],
+        rootHint: `blake2b32:${"Ab".repeat(32)}`,
+        owner: SAMPLE_ACCOUNT_FORMS.i105,
+        amount: "18446744073709551616.25",
+        durationBlocks: 0,
+        direction: "Aye",
+        nullifier: Buffer.alloc(32, 0xff),
+      },
+      governanceBallotOptions(FIXTURE_BOB_ID),
+    );
     assert.equal(calls[0].url, `${BASE_URL}/v1/gov/ballots/zk-v1`);
     assert.equal(calls[0].body.envelope_b64, "BAU=");
     assert.equal(calls[0].body.root_hint, "ab".repeat(32));
@@ -1734,21 +2201,24 @@ export function registerToriiClientGovernanceTests({
     assert.equal(zkV1Result.accepted, false);
     assert.equal(zkV1Result.reason, "build transaction skeleton");
 
-    const zkProofResult = await client.governanceSubmitZkBallotProofV1({
-      authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
-      electionId: "ref-zk",
-      ballot: {
-        backend: "halo2/ipa",
-        envelopeBytes: "AAE=",
-        rootHint: `blake2b32:${"Cc".repeat(32)}`,
-        nullifier: `0x${"DD".repeat(32)}`,
-        owner: SAMPLE_ACCOUNT_FORMS.i105,
-        amount: "18446744073709551616.25",
-        durationBlocks: "0",
-        direction: "Nay",
+    const zkProofResult = await client.governanceSubmitZkBallotProofV1(
+      {
+        authority: FIXTURE_BOB_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        electionId: "ref-zk",
+        ballot: {
+          backend: "halo2/ipa",
+          envelopeBytes: "AAE=",
+          rootHint: `blake2b32:${"Cc".repeat(32)}`,
+          nullifier: `0x${"DD".repeat(32)}`,
+          owner: SAMPLE_ACCOUNT_FORMS.i105,
+          amount: "18446744073709551616.25",
+          durationBlocks: "0",
+          direction: "Nay",
+        },
       },
-    });
+      governanceBallotOptions(FIXTURE_BOB_ID),
+    );
     assert.equal(calls[1].url, `${BASE_URL}/v1/gov/ballots/zk-v1/ballot-proof`);
     assert.equal(calls[1].body.ballot.root_hint, "cc".repeat(32));
     assert.equal(calls[1].body.ballot.nullifier, "dd".repeat(32));
@@ -1760,7 +2230,7 @@ export function registerToriiClientGovernanceTests({
 
   test("governance ZK-v1 routes emit full-u64 duration tokens losslessly", async () => {
     const bodies = [];
-    const client = new ToriiClient(BASE_URL, {
+    const client = governanceBallotClient({
       fetchImpl: async (_url, init) => {
         bodies.push(String(init.body));
         return createResponse({
@@ -1776,26 +2246,32 @@ export function registerToriiClientGovernanceTests({
       amount: "42",
       durationBlocks: maximum,
     };
-    await client.governanceSubmitZkBallotV1({
-      authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
-      electionId: "ref-zk",
-      backend: "halo2/ipa",
-      envelope: [1, 2, 3],
-      owner: lock.owner,
-      amount: lock.amount,
-      durationBlocks: maximum,
-    });
-    await client.governanceSubmitZkBallotProofV1({
-      authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
-      electionId: "ref-zk",
-      ballot: {
+    await client.governanceSubmitZkBallotV1(
+      {
+        authority: FIXTURE_BOB_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        electionId: "ref-zk",
         backend: "halo2/ipa",
-        envelopeBytes: "AQID",
-        ...lock,
+        envelope: [1, 2, 3],
+        owner: lock.owner,
+        amount: lock.amount,
+        durationBlocks: maximum,
       },
-    });
+      governanceBallotOptions(FIXTURE_BOB_ID),
+    );
+    await client.governanceSubmitZkBallotProofV1(
+      {
+        authority: FIXTURE_BOB_ID,
+        networkId: GOVERNANCE_NETWORK_ID,
+        electionId: "ref-zk",
+        ballot: {
+          backend: "halo2/ipa",
+          envelopeBytes: "AQID",
+          ...lock,
+        },
+      },
+      governanceBallotOptions(FIXTURE_BOB_ID),
+    );
 
     assert.equal(bodies.length, 2);
     for (const [index, body] of bodies.entries()) {
@@ -1829,7 +2305,7 @@ export function registerToriiClientGovernanceTests({
         () =>
           client.governanceSubmitZkBallotV1({
             authority: FIXTURE_BOB_ID,
-            chainId: "chain-0",
+            networkId: GOVERNANCE_NETWORK_ID,
             electionId: "ref-zk",
             backend: "halo2/ipa",
             envelope: [4, 5],
@@ -1844,7 +2320,7 @@ export function registerToriiClientGovernanceTests({
         () =>
           client.governanceSubmitZkBallotProofV1({
             authority: FIXTURE_BOB_ID,
-            chainId: "chain-0",
+            networkId: GOVERNANCE_NETWORK_ID,
             electionId: "ref-zk",
             ballot: {
               backend: "halo2/ipa",
@@ -1870,7 +2346,7 @@ export function registerToriiClientGovernanceTests({
       () =>
         client.governanceSubmitZkBallotV1({
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           backend: "halo2/ipa",
           envelope: [4, 5],
@@ -1894,7 +2370,7 @@ export function registerToriiClientGovernanceTests({
       () =>
         client.governanceSubmitZkBallotV1({
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           backend: "halo2/ipa",
           envelope: [4, 5],
@@ -1920,7 +2396,7 @@ export function registerToriiClientGovernanceTests({
       () =>
         client.governanceSubmitZkBallotV1({
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           backend: "halo2/ipa",
           envelope: [4, 5],
@@ -1944,7 +2420,7 @@ export function registerToriiClientGovernanceTests({
     });
     const base = {
       authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       electionId: "ref-zk",
     };
     for (const backend of ["", " halo2/ipa", "halo2/ipa ", "halo2 ipa", "halo2\nipa"] ) {
@@ -1981,7 +2457,7 @@ export function registerToriiClientGovernanceTests({
       () =>
         client.governanceSubmitZkBallotProofV1({
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           ballot: {
             backend: "halo2/ipa",
@@ -2007,7 +2483,7 @@ export function registerToriiClientGovernanceTests({
       () =>
         client.governanceSubmitZkBallotProofV1({
           authority: FIXTURE_BOB_ID,
-          chainId: "chain-0",
+          networkId: GOVERNANCE_NETWORK_ID,
           electionId: "ref-zk",
           ballot: {
             backend: "halo2/ipa",
@@ -2035,7 +2511,7 @@ export function registerToriiClientGovernanceTests({
     });
     const base = {
       authority: FIXTURE_BOB_ID,
-      chainId: "chain-0",
+      networkId: GOVERNANCE_NETWORK_ID,
       electionId: "ref-zk",
     };
     const invalidBallots = [

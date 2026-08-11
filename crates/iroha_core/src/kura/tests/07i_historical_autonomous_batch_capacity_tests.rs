@@ -4,13 +4,11 @@ fn historical_capacity_payload_for_kura(
     lane_block_height: u64,
     tag: &str,
     signer: &KeyPair,
-) -> (Hash, u64, LaneExecutablePayloadV1) {
-    let (chain_id_hash, epoch, source) =
+) -> (NetworkId, u64, LaneExecutablePayloadV1) {
+    let (network_id, epoch, source) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
     let transaction = TransactionBuilder::new(
-        "kura-autonomous-view-checkpoint"
-            .parse::<ChainId>()
-            .expect("historical capacity chain id"),
+        test_network_id(b"kura-autonomous-view-checkpoint"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -38,10 +36,8 @@ fn historical_capacity_payload_for_kura(
     ]);
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
-        lane_id,
-        dataspace_id,
-    ));
+    let routing_plan =
+        RoutingPlan::single(crate::queue::RoutingDecision::new(lane_id, dataspace_id));
     let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
@@ -66,7 +62,7 @@ fn historical_capacity_payload_for_kura(
         proposal_identity_hash: proposal.proposal_hash,
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         vec![entrypoint],
@@ -77,11 +73,11 @@ fn historical_capacity_payload_for_kura(
         signer.private_key(),
     )
     .expect("historical capacity payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }
 
 fn persist_historical_capacity_payload_fixture(kura: &Kura, payload: &LaneExecutablePayloadV1) {
-    kura.persist_lane_executable_payload(payload, payload.chain_id_hash, payload.epoch)
+    kura.persist_lane_executable_payload(payload, payload.network_id, payload.epoch)
         .expect("persist historical capacity payload dependency");
 }
 
@@ -99,10 +95,12 @@ fn historical_capacity_required_limit(kura: &Kura, additional_peak: u64) -> u64 
     kura.kura_disk_usage_bytes()
         .expect("measure historical capacity physical baseline")
         .checked_add(pending_canonical)
-        .and_then(|bytes| bytes.checked_add(
-            kura.autonomous_global_terminal_outcome_reserved_bytes()
-                .expect("measure historical capacity terminal reservations"),
-        ))
+        .and_then(|bytes| {
+            bytes.checked_add(
+                kura.autonomous_global_terminal_outcome_reserved_bytes()
+                    .expect("measure historical capacity terminal reservations"),
+            )
+        })
         .and_then(|bytes| {
             bytes.checked_add(
                 kura.post_wsv_lane_artifact_budget_reserved_bytes()
@@ -193,7 +191,10 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         .disk_usage_accounting_snapshot_for_tests()
         .expect("snapshot historical capacity accounting");
     let revision_before = kura.committed_lane_status_revision();
-    let post_wsv_before = kura.post_wsv_lane_artifact_budget_reservations.lock().clone();
+    let post_wsv_before = kura
+        .post_wsv_lane_artifact_budget_reservations
+        .lock()
+        .clone();
     let certified_before = kura.certified_bundle_capacity_reservations.lock().clone();
     Arc::get_mut(&mut kura)
         .expect("historical capacity Kura is exclusive")
@@ -204,7 +205,10 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
             .is_err(),
         "one byte below the whole-batch peak must reject before its first mutation",
     );
-    assert_eq!(snapshot_regular_files_recursively(temp_dir.path()), bytes_before);
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        bytes_before
+    );
     assert_eq!(
         kura.disk_usage_accounting_snapshot_for_tests()
             .expect("re-read rejected historical capacity accounting"),
@@ -261,16 +265,10 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         "restart-second",
         &signer,
     );
-    let first = historical_autonomous_recovery_record_for_kura(
-        &first_payload,
-        &signer,
-        b"restart-first",
-    );
-    let second = historical_autonomous_recovery_record_for_kura(
-        &second_payload,
-        &signer,
-        b"restart-second",
-    );
+    let first =
+        historical_autonomous_recovery_record_for_kura(&first_payload, &signer, b"restart-first");
+    let second =
+        historical_autonomous_recovery_record_for_kura(&second_payload, &signer, b"restart-second");
     let (kura, _) = Kura::new(&config, &lane_config).expect("historical restart Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
     persist_historical_capacity_payload_fixture(&kura, &second_payload);
@@ -310,10 +308,7 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
     );
     assert_eq!(
         reopened
-            .persist_historical_autonomous_lane_recovery_records(&[
-                first.clone(),
-                second.clone(),
-            ])
+            .persist_historical_autonomous_lane_recovery_records(&[first.clone(), second.clone(),])
             .expect("complete partial historical batch after restart"),
         vec![
             HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled,
@@ -402,10 +397,7 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
     );
     assert_eq!(
         reopened
-            .persist_historical_autonomous_lane_recovery_records(&[
-                first.clone(),
-                second.clone(),
-            ])
+            .persist_historical_autonomous_lane_recovery_records(&[first.clone(), second.clone(),])
             .expect("historical replay resumes after startup append recovery"),
         vec![
             HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled,
@@ -421,30 +413,29 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = historical_capacity_payload_for_kura(
+    let (network_id, epoch, payload) = historical_capacity_payload_for_kura(
         lane.lane_id,
         lane.dataspace_id,
         1,
         "seal-temp",
         &signer,
     );
-    let record =
-        historical_autonomous_recovery_record_for_kura(&payload, &signer, b"seal-temp");
+    let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"seal-temp");
     let seal_bytes = historical_autonomous_recovery_record_bytes(&record);
     let seal_len = u64::try_from(seal_bytes.len()).expect("historical seal length fits u64");
     let (kura, _) = Kura::new(&config, &lane_config).expect("historical seal-temp Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_capacity_payload_fixture(&kura, &payload);
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover seal-temp execution input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("persist seal-temp execution input dependency");
     assert_eq!(
-        kura.historical_autonomous_recovery_batch_additional_peak_for_test(
-            std::slice::from_ref(&record),
-        )
-        .expect("derive seal-only physical peak"),
+        kura.historical_autonomous_recovery_batch_additional_peak_for_test(std::slice::from_ref(
+            &record
+        ),)
+            .expect("derive seal-only physical peak"),
         seal_len,
         "the exact publication encoding is the one inode reserved for the no-clobber seal",
     );
@@ -455,10 +446,8 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
             .is_err(),
         "the injected crash must retain the synced seal temp before rename",
     );
-    let historical_directory = Kura::historical_autonomous_recovery_directory_for_entry(
-        lane,
-        temp_dir.path(),
-    );
+    let historical_directory =
+        Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let stable_seal = Kura::historical_autonomous_recovery_path_for_entry(
         lane,
         temp_dir.path(),
@@ -517,11 +506,7 @@ fn historical_recovery_acquires_prune_before_historical_mutation_lock() {
         "lock-order",
         &signer,
     );
-    let record = historical_autonomous_recovery_record_for_kura(
-        &payload,
-        &signer,
-        b"lock-order",
-    );
+    let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"lock-order");
     let (kura, _) = Kura::new(&config, &lane_config).expect("historical lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_capacity_payload_fixture(&kura, &payload);

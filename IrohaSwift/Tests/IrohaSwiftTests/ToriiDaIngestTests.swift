@@ -8,8 +8,12 @@ final class ToriiDaIngestTests: XCTestCase {
         let digest = Data(repeating: 0xAB, count: 32)
         let metadataEntry = ToriiDaMetadataEntry(key: "da.stream", value: Data("demo".utf8))
         let privateKeyBytes = Data((0..<32).map { UInt8($0) })
+        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
+        let owner = try makeDaOwner(privateKey: privateKey)
 
         var submission = ToriiDaBlobSubmission(
+            networkId: TestNetworkIds.canonical,
+            owner: owner,
             payload: payload,
             laneId: 1,
             epoch: 2,
@@ -26,9 +30,8 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(artifacts.payloadLength, payload.count)
         XCTAssertEqual(artifacts.clientBlobIdHex, digest.upperHexString())
 
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
-        let expectedSubmitter = encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
-        XCTAssertEqual(artifacts.submitterPublicKeyHex, expectedSubmitter)
+        let expectedSigner = encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
+        XCTAssertEqual(artifacts.signerPublicKeyHex, expectedSigner)
         let signingDigest = try XCTUnwrap(Data(hexString: artifacts.signingDigestHex))
         let signature = try XCTUnwrap(Data(hexString: artifacts.signatureHex))
         XCTAssertTrue(privateKey.publicKey.isValidSignature(signature, for: signingDigest))
@@ -38,6 +41,8 @@ final class ToriiDaIngestTests: XCTestCase {
         )
 
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["network_id"] as? String, TestNetworkIds.canonical.literal)
+        XCTAssertEqual(json["owner"] as? String, owner)
         XCTAssertEqual(json["lane_id"] as? Int, 1)
         XCTAssertEqual(json["epoch"] as? Int, 2)
         XCTAssertEqual(json["sequence"] as? Int, 3)
@@ -52,11 +57,21 @@ final class ToriiDaIngestTests: XCTestCase {
         let digestTuple = try XCTUnwrap(json["client_blob_id"] as? [[NSNumber]])
         XCTAssertEqual(digestTuple.first?.count, 32)
         XCTAssertEqual(digestTuple.first?.first, NSNumber(value: 0xAB))
+        let payloadHash = try XCTUnwrap(json["payload_hash"] as? [[NSNumber]])
+        XCTAssertEqual(payloadHash.first?.count, 32)
+        let signatures = try XCTUnwrap(json["signatures"] as? [[String: String]])
+        XCTAssertEqual(signatures.count, 1)
+        XCTAssertEqual(signatures[0]["signer"], expectedSigner)
     }
 
     func testDaIntentDigestMatchesSharedRustProtocolVector() throws {
         let clientBlobId = Data((0..<32).map { UInt8(0x11 + $0) })
+        let privateKey = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: Data(repeating: 0x19, count: 32)
+        )
         let submission = ToriiDaBlobSubmission(
+            networkId: try NetworkId(bytes: Data(repeating: 0xA5, count: 32)),
+            owner: try makeDaOwner(privateKey: privateKey),
             payload: Data("hello data availability".utf8),
             chunkSize: 1 << 20,
             laneId: 2,
@@ -96,7 +111,7 @@ final class ToriiDaIngestTests: XCTestCase {
 
         XCTAssertEqual(
             artifacts.signingDigestHex,
-            "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8"
+            "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA"
         )
     }
 
@@ -215,10 +230,22 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: payload))
     }
 
-    func testMissingClientBlobIdFails() {
-        let submission = ToriiDaBlobSubmission(payload: Data("hi".utf8))
+    func testMissingClientBlobIdFails() throws {
+        let privateKey = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: Data(repeating: 0x31, count: 32)
+        )
+        let submission = ToriiDaBlobSubmission(
+            networkId: TestNetworkIds.canonical,
+            owner: try makeDaOwner(privateKey: privateKey),
+            payload: Data("hi".utf8)
+        )
         let builder = ToriiDaIngestRequestBuilder(submission: submission)
         XCTAssertThrowsError(try builder.makeRequestBody())
+    }
+
+    private func makeDaOwner(privateKey: Curve25519.Signing.PrivateKey) throws -> String {
+        try AccountAddress.fromAccount(publicKey: privateKey.publicKey.rawRepresentation)
+            .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
     private func encodeEd25519Multihash(_ publicKey: Data) -> String {

@@ -1332,12 +1332,15 @@ def test_async_source_fidelity_pins_validator_progress_capacity(
     )
     (formal_dir / "SumeragiV2AsyncNetwork.tla").write_text(
         source.replace(
-            "AsyncIngressCapacity >= 4 * N + 2",
+            "AsyncIngressCapacity >= 5 * N + 2",
             "AsyncIngressCapacity >= N + 2",
             1,
         ).replace(
-            "Len(lanes[recipient][source]) = 3",
-            "Len(lanes[recipient][source]) = 4",
+            "           /\\ Len(lanes[recipient][source]) =\n"
+            "                Cardinality(\n"
+            "                  IngressProtectedClassesPresentIn(\n"
+            "                    lanes, recipient, source))\n",
+            "           /\\ Len(lanes[recipient][source]) = 4\n",
             1,
         ).replace(
             "       /\\ \\A source \\in AsyncIngressSources:\n"
@@ -2393,19 +2396,17 @@ def local_runner_service_fixture(tmp_path: Path, module) -> Path:
     return formal_dir
 
 
-def pending_run_inner_fixture(
+def reviewed_run_inner_fixture(
     tmp_path: Path, module, checker_name: str
 ) -> Path:
-    """Copy and approve the source fixture owned by one run-loop checker."""
+    """Copy the canonical source fixture owned by one run-loop checker."""
 
     if checker_name != "timeout_vote_episode":
         return local_runner_service_fixture(tmp_path, module)
-    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
-    return formal_dir
+    return copy_timeout_vote_episode_fixture(tmp_path, module)
 
 
-def pending_run_inner_source_fidelity_errors(
+def reviewed_run_inner_source_fidelity_errors(
     module, repo_root: Path, formal_dir: Path, checker_name: str
 ) -> list[str]:
     """Dispatch one run-loop mutation to its sole semantic owner."""
@@ -2524,6 +2525,29 @@ def test_leader_wire_physical_ingress_production_contract_is_current(
             "            .take(1)\n"
             "            .collect())\n",
             "every active logical scheduler owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "token.admission_ordinal > restore.last_admission_ordinal()",
+            "token.admission_ordinal < restore.last_admission_ordinal()",
+            "every restored durable token must remain at or below the restored physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            ".max(restore.last_admission_ordinal());",
+            ".max(0);",
+            "restart binding must preserve the durable physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .checked_add(1)\n"
+            "        .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .wrapping_add(1);",
+            "fresh leader-wire lifecycle admission must use the next physical high-watermark ordinal",
         ),
     ),
 )
@@ -2651,11 +2675,29 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "self.dormant_local_fifo_reservations.iter().try_fold(\n"
-            "            command_minimum,",
-            "self.commands.iter().try_fold(\n"
-            "            command_minimum,",
-            "latent Local FIFO reservations must participate in the oldest active owner",
+            "        for reservation in &self.dormant_local_fifo_reservations {\n"
+            "            if reservation.admission_ordinal == 0\n"
+            "                || !self\n"
+            "                    .lifecycle_ordinals\n"
+            "                    .recognizes_minted(reservation.admission_ordinal)\n"
+            "                    .map_err(|_| EnqueueError::FailClosed)?\n"
+            "            {\n"
+            "                return Err(EnqueueError::FailClosed);\n"
+            "            }\n"
+            "        }\n"
+            "        // Dormant replay reservations are passive capacity claims, not\n",
+            "        for reservation in &self.dormant_local_fifo_reservations {\n"
+            "            if false && reservation.admission_ordinal == 0\n"
+            "                || !self\n"
+            "                    .lifecycle_ordinals\n"
+            "                    .recognizes_minted(reservation.admission_ordinal)\n"
+            "                    .map_err(|_| EnqueueError::FailClosed)?\n"
+            "            {\n"
+            "                return Err(EnqueueError::FailClosed);\n"
+            "            }\n"
+            "        }\n"
+            "        // Dormant replay reservations are passive capacity claims, not\n",
+            "latent Local FIFO reservations must retain exact minted identity but remain passive until a runnable occurrence materializes",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -2670,10 +2712,51 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
             "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal)),\n",
-            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal <= serve_lifecycle_ordinal)),\n",
-            "complete owner minimum must be strictly older than the ticket",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                let claimed_older_runtime_episode = services\n"
+            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n",
+            "                let claimed_older_runtime_episode = services\n"
+            "                    .claim_certified_serve_runtime_episode_unchecked(serve_barrier)\n",
+            "an exact target turn must claim before selecting one completed predecessor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    services.drain_exact_serve_runtime_predecessor(\n"
+            "                        &mut executor,\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )?;\n",
+            "                    services.drain_exact_serve_runtime_predecessor(\n"
+            "                        &mut executor,\n"
+            "                        serve_barrier.lifecycle_ordinal(),\n"
+            "                    )?;\n",
+            "an exact target turn must claim before selecting one completed predecessor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    if predecessor_witness.is_some()\n"
+            "                        && services\n",
+            "                    if predecessor_witness.is_none()\n"
+            "                        && services\n",
+            "serialized predecessor step must require both an older owner and physical capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    older_predecessor_remains = predecessor_witness.is_some();\n",
+            "                    older_predecessor_remains = predecessor_witness.is_none();\n",
+            "every claimed turn must re-publish/recheck the full owner set before settlement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "            else {\n"
+            "                // Exact admission won the queue-locked race after the\n"
+            "                // observation above. Restart at the dedicated target turn.\n"
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n"
+            "            };\n",
+            "            else {\n"
+            "                continue;\n"
+            "            };\n",
+            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
         ),
     ),
 )
@@ -2783,16 +2866,17 @@ def test_local_runner_service_contract_rejects_broadened_trust_boundary(
         (
             "SumeragiV2AsyncLivenessProofs.tla",
             "LocalRunnerServiceContractDebt",
+            "  IF node \\in AsyncTimedServiceNodes\n"
+            "       /\\ asyncNodeServiceDeadlines[node] <= asyncNow\n",
             "  IF node \\in LocalRunnerServiceOwners\n"
             "       /\\ asyncNodeServiceDeadlines[node] <= asyncNow\n",
-            "  IF asyncNodeServiceDeadlines[node] <= asyncNow\n",
             "LocalRunnerServiceContractDebt must equal only",
         ),
         (
             "SumeragiV2AsyncLivenessProofs.tla",
             "LocalRunnerServiceContractDecreaseStep",
+            "  \\E node \\in AsyncTimedServiceNodes:\n",
             "  \\E node \\in LocalRunnerServiceOwners:\n",
-            "  \\E node \\in ValidatorIds:\n",
             "LocalRunnerServiceContractDecreaseStep must equal only",
         ),
         (
@@ -2992,7 +3076,7 @@ def test_effect_capacity_reconciled_semantics_survive_digest_refresh(
             adapter.read_text(encoding="utf-8"), "step_with_defer_policy"
         )
         check = module._adapter_step_has_synchronous_reducer_effect_dataflow
-        reducer = "self.reducer.step(event)"
+        reducer = "self.step_reducer(event)"
         drive = "self.drive_effects(outcome.into_effects())"
         assert check(adapter_item.source)
         assert not check(adapter_item.source.replace(drive, "Vec::new()", 1))

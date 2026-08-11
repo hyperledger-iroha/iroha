@@ -793,9 +793,7 @@ impl Kura {
                     "Kura-root initial process-generation authority inventory contains a non-UTF-8 entry",
                 )
             })?;
-            if !file_name
-                .starts_with(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX)
-            {
+            if !file_name.starts_with(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX) {
                 continue;
             }
             if !Self::validate_autonomous_publication_quarantine(
@@ -948,8 +946,7 @@ impl Kura {
         }
         let stable =
             Self::read_autonomous_lifecycle_process_generation_stable_record_for(store_root)?;
-        let mut retained_initial_authority =
-            None::<AutonomousLifecycleProcessGenerationRecordV1>;
+        let mut retained_initial_authority = None::<AutonomousLifecycleProcessGenerationRecordV1>;
         for (path, quarantine) in quarantine_records {
             let valid = match stable.as_ref() {
                 None if quarantine.body.generation == 1 => {
@@ -962,7 +959,7 @@ impl Kura {
                 }
                 None => false,
                 Some((stable, _)) => {
-                    quarantine.body.chain_id_hash == stable.body.chain_id_hash
+                    quarantine.body.network_id == stable.body.network_id
                         && quarantine.body.local_peer_id == stable.body.local_peer_id
                         && quarantine.body.generation
                             <= stable.body.generation.checked_add(1).unwrap_or(u64::MAX)
@@ -998,7 +995,7 @@ impl Kura {
                     .as_ref()
                     .is_none_or(|authority| authority == &temporary) => {}
             Some((stable, _))
-                if temporary.body.chain_id_hash == stable.body.chain_id_hash
+                if temporary.body.network_id == stable.body.network_id
                     && temporary.body.local_peer_id == stable.body.local_peer_id
                     && stable
                         .body

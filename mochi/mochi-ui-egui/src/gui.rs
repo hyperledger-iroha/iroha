@@ -51,7 +51,6 @@ use egui_plot::{Legend, Line, Plot, PlotPoint, PlotPoints};
 use hex::encode_upper;
 #[allow(unused_imports)]
 use iroha_data_model::{
-    ChainId,
     account::{
         AccountAdmissionMode, AccountAdmissionPolicy,
         admission::{ImplicitAccountCreationFee, ImplicitAccountFeeDestination},
@@ -74,7 +73,6 @@ use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
     prelude::{AccountId, Name, Numeric, Quantity},
     role::RoleId,
-    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
 use mochi_core::{
@@ -928,7 +926,7 @@ fn print_cli_usage() {
     println!("  --enable-nexus               Enable Nexus/multi-lane features.");
     println!("  --disable-nexus              Disable Nexus/multi-lane features.");
     println!("  --nexus-lane-count <count>   Override nexus.lane_count in generated configs.");
-    println!("  --irohad <path>              Override the irohad binary path.");
+    println!("  --irohad <path>              Override the iroha3d binary path.");
     println!("  --kagami <path>              Override the kagami binary path.");
     println!("  --iroha-cli <path>           Override the iroha_cli binary path.");
     println!("  --build-binaries             Auto-build missing binaries via cargo.");
@@ -5623,7 +5621,9 @@ impl MochiApp {
                 "No Supervisor signer is configured with CanSetParameters; update the signer vault"
                     .to_owned()
             })?;
-        let chain_id = supervisor.chain_id().to_owned();
+        let network_id = client.network_id().ok_or_else(|| {
+            format!("Torii client for {peer_alias} has no exact network identity")
+        })?;
         let lifecycle_result = handle.block_on(async {
             let options = ReadinessOptions::new(READINESS_TIMEOUT)
                 .with_poll_interval(READINESS_POLL_INTERVAL);
@@ -5632,7 +5632,7 @@ impl MochiApp {
                 .await
                 .map_err(|err| format!("Torii readiness failed: {err}"))?;
             client
-                .apply_lane_lifecycle(&chain_id, &signer, plan)
+                .apply_lane_lifecycle(network_id, &signer, plan)
                 .await
                 .map_err(|err| format!("Signed lane lifecycle transaction failed: {err}"))?;
             Ok::<(), String>(())
@@ -6322,7 +6322,7 @@ impl MochiApp {
                                     "Auto-build missing binaries (cargo build)",
                                 );
                                 ui.small(
-                                    "When enabled, MOCHI may run `cargo build` to build missing `irohad`, `kagami`, and `iroha_cli` binaries.",
+                                    "When enabled, MOCHI may run `cargo build` to build missing `iroha3d`, `kagami`, and `iroha` binaries.",
                                 );
                                 ui.add_space(6.0);
                                 ui.checkbox(
@@ -10479,6 +10479,16 @@ impl MochiApp {
             self.composer_chain_id.trim().to_owned()
         };
         self.composer_chain_id = chain.clone();
+        let network_id = match supervisor.network_id() {
+            Ok(network_id) => network_id,
+            Err(error) => {
+                self.composer_error = Some(format!(
+                    "The selected generation has no exact transaction network identity: {error}"
+                ));
+                self.composer_preview = None;
+                return false;
+            }
+        };
 
         if self.composer_drafts.is_empty() {
             self.composer_error =
@@ -10525,7 +10535,7 @@ impl MochiApp {
             }
         }
 
-        match compose_preview_with_options(&chain, &self.composer_drafts, signer, &options) {
+        match compose_preview_with_options(network_id, &self.composer_drafts, signer, &options) {
             Ok(preview) => {
                 self.composer_preview = Some(preview);
                 self.composer_error = None;
@@ -12014,7 +12024,8 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
             | ToriiErrorKind::InvalidEndpoint
             | ToriiErrorKind::UnsupportedScheme
             | ToriiErrorKind::InvalidHeader
-            | ToriiErrorKind::InvalidWebSocketRequest => Color32::from_gray(150),
+            | ToriiErrorKind::InvalidWebSocketRequest
+            | ToriiErrorKind::SignedQueryContext => Color32::from_gray(150),
         }
     }
 }

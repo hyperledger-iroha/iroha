@@ -13,6 +13,7 @@ pub mod confidential_store;
 pub mod pin_intents;
 pub mod pin_store;
 pub mod proofs;
+pub(crate) mod quota;
 pub mod receipts;
 pub mod replay_cache;
 pub mod shard_cursor;
@@ -23,7 +24,8 @@ pub use confidential::{ConfidentialComputeError, validate_confidential_compute_r
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    account::AccountId,
+    NetworkId,
+    account::{AccountController, AccountId},
     da::{
         commitment::{
             DaCommitmentBundle, DaCommitmentKey, DaCommitmentRecord, DaProofPolicyBundle,
@@ -256,6 +258,98 @@ pub enum DaPinIntentValidationError {
         sequence: u64,
         /// Owner account missing from the registry.
         owner: AccountId,
+    },
+    /// Signed authorization does not describe the enclosing pin intent.
+    #[error(
+        "DA ingest authorization does not match lane {lane} epoch {epoch} sequence {sequence} pin intent"
+    )]
+    AuthorizationMismatch {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Signed authorization targets another genesis lineage.
+    #[error(
+        "DA ingest authorization for lane {lane} epoch {epoch} sequence {sequence} targets network {actual}, expected {expected}"
+    )]
+    WrongNetwork {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Expected exact network identity.
+        expected: NetworkId,
+        /// Signed network identity.
+        actual: NetworkId,
+    },
+    /// Signed authorization carries no canonical payload charge.
+    #[error(
+        "DA ingest authorization for lane {lane} epoch {epoch} sequence {sequence} declares zero payload bytes"
+    )]
+    ZeroPayloadBytes {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Signed authorization witnesses are empty, non-canonical, duplicated, or invalid.
+    #[error(
+        "DA ingest authorization for lane {lane} epoch {epoch} sequence {sequence} has invalid signer witnesses"
+    )]
+    InvalidAuthorizationSignatures {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Signed witnesses do not satisfy the committed account controller.
+    #[error(
+        "DA ingest authorization for owner {owner} does not satisfy its committed account controller"
+    )]
+    UnauthorizedOwner {
+        /// Owner whose controller was not satisfied.
+        owner: AccountId,
+    },
+    /// Deterministic per-account DA ingest count/byte ceiling was exceeded.
+    #[error(
+        "DA ingest quota for owner {owner} exceeded in window {window}: count {count}/{max_count}, bytes {bytes}/{max_bytes}"
+    )]
+    QuotaExceeded {
+        /// Account whose quota would be exceeded.
+        owner: AccountId,
+        /// Deterministic block-window index.
+        window: u64,
+        /// Prospective ingest count.
+        count: u64,
+        /// Configured count ceiling.
+        max_count: u64,
+        /// Prospective canonical byte charge.
+        bytes: u64,
+        /// Configured byte ceiling.
+        max_bytes: u64,
+    },
+    /// Checked quota arithmetic overflowed.
+    #[error("DA ingest quota arithmetic overflow for owner {owner}")]
+    QuotaOverflow {
+        /// Account whose usage could not be represented.
+        owner: AccountId,
+    },
+    /// Persisted deterministic quota state was malformed or non-canonical.
+    #[error("DA ingest quota state for owner {owner} is corrupt: {reason}")]
+    QuotaStateCorrupt {
+        /// Account whose stored usage was corrupt.
+        owner: AccountId,
+        /// Bounded failure detail.
+        reason: String,
     },
     /// Pin-intent alias exceeds the consensus admission bound.
     #[error(
@@ -888,16 +982,42 @@ fn sanitize_pin_intents_with_lane_check(
             continue;
         }
 
-        if let Some(owner) = intent.owner.as_ref() {
-            if !account_exists(owner) {
-                rejected.push(DaPinIntentValidationError::UnknownOwner {
-                    lane: intent.lane_id,
-                    epoch: intent.epoch,
-                    sequence: intent.sequence,
-                    owner: owner.clone(),
-                });
-                continue;
-            }
+        let authorization = &intent.authorization;
+        if authorization.lane_id != intent.lane_id
+            || authorization.epoch != intent.epoch
+            || authorization.sequence != intent.sequence
+        {
+            rejected.push(DaPinIntentValidationError::AuthorizationMismatch {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+        if authorization.payload_bytes == 0 {
+            rejected.push(DaPinIntentValidationError::ZeroPayloadBytes {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+        if !authorization.has_valid_canonical_signatures() {
+            rejected.push(DaPinIntentValidationError::InvalidAuthorizationSignatures {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+        if !account_exists(&authorization.owner) {
+            rejected.push(DaPinIntentValidationError::UnknownOwner {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+                owner: authorization.owner.clone(),
+            });
+            continue;
         }
 
         if !seen.insert(key) {
@@ -931,6 +1051,136 @@ fn sanitize_pin_intents_with_lane_check(
     }
 
     (kept, rejected)
+}
+
+fn authorization_satisfies_controller(
+    authorization: &iroha_data_model::da::ingest::DaIngestAuthorizationV1,
+    controller: &AccountController,
+) -> bool {
+    if !authorization.has_valid_canonical_signatures() {
+        return false;
+    }
+    match controller {
+        AccountController::Single(signatory) => {
+            matches!(authorization.signatures.as_slice(), [witness] if &witness.signer == signatory)
+        }
+        AccountController::Multisig(policy) => {
+            let Some(weight) =
+                authorization
+                    .signatures
+                    .iter()
+                    .try_fold(0_u32, |accumulated, witness| {
+                        let member = policy
+                            .members()
+                            .iter()
+                            .find(|member| member.public_key() == &witness.signer)?;
+                        accumulated.checked_add(u32::from(member.weight()))
+                    })
+            else {
+                return false;
+            };
+            weight >= u32::from(policy.threshold())
+        }
+    }
+}
+
+/// Verify every pin-intent authorization against the exact network and committed account state.
+///
+/// # Errors
+///
+/// Returns the first missing, cross-network, cryptographically invalid, or
+/// controller-insufficient authorization. Call this before quota preparation.
+pub fn validate_pin_intent_authorizations(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    expected_network_id: NetworkId,
+    account_controller: impl Fn(&AccountId) -> Option<AccountController>,
+) -> Result<(), DaPinIntentValidationError> {
+    for intent in &bundle.intents {
+        let authorization = &intent.authorization;
+        if authorization.lane_id != intent.lane_id
+            || authorization.epoch != intent.epoch
+            || authorization.sequence != intent.sequence
+        {
+            return Err(DaPinIntentValidationError::AuthorizationMismatch {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+        }
+        if authorization.network_id != expected_network_id {
+            return Err(DaPinIntentValidationError::WrongNetwork {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+                expected: expected_network_id,
+                actual: authorization.network_id,
+            });
+        }
+        if authorization.payload_bytes == 0 {
+            return Err(DaPinIntentValidationError::ZeroPayloadBytes {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+        }
+        if !authorization.has_valid_canonical_signatures() {
+            return Err(DaPinIntentValidationError::InvalidAuthorizationSignatures {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+        }
+        let Some(controller) = account_controller(&authorization.owner) else {
+            return Err(DaPinIntentValidationError::UnknownOwner {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+                owner: authorization.owner.clone(),
+            });
+        };
+        if !authorization_satisfies_controller(authorization, &controller) {
+            return Err(DaPinIntentValidationError::UnauthorizedOwner {
+                owner: authorization.owner.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+/// Build a canonically signed DA ingest authorization for unit-test pin intents.
+pub(crate) fn signed_test_ingest_authorization(
+    network_id: NetworkId,
+    key_pair: &iroha_crypto::KeyPair,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    payload_bytes: u64,
+) -> iroha_data_model::da::ingest::DaIngestAuthorizationV1 {
+    use iroha_data_model::da::{
+        ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+        types::BlobDigest,
+    };
+
+    let mut authorization = DaIngestAuthorizationV1 {
+        network_id,
+        owner: AccountId::new(key_pair.public_key().clone()),
+        lane_id,
+        epoch,
+        sequence,
+        payload_hash: BlobDigest::new([0xA5; 32]),
+        payload_bytes,
+        request_content_hash: Hash::prehashed([0x5A; 32]),
+        signatures: Vec::new(),
+    };
+    let signature =
+        iroha_crypto::Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+            .expect("test DA ingest authorization must sign");
+    authorization.signatures.push(DaIngestSignatureV1 {
+        signer: key_pair.public_key().clone(),
+        signature,
+    });
+    authorization
 }
 
 /// Validate a DA pin-intent bundle before accepting an inbound block.
@@ -1218,9 +1468,11 @@ fn validate_pin_intent_bundle_len(len: usize) -> Result<(), DaPinIntentValidatio
 #[cfg(test)]
 mod proof_policy_tests {
     use iroha_data_model::{
+        account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
         da::{
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
-            types::StorageTicketId,
+            types::{BlobDigest, StorageTicketId},
         },
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
@@ -1235,12 +1487,21 @@ mod proof_policy_tests {
         manifest_bytes: [u8; 32],
         ticket_bytes: [u8; 32],
     ) -> DaPinIntent {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x5A; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic DA owner key");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; 32]),
+        ));
         DaPinIntent::new(
             lane,
             epoch,
             sequence,
             StorageTicketId::new(ticket_bytes),
             ManifestDigest::new(manifest_bytes),
+            signed_test_ingest_authorization(network_id, &key_pair, lane, epoch, sequence, 1),
         )
     }
 
@@ -1473,7 +1734,22 @@ mod proof_policy_tests {
         let lane_config = LaneConfig::default();
         let lane = lane_config.primary().lane_id;
         let mut with_owner = intent(lane, 2, 0, [0xAB; 32], [0xCD; 32]);
-        with_owner.owner = Some(iroha_test_samples::ALICE_ID.clone());
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xA6; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic unknown-owner key");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; 32]),
+        ));
+        with_owner.authorization = signed_test_ingest_authorization(
+            network_id,
+            &key_pair,
+            lane,
+            with_owner.epoch,
+            with_owner.sequence,
+            1,
+        );
         let without_owner = intent(lane, 3, 1, [0xEF; 32], [0x11; 32]);
 
         let (kept, rejected) = sanitize_pin_intents(
@@ -1486,16 +1762,144 @@ mod proof_policy_tests {
                 .all(|intent| intent.storage_ticket != with_owner.storage_ticket),
             "intent with unknown owner must be dropped"
         );
-        assert!(
-            kept.iter()
-                .any(|intent| intent.storage_ticket == without_owner.storage_ticket)
-        );
+        assert!(kept.is_empty());
         assert!(
             rejected
                 .iter()
                 .any(|reason| matches!(reason, DaPinIntentValidationError::UnknownOwner { .. })),
             "unknown owner should surface as a validation error"
         );
+    }
+
+    fn signed_authorization_for_controller(
+        network_id: NetworkId,
+        owner: AccountId,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        signers: &[&iroha_crypto::KeyPair],
+    ) -> DaIngestAuthorizationV1 {
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id,
+            owner,
+            lane_id,
+            epoch,
+            sequence,
+            payload_hash: BlobDigest::new([0xC1; 32]),
+            payload_bytes: 17,
+            request_content_hash: Hash::prehashed([0xC2; 32]),
+            signatures: Vec::new(),
+        };
+        let digest = authorization.signing_digest();
+        authorization.signatures = signers
+            .iter()
+            .map(|key_pair| DaIngestSignatureV1 {
+                signer: key_pair.public_key().clone(),
+                signature: iroha_crypto::Signature::try_new(key_pair.private_key(), &digest)
+                    .expect("sign controller authorization"),
+            })
+            .collect();
+        authorization
+            .signatures
+            .sort_by(|left, right| left.signer.cmp(&right.signer));
+        authorization
+    }
+
+    #[test]
+    fn ingest_authorization_rejects_same_label_different_genesis() {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xC3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic owner key");
+        let owner = AccountId::new(key_pair.public_key().clone());
+        let expected = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xC4; 32]),
+            ),
+        );
+        let foreign = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xC5; 32]),
+            ),
+        );
+        let lane = LaneId::SINGLE;
+        let authorization =
+            signed_authorization_for_controller(foreign, owner.clone(), lane, 1, 1, &[&key_pair]);
+        let bundle = DaPinIntentBundle::new(vec![DaPinIntent::new(
+            lane,
+            1,
+            1,
+            StorageTicketId::new([0xC6; 32]),
+            ManifestDigest::new([0xC7; 32]),
+            authorization,
+        )]);
+
+        let error = validate_pin_intent_authorizations(&bundle, expected, |candidate| {
+            (candidate == &owner).then(|| owner.controller().clone())
+        })
+        .expect_err("the same display label cannot bridge distinct genesis lineages");
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::WrongNetwork { actual, .. } if actual == foreign
+        ));
+    }
+
+    #[test]
+    fn ingest_authorization_enforces_committed_multisig_threshold() {
+        let member_a =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xC8; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid member A");
+        let member_b =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xC9; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid member B");
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(member_a.public_key().clone(), 1).expect("member A policy"),
+                MultisigMember::new(member_b.public_key().clone(), 1).expect("member B policy"),
+            ],
+        )
+        .expect("two-of-two policy");
+        let owner = AccountId::new_multisig(policy.clone());
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xCA; 32]),
+            ),
+        );
+        let make_bundle = |signers: &[&iroha_crypto::KeyPair]| {
+            DaPinIntentBundle::new(vec![DaPinIntent::new(
+                LaneId::SINGLE,
+                2,
+                3,
+                StorageTicketId::new([0xCB; 32]),
+                ManifestDigest::new([0xCC; 32]),
+                signed_authorization_for_controller(
+                    network_id,
+                    owner.clone(),
+                    LaneId::SINGLE,
+                    2,
+                    3,
+                    signers,
+                ),
+            )])
+        };
+
+        validate_pin_intent_authorizations(
+            &make_bundle(&[&member_a, &member_b]),
+            network_id,
+            |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
+        )
+        .expect("canonical two-of-two witnesses satisfy committed state");
+
+        let error = validate_pin_intent_authorizations(
+            &make_bundle(&[&member_a]),
+            network_id,
+            |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
+        )
+        .expect_err("one witness cannot satisfy a two-of-two account");
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::UnauthorizedOwner { owner: rejected } if rejected == owner
+        ));
     }
 }
 
@@ -1603,6 +2007,21 @@ mod tests {
 
     use super::*;
 
+    fn test_pin_authorization(
+        lane: LaneId,
+        epoch: u64,
+        sequence: u64,
+    ) -> iroha_data_model::da::ingest::DaIngestAuthorizationV1 {
+        let key_pair = KeyPair::try_from_seed(vec![0xDA; 32], Algorithm::Ed25519)
+            .expect("valid deterministic DA authorization key");
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xAD; 32]),
+            ),
+        );
+        signed_test_ingest_authorization(network_id, &key_pair, lane, epoch, sequence, 1)
+    }
+
     fn lane_catalog_with(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {
         let max_lane = lanes
             .iter()
@@ -1656,7 +2075,11 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"da-policy-drain-chain"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"da-policy-drain-genesis"),
+                )),
                 lane_id: lane.id,
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation: Hash::new(b"da-policy-drain-incarnation"),
@@ -1816,6 +2239,7 @@ mod tests {
                 1,
                 StorageTicketId::new([0xCD; 32]),
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAB; 32]),
+                test_pin_authorization(stale_lane, 1, 1),
             ),
         ]);
 
@@ -1875,6 +2299,7 @@ mod tests {
                 1,
                 StorageTicketId::new([0x41; 32]),
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x43; 32]),
+                test_pin_authorization(inactive_lane, 1, 1),
             ),
         ]);
         let err = validate_pin_intent_bundle_against_nexus(&pin_bundle, &nexus, |_| true)
@@ -2107,6 +2532,7 @@ mod tests {
                 1,
                 StorageTicketId::new([0x61; 32]),
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x63; 32]),
+                test_pin_authorization(lane, 1, 1),
             ),
         ]);
 
@@ -2231,6 +2657,7 @@ mod tests {
                 1,
                 StorageTicketId::new([0x51; 32]),
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x53; 32]),
+                test_pin_authorization(drifted_lane, 1, 1),
             ),
         ]);
         let err = validate_pin_intent_bundle_against_nexus(&pin_bundle, &nexus, |_| true)

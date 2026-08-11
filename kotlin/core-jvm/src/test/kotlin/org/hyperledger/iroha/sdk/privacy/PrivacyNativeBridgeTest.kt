@@ -46,7 +46,7 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun exactClosedRegistryIsStable() {
-        assertEquals(21, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(22, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(expected, PrivacyNativeBridge.protocolsV1().map { it.canonicalLabel })
         assertEquals(12, PrivacyNativeBridge.protocolsV1().size)
         expected.forEachIndexed { index, label ->
@@ -187,10 +187,11 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() {
+    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+        val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
-            PrivacyNativeBridge.isNativeAvailable(),
-            "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required",
+            available,
+            "ABI-22 connect_norito_bridge with compiled-profile catalog JNI exports is required",
         )
 
         val canonical = PrivacyNativeBridge.compiledProfileCatalogV1()
@@ -256,10 +257,11 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() {
+    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+        val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
-            PrivacyNativeBridge.isNativeAvailable(),
-            "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
+            available,
+            "ABI-22 connect_norito_bridge with exact-12 fixture JNI exports is required",
         )
 
         val fetched = PrivacyNativeBridge.exact12FixtureBundleV1()

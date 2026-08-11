@@ -1,5 +1,13 @@
 #[cfg(test)]
 mod tests {
+    fn network_id(seed: impl AsRef<[u8]>) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(seed)
+        ))
+    }
+
     fn schema_public_input_order(schema: &[u8]) -> Vec<String> {
         let value: norito::json::Value =
             norito::json::from_slice(schema).expect("public-input schema must be valid JSON");
@@ -567,7 +575,7 @@ mod tests {
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[3, 5]),
                 (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3, &[3]),
             ];
@@ -614,7 +622,7 @@ mod tests {
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[3, 5]),
                 (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3, &[3]),
             ];
@@ -801,10 +809,10 @@ mod tests {
                 "45591fdcac6208fef59f1955ef819d2296dab0aeba1023a3813ccf2d4e52eb03",
             ),
             (
-                super::CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3,
+                super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3,
                 &[3],
-                "fca84dd79474290906d03758d1c9dd2ab58a8a97117c2265eb9dccca8652801f",
-                "870b2059b229ac2c6039448efe1fb1ee2b84eab4a3a471f71c87d4c221f4902b",
+                "971c0d57fd63afa24ea0d1c6206a4873d7be0b283848eba6fc9fd929d2747d04",
+                "569c33f348ee0dd7714f5b10a50f797ada3f0b49f373de606445c0ddb338f737",
             ),
             (
                 super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3,
@@ -831,13 +839,14 @@ mod tests {
 
         let asset =
             super::derive_confidential_asset_tag_v3("rose#wonderland").expect("V3 asset tag");
-        let chain = super::derive_confidential_chain_tag_v3("00000000-0000-0000-0000-000000000001")
-            .expect("V3 chain tag");
+        let exact_network = network_id(b"confidential-v3-domain-separation-network");
+        let network = super::derive_confidential_network_tag_v3(&exact_network)
+            .expect("V3 exact-network tag");
         let payer = super::derive_kagemusha_topup_payer_tag_v3("alice").expect("V3 payer tag");
         let operation =
             super::derive_kagemusha_topup_operation_tag_v3(&[7; 32]).expect("V3 operation tag");
         assert_eq!(
-            BTreeSet::from([asset, chain, payer, operation]).len(),
+            BTreeSet::from([asset, network, payer, operation]).len(),
             4,
             "distinct use domains must not alias the same preimage"
         );
@@ -849,7 +858,7 @@ mod tests {
                 .expect("V3 owner");
         let rho = [17; 32];
         let note = super::derive_confidential_note_v3(asset, 19, rho, owner).expect("V3 note");
-        let nullifier = super::derive_confidential_nullifier_v3(&spend_key, rho, asset, chain)
+        let nullifier = super::derive_confidential_nullifier_v3(&spend_key, rho, asset, network)
             .expect("V3 nullifier");
         assert_ne!(note, nullifier);
         assert!(
@@ -862,15 +871,17 @@ mod tests {
         );
         assert!(super::derive_confidential_asset_tag_v3("  ").is_err());
         assert!(super::derive_confidential_asset_tag_v3(" rose#wonderland").is_err());
-        assert!(
-            super::derive_confidential_chain_tag_v3("00000000-0000-0000-0000-000000000001 ")
-                .is_err()
+        let other_network = network_id(b"confidential-v3-other-network");
+        assert_ne!(
+            network,
+            super::derive_confidential_network_tag_v3(&other_network)
+                .expect("different exact-network tag")
         );
         assert!(super::derive_kagemusha_topup_payer_tag_v3("alice ").is_err());
         assert!(super::derive_kagemusha_topup_operation_tag_v3(&[0; 32]).is_err());
         assert!(super::derive_confidential_note_v3(asset, 0, rho, owner).is_err());
         assert!(
-            super::derive_confidential_nullifier_v3(&spend_key, [0; 32], asset, chain).is_err()
+            super::derive_confidential_nullifier_v3(&spend_key, [0; 32], asset, network).is_err()
         );
     }
 
@@ -1334,11 +1345,7 @@ mod tests {
     #[test]
     fn generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk() {
         use halo2_proofs::halo2curves::{ff::Field as _, pasta::Fp};
-        use iroha_data_model::ChainId;
-
-        let chain_id: ChainId = "fc56984b-2be7-431d-840e-21514d1883f0"
-            .parse()
-            .expect("valid chain id");
+        let network_id = network_id(b"generated-confidential-transfer-network");
         let asset_definition_id = "xor#universal";
         let spend_key = [0x11_u8; 32];
         let input_rho = [0x22_u8; 32];
@@ -1376,9 +1383,9 @@ mod tests {
         )
         .expect("output commitment");
         let asset_tag = super::derive_confidential_asset_tag_v2(asset_definition_id);
-        let chain_tag = super::derive_confidential_chain_tag_v2(chain_id.as_str());
+        let network_tag = super::derive_confidential_network_tag_v2(&network_id);
         let nullifier = super::derive_confidential_nullifier_v2(
-            chain_id.as_str(),
+            &network_id,
             asset_definition_id,
             &spend_key,
             input_rho,
@@ -1403,7 +1410,7 @@ mod tests {
             output_0_owner_tag: output_owner_tag,
             output_1_owner_tag: [0u8; 32],
             asset_tag,
-            chain_tag,
+            network_tag,
             input_0_path: input_path,
             input_1_path: empty_path,
         };
@@ -1421,7 +1428,7 @@ mod tests {
             vec![Fp::ZERO],
             vec![super::scalar_from_repr(root).expect("root")],
             vec![super::scalar_from_repr(asset_tag).expect("asset tag")],
-            vec![super::scalar_from_repr(chain_tag).expect("chain tag")],
+            vec![super::scalar_from_repr(network_tag).expect("network tag")],
         ];
         halo2_proofs::dev::MockProver::run(
             super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
@@ -1432,7 +1439,7 @@ mod tests {
         .assert_satisfied();
 
         let proof = super::build_confidential_transfer_proof_v2(
-            &chain_id,
+            &network_id,
             asset_definition_id,
             &spend_key,
             &tree_commitments,
@@ -1475,7 +1482,7 @@ mod tests {
             crate::zk::hash_vk(&wrong_cid_key)
         );
         let wrong_cid_proof = super::build_confidential_transfer_proof_v2(
-            &chain_id,
+            &network_id,
             asset_definition_id,
             &spend_key,
             &tree_commitments,
@@ -1508,7 +1515,7 @@ mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
-        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-test");
+        let network_id = network_id(b"confidential-transfer-v2-test-network");
         let asset_definition_id = "zcoin#wonderland";
         let spend_key = [0x11_u8; 32];
         let input_0_rho = [0x21_u8; 32];
@@ -1560,7 +1567,7 @@ mod tests {
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");
         let proof = super::build_confidential_transfer_proof_v2(
-            &chain_id,
+            &network_id,
             asset_definition_id,
             &spend_key,
             &tree_commitments,
@@ -1605,7 +1612,7 @@ mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_one_input_two_outputs_verifies_against_generated_vk() {
-        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-one-input-test");
+        let network_id = network_id(b"confidential-transfer-v2-one-input-test-network");
         let asset_definition_id = "zcoin#wonderland";
         let spend_key = [0x61_u8; 32];
         let input_rho = [0x71_u8; 32];
@@ -1631,7 +1638,7 @@ mod tests {
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");
         let proof = super::build_confidential_transfer_proof_v2(
-            &chain_id,
+            &network_id,
             asset_definition_id,
             &spend_key,
             &tree_commitments,
@@ -1668,7 +1675,7 @@ mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn kagemusha_topup_shield_v2_binds_every_public_field_and_rejects_substitution() {
-        let chain_id = iroha_data_model::ChainId::from("kagemusha-topup-shield-test");
+        let network_id = network_id(b"kagemusha-topup-shield-test-network");
         let asset_definition_id = "pkr#sbp";
         let payer = "ed0120AABBCC@sbp";
         let operation_id = [0x41_u8; 32];
@@ -1687,7 +1694,7 @@ mod tests {
                 .expect("next-zero path");
         let vk_box = super::kagemusha_topup_shield_v2_vk_box().expect("canonical shield vk");
         let result = super::build_kagemusha_topup_shield_proof_v2(
-            &chain_id,
+            &network_id,
             asset_definition_id,
             payer,
             operation_id,
@@ -1730,8 +1737,8 @@ mod tests {
             super::derive_confidential_asset_tag_v2(asset_definition_id)
         );
         assert_eq!(
-            public.chain_tag,
-            super::derive_confidential_chain_tag_v2(chain_id.as_str())
+            public.network_tag,
+            super::derive_confidential_network_tag_v2(&network_id)
         );
         assert_eq!(
             public.payer_tag,
@@ -1764,7 +1771,7 @@ mod tests {
                 spend_scalar: super::scalar_to_repr_bytes(spend_scalar),
                 diversifier,
                 asset_tag: super::derive_confidential_asset_tag_v2(asset_definition_id),
-                chain_tag: super::derive_confidential_chain_tag_v2(chain_id.as_str()),
+                network_tag: super::derive_confidential_network_tag_v2(&network_id),
                 payer_tag: super::derive_kagemusha_topup_payer_tag_v2(payer),
                 operation_tag: super::derive_kagemusha_topup_operation_tag_v2(&operation_id),
                 zero_path: zero_path.clone(),

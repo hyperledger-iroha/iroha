@@ -441,6 +441,7 @@ def test_publisher_requires_qualified_exclusive_ingress_and_shared_replay(
 def test_governance_approval_must_bind_publisher_ingress_qualification(
     tmp_path: Path,
 ) -> None:
+    assert MODULE.INGRESS_QUALIFICATION_BOUND_KINDS == ("governance_approval",)
     for field in (
         "receiver_policy_digest_hex",
         "replay_namespace_digest_hex",
@@ -559,6 +560,19 @@ def test_publisher_security_identity_digests_reject_zero(tmp_path: Path) -> None
             "errors"
         ]
         assert f"{field} must not be the zero digest" in errors
+
+
+def test_governance_approval_policy_digest_rejects_zero(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = "0" * 64
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["governance_approval"]["artifacts"][0]["errors"]
+    assert "policy_digest_hex must not be the zero digest" in errors
 
 
 def test_fixed_retention_contract_is_exact_across_mirror_and_approval(

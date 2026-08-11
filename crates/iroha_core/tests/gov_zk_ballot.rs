@@ -40,14 +40,14 @@ use mv::storage::StorageReadOnly;
 
 fn derive_ballot_nullifier(
     domain_tag: &str,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     election_id: &str,
     commit: &[u8; 32],
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
 
     let mut input = Vec::with_capacity(
-        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+        domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
     let push_len = |buf: &mut Vec<u8>, len: usize| {
         let len_u64 = len as u64;
@@ -55,8 +55,8 @@ fn derive_ballot_nullifier(
     };
     push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(&mut input, chain_id.as_str().len());
-    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(&mut input, network_id.as_bytes().len());
+    input.extend_from_slice(network_id.as_bytes());
     push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
@@ -414,7 +414,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     let commit_bytes = bundle.commit_bytes();
     let expected_nullifier = derive_ballot_nullifier(
         "gov:ballot:v1",
-        &state.chain_id,
+        &state.network_id,
         &election_id,
         &commit_bytes,
     );

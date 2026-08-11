@@ -153,6 +153,8 @@ fn build_handle(
         manifest_view_root: vec![1; 32],
         expiry_slot: 99,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
 
@@ -276,8 +278,8 @@ fn adversarial_wsv_host(dsid: DataSpaceId, manifest_root: [u8; 32]) -> WsvHost {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 1,
         },
     );
@@ -775,6 +777,8 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         manifest_view_root: vec![1; 32],
         expiry_slot: 99,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
@@ -1893,8 +1897,8 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1957,8 +1961,8 @@ fn wsv_host_rejects_handle_skew_above_config() {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2021,8 +2025,8 @@ fn wsv_host_rejects_preflighted_proof_without_verifier() {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2078,8 +2082,8 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2296,8 +2300,8 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane: LaneId::new(4),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     }];
@@ -2361,8 +2365,8 @@ fn wsv_host_rejects_noncanonical_policy_snapshot_without_panicking() {
         policy: AxtPolicyEntry {
             manifest_root: [0x22; 32],
             target_lane: LaneId::new(4),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     }];
@@ -2395,8 +2399,8 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         DataspaceAxtPolicy {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 5,
         },
     );
@@ -2451,8 +2455,8 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     let manifest_root = [1u8; 32];
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_axt_min_handle_era(dsid, 3)
-            .with_axt_min_sub_nonce(dsid, 5);
+            .with_axt_active_handle_era(dsid, 3)
+            .with_axt_next_handle_counter(dsid, 5);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],

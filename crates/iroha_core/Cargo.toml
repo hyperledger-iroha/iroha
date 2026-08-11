@@ -37,6 +37,11 @@ name = "pk2_bridge_finality_verify"
 path = "src/bin/pk2_bridge_finality_verify.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "privacy_exact12_action_driver"
+path = "src/bin/privacy_exact12_action_driver.rs"
+required-features = ["privacy-release-evidence"]
+
 [lints]
 workspace = true
 

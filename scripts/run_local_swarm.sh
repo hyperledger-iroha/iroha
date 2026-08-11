@@ -267,9 +267,9 @@ fi
 export NORITO_SKIP_BINDINGS_SYNC=1
 export IROHA_BUILD_LINE=iroha3
 if [ "${SKIP_BUILD:-0}" -ne 1 ]; then
-  cargo build --release --bin irohad --bin iroha --bin kagami
+  cargo build --release --bin iroha3d --bin iroha --bin kagami
 fi
-IROHAD=target/release/irohad
+IROHAD=target/release/iroha3d
 IROHA=target/release/iroha
 KAGAMI=target/release/kagami
 
@@ -407,6 +407,7 @@ EOF
 write_client_config() {
   cat > "$BASE/client.toml" <<EOF
 chain = "00000000-0000-0000-0000-000000000000"
+network_id = "$GENESIS_EXPECTED_HASH"
 torii_url = "http://127.0.0.1:${APIS[0]}/"
 
 [basic_auth]

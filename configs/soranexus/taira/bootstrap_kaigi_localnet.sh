@@ -586,6 +586,10 @@ for tx in genesis.get("transactions", []):
             has_funding = True
         create_program = instruction.get("CreateFeeSponsorProgram", {}).get("program")
         if isinstance(create_program, dict) and create_program.get("id") == program_id:
+            if create_program.get("payout_account") != sponsor_account_id:
+                raise SystemExit(
+                    "existing DPN sponsor program must use its sponsor as immutable payout account"
+                )
             has_program = True
 
 instructions = []
@@ -630,6 +634,7 @@ if not has_program:
                 "CreateFeeSponsorProgram": {
                     "program": {
                         "id": program_id,
+                        "payout_account": sponsor_account_id,
                         "lifecycle": {"state": "staged"},
                     }
                 }
@@ -842,10 +847,10 @@ set -euo pipefail
 setopt null_glob
 
 DIR=\$(cd "\$(dirname "\$0")" && pwd)
-IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
+IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/iroha3d}"
 
 if [[ ! -x "\$IROHAD_BIN" ]]; then
-  echo "irohad binary not executable: \$IROHAD_BIN" >&2
+  echo "iroha3d binary not executable: \$IROHAD_BIN" >&2
   exit 1
 fi
 

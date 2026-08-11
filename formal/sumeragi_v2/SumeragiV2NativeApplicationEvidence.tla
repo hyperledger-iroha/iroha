@@ -36,7 +36,7 @@ NativeSourceClaimV4FieldMutationModes ==
    "DivergentSourceClaimRoundHeight",
    "DivergentSourceClaimRoundView",
    "DivergentSourceClaimEpoch",
-   "DivergentSourceClaimChainIdHash",
+   "DivergentSourceClaimNetworkId",
    "DivergentSourceClaimAuthorityContextHeight",
    "DivergentSourceClaimCoordinatorLaneId",
    "DivergentSourceClaimCoordinatorDataspaceId",
@@ -180,7 +180,7 @@ NativeSourceSessionClaimV4(
     roundHeight,
     roundView,
     epochValue,
-    chainIdHash,
+    networkId,
     authorityContextHeight,
     coordinatorLaneId,
     coordinatorDataspaceId,
@@ -195,7 +195,7 @@ NativeSourceSessionClaimV4(
               height |-> roundHeight,
               view |-> roundView],
    epoch |-> epochValue,
-   chain_id_hash |-> chainIdHash,
+   network_id |-> networkId,
    authority_context_height |-> authorityContextHeight,
    coordinator_lane_id |-> coordinatorLaneId,
    coordinator_dataspace_id |-> coordinatorDataspaceId,
@@ -294,7 +294,7 @@ RetrySourceSessionClaim ==
     RetryClaimValue("DivergentSourceClaimRoundHeight"),
     RetryClaimValue("DivergentSourceClaimRoundView"),
     RetryClaimValue("DivergentSourceClaimEpoch"),
-    RetryClaimValue("DivergentSourceClaimChainIdHash"),
+    RetryClaimValue("DivergentSourceClaimNetworkId"),
     RetryClaimValue("DivergentSourceClaimAuthorityContextHeight"),
     RetryClaimValue("DivergentSourceClaimCoordinatorLaneId"),
     RetryClaimValue("DivergentSourceClaimCoordinatorDataspaceId"),
@@ -356,9 +356,9 @@ SourceSessionClaimAccepted(stored, candidate) ==
   /\ SourceClaimFieldAccepted(
        "DivergentSourceClaimEpoch", stored.epoch, candidate.epoch)
   /\ SourceClaimFieldAccepted(
-       "DivergentSourceClaimChainIdHash",
-       stored.chain_id_hash,
-       candidate.chain_id_hash)
+       "DivergentSourceClaimNetworkId",
+       stored.network_id,
+       candidate.network_id)
   /\ SourceClaimFieldAccepted(
        "DivergentSourceClaimAuthorityContextHeight",
        stored.authority_context_height,

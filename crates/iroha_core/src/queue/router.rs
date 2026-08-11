@@ -32,8 +32,9 @@ use iroha_data_model::{
         },
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         settlement::{
-            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
-            SettleFxCorridor, SettlementInstructionBox,
+            DvpIsi, FundFxCorridorEscrow, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi,
+            RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor,
+            SettlementInstructionBox,
         },
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
@@ -75,12 +76,12 @@ use iroha_executor_data_model::permission::{
     },
     asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+        CanUnregisterAssetDefinition,
     },
     nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
-        CanWithdrawFeeSponsorProgram,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -1590,6 +1591,16 @@ fn instruction_settlement_dataspace_target(
             Some(policy.destination_dataspace),
         ));
     }
+    if let Some(fx) = any.downcast_ref::<FundFxCorridorEscrow>() {
+        return Ok(Some(
+            fx_corridor_policy_with_state(state_view, &fx.policy_id)?.destination_dataspace,
+        ));
+    }
+    if let Some(fx) = any.downcast_ref::<RefundFxCorridorEscrow>() {
+        return Ok(Some(
+            fx_corridor_policy_with_state(state_view, &fx.policy_id)?.destination_dataspace,
+        ));
+    }
 
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
@@ -1618,6 +1629,12 @@ fn instruction_settlement_dataspace_target(
                 ),
             ),
             SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::FundFxCorridorEscrow(fx) => Some(
+                fx_corridor_policy_with_state(state_view, &fx.policy_id)?.destination_dataspace,
+            ),
+            SettlementInstructionBox::RefundFxCorridorEscrow(fx) => Some(
+                fx_corridor_policy_with_state(state_view, &fx.policy_id)?.destination_dataspace,
+            ),
             SettlementInstructionBox::SettleFxCorridor(fx) => {
                 let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
                 settlement_pair_dataspace_target(
@@ -1684,6 +1701,16 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             Some(policy.destination_dataspace),
         ));
     }
+    if let Some(fx) = any.downcast_ref::<FundFxCorridorEscrow>() {
+        return Ok(Some(
+            fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace,
+        ));
+    }
+    if let Some(fx) = any.downcast_ref::<RefundFxCorridorEscrow>() {
+        return Ok(Some(
+            fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace,
+        ));
+    }
 
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
@@ -1716,6 +1743,12 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 ),
             ),
             SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::FundFxCorridorEscrow(fx) => {
+                Some(fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace)
+            }
+            SettlementInstructionBox::RefundFxCorridorEscrow(fx) => {
+                Some(fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace)
+            }
             SettlementInstructionBox::SettleFxCorridor(fx) => {
                 let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
                 settlement_pair_dataspace_target(
@@ -2534,7 +2567,9 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
                 SettlementInstructionBox::Dvp(_)
                 | SettlementInstructionBox::Pvp(_)
-                | SettlementInstructionBox::SetFxCorridorPolicy(_) => None,
+                | SettlementInstructionBox::SetFxCorridorPolicy(_)
+                | SettlementInstructionBox::FundFxCorridorEscrow(_)
+                | SettlementInstructionBox::RefundFxCorridorEscrow(_) => None,
             })
     });
     if let Some(fx) = fx_instruction {
@@ -2566,6 +2601,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     pvp.counter_leg().asset_definition_id(),
                 )),
                 SettlementInstructionBox::SetFxCorridorPolicy(_)
+                | SettlementInstructionBox::FundFxCorridorEscrow(_)
+                | SettlementInstructionBox::RefundFxCorridorEscrow(_)
                 | SettlementInstructionBox::SettleFxCorridor(_) => None,
             })
     };
@@ -4820,11 +4857,20 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return true;
     }
 
+    if any.downcast_ref::<SettleFxCorridor>().is_some()
+        || any.downcast_ref::<FundFxCorridorEscrow>().is_some()
+        || any.downcast_ref::<RefundFxCorridorEscrow>().is_some()
+    {
+        return true;
+    }
+
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => true,
             SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
-            SettlementInstructionBox::SettleFxCorridor(_) => true,
+            SettlementInstructionBox::FundFxCorridorEscrow(_)
+            | SettlementInstructionBox::RefundFxCorridorEscrow(_)
+            | SettlementInstructionBox::SettleFxCorridor(_) => true,
         };
     }
 
@@ -5249,6 +5295,11 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
             .is_some(),
+        "CanManageAssetDefinitionConfidentialPolicy" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
+            .ok()
+            .is_some(),
         "CanManageAssetDefinitionAlias" => permission
             .payload()
             .try_into_any_norito::<CanManageAssetDefinitionAlias>()
@@ -5262,11 +5313,6 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
         "CanEnrollFeeSponsorProgram" => permission
             .payload()
             .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
-            .ok()
-            .is_some(),
-        "CanWithdrawFeeSponsorProgram" => permission
-            .payload()
-            .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
             .ok()
             .is_some(),
         _ => false,
@@ -5374,6 +5420,19 @@ fn dataspace_scoped_permission_target(
                         state_view,
                     )
                 }),
+            "CanManageAssetDefinitionConfidentialPolicy" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
             "CanManageAccountAlias" => permission
                 .payload()
                 .try_into_any_norito::<CanManageAccountAlias>()
@@ -5432,17 +5491,6 @@ fn dataspace_scoped_permission_target(
             "CanEnrollFeeSponsorProgram" => permission
                 .payload()
                 .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
-                .ok()
-                .and_then(|token| {
-                    account_dataspace_target(
-                        state_view.map(StateView::world),
-                        &token.program_id.sponsor,
-                        state_view.map(state_view_ledger_time_ms),
-                    )
-                }),
-            "CanWithdrawFeeSponsorProgram" => permission
-                .payload()
-                .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
                     account_dataspace_target(
@@ -5584,6 +5632,20 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         ledger_time_ms,
                     )
                 }),
+            "CanManageAssetDefinitionConfidentialPolicy" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
             "CanManageAccountAlias" => permission
                 .payload()
                 .try_into_any_norito::<CanManageAccountAlias>()
@@ -5642,13 +5704,6 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             "CanEnrollFeeSponsorProgram" => permission
                 .payload()
                 .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
-                .ok()
-                .and_then(|token| {
-                    account_dataspace_target(Some(world), &token.program_id.sponsor, ledger_time_ms)
-                }),
-            "CanWithdrawFeeSponsorProgram" => permission
-                .payload()
-                .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
                     account_dataspace_target(Some(world), &token.program_id.sponsor, ledger_time_ms)
@@ -7591,15 +7646,13 @@ mod tests {
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
         alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
-        asset::{
-            AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
-        },
+        asset::{AssetDefinitionAlias, Mintable, NewAssetDefinition},
         isi::{
             alias_setup::CompareAndSetPrimaryAccountAlias,
             prelude::{Mint, Register, Transfer},
             settlement::{
-                DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
-                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
+                DvpIsi, FxCorridorOracleEvidence, FxCorridorPolicy, FxCorridorPolicyRegistry,
+                PvpIsi, SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
                 SettlementInstructionBox, SettlementLeg, SettlementPlan,
             },
             smart_contract_code::{
@@ -7614,6 +7667,7 @@ mod tests {
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, LaneConfig, LaneVisibility,
             ManifestVersion, UniversalAccountId,
         },
+        oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         peer::PeerId,
         permission::Permission,
         prelude::*,
@@ -7661,9 +7715,9 @@ mod tests {
         instructions: Vec<InstructionBox>,
         metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("chain");
+        let network_id = super::super::queue_test_network_id();
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7682,7 +7736,7 @@ mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::accept(
             tx,
-            &chain_id,
+            &network_id,
             core::time::Duration::from_secs(30),
             params,
             &crypto_cfg,
@@ -7709,9 +7763,9 @@ mod tests {
         executable: iroha_data_model::transaction::Executable,
         metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("chain");
+        let network_id = super::super::queue_test_network_id();
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -7733,7 +7787,7 @@ mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::accept(
             tx,
-            &chain_id,
+            &network_id,
             core::time::Duration::from_secs(30),
             params,
             &crypto_cfg,
@@ -7776,7 +7830,7 @@ mod tests {
     ) -> iroha_data_model::transaction::executable::ContractInvocation {
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &super::super::queue_test_network_id(),
                 authority,
                 nonce,
                 dataspace,
@@ -8198,7 +8252,7 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"queue-router-drain-chain"),
+                network_id: super::super::queue_test_network_id(),
                 lane_id: lane.id,
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation: Hash::new(b"queue-router-drain-incarnation"),
@@ -10254,7 +10308,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -10943,7 +10997,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -10985,7 +11039,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             dataspace_id,
@@ -11041,7 +11095,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             contract_dataspace,
@@ -11115,7 +11169,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11613,25 +11667,27 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace_id),
+        ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
                 default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![],
             },
-            dataspace_catalog(&[(dataspace_id, "paynet")]),
-            catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                (LaneId::new(2), dataspace_id),
-            ]),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
         );
-        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let id_seed_domain = DomainId::try_new("cash", "sbp").expect("asset definition id seed");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            owning_domain.clone(),
+            id_seed_domain,
             "pkr".parse().expect("asset definition name"),
         );
         let transfer = Transfer::asset_quantity(
-            AssetId::of(asset_definition, sender_id.clone()),
+            AssetId::of(asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
         );
@@ -11640,11 +11696,32 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("owning domain");
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
 
         assert_eq!(
             router
-                .try_route(&tx)
-                .expect("asset transfer route must resolve"),
+                .try_route_without_state(&tx)
+                .expect("opaque asset transfer should defer to state"),
+            None
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("asset transfer route must resolve from stored ownership"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
@@ -11917,7 +11994,6 @@ mod tests {
             owning_domain: Some(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
             ),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -11968,7 +12044,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12019,7 +12094,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12074,7 +12148,6 @@ mod tests {
             owning_domain: Some(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
             ),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12124,7 +12197,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12187,7 +12259,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let aed = NewAssetDefinition {
             id: aed_id,
@@ -12200,7 +12271,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -13179,14 +13249,7 @@ mod tests {
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
 
-        let instruction = InstructionBox::from(RegisterZkAsset::new(
-            asset_definition,
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            None,
-        ));
+        let instruction = InstructionBox::from(RegisterZkAsset::new(asset_definition, None, None));
         let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
         assert_eq!(
             router
@@ -13314,8 +13377,8 @@ mod tests {
     fn fx_corridor_fixture(
         source_dataspace: DataSpaceId,
         destination_dataspace: DataSpaceId,
-        source_sink: AccountId,
-        destination_reserve: AccountId,
+        owner: AccountId,
+        _former_destination_reserve: AccountId,
         recipient: AccountId,
         settlement_id: &str,
     ) -> (FxCorridorPolicy, InstructionBox) {
@@ -13330,20 +13393,35 @@ mod tests {
         let corridor = FxCorridorPolicy {
             policy_id: "mobile_aed_pkr".parse().expect("FX corridor policy id"),
             revision: 1,
+            owner,
             source_dataspace,
-            source: FxCorridorSource::TransactionAuthority,
             source_asset_definition_id: source_asset_definition_id.clone(),
-            source_sink,
             destination_dataspace,
-            destination_reserve,
             destination_asset_definition_id: destination_asset_definition_id.clone(),
             allowed_destination_alias_domains: BTreeSet::from([
                 DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
                 DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
             ]),
-            rate_numerator: 76,
-            rate_denominator: 1,
+            oracle_feed_id: "mobile_aed_pkr_rate".parse().expect("FX corridor feed id"),
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: 1_000_u32.into(),
+            max_destination_amount_per_settlement: 100_000_u32.into(),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: 10_000_u32.into(),
+            max_destination_amount_per_window: 1_000_000_u32.into(),
             enabled: true,
+        };
+        let request_hash = Hash::new(b"router-fx-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: corridor.oracle_feed_id.clone(),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
         };
         let settlement = SettleFxCorridor {
             policy_id: corridor.policy_id.clone(),
@@ -13353,6 +13431,14 @@ mod tests {
             settlement_id: settlement_id.parse().expect("FX settlement id"),
             recipient,
             source_amount: iroha_primitives::numeric::Quantity::from(10_u32),
+            expected_destination_amount: 760_u32.into(),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
         };
         (
             corridor,
@@ -13852,7 +13938,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &super::super::queue_test_network_id(),
             &authority,
             0,
             contract_dataspace,
@@ -14003,7 +14089,7 @@ mod tests {
     fn fx_corridor_full_plan_routes_native_amx_from_governed_policy() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
         let (source_sink, _) = gen_account_in("wonderland");
-        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (_former_destination_reserve, _) = gen_account_in("wonderland");
         let (recipient, _) = gen_account_in("wonderland");
         let source_dataspace = DataSpaceId::new(10);
         let auxiliary_dataspace = DataSpaceId::new(11);
@@ -14043,20 +14129,35 @@ mod tests {
         let corridor = FxCorridorPolicy {
             policy_id: "mobile_aed_pkr".parse().expect("FX corridor policy id"),
             revision: 1,
+            owner: source_sink.clone(),
             source_dataspace,
-            source: FxCorridorSource::TransactionAuthority,
             source_asset_definition_id: source_asset_definition_id.clone(),
-            source_sink: source_sink.clone(),
             destination_dataspace,
-            destination_reserve,
             destination_asset_definition_id: destination_asset_definition_id.clone(),
             allowed_destination_alias_domains: BTreeSet::from([
                 DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
                 DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
             ]),
-            rate_numerator: 76,
-            rate_denominator: 1,
+            oracle_feed_id: "mobile_aed_pkr_rate".parse().expect("FX corridor feed id"),
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: 1_000_u32.into(),
+            max_destination_amount_per_settlement: 100_000_u32.into(),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: 10_000_u32.into(),
+            max_destination_amount_per_window: 1_000_000_u32.into(),
             enabled: true,
+        };
+        let request_hash = Hash::new(b"router-fx-full-plan-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: corridor.oracle_feed_id.clone(),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
         };
         let settlement = SettleFxCorridor {
             policy_id: corridor.policy_id.clone(),
@@ -14066,6 +14167,14 @@ mod tests {
             settlement_id: "mobile_fx_1".parse().expect("FX settlement id"),
             recipient,
             source_amount: iroha_primitives::numeric::Quantity::from(10_u32),
+            expected_destination_amount: 760_u32.into(),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
         };
         let settlement_instruction =
             InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement));
@@ -14662,6 +14771,82 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("stored alias definition metadata permission route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanManageAssetDefinitionConfidentialPolicy {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("confidential-policy permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("exact confidential-policy permission route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

@@ -19,6 +19,7 @@ SELF_TESTS=(
   --self-test-bad-proof-signature
   --self-test-bad-artifact-signature
   --self-test-missing-export-pair
+  --self-test-forbidden-retired-transaction-signer
   --self-test-missing-protocol-export
   --self-test-bad-receiver-key-signature
   --self-test-bad-verification-time-signature
@@ -170,6 +171,26 @@ DETACHED_EXPORTS = {
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
+}
+
+TRANSACTION_SIGNER_BASE_EXPORTS = {
+    "connect_norito_encode_burn_signed_transaction",
+    "connect_norito_encode_claim_identifier_signed_transaction",
+    "connect_norito_encode_governance_cast_plain_ballot_signed_transaction",
+    "connect_norito_encode_governance_cast_zk_ballot_signed_transaction",
+    "connect_norito_encode_governance_enact_referendum_signed_transaction",
+    "connect_norito_encode_governance_finalize_referendum_signed_transaction",
+    "connect_norito_encode_governance_persist_council_signed_transaction",
+    "connect_norito_encode_governance_propose_deploy_signed_transaction",
+    "connect_norito_encode_mint_signed_transaction",
+    "connect_norito_encode_multisig_register_signed_transaction",
+    "connect_norito_encode_register_zk_asset_signed_transaction",
+    "connect_norito_encode_remove_key_value_signed_transaction",
+    "connect_norito_encode_set_key_value_signed_transaction",
+    "connect_norito_encode_transfer_signed_transaction",
+}
+TRANSACTION_SIGNER_EXPORTS = TRANSACTION_SIGNER_BASE_EXPORTS | {
+    f"{name}_alg" for name in TRANSACTION_SIGNER_BASE_EXPORTS
 }
 
 def rust_exports(prefix: str) -> set[str]:
@@ -398,12 +419,8 @@ rust_transaction_signers = {
 header_transaction_signers = {
     name for name in header_exports("connect_norito_encode_") if signer_name.fullmatch(name)
 }
-if len(rust_transaction_signers) != 34:
-    raise SystemExit(
-        "Rust transaction signer inventory must contain exactly 17 base/algorithm pairs: "
-        f"found {len(rust_transaction_signers)}"
-    )
-exact("C header transaction signer", rust_transaction_signers, header_transaction_signers)
+exact("Rust transaction signer", TRANSACTION_SIGNER_EXPORTS, rust_transaction_signers)
+exact("C header transaction signer", TRANSACTION_SIGNER_EXPORTS, header_transaction_signers)
 base_transaction_signers = {
     name for name in rust_transaction_signers if not name.endswith("_alg")
 }
@@ -414,6 +431,14 @@ exact("Rust transaction signer algorithm pairing", expected_transaction_signers,
 for name in sorted(rust_transaction_signers):
     rust_names = rust_parameter_names(name)
     header_names = c_parameter_names(name)
+    if rust_names[:2] != ["network_id_ptr", "network_id_len"]:
+        raise SystemExit(
+            f"Rust signer {name} must begin with exact NetworkId pointer/length arguments"
+        )
+    if header_names[:2] != ["network_id", "network_id_len"]:
+        raise SystemExit(
+            f"C signer {name} must begin with exact NetworkId pointer/length arguments"
+        )
     rust_fee_index = rust_names.index("fee_payment_json_ptr")
     header_fee_index = header_names.index("fee_payment_json")
     if rust_names[rust_fee_index:rust_fee_index + 4] != [
@@ -451,15 +476,15 @@ if re.search(
 ) is None:
     raise SystemExit("connect_norito bridge ABI must use the shared privacy ABI constant")
 if re.search(
-    r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1\s*:\s*u32\s*=\s*21\s*;",
+    r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1\s*:\s*u32\s*=\s*22\s*;",
     privacy_model,
 ) is None:
-    raise SystemExit("shared privacy bridge ABI must be exactly 21")
+    raise SystemExit("shared privacy bridge ABI must be exactly 22")
 if re.search(
-    r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+21(?:\s|$)",
+    r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+22(?:\s|$)",
     header,
 ) is None:
-    raise SystemExit("C bridge ABI macro must be exactly 21")
+    raise SystemExit("C bridge ABI macro must be exactly 22")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
@@ -491,7 +516,7 @@ if swift_proof_exports & swift_protocol_exports:
 expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
 if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
     raise SystemExit(
-        "Swift ABI-21 inventory must contain 4 proof and "
+        "Swift ABI-22 inventory must contain 4 proof and "
         f"{expected_protocol_count} protocol symbols"
     )
 swift_exports = swift_proof_exports | swift_protocol_exports
@@ -506,7 +531,7 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
 print(
-    "bridge header contract passed: ABI 21, "
+    "bridge header contract passed: bridge ABI 22, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
@@ -652,6 +677,11 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
         "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+      ;;
+    --self-test-forbidden-retired-transaction-signer)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(' \
+        'pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction('
       ;;
     --self-test-missing-protocol-export)
       replace_once "${tmp_rust}" \

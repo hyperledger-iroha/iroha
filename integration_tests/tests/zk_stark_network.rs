@@ -1,12 +1,19 @@
 //! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
 #![cfg(feature = "zk-stark")]
 
-use std::{num::NonZeroU64, time::Duration};
+use std::{
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
-use iroha_crypto::blake2::{Blake2b512, Digest as _};
+use iroha_crypto::{
+    Signature,
+    blake2::{Blake2b512, Digest as _},
+};
 use iroha_data_model::{
     isi::{Grant, InstructionBox},
     metadata::Metadata,
@@ -25,6 +32,10 @@ use iroha_executor_data_model::permission::governance::{
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
+use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+    canonical_network_request_signature_message, signature_header_value,
+};
 use reqwest::{Client as HttpClient, StatusCode};
 
 #[derive(norito::JsonSerialize)]
@@ -165,6 +176,47 @@ fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
     url
 }
 
+fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
+    match url.query() {
+        Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
+        None => Ok(url.path().parse()?),
+    }
+}
+
+fn add_canonical_prove_headers(
+    request: reqwest::RequestBuilder,
+    client: &Client,
+    method: Method,
+    url: &reqwest::Url,
+    body: &[u8],
+) -> Result<reqwest::RequestBuilder> {
+    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let timestamp_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let nonce = format!(
+        "zk-stark-prove-{timestamp_ms}-{}",
+        NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let uri = signing_uri(url)?;
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &method,
+        &uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
+    let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
+    Ok(request
+        .header(HEADER_ACCOUNT, client.account.to_string())
+        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce))
+}
+
 async fn post_torii_json_v2(
     client: &Client,
     segments: &[&str],
@@ -190,18 +242,50 @@ async fn post_torii_json_v2(
     Ok(norito::json::from_slice(&bytes)?)
 }
 
-async fn get_torii_json_v2(
+async fn post_torii_json_v2_signed(
+    client: &Client,
+    segments: &[&str],
+    payload: &norito::json::Value,
+    context: &str,
+) -> Result<norito::json::Value> {
+    let url = torii_v2_url(client, segments);
+    let body = norito::json::to_vec(payload)?;
+    let http = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(20))
+        .build()?;
+    let request = add_canonical_prove_headers(
+        http.post(url.clone())
+            .header("Content-Type", "application/json")
+            .body(body.clone()),
+        client,
+        Method::POST,
+        &url,
+        &body,
+    )?;
+    let response = request.send().await?;
+    let status = response.status();
+    let bytes = response.bytes().await?.to_vec();
+    if status != StatusCode::OK {
+        let body = String::from_utf8_lossy(&bytes);
+        return Err(eyre!("{context}: HTTP {status}. {body}"));
+    }
+    Ok(norito::json::from_slice(&bytes)?)
+}
+
+async fn get_torii_json_v2_signed(
     client: &Client,
     segments: &[&str],
     context: &str,
 ) -> Result<norito::json::Value> {
     let url = torii_v2_url(client, segments);
-    let response = HttpClient::builder()
+    let http = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
-        .build()?
-        .get(url)
-        .send()
-        .await?;
+        .build()?;
+    let request =
+        add_canonical_prove_headers(http.get(url.clone()), client, Method::GET, &url, &[])?;
+    let response = request.send().await?;
     let status = response.status();
     let bytes = response.bytes().await?.to_vec();
     if status != StatusCode::OK {
@@ -214,7 +298,7 @@ async fn get_torii_json_v2(
 async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<ProofAttachment> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
-        let value = get_torii_json_v2(
+        let value = get_torii_json_v2_signed(
             client,
             &["v2", "zk", "ivm", "prove", job_id],
             "fetch /v1/zk/ivm/prove/{job_id}",
@@ -543,7 +627,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         proved: Some(derive_resp.proved.clone()),
     };
     let prove_req_json = norito::json::to_value(&prove_req)?;
-    let prove_created_json = post_torii_json_v2(
+    let prove_created_json = post_torii_json_v2_signed(
         &client,
         &["v2", "zk", "ivm", "prove"],
         &prove_req_json,
@@ -555,7 +639,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
 
     let tx_valid = TransactionBuilder::new(
-        client.chain.clone(),
+        client.network_id,
         client.account.clone(),
         fee_payment.clone(),
     )
@@ -572,7 +656,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
 
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
-    let tx_bad = TransactionBuilder::new(client.chain.clone(), client.account.clone(), fee_payment)
+    let tx_bad = TransactionBuilder::new(client.network_id, client.account.clone(), fee_payment)
         .with_executable(Executable::IvmProved(derive_resp.proved))
         .with_metadata(tx_meta)
         .with_attachments(

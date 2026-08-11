@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import importlib.util
 import json
 import re
@@ -97,6 +96,12 @@ from scripts.tests.sorafs_rollout_gate_contract_inventory import (
     rendered_gate_steps,
     expected_rendered_plan_steps,
     runner_inventory_constant_fields,
+)
+from scripts.tests.sorafs_rollout_gate_source_support import (
+    function_source,
+    governance_service_source,
+    governance_source,
+    read_source as read,
 )
 
 
@@ -261,6 +266,7 @@ TORII_OPENAPI_RS = (
 TORII_ROUTE_CATALOG_RS = (
     REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
 )
+TORII_SORAFS_POP_ROUTE_CATALOG_RS = TORII_ROUTE_CATALOG_RS.with_name("route_catalog") / "sorafs_pop.rs"
 IROHAD_SORAFS_HEDGING_BILLING_RUNTIME_RS = (
     REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_hedging_billing_runtime.rs"
 )
@@ -955,34 +961,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     *sorted((SCRIPTS_DIR / "examples").glob("*sorafs*.args.example")),
     *sorted((REPO_ROOT / "ci").glob("*sorafs*.sh")),
 )
-
-
-TEST_SOURCE_COMPONENTS = {
-    "check_sorafs_ai_prescreen_rollout_evidence_test.py": (
-        "sorafs_ai_prescreen_live_evidence_cases.py",
-    ),
-    "check_sorafs_production_readiness_test.py": (
-        "sorafs_production_foundational_cases.py",
-    ),
-    "check_sorafs_rollout_gate_contract_test.py": ("sorafs_rollout_gate_contract_inventory.py",),
-    "actual.rs": ("actual/sorafs_pop_credentials.rs",),
-}
-
-
-def read(path: Path) -> str:
-    source = path.read_text(encoding="utf-8")
-    for component_name in TEST_SOURCE_COMPONENTS.get(path.name, ()):
-        source += "\n" + (path.parent / component_name).read_text(encoding="utf-8")
-    return source
-
-
-def function_source(path: Path, function_name: str) -> str:
-    source_text = read(path)
-    module = ast.parse(source_text)
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == function_name:
-            return ast.get_source_segment(source_text, node) or ""
-    return ""
 
 
 def test_rollout_checkers_use_exact_required_value_membership() -> None:
@@ -2122,7 +2100,9 @@ def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
 
 def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     cli = read(IROHA_CLI_SORAFS_RS)
-    peer = read(IROHA_P2P_PEER_RS)
+    peer = read(IROHA_P2P_PEER_RS) + read(
+        IROHA_P2P_PEER_RS.with_name("peer_handshake_config_tests.rs")
+    )
     kiso = read(IROHA_CORE_KISO_RS)
     actual_config = read(IROHA_CONFIG_ACTUAL_RS)
     user_config = read(IROHA_CONFIG_USER_RS)
@@ -7804,7 +7784,7 @@ def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     adoption_test = read(
         SCRIPTS_DIR / "tests" / "sorafs_orchestrator_adoption_wrapper_test.py"
     )
-    xtask_main = read(XTASK_MAIN_RS)
+    xtask_main = read(XTASK_MAIN_RS) + read(XTASK_MAIN_RS.with_name("tests.rs"))
 
     assert "def read_open_flags() -> int" in adoption
     assert "def write_open_flags() -> int" in adoption
@@ -14734,15 +14714,9 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     outbox = read(
         REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_outbox.rs"
     )
-    runtime = read(
-        REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_runtime.rs"
-    )
+    runtime = read(SORAFS_NODE_LIB_RS.with_name("provider_ingest_runtime.rs"))
     daemon = read(
-        REPO_ROOT
-        / "crates"
-        / "irohad"
-        / "src"
-        / "sorafs_provider_ingest_runtime.rs"
+        IROHAD_MAIN_RS.parent / "sorafs_provider_ingest_runtime.rs"
     )
     closure = read(DOCS_SOURCE_DIR / "sorafs" / "v1_closure_ledger.md")
 
@@ -14966,7 +14940,7 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
     missing = [phrase for phrase in required_open if phrase not in normalized]
     assert missing == []
     for stale_claim in (
-        "but it is not yet deployable from the standard `irohad` binary",
+        "but it is not yet deployable from the standard `iroha3d` binary",
         "the standard `irohad` entrypoint does not yet construct and inject",
         "no deployable shared external-runtime or sidecar adapter",
         "no production caller currently supplies",
@@ -15588,7 +15562,7 @@ def pop_credentials_production_surface_errors(
     for descriptor, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
         descriptor_matches = re.findall(
             rf"pub const {re.escape(descriptor)}: RouteDescriptor\s*=\s*"
-            rf"(.*?)(?=\n\s*(?:pub const|const fn))",
+            rf"(.*?)(?=\n\s*(?:pub const|const fn)|\Z)",
             route_catalog,
             re.S,
         )
@@ -15598,13 +15572,12 @@ def pop_credentials_production_surface_errors(
         descriptor_source = descriptor_matches[0]
         if descriptor_source.count(f'"{route}"') != 1:
             errors.append(f"{descriptor} must bind exactly {route}")
-        if (
-            descriptor_source.count(
-                ".with_authentication(AuthenticationPolicy::ProtocolHandshake)"
-            )
-            != 1
-        ):
-            errors.append(f"{descriptor} must require ProtocolHandshake")
+    for marker in (
+        ".with_authentication(AuthenticationPolicy::ProtocolHandshake)",
+        "AdmissionPolicy::AuthenticatedProtocolPrincipal,",
+    ):
+        if route_catalog.count(marker) != 1:
+            errors.append(f"PoP route helper must contain exactly one {marker}")
 
     mounted = re.findall(
         r"pop_post!\(\s*([A-Z0-9_]+),\s*"
@@ -15703,7 +15676,7 @@ def pop_credentials_production_surface_errors(
 
 
 def test_pop_credentials_production_surface_matcher_has_negative_controls() -> None:
-    route_catalog = read(TORII_ROUTE_CATALOG_RS)
+    route_catalog = read(TORII_SORAFS_POP_ROUTE_CATALOG_RS)
     torii = read(TORII_LIB_RS)
     openapi = read(TORII_OPENAPI_RS)
     pop_api = read(TORII_SORAFS_POP_API_RS)
@@ -15803,7 +15776,7 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
 def test_pop_credentials_production_service_exposes_exact_canonical_v1_surface() -> None:
     assert (
         pop_credentials_production_surface_errors(
-            read(TORII_ROUTE_CATALOG_RS),
+            read(TORII_SORAFS_POP_ROUTE_CATALOG_RS),
             read(TORII_LIB_RS),
             read(TORII_OPENAPI_RS),
             read(TORII_SORAFS_POP_API_RS),
@@ -17685,7 +17658,7 @@ def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
         bootstrap_start,
     )
     bootstrap_source = daemon_source[bootstrap_start:bootstrap_end]
-    assert ".validate_for_request(chain_id, None, 1, u64::MAX)" in bootstrap_source
+    assert ".validate_for_request(network_id, None, 1, u64::MAX)" in bootstrap_source
     assert (
         'wrap_err("validate exact finalized reputation journal bootstrap view")'
         in bootstrap_source
@@ -20101,7 +20074,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-11 work is native qualification, release evidence, and SDK distribution: clean five-target ABI-21 rebuilds, skip-free parity replay, published archives and bindings, signed manifests, and live operator smokes.",
+        "Remaining SF-11 work is native qualification, release evidence, and SDK distribution: clean five-target ABI-22 rebuilds, skip-free parity replay, published archives and bindings, signed manifests, and live operator smokes.",
         "Remaining downstream work is signed release packaging, publication, and live SDK smoke evidence for those bindings.",
         "Cross-target release evidence is still a production gate; archive published checksums and smoke outputs for each supported release target and require the SF-11 release evidence gate to pass before declaring those artifacts production-ready.",
         "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
@@ -21123,7 +21096,7 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
 
 def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS) + read(SORAFS_GOVERNANCE_DAG_SERVICE_RS.parent / "governance_service/tests/restart_and_live_kubo.rs")
+    service = governance_service_source(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
 
     outstanding_start = source.index("Still outstanding:")
     outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
@@ -21131,13 +21104,13 @@ def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
         r"\s+", " ", source[outstanding_start:outstanding_end]
     )
     required_shipped = (
-        "The `sorafs_governance_dag` implementation, exposed through the public `run_governance_dag_service` launcher, is the always-on publisher",
-        "The service derives the expected root locally, rejects any different Kubo result, pins the object, and reads the exact bytes back.",
-        "authenticated signed-HTTP endpoint with strong-ETag compare-and-swap and readback verification",
-        "A service-specific sealed checkpoint and write-ahead publish intent",
-        "The process also serves bounded mirror, head, block, node, checkpoint, health, readiness, and Prometheus routes.",
-        "consumes one finalized typed HTTP request",
-        "SharedSealedAtomicConsumeUntilExpiry",
+        "The `sorafs_governance_dag` service implementation, exposed through the public `run_governance_dag_service` library launcher, is the always-on production service",
+        "uploads and recursively pins every new block plus the signed head",
+        "authenticated HTTP compare-and-swap or IPNS resolve/publish/",
+        "A service-specific authenticated checkpoint and write-ahead publish intent",
+        "bounded public mirror, head, block, node, checkpoint, health, and Prometheus surface",
+        "The standard outbound path already consumes verified nonces through separate sealed IPFS and signed-head slots",
+        "receiver-side sealed cross-replica replay adapter",
     )
     normalized_source = re.sub(r"\s+", " ", source)
     assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
@@ -21167,8 +21140,8 @@ def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
 
 def test_governance_dag_rollout_constants_and_bindings_are_source_bound() -> None:
     checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
-    governance = read(SORAFS_GOVERNANCE_RS)
+    service = governance_service_source(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    governance = governance_source(SORAFS_GOVERNANCE_RS)
     kubo_workflow = read(SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW)
 
     for checker_marker, source_marker in (
@@ -24086,9 +24059,8 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
     instructions = read(
         REPO_ROOT / "crates" / "iroha_data_model" / "src" / "isi" / "sorafs.rs"
     )
-    queries = read(
-        REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query" / "mod.rs"
-    )
+    query_root = REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query"
+    queries = read(query_root / "mod.rs") + read(query_root / "domain_queries.rs")
     core = read(
         REPO_ROOT
         / "crates"
@@ -25131,7 +25103,12 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
             / "protocol_primitives.rs"
         ),
     )
-    daemon = re.sub(r"\s+", "", read(IROHAD_MAIN_RS) + read(REPO_ROOT / "crates" / "irohad" / "src" / "main" / "governance_dag_launcher_tests.rs"))
+    daemon = re.sub(
+        r"\s+",
+        "",
+        read(IROHAD_MAIN_RS)
+        + read(IROHAD_MAIN_RS.parent / "main/governance_dag_launcher_tests.rs"),
+    )
 
     slots = (
         ("PrivacyCyclePrfProvider", 2, "privacy_cycle_prf_provider"),
@@ -26212,7 +26189,7 @@ def test_gateway_compliance_control_surface_is_single_canonical_authenticated_fa
         assert handler in torii
         assert handler in control
 
-    assert control.count("verify_canonical_request(") == 1
+    assert control.count("verify_canonical_network_request(") == 1
     assert "sorafs_gateway_compliance_operator" in control
     assert "require_exact_canonical_json" in control
     assert "MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1" in control

@@ -53,7 +53,7 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message, signature_header_value,
+    canonical_network_request_signature_message, signature_header_value,
 };
 use norito::json::{self, Value};
 use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
@@ -103,10 +103,7 @@ fn with_soracloud_private_runtime_bootstrap(mut builder: NetworkBuilder) -> Netw
     for instruction in sorafs_pin_fee_bootstrap_instructions() {
         builder = builder.with_genesis_instruction(instruction);
     }
-    builder.with_genesis_instruction(Grant::account_permission(
-        Permission::from(iroha_executor_data_model::permission::sorafs::CanRegisterSorafsPin),
-        ALICE_ID.clone(),
-    ))
+    builder
 }
 
 fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
@@ -154,7 +151,7 @@ fn register_private_model_pin(
         })
         .build()?;
     let digest = ManifestDigest::from_manifest(&manifest)?;
-    let instruction = RegisterPinManifest::new(manifest.encode()?, 1, None, None);
+    let instruction = RegisterPinManifest::new(manifest.encode()?, None, None);
     Ok((digest, instruction))
 }
 
@@ -962,7 +959,14 @@ fn add_canonical_app_headers(
         Hash::new(url.as_str())
     );
     let uri = signing_uri(url)?;
-    let message = canonical_request_signature_message(&method, &uri, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &method,
+        &uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
         .header(HEADER_ACCOUNT, client.account.to_string())

@@ -1,13 +1,17 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Modifier
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -20,7 +24,7 @@ class TransactionPayloadTest {
     @Test
     fun `constructor applies defaults`() {
         val payload = defaultPayload()
-        assertEquals("00000000", payload.chainId)
+        assertEquals(TEST_NETWORK_ID, payload.networkId)
         assertEquals(sampleAuthority(0x00), payload.authority)
         assertEquals(1000L, payload.creationTimeMs)
         assertEquals(100_000L, payload.timeToLiveMs)
@@ -35,7 +39,7 @@ class TransactionPayloadTest {
         }
         val error = assertFailsWith<InvocationTargetException> {
             defaultingConstructor.newInstance(
-                "00000000",
+                TEST_NETWORK_ID,
                 null,
                 0L,
                 null,
@@ -53,7 +57,7 @@ class TransactionPayloadTest {
     }
 
     @Test
-    fun `chainId cannot be synthesized by the Kotlin default constructor`() {
+    fun `networkId cannot be synthesized by the Kotlin default constructor`() {
         val defaultingConstructor = TransactionPayload::class.java.declaredConstructors.single {
             it.isSynthetic && it.parameterTypes.last().name == "kotlin.jvm.internal.DefaultConstructorMarker"
         }
@@ -73,13 +77,13 @@ class TransactionPayloadTest {
             )
         }
         assertTrue(error.cause is NullPointerException)
-        assertTrue(error.cause?.message?.contains("chainId") == true)
+        assertTrue(error.cause?.message?.contains("networkId") == true)
     }
 
     @Test
-    fun `blank chainId throws`() {
+    fun `blank networkId throws`() {
         assertFailsWith<IllegalArgumentException> {
-            testPayload(chainId = "  ", creationTimeMs = 1000L)
+            NetworkId.parse("  ")
         }
     }
 
@@ -91,36 +95,97 @@ class TransactionPayloadTest {
     }
 
     @Test
-    fun `padded chainId throws before payload can be signed`() {
+    fun networkIdRejectsNonCanonicalText() {
         val error = assertFailsWith<IllegalArgumentException> {
-            testPayload(chainId = " chain", creationTimeMs = 1000L)
+            NetworkId.parse(TEST_NETWORK_ID.literal.lowercase())
+        }
+        assertTrue(error.message?.contains("exact canonical") == true)
+    }
+
+    @Test
+    fun `networkId requires a checked 32 byte genesis hash`() {
+        for (invalid in listOf(
+            TEST_NETWORK_ID.literal.dropLast(1) + "1",
+            TEST_NETWORK_ID.literal.removeSuffix("#A2F0"),
+            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149",
+            "network-label",
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                NetworkId.parse(invalid)
+            }
         }
         assertEquals(
-            "chainId must begin and end with an ASCII alphanumeric character",
-            error.message,
+            TEST_NETWORK_ID,
+            NetworkId.fromBytes(TEST_NETWORK_ID.bytes()),
         )
     }
 
     @Test
-    fun `chainId uses the canonical bounded ASCII grammar`() {
-        for (invalid in listOf(
-            "-leading",
-            "trailing_",
-            "contains space",
-            "unicode-\u00E9",
-            "x".repeat(129),
-        )) {
+    fun `networkId defensively copies raw bytes`() {
+        val source = TEST_NETWORK_ID.bytes()
+        val networkId = NetworkId.fromBytes(source)
+        source[0] = (source[0].toInt() xor 0x7f).toByte()
+        val exposed = networkId.bytes()
+        exposed[1] = (exposed[1].toInt() xor 0x7f).toByte()
+
+        assertEquals(TEST_NETWORK_ID, networkId)
+        assertNotEquals(source[0], networkId.bytes()[0])
+        assertNotEquals(exposed[1], networkId.bytes()[1])
+    }
+
+    @Test
+    fun `networkId raw bytes require exact width and genesis marker`() {
+        listOf(0, NetworkId.BYTE_LENGTH - 1, NetworkId.BYTE_LENGTH + 1).forEach { size ->
             assertFailsWith<IllegalArgumentException> {
-                testPayload(chainId = invalid, creationTimeMs = 1000L)
+                NetworkId.fromBytes(ByteArray(size))
             }
         }
-        assertEquals(
-            "iroha.mainnet:v1-alpha_2",
-            testPayload(
-                chainId = "iroha.mainnet:v1-alpha_2",
-                creationTimeMs = 1000L,
-            ).chainId,
+
+        val missingMarker = TEST_NETWORK_ID.bytes().also { bytes ->
+            bytes[bytes.lastIndex] = (bytes.last().toInt() and 0xfe).toByte()
+        }
+        val failure = assertFailsWith<IllegalArgumentException> {
+            NetworkId.fromBytes(missingMarker)
+        }
+        assertTrue(failure.message.orEmpty().contains("marker bit"))
+    }
+
+    @Test
+    fun publicTransactionApiDoesNotExposeLegacyChainNames() {
+        val publicTypes = listOf(
+            TransactionPayload::class.java,
+            NetworkId::class.java,
+            LocalSigningContext::class.java,
+            NativeSignerBridge::class.java,
         )
+        publicTypes.forEach { type ->
+            val exposedNames = buildList {
+                type.fields.mapTo(this) { it.name }
+                type.methods.mapTo(this) { it.name }
+                type.constructors.flatMapTo(this) { constructor ->
+                    constructor.parameters.map { it.name }
+                }
+            }
+            assertFalse(
+                exposedNames.any(::isLegacyChainIdentityName),
+                "${type.name} exposes a retired ChainId surface: $exposedNames",
+            )
+        }
+
+        val payloadConstructor = TransactionPayload::class.java.constructors.single {
+            Modifier.isPublic(it.modifiers) && !it.isSynthetic
+        }
+        assertEquals(NetworkId::class.java, payloadConstructor.parameterTypes.first())
+        assertEquals(
+            NetworkId::class.java,
+            LocalSigningContext::class.java.constructors.single().parameterTypes.single(),
+        )
+        val signer = NativeSignerBridge::class.java.declaredMethods.single {
+            it.name == "encodeRegisterZkAssetSignedTransaction" &&
+                Modifier.isPublic(it.modifiers) &&
+                Modifier.isStatic(it.modifiers)
+        }
+        assertEquals(NetworkId::class.java, signer.parameterTypes[1])
     }
 
     @Test
@@ -235,24 +300,16 @@ class TransactionPayloadTest {
     @Test
     fun `copy preserves values and allows overrides`() {
         val original = testPayload(
-            chainId = "chain1",
+            networkId = TEST_NETWORK_ID,
             authority = sampleAuthority(0x21),
             creationTimeMs = 2000L,
             nonce = 7,
         )
-        val copied = original.copy(chainId = "chain2", nonce = 10)
-        assertEquals("chain2", copied.chainId)
+        val copied = original.copy(networkId = OTHER_NETWORK_ID, nonce = 10)
+        assertEquals(OTHER_NETWORK_ID, copied.networkId)
         assertEquals(sampleAuthority(0x21), copied.authority)
         assertEquals(2000L, copied.creationTimeMs)
         assertEquals(10L, copied.nonce)
-    }
-
-    @Test
-    fun `copy validates new values`() {
-        val original = defaultPayload()
-        assertFailsWith<IllegalArgumentException> {
-            original.copy(chainId = "")
-        }
     }
 
     @Test
@@ -294,7 +351,7 @@ class TransactionPayloadTest {
     fun `equal instances are equal`() {
         val executable = Executable.ivm(byteArrayOf(1, 2, 3))
         val a = testPayload(
-            chainId = "c",
+            networkId = TEST_NETWORK_ID,
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
@@ -304,7 +361,7 @@ class TransactionPayloadTest {
             metadata = mapOf("k" to JsonValue.string("v")),
         )
         val b = testPayload(
-            chainId = "c",
+            networkId = TEST_NETWORK_ID,
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
@@ -319,13 +376,13 @@ class TransactionPayloadTest {
 
     @Test
     fun `different instances are not equal`() {
-        val a = testPayload(chainId = "c1", creationTimeMs = 100)
-        val b = testPayload(chainId = "c2", creationTimeMs = 100)
+        val a = testPayload(networkId = TEST_NETWORK_ID, creationTimeMs = 100)
+        val b = testPayload(networkId = OTHER_NETWORK_ID, creationTimeMs = 100)
         assertNotEquals(a, b)
     }
 
     private fun testPayload(
-        chainId: String = "00000000",
+        networkId: NetworkId = TEST_NETWORK_ID,
         authority: String = sampleAuthority(0x00),
         creationTimeMs: Long = System.currentTimeMillis(),
         executable: Executable = Executable.instructions(emptyList()),
@@ -334,7 +391,7 @@ class TransactionPayloadTest {
         feePayment: FeePaymentIntent = FeePaymentIntent.authority(emptyList()),
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload = TransactionPayload(
-        chainId = chainId,
+        networkId = networkId,
         authority = authority,
         creationTimeMs = creationTimeMs,
         executable = executable,
@@ -348,8 +405,19 @@ class TransactionPayloadTest {
         .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
+    private fun isLegacyChainIdentityName(name: String): Boolean {
+        val compact = name.replace("_", "").lowercase()
+        return compact == "chain" || compact.contains("chainid")
+    }
+
     companion object {
         private const val CONTRACT_ADDRESS =
             "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+        private val TEST_NETWORK_ID = NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        private val OTHER_NETWORK_ID = NetworkId.parse(
+            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+        )
     }
 }

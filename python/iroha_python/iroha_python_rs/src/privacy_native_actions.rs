@@ -74,28 +74,28 @@ use iroha_core::{
     },
     privacy_state::derive_privacy_pgc_account_state_root_v1,
 };
-use iroha_crypto::{Hash, PrivateKey, PublicKey};
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, ChainId},
+    nexus::DataSpaceId,
+    prelude::{AccountId, NetworkId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
         IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
-        MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
-        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PqMaspStarkStatementV1, PrivacyActionDigestV1,
-        PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
-        PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyNoteEncryptionKeyDigestV1,
-        PrivacyOrchardActionV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1,
+        PrivacyActionDigestV1, PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1,
+        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
+        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1,
+        PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
         PrivacyVeRangeBitLengthV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
         PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1,
@@ -127,6 +127,42 @@ pub const PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1: usize = 10 * 10
 pub const PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1: usize = 256 * 1024;
 /// Exact maximum X5S1 proof returned by the profile-owned worker.
 pub const PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1: usize = ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1;
+
+/// Parse the sole canonical public spelling of a transparent balance scope.
+///
+/// `dataspace:0` is intentionally unrepresentable because dataspace zero is
+/// the universal coordinator route, not a restricted balance partition.
+#[must_use]
+pub(crate) fn parse_canonical_public_balance_scope_v1(value: &str) -> Option<AssetBalanceScope> {
+    if value == "global" {
+        return Some(AssetBalanceScope::Global);
+    }
+    let raw = value.strip_prefix("dataspace:")?;
+    if raw.is_empty()
+        || raw.len() > 20
+        || raw.starts_with('0')
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let dataspace = raw.parse::<u64>().ok()?;
+    if dataspace == DataSpaceId::UNIVERSAL.as_u64() {
+        return None;
+    }
+    Some(AssetBalanceScope::Dataspace(DataSpaceId::new(dataspace)))
+}
+
+/// Return the sole canonical public spelling of a valid balance scope.
+#[must_use]
+pub(crate) fn canonical_public_balance_scope_v1(scope: AssetBalanceScope) -> Option<String> {
+    match scope {
+        AssetBalanceScope::Global => Some("global".to_owned()),
+        AssetBalanceScope::Dataspace(dataspace) if dataspace != DataSpaceId::UNIVERSAL => {
+            Some(format!("dataspace:{}", dataspace.as_u64()))
+        }
+        AssetBalanceScope::Dataspace(_) => None,
+    }
+}
 
 /// Capability bit for hidden amounts.
 pub const PRIVACY_NATIVE_FEATURE_HIDE_AMOUNT_V1: u8 = 1;
@@ -255,8 +291,8 @@ pub fn privacy_native_action_capability_for_protocol_v1(
 /// Exact signature-bound transaction fields for one direct native action.
 #[derive(Clone)]
 pub struct PrivacyActionTransactionContextV1 {
-    /// Chain selected by the signed transaction and every native transcript.
-    pub chain_id: ChainId,
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact direct single-key authority.
     pub authority: AccountId,
     /// Creation time resolved once before two-pass construction.
@@ -275,7 +311,7 @@ impl fmt::Debug for PrivacyActionTransactionContextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PrivacyActionTransactionContextV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("authority", &self.authority)
             .field("creation_time", &self.creation_time)
             .field("time_to_live", &self.time_to_live)
@@ -471,6 +507,8 @@ pub struct FcmpMembershipPaymentActionRequestV1 {
 pub struct OrchardNoteActionRequestV1 {
     /// Public asset represented by the Orchard pool.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Governed Orchard pool.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact retained anchor.
@@ -499,6 +537,8 @@ pub struct IvmPrivateNoteOutputRequestV1 {
 pub struct IvmPrivateNoteActionRequestV1 {
     /// Public asset manipulated by the program.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Governed private-note pool.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact retained program-state root.
@@ -843,14 +883,6 @@ impl InspectedPrivacyActionV1 {
 fn validate_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> Result<(), PrivacyNativeActionErrorV1> {
-    let chain_len = context.chain_id.as_str().as_bytes().len();
-    if chain_len == 0
-        || chain_len
-            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                .expect("privacy chain-id bound fits usize")
-    {
-        return Err(PrivacyNativeActionErrorV1::at("transaction-chain-id"));
-    }
     if context.creation_time.as_millis() > u128::from(u64::MAX) {
         return Err(PrivacyNativeActionErrorV1::at("transaction-creation-time"));
     }
@@ -882,7 +914,7 @@ fn transaction_payload(
     envelope: Option<PrivacyProofEnvelopeV1>,
 ) -> Result<TransactionPayload, PrivacyNativeActionErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -907,7 +939,7 @@ fn statement_context(
     profile: CompiledPrivacyProfileV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
         parameter_id: profile.parameter_id,
@@ -1053,6 +1085,14 @@ fn require_genesis(canonical_genesis_hash: [u8; 32]) -> Result<(), PrivacyNative
     Ok(())
 }
 
+pub(crate) fn network_id_from_genesis_hash_bytes(canonical_genesis_hash: [u8; 32]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            canonical_genesis_hash,
+        )),
+    )
+}
+
 fn validate_action_preflight(
     context: &PrivacyActionTransactionContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1060,6 +1100,9 @@ fn validate_action_preflight(
 ) -> Result<(), PrivacyNativeActionErrorV1> {
     require_genesis(canonical_genesis_hash)?;
     validate_context(context)?;
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(PrivacyNativeActionErrorV1::at("transaction-network-id"));
+    }
     validate_signing_authority(&context.authority, private_key)
 }
 
@@ -1099,7 +1142,7 @@ pub fn build_signed_zk_ace_authorization_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = ZkAcePrivacyActionTransactionContextV1 {
-        chain_id: context.chain_id,
+        network_id: context.network_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1130,7 +1173,7 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = JindoPrivacyActionTransactionContextV1 {
-        chain_id: context.chain_id,
+        network_id: context.network_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1160,7 +1203,7 @@ pub fn build_signed_vega_credential_presentation_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = VegaPrivacyActionTransactionContextV1 {
-        chain_id: context.chain_id,
+        network_id: context.network_id,
         authority: context.authority,
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1232,9 +1275,14 @@ fn validate_zk_x509_action_statement_v1(
 /// sign or submit a proof.
 pub fn prepare_zk_x509_identity_presentation_action_intent_v1(
     context: &PrivacyActionTransactionContextV1,
+    canonical_genesis_hash: [u8; 32],
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyNativeActionErrorV1> {
+    require_genesis(canonical_genesis_hash)?;
     validate_context(context)?;
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(PrivacyNativeActionErrorV1::at("transaction-network-id"));
+    }
     let profile = zk_x509_release_candidate_profile_material_v1()
         .map_err(|_| PrivacyNativeActionErrorV1::at("zk-x509-release-candidate-profile"))?;
     validate_zk_x509_action_statement_v1(context, profile, statement, false)?;
@@ -1361,7 +1409,7 @@ pub fn build_signed_verange_action_v1(
         .digest()
         .map_err(|_| PrivacyNativeActionErrorV1::at("verange-statement-digest"))?;
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1461,7 +1509,7 @@ fn zk_ams_transaction_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         authority: context.authority.clone(),
         creation_time: context.creation_time,
         time_to_live: context.time_to_live,
@@ -1478,7 +1526,7 @@ fn zk_ams_transcript_binding<'a>(
     statement_digest: PrivacyStatementDigestV1,
 ) -> TranscriptBindingV1<'a> {
     TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1817,7 +1865,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
     let parameters = AnonymousPgcParametersV1::get()
         .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-parameters"))?;
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1898,6 +1946,11 @@ pub fn build_signed_orchard_note_action_v1(
     if request.anchor_epoch == 0 || request.expiry_height == 0 {
         return Err(PrivacyNativeActionErrorV1::at("orchard-epoch-or-expiry"));
     }
+    if canonical_public_balance_scope_v1(request.public_balance_scope).is_none() {
+        return Err(PrivacyNativeActionErrorV1::at(
+            "orchard-public-balance-scope",
+        ));
+    }
     let profile = compiled_profile(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)?;
     let prepared = prepare_orchard_bundle_v1(
         request.anchor.into_bytes(),
@@ -1913,7 +1966,7 @@ pub fn build_signed_orchard_note_action_v1(
     let mut statement = OrchardHalo2ActionsStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
-        public_balance_scope: AssetBalanceScope::Global,
+        public_balance_scope: request.public_balance_scope,
         pool_id: request.pool_id,
         anchor: request.anchor,
         anchor_epoch: request.anchor_epoch,
@@ -1974,13 +2027,11 @@ fn model_fcmp_input(input: FcmpProofInputPublicV1) -> PrivacyFcmpInputPublicV1 {
 
 fn fcmp_runtime_context_hash(
     context: &PrivacyActionTransactionContextV1,
-    canonical_genesis_hash: [u8; 32],
     statement_digest: PrivacyStatementDigestV1,
     profile: CompiledPrivacyProfileV1,
 ) -> [u8; 32] {
     derive_fcmp_runtime_context_hash_v1(&FcmpRuntimeContextBindingV1 {
-        chain_id: &context.chain_id,
-        genesis_hash: canonical_genesis_hash,
+        network_id: &context.network_id,
         action_index: 0,
         statement_digest,
         parameter_id: profile.parameter_id,
@@ -2063,8 +2114,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyNativeActionErrorV1::at("fcmp-statement-digest"))?;
-    let runtime_context =
-        fcmp_runtime_context_hash(&context, canonical_genesis_hash, statement_digest, profile);
+    let runtime_context = fcmp_runtime_context_hash(&context, statement_digest, profile);
     let proved = prove_fcmp_plus_plus_v1(
         &mut OsRng,
         runtime_context,
@@ -2127,6 +2177,9 @@ pub fn build_signed_ivm_private_note_action_v1(
     if request.root_epoch == 0 {
         return Err(PrivacyNativeActionErrorV1::at("ivm-root-epoch"));
     }
+    if canonical_public_balance_scope_v1(request.public_balance_scope).is_none() {
+        return Err(PrivacyNativeActionErrorV1::at("ivm-public-balance-scope"));
+    }
     let profile = compiled_profile(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?;
     let program_id = derive_private_program_id_v1(&request.program)
         .map_err(|_| PrivacyNativeActionErrorV1::at("ivm-program-id"))?;
@@ -2164,7 +2217,7 @@ pub fn build_signed_ivm_private_note_action_v1(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
-        public_balance_scope: AssetBalanceScope::Global,
+        public_balance_scope: request.public_balance_scope,
         pool_id: request.pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),
@@ -2717,7 +2770,7 @@ mod tests {
     fn action_context() -> PrivacyActionTransactionContextV1 {
         let private_key = signing_key();
         PrivacyActionTransactionContextV1 {
-            chain_id: ChainId::from("privacy-native-actions-test-v1"),
+            network_id: network_id_from_genesis_hash_bytes([1; 32]),
             authority: AccountId::new(PublicKey::from(private_key)),
             creation_time: Duration::from_millis(1_800_000_000_123),
             time_to_live: Some(Duration::from_secs(60)),
@@ -2818,6 +2871,64 @@ mod tests {
 
     fn bounded_x509_test_proof(encoded: Vec<u8>) -> ZkX509CredentialProofBytesV1 {
         ZkX509CredentialProofBytesV1::try_new(encoded).expect("bounded X509 test proof")
+    }
+
+    #[test]
+    fn public_balance_scope_literals_are_exact_and_never_alias_universal() {
+        for (literal, expected) in [
+            ("global", AssetBalanceScope::Global),
+            (
+                "dataspace:1",
+                AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+            ),
+            (
+                "dataspace:18446744073709551615",
+                AssetBalanceScope::Dataspace(DataSpaceId::new(u64::MAX)),
+            ),
+        ] {
+            let parsed = parse_canonical_public_balance_scope_v1(literal)
+                .expect("canonical scope must parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(
+                canonical_public_balance_scope_v1(parsed).as_deref(),
+                Some(literal)
+            );
+        }
+
+        for hostile in [
+            "",
+            "Global",
+            "GLOBAL",
+            " global",
+            "global ",
+            "universal",
+            "dataspace:",
+            "dataspace:0",
+            "dataspace:00",
+            "dataspace:01",
+            "dataspace:+1",
+            "dataspace:-1",
+            "dataspace: 1",
+            "dataspace:1 ",
+            "dataspace:１",
+            "dataspace:18446744073709551616",
+            "dataspace:999999999999999999999",
+            "dataspace:universal",
+        ] {
+            assert_eq!(
+                parse_canonical_public_balance_scope_v1(hostile),
+                None,
+                "hostile scope {hostile:?} was accepted"
+            );
+        }
+        assert_eq!(
+            canonical_public_balance_scope_v1(
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL,)
+            ),
+            None
+        );
+        let oversized = format!("dataspace:{}", "9".repeat(4_096));
+        assert_eq!(parse_canonical_public_balance_scope_v1(&oversized), None);
     }
 
     #[test]
@@ -3031,6 +3142,13 @@ mod tests {
         );
 
         assert_eq!(
+            validate_action_preflight(&context, [2; 32], &foreign_signing_key())
+                .expect_err("foreign transaction network must fail before authority inspection")
+                .stage(),
+            "transaction-network-id"
+        );
+
+        assert_eq!(
             validate_action_preflight(&context, [1; 32], &foreign_signing_key())
                 .expect_err("foreign authority key must fail before proving")
                 .stage(),
@@ -3041,25 +3159,9 @@ mod tests {
     }
 
     #[test]
-    fn chain_id_and_transaction_context_reject_invalid_values_before_proving() {
+    fn transaction_context_rejects_invalid_values_before_proving() {
         let mut context = action_context();
         validate_context(&context).expect("baseline context");
-
-        assert!(
-            "".parse::<ChainId>().is_err(),
-            "the canonical ChainId type must reject an empty identifier"
-        );
-        assert!(
-            ChainId::try_from(
-                "x".repeat(
-                    usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
-                        .expect("privacy chain-id bound fits usize")
-                        + 1,
-                ),
-            )
-            .is_err(),
-            "the canonical ChainId type must reject an oversized identifier"
-        );
 
         context = action_context();
         context.creation_time = Duration::from_secs(u64::MAX);
@@ -3091,13 +3193,29 @@ mod tests {
 
     #[test]
     fn x509_two_stage_candidate_action_is_exact_and_production_signing_fails_closed() {
-        let context = action_context();
         let genesis = [0xA5; 32];
+        let mut context = action_context();
+        context.network_id = network_id_from_genesis_hash_bytes(genesis);
         let candidate_profile = zk_x509_release_candidate_profile_material_v1()
             .expect("deterministic X509 release-candidate profile material");
         let mut statement = x509_draft_statement(&context);
-        let intent = prepare_zk_x509_identity_presentation_action_intent_v1(&context, &statement)
-            .expect("draft statement yields one intent");
+        assert_eq!(
+            prepare_zk_x509_identity_presentation_action_intent_v1(&context, [0; 32], &statement,)
+                .expect_err("reserved genesis must fail unsigned preparation")
+                .stage(),
+            "canonical-genesis-hash"
+        );
+        assert_eq!(
+            prepare_zk_x509_identity_presentation_action_intent_v1(
+                &context, [0xA6; 32], &statement,
+            )
+            .expect_err("foreign transaction network must fail unsigned preparation")
+            .stage(),
+            "transaction-network-id"
+        );
+        let intent =
+            prepare_zk_x509_identity_presentation_action_intent_v1(&context, genesis, &statement)
+                .expect("draft statement yields one intent");
         assert_ne!(intent.as_bytes(), &[0; 32]);
         statement.context.transaction_intent_digest = intent;
         let proof = x509_test_proof(&statement, genesis);
@@ -3162,9 +3280,13 @@ mod tests {
 
         let mut already_bound = statement.clone();
         assert_eq!(
-            prepare_zk_x509_identity_presentation_action_intent_v1(&context, &already_bound)
-                .expect_err("prepare accepts only a zero-intent draft")
-                .stage(),
+            prepare_zk_x509_identity_presentation_action_intent_v1(
+                &context,
+                genesis,
+                &already_bound,
+            )
+            .expect_err("prepare accepts only a zero-intent draft")
+            .stage(),
             "zk-x509-intent-state"
         );
         already_bound.context.transaction_intent_digest =

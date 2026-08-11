@@ -65,7 +65,7 @@ pub fn find_existing_cli_binary_path_from_roots(
     find_existing_binary_path_from_roots(target_roots, profiles, cli_binary_name())
 }
 
-/// Find an existing `irohad` binary under the current target roots.
+/// Find an existing `iroha3d` binary under the current target roots.
 pub fn find_existing_irohad_binary_path() -> Option<PathBuf> {
     let target_roots = default_target_roots();
     let profiles = default_profiles();
@@ -91,7 +91,7 @@ pub fn find_primary_target_irohad_binary_path() -> Option<PathBuf> {
     find_existing_binary_path_from_roots(&target_roots, &default_profiles(), irohad_binary_name())
 }
 
-/// Resolve the sibling `irohad` binary next to a known CLI path.
+/// Resolve the sibling `iroha3d` binary next to a known CLI path.
 pub fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
     let candidate = path.parent()?.join(irohad_binary_name());
     candidate.is_file().then_some(candidate)
@@ -146,9 +146,9 @@ pub const fn cli_binary_name() -> &'static str {
 /// Return the daemon binary name for the current platform.
 pub const fn irohad_binary_name() -> &'static str {
     if cfg!(windows) {
-        "irohad.exe"
+        "iroha3d.exe"
     } else {
-        "irohad"
+        "iroha3d"
     }
 }
 

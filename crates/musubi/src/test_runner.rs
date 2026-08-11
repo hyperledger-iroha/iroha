@@ -3,23 +3,20 @@
 //! Selected workspace roots own their test targets and development edges. The
 //! consumer lock remains authoritative for exact registry selections, while
 //! every reachable registry bundle is re-authenticated before it can become a
-//! compiler input.
+//! compiler input. Filesystem-backed execution is qualified on Unix; other
+//! targets fail closed before reading workspace, cache, or test-source state.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt,
-    fs::{self, OpenOptions},
-    io::Read as _,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::MetadataExt as _;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use iroha_data_model::musubi::MusubiExactDependencyEdgeV1;
 use iroha_data_model::musubi::{
     MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1, MusubiDependencyKindV1,
@@ -45,6 +42,7 @@ use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
     graph::collect_local_members,
+    local_file::read_bounded_single_link_regular_file_v1,
     lockfile::{LockedRootV1, LockfileV1},
     manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
     package::{is_excluded_directory, is_sensitive_component},
@@ -132,6 +130,8 @@ impl WorkspaceTestReportV1 {
 /// Stable authenticated workspace test failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceTestErrorV1 {
+    /// Secure filesystem-backed test execution is unsupported on this platform.
+    UnsupportedPlatform,
     /// Selection or local workspace state was inconsistent.
     Workspace(String),
     /// The exact consumer lock did not match the selected roots.
@@ -149,6 +149,9 @@ pub enum WorkspaceTestErrorV1 {
 impl fmt::Display for WorkspaceTestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedPlatform => formatter.write_str(
+                "secure Musubi workspace-test execution is unsupported on this platform; qualified execution currently requires Unix stable file identities",
+            ),
             Self::Workspace(reason) => write!(formatter, "invalid test workspace: {reason}"),
             Self::Lock(reason) => write!(formatter, "invalid exact test lock: {reason}"),
             Self::Cache(reason) => write!(formatter, "authenticated test cache error: {reason}"),
@@ -187,6 +190,12 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
 /// registry nodes are already forbidden from carrying development edges by the
 /// lock schema. This function never discovers or runs tests owned by dependency
 /// packages.
+///
+/// # Errors
+///
+/// Returns [`WorkspaceTestErrorV1::UnsupportedPlatform`] on non-Unix targets before consulting
+/// the cache, workspace, lock, options, or declared test sources. On Unix, returns a categorized
+/// authentication, graph, compilation, or execution failure.
 pub fn execute_workspace_tests_v1(
     cache: &MusubiCache,
     workspace: &Workspace,
@@ -194,7 +203,18 @@ pub fn execute_workspace_tests_v1(
     lock: &LockfileV1,
     options: &WorkspaceTestOptionsV1,
 ) -> Result<WorkspaceTestReportV1, WorkspaceTestErrorV1> {
+    ensure_test_runner_platform_supported_v1()?;
     execute_workspace_tests_with_source(cache, workspace, selected, lock, options)
+}
+
+fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        // TODO: Enable non-Unix workspace tests only after a safe stable handle-identity,
+        // single-link, and no-follow file-open abstraction is available.
+        Err(WorkspaceTestErrorV1::UnsupportedPlatform)
+    }
 }
 
 #[expect(
@@ -788,11 +808,6 @@ fn selected_registry_nodes<'a>(
 
 const MAX_TEST_SOURCE_SET_DEPTH_V1: usize = 64;
 
-#[cfg(windows)]
-const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-#[cfg(windows)]
-const FILE_SHARE_READ: u32 = 0x0000_0001;
-
 struct DeclaredTestSourceV1 {
     logical_path: String,
     unit: SourceModuleUnit,
@@ -1004,6 +1019,25 @@ fn read_declared_test_source(
     logical_path: String,
     budget: &mut DeclaredTestSourceBudgetV1,
 ) -> Result<DeclaredTestSourceV1, WorkspaceTestErrorV1> {
+    read_declared_test_source_with_reader(
+        package_root,
+        physical,
+        logical_path,
+        budget,
+        read_bounded_single_link_regular_file_v1,
+    )
+}
+
+fn read_declared_test_source_with_reader<F>(
+    package_root: &Path,
+    physical: &Path,
+    logical_path: String,
+    budget: &mut DeclaredTestSourceBudgetV1,
+    read_file: F,
+) -> Result<DeclaredTestSourceV1, WorkspaceTestErrorV1>
+where
+    F: FnOnce(&Path, u64) -> io::Result<Vec<u8>>,
+{
     let before = fs::symlink_metadata(physical).map_err(|error| {
         WorkspaceTestErrorV1::Target(format!(
             "cannot inspect test source `{}`: {error}",
@@ -1020,58 +1054,13 @@ fn read_declared_test_source(
             physical.display()
         )));
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_test_no_follow(&mut options);
-    let mut file = options.open(physical).map_err(|error| {
+    let bytes = read_file(physical, MAX_MODULE_GRAPH_SOURCE_BYTES as u64).map_err(|error| {
         WorkspaceTestErrorV1::Target(format!(
-            "cannot securely open test source `{}`: {error}",
+            "cannot securely read bounded test source `{}`: {error}",
             physical.display()
         ))
     })?;
-    let opened = file.metadata().map_err(|error| {
-        WorkspaceTestErrorV1::Target(format!(
-            "cannot inspect opened test source `{}`: {error}",
-            physical.display()
-        ))
-    })?;
-    if !metadata_is_safe_test_file(&opened) || !same_test_snapshot(&before, &opened) {
-        return Err(WorkspaceTestErrorV1::Target(format!(
-            "test source `{}` changed while it was opened",
-            physical.display()
-        )));
-    }
-    let capacity = usize::try_from(before.len()).map_err(|_| {
-        WorkspaceTestErrorV1::Target("test source length does not fit memory".to_owned())
-    })?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
-        .take(MAX_MODULE_GRAPH_SOURCE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            WorkspaceTestErrorV1::Target(format!(
-                "cannot read test source `{}`: {error}",
-                physical.display()
-            ))
-        })?;
-    let opened_after = file.metadata().map_err(|error| {
-        WorkspaceTestErrorV1::Target(format!(
-            "cannot reinspect opened test source `{}`: {error}",
-            physical.display()
-        ))
-    })?;
-    let linked_after = fs::symlink_metadata(physical).map_err(|error| {
-        WorkspaceTestErrorV1::Target(format!(
-            "cannot reinspect test source `{}`: {error}",
-            physical.display()
-        ))
-    })?;
-    if bytes.len() as u64 != before.len()
-        || bytes.len() > MAX_MODULE_GRAPH_SOURCE_BYTES
-        || !same_test_snapshot(&before, &opened_after)
-        || !same_test_snapshot(&opened_after, &linked_after)
-        || fs::canonicalize(physical).ok().as_deref() != Some(physical)
-    {
+    if fs::canonicalize(physical).ok().as_deref() != Some(physical) {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test source `{}` changed while it was read",
             physical.display()
@@ -1189,11 +1178,7 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     {
         metadata.file_type().is_symlink()
     }
-    #[cfg(windows)]
-    {
-        metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0000_0400 != 0
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = metadata;
         true
@@ -1208,11 +1193,7 @@ fn metadata_is_safe_test_file(metadata: &fs::Metadata) -> bool {
     {
         metadata.nlink() == 1
     }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         false
     }
@@ -1235,79 +1216,19 @@ fn same_test_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
             && left.ctime_nsec() == right.ctime_nsec()
             && left.nlink() == right.nlink()
     }
-    #[cfg(windows)]
-    {
-        left.volume_serial_number().is_some()
-            && left.file_index().is_some()
-            && left.volume_serial_number() == right.volume_serial_number()
-            && left.file_index() == right.file_index()
-            && left.file_type() == right.file_type()
-            && left.file_attributes() == right.file_attributes()
-            && left.file_size() == right.file_size()
-            && left.creation_time() == right.creation_time()
-            && left.last_write_time() == right.last_write_time()
-            && left.number_of_links() == right.number_of_links()
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = (left, right);
         false
     }
 }
 
-fn set_test_no_follow(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    options.custom_flags(platform_no_follow_flag());
-    #[cfg(windows)]
-    {
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-        options.share_mode(FILE_SHARE_READ);
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = options;
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn platform_no_follow_flag() -> i32 {
-    0o400000
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0
-}
-
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{cell::RefCell, fs, path::Path};
+
+    #[cfg(unix)]
+    use std::process::Command;
 
     use iroha_data_model::{
         musubi::{
@@ -1324,7 +1245,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{lockfile::LockedRootV1, workspace::load_workspace};
+    use crate::{
+        lockfile::LockedRootV1,
+        workspace::{Workspace, load_workspace},
+    };
 
     struct RecordingRegistry {
         releases: RefCell<Vec<String>>,
@@ -1368,6 +1292,19 @@ mod tests {
         fs::write(path, contents).expect("write fixture");
     }
 
+    fn declared_source_fixture(contents: &str) -> (tempfile::TempDir, Workspace) {
+        let temporary = tempdir().expect("tempdir");
+        write(
+            &temporary.path().join("Musubi.toml"),
+            &package_manifest("app", ""),
+        );
+        write(&temporary.path().join("src/lib.ko"), "module AppLib {}");
+        write(&temporary.path().join("tests/unit.ko"), contents);
+        let workspace =
+            load_workspace(temporary.path().join("Musubi.toml")).expect("workspace fixture");
+        (temporary, workspace)
+    }
+
     fn package_manifest(name: &str, dependency: &str) -> String {
         format!(
             r#"manifest-version = 1
@@ -1394,8 +1331,9 @@ path = "tests/unit.ko"
 
     fn lock(roots: Vec<LockedRootV1>, nodes: Vec<MusubiVerificationNodeV1>) -> LockfileV1 {
         LockfileV1::new(
-            "musubi-tests".parse().expect("chain id"),
-            [9; 32],
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("network id"),
             MusubiRegistrySnapshotV1 {
                 finalized_height: 7,
                 finalized_block_hash: [8; 32],
@@ -1902,5 +1840,173 @@ core = { package = "test/core", version = "^1.0.0" }
         .expect_err("hardlinked test source must fail closed");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("hardlink"));
+    }
+
+    #[test]
+    fn declared_test_source_accepts_a_bounded_regular_leaf() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+
+        let declared = read_declared_test_source(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+        )
+        .expect("bounded regular declared source");
+        assert_eq!(declared.logical_path, "tests/unit.ko");
+        assert_eq!(declared.unit.source, "module Unit {}");
+        assert_eq!(budget.source_bytes, 14);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn declared_test_source_rejects_a_raced_regular_replacement() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let replacement = member.package_root.join("tests/replacement.ko");
+        write(&replacement, "module Other {}");
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+
+        let error = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |path, maximum| {
+                crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
+                    path,
+                    maximum,
+                    |path| {
+                        fs::remove_file(path)?;
+                        fs::rename(&replacement, path)
+                    },
+                )
+            },
+        )
+        .expect_err("raced declared-source replacement must fail");
+        assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
+        assert!(error.to_string().contains("securely read bounded"));
+        assert_eq!(budget.source_bytes, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn declared_test_source_rejects_a_raced_fifo_without_blocking() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+
+        let error = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |path, maximum| {
+                crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
+                    path,
+                    maximum,
+                    |path| {
+                        fs::remove_file(path)?;
+                        let status = Command::new("mkfifo").arg(path).status()?;
+                        if !status.success() {
+                            return Err(io::Error::other("mkfifo failed"));
+                        }
+                        Ok(())
+                    },
+                )
+            },
+        )
+        .expect_err("raced FIFO source must fail without hanging");
+        assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
+        assert!(error.to_string().contains("securely read bounded"));
+        assert_eq!(budget.source_bytes, 0);
+    }
+
+    #[test]
+    fn declared_test_source_rejects_an_oversized_sparse_leaf() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("Musubi.toml"),
+            &package_manifest("app", ""),
+        );
+        write(&temp.path().join("src/lib.ko"), "module AppLib {}");
+        let source = temp.path().join("tests/unit.ko");
+        fs::create_dir_all(source.parent().expect("test parent")).expect("create tests");
+        fs::File::create(&source)
+            .expect("create sparse source")
+            .set_len(MAX_MODULE_GRAPH_SOURCE_BYTES as u64 + 1)
+            .expect("extend sparse source");
+        let workspace = load_workspace(&temp.path().join("Musubi.toml")).expect("workspace");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+
+        let error = declared_test_sources(member, Path::new("tests/unit.ko"))
+            .expect_err("oversized test source must fail closed");
+        assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
+        assert!(error.to_string().contains("bounded regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn declared_test_directory_rejects_a_fifo_leaf_without_opening_it() {
+        let temp = tempdir().expect("tempdir");
+        let manifest =
+            package_manifest("app", "").replace("path = \"tests/unit.ko\"", "path = \"tests\"");
+        write(&temp.path().join("Musubi.toml"), &manifest);
+        write(&temp.path().join("src/lib.ko"), "module AppLib {}");
+        let fifo = temp.path().join("tests/pipe.ko");
+        fs::create_dir_all(fifo.parent().expect("test parent")).expect("create tests");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("run mkfifo")
+                .success(),
+            "mkfifo must create the adversarial source"
+        );
+        let workspace = load_workspace(&temp.path().join("Musubi.toml")).expect("workspace");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+
+        let error = declared_test_sources(member, Path::new("tests"))
+            .expect_err("FIFO test source must fail without hanging");
+        assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
+        assert!(error.to_string().contains("hardlink or special file"));
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod unsupported_platform_tests {
+    use super::{WorkspaceTestErrorV1, ensure_test_runner_platform_supported_v1};
+
+    #[test]
+    fn workspace_test_guard_returns_the_exact_platform_error() {
+        assert_eq!(
+            ensure_test_runner_platform_supported_v1(),
+            Err(WorkspaceTestErrorV1::UnsupportedPlatform)
+        );
     }
 }

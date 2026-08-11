@@ -72,8 +72,8 @@ schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
 [[bin]]
-name = "irohad"
-path = "src/bin/irohad.rs"
+name = "iroha3d"
+path = "src/bin/iroha3d.rs"
 required-features = ["daemon"]
 
 [[bin]]

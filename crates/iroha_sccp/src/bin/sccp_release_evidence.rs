@@ -25,7 +25,7 @@ use iroha_data_model::bridge::{
     sccp_sora_finality_anchor_hash_v1,
 };
 use iroha_sccp::{
-    SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SCCP_TAIRA_FINALITY_CHAIN_ID_V1,
+    SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SCCP_TAIRA_CHAIN_ID_V1,
     SccpNativeInboundMessageProofV1, SccpPayloadV1, ValidatedSccpNativeInboundMessageV1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1,
     decode_canonical_sccp_groth16_bn254_proof_artifact_v1,
@@ -1641,9 +1641,7 @@ fn validate_release_evidence_envelope(
 }
 
 fn validate_release_hub(evidence: &ReleaseEvidenceSignaturesV1) -> Result<(), String> {
-    if evidence.hub_profile != "sora-taira"
-        || evidence.hub_chain_id != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-    {
+    if evidence.hub_profile != "sora-taira" || evidence.hub_chain_id != SCCP_TAIRA_CHAIN_ID_V1 {
         return Err("release evidence must identify exact SORA Taira V1".to_owned());
     }
     Ok(())
@@ -3784,7 +3782,7 @@ mod tests {
             release_id: "release-envelope-test-v1".to_owned(),
             protocol_version: 1,
             hub_profile: "sora-taira".to_owned(),
-            hub_chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.to_owned(),
+            hub_chain_id: SCCP_TAIRA_CHAIN_ID_V1.to_owned(),
             created_at_unix_ms: 1,
             trust_policy_id: "external-policy-v1".to_owned(),
             trust_policy_sha256_hex: lowercase_hex(&[99; 32]),

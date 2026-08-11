@@ -6,9 +6,9 @@
   "generator_source_sha256_hex": "91dc695fa1ef0ec06e06b1ccf09e455ab40fe8e05f69a0a8ef09e14ae0a87ee6",
   "artifact": {
     "path": "torii.json",
-    "bytes": 2136374,
-    "sha256_hex": "2906f92949475528c6c062b416e186562aad8f24c5db8a401753f3d4e63777d5",
-    "blake3_hex": "21fccb3b4845d84f4252071630efd78eaa8fe1aceccf9ec2c498c625a2e20dce",
+    "bytes": 2396936,
+    "sha256_hex": "bedcf2319a4f2fd861ded70907631c2b71a922d05fddbbf42bd56e46235f9345",
+    "blake3_hex": "a625bf42dd1e4fd251adaf3ced73e7a4dcdb1b6e6ae057fcb42a08213508f029",
     "signature": null
   }
 }

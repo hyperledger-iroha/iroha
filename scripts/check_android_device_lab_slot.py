@@ -1177,7 +1177,7 @@ ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 ED25519_SIGNATURE_BYTES = 64
-REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 21
+REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 22
 KAGEMUSHA_RECURSIVE_SPEND_JNI_PROBE_STATES = {"recursive_spend_verified"}
 KAGEMUSHA_RECURSIVE_SPEND_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
@@ -6653,9 +6653,9 @@ def validate_candidate_binding_v2(
     for key in digest_fields:
         _candidate_binding_sha256(binding, key, errors)
     if binding.get("bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
-        errors.append("candidate binding bridge_abi_version must be 21")
+        errors.append("candidate binding bridge_abi_version must be 22")
     if binding.get("native_accepted_bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
-        errors.append("candidate binding native_accepted_bridge_abi_version must be 21")
+        errors.append("candidate binding native_accepted_bridge_abi_version must be 22")
     if binding.get("production_capability_observed") is not False:
         errors.append("candidate binding production_capability_observed must be false")
     if binding.get("source_repo_dirty") is not False:

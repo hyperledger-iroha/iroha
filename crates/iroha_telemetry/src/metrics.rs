@@ -8215,6 +8215,10 @@ pub struct Metrics {
     pub torii_sorafs_registry_manifests_total: GenericGaugeVec<AtomicU64>,
     /// SoraFS manifest alias total (active entries tracked on-chain).
     pub torii_sorafs_registry_aliases_total: GenericGauge<AtomicU64>,
+    /// Consensus-maintained count of retained SoraFS pin lifecycle records.
+    pub torii_sorafs_pin_retained_manifests: GenericGauge<AtomicU64>,
+    /// Consensus-maintained aggregate bytes represented by live SoraFS pins.
+    pub torii_sorafs_pin_live_content_bytes: GenericGauge<AtomicU64>,
     /// Alias cache evaluation outcomes (fresh/refresh/expired/hard-expired).
     pub torii_sorafs_alias_cache_refresh_total: IntCounterVec,
     /// Observed alias proof age when served (seconds).
@@ -8508,7 +8512,7 @@ pub struct Metrics {
 
 const METRIC_CATALOG_V1: &str = include_str!("metrics/catalog_v1.tsv");
 const METRIC_CATALOG_V1_HEADER: &str = "# iroha-telemetry-metric-catalog-v1";
-const METRIC_CATALOG_V1_ROWS: usize = 868;
+const METRIC_CATALOG_V1_ROWS: usize = 870;
 
 struct MetricSpecCursor {
     lines: std::str::Lines<'static>,
@@ -12170,6 +12174,12 @@ impl Default for Metrics {
         let torii_sorafs_registry_aliases_total =
             GenericGauge::with_opts(metric_specs.opts("torii_sorafs_registry_aliases_total"))
                 .expect("Infallible");
+        let torii_sorafs_pin_retained_manifests =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_pin_retained_manifests"))
+                .expect("Infallible");
+        let torii_sorafs_pin_live_content_bytes =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_pin_live_content_bytes"))
+                .expect("Infallible");
         let torii_sorafs_alias_cache_refresh_total = IntCounterVec::new(
             metric_specs.opts("torii_sorafs_alias_cache_refresh_total"),
             &["result", "reason"],
@@ -12239,6 +12249,8 @@ impl Default for Metrics {
             &torii_sorafs_replication_completion_latency_epochs,
         );
         register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
+        register_guarded(&registry, &torii_sorafs_pin_retained_manifests);
+        register_guarded(&registry, &torii_sorafs_pin_live_content_bytes);
         let soranet_privacy_circuit_events_total = IntCounterVec::new(
             metric_specs.opts("soranet_privacy_circuit_events_total"),
             &["mode", "bucket_start", "kind"],
@@ -14405,6 +14417,8 @@ impl Default for Metrics {
             torii_sorafs_gateway_fixture_info,
             torii_sorafs_registry_manifests_total,
             torii_sorafs_registry_aliases_total,
+            torii_sorafs_pin_retained_manifests,
+            torii_sorafs_pin_live_content_bytes,
             torii_sorafs_alias_cache_refresh_total,
             torii_sorafs_alias_cache_age_seconds,
             torii_sorafs_tls_cert_expiry_seconds,
@@ -16625,6 +16639,18 @@ impl Metrics {
             &self.torii_sorafs_replication_deadline_slack_epochs,
             deadline_slack_epochs,
         );
+    }
+
+    /// Record the O(1), consensus-maintained global SoraFS pin resource summary.
+    pub fn record_sorafs_pin_resource_usage(
+        &self,
+        retained_manifests: u64,
+        live_content_bytes: u64,
+    ) {
+        self.torii_sorafs_pin_retained_manifests
+            .set(retained_manifests);
+        self.torii_sorafs_pin_live_content_bytes
+            .set(live_content_bytes);
     }
 
     /// Increment the active fetch gauge for the orchestrator.

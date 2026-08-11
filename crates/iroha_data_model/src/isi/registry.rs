@@ -86,6 +86,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<nexus::FundFeeSponsorProgram>,
     InstructionRegistry::register_slice::<nexus::WithdrawFeeSponsorProgram>,
     InstructionRegistry::register_slice::<bridge::ApplySccpRouteGovernance>,
+    InstructionRegistry::register_slice::<bridge::FundSccpRouteEscrow>,
+    InstructionRegistry::register_slice::<bridge::RefundSccpRouteEscrow>,
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register_slice::<oracle::AggregateOracleFeed>,
@@ -362,6 +364,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeSccpRouteGovernance>,
     #[cfg(feature = "governance")]
+    InstructionRegistry::register_slice::<governance::ProposeSorafsProviderGovernance>,
+    #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeValidationFeePolicy>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeValidationFeePayoutLifecycle>,
@@ -375,6 +379,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<governance::RestituteGovernanceLock>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::EnactReferendum>,
+    #[cfg(feature = "governance")]
+    InstructionRegistry::register_slice::<governance::EnactSccpRouteGovernance>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::FinalizeReferendum>,
     #[cfg(feature = "governance")]

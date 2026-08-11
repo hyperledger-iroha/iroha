@@ -527,6 +527,7 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
     expected_record.evidence_hashes = expected.evidence_hashes.clone();
     let mut request = AppealFinanceTransactionSigningRequestV1 {
         operation_id: [0xA1; 32],
+        network_id: crate::signed_query_test_network_id(),
         chain_id: ChainId::from("appeal-finance-policy-rotation-test"),
         authority: auth.provider.account.clone(),
         operation,

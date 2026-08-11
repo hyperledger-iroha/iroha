@@ -8,9 +8,11 @@ use std::io::Write as _;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 
 use iroha::{
-    crypto::{Algorithm, KeyPair, SignatureOf},
+    crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf},
     data_model::{
+        NetworkId,
         account::{MultisigMember, MultisigPolicy},
+        block::BlockHeader,
         musubi::{
             MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1,
             MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
@@ -38,6 +40,12 @@ use iroha::{
 use tempfile::tempdir;
 
 use super::*;
+
+fn publication_test_network_id(marker: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([marker; 32]),
+    ))
+}
 
 struct BytesSource(Vec<u8>);
 
@@ -819,7 +827,7 @@ fn compact_release_envelope_distinguishes_valid_authorization_bundles() {
         .expect("one-of-two multisig policy"),
     );
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -918,15 +926,17 @@ fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
         .is_err()
     );
 
-    let mut wrong_chain_payload = signed.payload().clone();
-    wrong_chain_payload.chain = ChainId::from("other-chain");
-    let wrong_chain_transaction = TransactionBuilder::from_payload(wrong_chain_payload)
-        .expect("wrong-chain fixture payload")
+    let mut wrong_network_payload = signed.payload().clone();
+    wrong_network_payload.domain = iroha_data_model::transaction::TransactionDomain::Network(
+        publication_test_network_id(0xFF),
+    );
+    let wrong_network_transaction = TransactionBuilder::from_payload(wrong_network_payload)
+        .expect("wrong-network fixture payload")
         .sign(publisher_keypair.private_key());
     assert!(
         PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(
             &request,
-            &wrong_chain_transaction
+            &wrong_network_transaction
         )
         .is_err()
     );
@@ -999,6 +1009,19 @@ fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
     assert!(
         checkpoint
             .validate_for(&different_operation, &submission)
+            .is_err()
+    );
+    let mut foreign_network = request.clone();
+    // Two deployments may reuse the same human-facing ChainName. Their distinct
+    // genesis-derived identities must still separate operation and checkpoint replay.
+    foreign_network.network_id = publication_test_network_id(0xA7);
+    foreign_network
+        .validate()
+        .expect("foreign genesis-derived identity remains structurally valid");
+    assert_ne!(foreign_network.operation_id(), request.operation_id());
+    assert!(
+        checkpoint
+            .validate_for(&foreign_network, &submission)
             .is_err()
     );
     let mut substituted_submission = submission;

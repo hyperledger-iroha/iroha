@@ -59,6 +59,32 @@ external = true
 provenance = "checked-in public API facade; legacy generator requires repair before regeneration"
 
 [[generated]]
+name = "musubi-v1-signed-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/musubi/instructions_v1.json",
+  "fixtures/musubi/sdk_v1.json",
+]
+generator = "CARGO_TARGET_DIR=\"${IROHA_MUSUBI_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute non-symbolic private external Cargo target directory}\" python3 scripts/write_musubi_fixtures.py --output-root \"${IROHA_MUSUBI_FIXTURE_OUTPUT_ROOT:?set an existing absolute non-symbolic empty private external staging root}\""
+generator_sources = [
+  "crates/iroha_data_model/Cargo.toml",
+  "crates/iroha_data_model/src/bin/musubi_fixture_values.rs",
+  "crates/iroha_data_model/src/bin/musubi_fixtures.rs",
+  "crates/iroha_data_model/src/bin/musubi_sdk_fixture_values.rs",
+  "scripts/check_musubi_fixtures.py",
+  "scripts/write_musubi_fixtures.py",
+]
+inputs = [
+  "crates/iroha_data_model/src/id.rs",
+  "crates/iroha_data_model/src/isi/mod.rs",
+  "crates/iroha_data_model/src/isi/musubi.rs",
+  "crates/iroha_data_model/src/musubi.rs",
+  "crates/iroha_data_model/src/musubi/query_models.rs",
+  "crates/iroha_data_model/src/sorafs/pin_registry.rs",
+]
+check = "CARGO_TARGET_DIR=\"${IROHA_MUSUBI_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute non-symbolic private external Cargo target directory}\" python3 scripts/check_musubi_fixtures.py"
+
+[[generated]]
 name = "openapi-cargo-lock-pin"
 kind = "file"
 outputs = ["release/openapi-cargo-lock-v1.txt"]
@@ -201,6 +227,80 @@ inputs = [
 check = "node scripts/check_sf1_vectors.mjs"
 
 [[generated]]
+name = "sorafs-por-aggregate-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/sorafs_manifest/governance/dag_block_0_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_1_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_cid_mismatch_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_reordered_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/node_v1.json",
+  "fixtures/sorafs_manifest/governance/node_v1.to",
+  "fixtures/sorafs_manifest/governance/sdk_validation_inventory_v1.json",
+  "fixtures/sorafs_manifest/moderation/governance_node_v1.json",
+  "fixtures/sorafs_manifest/moderation/governance_node_v1.to",
+  "fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/por/challenge_v1.json",
+  "fixtures/sorafs_manifest/por/challenge_v1.to",
+  "fixtures/sorafs_manifest/por/proof_v1.json",
+  "fixtures/sorafs_manifest/por/proof_v1.to",
+  "fixtures/sorafs_manifest/por/verdict_v1.json",
+  "fixtures/sorafs_manifest/por/verdict_v1.to",
+  "fixtures/sorafs_manifest/potr/receipt_v1.json",
+  "fixtures/sorafs_manifest/potr/receipt_v1.to",
+  "fixtures/sorafs_manifest/reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_routing_admission_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.to",
+  "fixtures/sorafs_manifest/repair/negative/task_provider_unassigned_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_provider_unassigned_v1.to",
+  "fixtures/sorafs_manifest/repair/task_v1.json",
+  "fixtures/sorafs_manifest/repair/task_v1.to",
+]
+generator = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write --output-dir \"${IROHA_SORAFS_MANIFEST_STAGE:?set an absolute external complete sorafs_manifest staging tree}\""
+generator_sources = [
+  "crates/sorafs_manifest/Cargo.toml",
+  "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs",
+]
+inputs = [
+  "fixtures/sorafs_manifest/appeal_finance/**",
+  "fixtures/sorafs_manifest/orderbook/**",
+  "fixtures/sorafs_manifest/pdp/**",
+  "fixtures/sorafs_manifest/provider_admission/**",
+  "fixtures/sorafs_manifest/replication_order/**",
+]
+check = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --check"
+
+[[generated]]
 name = "ivm-pointer-abi-regions"
 kind = "regions"
 outputs = [
@@ -301,12 +401,40 @@ inputs = [
   "crates/**",
   "vendor/**",
 ]
-# The generator resolves the exact transitive local-package closure from tracked
-# Cargo manifests and binds its path+byte digest into the platform-independent
-# fixture. Cargo.lock is intentionally absent because it is ignored; its digest,
-# the fresh koto executable, and exact Git are attested only in private cache.
-# Live-tree publication remains a separate guarded operation.
+# The generator resolves the exact transitive local-package closure from present
+# indexed or nonignored-untracked Cargo manifests. The platform-independent
+# fixture binds every present build input by path+bytes without depending on its
+# tracked state, so committing the same overlay does not stale the fixture.
+# Index-only deletions and tracked/untracked classifications are authenticated in
+# the private cache attestation and before/after inventory guards. Cargo.lock is
+# intentionally absent because it is ignored; its digest, the fresh koto
+# executable, and exact Git are also attested only in private cache. Live-tree
+# publication remains a separate guarded operation.
 check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
+
+[[generated]]
+name = "nexus-connect-transfer-v1-fixture"
+kind = "file"
+outputs = [
+  "fixtures/sdk/nexus_connect_transfer_v1.json",
+]
+generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --write --output-root \"${IROHA_NEXUS_CONNECT_FIXTURE_STAGE:?set an absolute external staging tree}\""
+generator_sources = [
+  "xtask/src/main.rs",
+  "xtask/src/nexus.rs",
+]
+inputs = [
+  "Cargo.toml",
+  "crates/iroha/Cargo.toml",
+  "crates/iroha/src/nexus_app.rs",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "rust-toolchain.toml",
+  "xtask/Cargo.toml",
+]
+check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --check --output-root \"$PWD\""
 
 [[generated]]
 name = "ivm-public-syscall-table"
@@ -328,6 +456,7 @@ check = "python3 scripts/gen_syscall_doc.py --check"
 name = "norito-rpc-fixtures"
 kind = "file"
 outputs = [
+  "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json",
   "fixtures/norito_rpc/typed_fee_payment_gas_limit.norito",
   "fixtures/norito_rpc/register_asset_definition.norito",
   "fixtures/norito_rpc/transfer_asset.norito",
@@ -395,10 +524,14 @@ outputs = [
 ]
 generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures"
 generator_sources = [
+  "crates/iroha/Cargo.toml",
+  "crates/iroha/src/client.rs",
   "tools/norito_codegen_exporter/src/lib.rs",
   "tools/norito_codegen_exporter/src/norito_rpc.rs",
+  "xtask/Cargo.toml",
   "xtask/src/main.rs",
   "xtask/src/norito_rpc.rs",
+  "xtask/src/norito_rpc/alias_setup_fixture.rs",
 ]
 inputs = [
   "crates/iroha_crypto/src/**/*.rs",
@@ -577,3 +710,91 @@ inputs = [
   "defaults/*.toml",
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
+
+# Kagami profile generation consumes the ignored/untracked root Cargo.lock at
+# runtime. The fail-closed wrapper authenticates its stable regular-file bytes
+# before and after every child: size=321032,
+# sha256=cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79.
+# Update both literal arguments only as a reviewed lock refresh; Cargo.lock must
+# not be listed below because generated-file inputs must be tracked.
+[[generated]]
+name = "kagami-iroha3-dev-profile-bundle"
+kind = "file"
+outputs = [
+  "defaults/kagami/iroha3-dev/README.md",
+  "defaults/kagami/iroha3-dev/config-peer-1.toml",
+  "defaults/kagami/iroha3-dev/config-peer-2.toml",
+  "defaults/kagami/iroha3-dev/config-peer-3.toml",
+  "defaults/kagami/iroha3-dev/config.toml",
+  "defaults/kagami/iroha3-dev/docker-compose.yml",
+  "defaults/kagami/iroha3-dev/genesis.expected_hash",
+  "defaults/kagami/iroha3-dev/genesis.json",
+  "defaults/kagami/iroha3-dev/genesis.public_key",
+  "defaults/kagami/iroha3-dev/genesis.signed.nrt",
+  "defaults/kagami/iroha3-dev/peer0.toml",
+  "defaults/kagami/iroha3-dev/peer1.toml",
+  "defaults/kagami/iroha3-dev/peer2.toml",
+  "defaults/kagami/iroha3-dev/peer3.toml",
+  "defaults/kagami/iroha3-dev/verify.txt",
+]
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator_sources = [
+  "scripts/kagami_profile_owner.py",
+  "xtask/src/kagami_profiles.rs",
+  "xtask/src/main.rs",
+]
+inputs = [
+  ".cargo/config.toml",
+  "Cargo.toml",
+  "crates/**",
+  "rust-toolchain.toml",
+  "vendor/**",
+  "xtask/Cargo.toml",
+]
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+
+# This output set is intentionally disjoint from the dev owner above. The
+# incomplete iroha3-nexus directory remains unregistered until all 15 outputs
+# can be generated from an authenticated operator-supplied canonical XOR id.
+[[generated]]
+name = "kagami-iroha3-taira-profile-bundle"
+kind = "file"
+outputs = [
+  "defaults/kagami/iroha3-taira/README.md",
+  "defaults/kagami/iroha3-taira/config-peer-1.toml",
+  "defaults/kagami/iroha3-taira/config-peer-2.toml",
+  "defaults/kagami/iroha3-taira/config-peer-3.toml",
+  "defaults/kagami/iroha3-taira/config-peer-4.toml",
+  "defaults/kagami/iroha3-taira/config-peer-5.toml",
+  "defaults/kagami/iroha3-taira/config-peer-6.toml",
+  "defaults/kagami/iroha3-taira/config.toml",
+  "defaults/kagami/iroha3-taira/docker-compose.yml",
+  "defaults/kagami/iroha3-taira/genesis.expected_hash",
+  "defaults/kagami/iroha3-taira/genesis.json",
+  "defaults/kagami/iroha3-taira/genesis.public_key",
+  "defaults/kagami/iroha3-taira/genesis.signed.nrt",
+  "defaults/kagami/iroha3-taira/peer0.toml",
+  "defaults/kagami/iroha3-taira/peer1.toml",
+  "defaults/kagami/iroha3-taira/peer2.toml",
+  "defaults/kagami/iroha3-taira/peer3.toml",
+  "defaults/kagami/iroha3-taira/peer4.toml",
+  "defaults/kagami/iroha3-taira/peer5.toml",
+  "defaults/kagami/iroha3-taira/peer6.toml",
+  "defaults/kagami/iroha3-taira/sorafs_sites.json",
+  "defaults/kagami/iroha3-taira/verify.txt",
+]
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-taira --output-root \"${IROHA_KAGAMI_TAIRA_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator_sources = [
+  "scripts/kagami_profile_owner.py",
+  "xtask/src/kagami_profiles.rs",
+  "xtask/src/main.rs",
+]
+inputs = [
+  ".cargo/config.toml",
+  "Cargo.toml",
+  "crates/**",
+  "rust-toolchain.toml",
+  "vendor/**",
+  "xtask/Cargo.toml",
+]
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-taira --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"

@@ -59,12 +59,12 @@ that workflow for local release verification.
    ```
 
    The release command requires a clean dependency-closure source tree, compiles the Rust
-   bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 macOS targets,
+   bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 and x86_64 macOS targets,
    and writes `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework`. The canonical manifest is embedded at
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 21, the privacy-production feature state,
+   manifest binds exact native bridge ABI 22, the privacy-production feature state,
    source commit and fingerprint, header digest, required-symbol inventory, and
    per-slice SHA-256 hashes. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
@@ -96,7 +96,7 @@ that workflow for local release verification.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-21 inventory,
+   unique source snapshot and re-authenticates the exact ABI-22 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
@@ -110,14 +110,10 @@ that workflow for local release verification.
    directly. CI also feeds the published ZIP to a fresh local SwiftPM binary target
    and compiles a consumer against `NoritoBridge`.
 
-3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
-   version and checksum:
-
-   ```bash
-   swift package compute-checksum "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
-   ```
-
-   Record the checksum in `Package.swift` when defining the binary target.
+3. Authenticate the archive against its embedded manifest and retain the signed
+   release evidence outside the source tree. The checked-in Swift package uses
+   the authenticated external artifact directory and does not embed generated
+   release archives or their checksums.
 
 4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
    URL.
@@ -139,7 +135,8 @@ that workflow for local release verification.
    exercises the same telemetry checks enforced in Buildkite (including the
    `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
 
-7. Commit the generated artifacts in a release branch and tag the commit.
+7. Record the signed publication evidence and tag the reviewed source commit.
+   Generated `dist/*` outputs remain untracked; only `dist/.gitkeep` belongs in Git.
 
 ## Publishing
 

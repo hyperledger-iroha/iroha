@@ -7,6 +7,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import java.util.Objects;
 import org.bouncycastle.crypto.InvalidCipherTextException;
 import org.bouncycastle.crypto.agreement.X25519Agreement;
 import org.bouncycastle.crypto.digests.SHA256Digest;
@@ -17,6 +18,7 @@ import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.ConfidentialEncryptedPayload;
 
 final class ConfidentialNoteCrypto {
@@ -105,7 +107,7 @@ final class ConfidentialNoteCrypto {
       final byte[] recipientPrivateKey,
       final byte[] spendKey,
       final byte[] expectedOwnerTag,
-      final String expectedChainId) {
+      final NetworkId expectedNetworkId) {
     if (encryptedPayload == null) {
       throw new IllegalArgumentException("encryptedPayload must be provided");
     }
@@ -115,6 +117,8 @@ final class ConfidentialNoteCrypto {
     }
     final byte[] expectedOwnerTagBytes =
         ConfidentialNoteScalars.fixedScalar(expectedOwnerTag, "expectedOwnerTag");
+    final NetworkId expectedNetwork =
+        Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
     final byte[] recipientPrivate =
         fixedNonZeroBytes(recipientPrivateKey, KEY_LENGTH, "recipientPrivateKey");
     byte[] key = null;
@@ -135,20 +139,21 @@ final class ConfidentialNoteCrypto {
               payloadAad(encryptedPayload.ephemeralPublicKey(), recipientPublic),
               encryptedPayload.ciphertext());
       final DecodedPlaintext decoded = decodePlaintext(plaintext);
-      if (expectedChainId != null) {
-        final String expected =
-            ConfidentialNoteScalars.canonicalText(expectedChainId, "expectedChainId");
-        if (!decoded.chainId.equals(expected)) {
-          throw new IllegalArgumentException(
-              "confidential note chainId does not match expectedChainId");
-        }
+      if (!decoded.networkId.equals(expectedNetwork)) {
+        throw new IllegalArgumentException(
+            "confidential note NetworkId does not match expectedNetworkId");
       }
       if (!Arrays.equals(decoded.ownerTag, expectedOwnerTagBytes)) {
         throw new IllegalArgumentException(
             "confidential note ownerTag does not match expectedOwnerTag");
       }
       return new ConfidentialNoteOpening(
-          decoded.rho, spendKey, decoded.ownerTag, decoded.asset, decoded.chainId, decoded.amount);
+          decoded.rho,
+          spendKey,
+          decoded.ownerTag,
+          decoded.asset,
+          decoded.networkId,
+          decoded.amount);
     } finally {
       if (key != null) {
         Arrays.fill(key, (byte) 0);
@@ -162,10 +167,8 @@ final class ConfidentialNoteCrypto {
 
   private static byte[] encodePlaintext(final ConfidentialNoteOpening opening) {
     final byte[] assetBytes = opening.asset().getBytes(StandardCharsets.UTF_8);
-    final byte[] chainIdBytes = opening.chainId().getBytes(StandardCharsets.UTF_8);
     final byte[] amountBytes = opening.amount().getBytes(StandardCharsets.US_ASCII);
     requireNoteTextLength(assetBytes.length, "asset");
-    requireNoteTextLength(chainIdBytes.length, "chainId");
     requireNoteTextLength(amountBytes.length, "amount");
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(NOTE_PLAINTEXT_VERSION_V1);
@@ -173,8 +176,7 @@ final class ConfidentialNoteCrypto {
     write(out, opening.ownerTag());
     writeVarint(assetBytes.length, out);
     write(out, assetBytes);
-    writeVarint(chainIdBytes.length, out);
-    write(out, chainIdBytes);
+    write(out, opening.networkId().bytes());
     writeVarint(amountBytes.length, out);
     write(out, amountBytes);
     return out.toByteArray();
@@ -207,16 +209,12 @@ final class ConfidentialNoteCrypto {
         ConfidentialNoteScalars.canonicalText(
             decodeUtf8(bytes, offset, assetLen.value, "asset"), "asset");
     offset += assetLen.value;
-    final Varint chainLen = readVarint(bytes, offset);
-    offset += chainLen.encodedBytes;
-    requireDecodedTextLength(chainLen.value, "chainId");
-    if (bytes.length < offset + chainLen.value) {
-      throw new IllegalArgumentException("chainId is truncated");
+    if (bytes.length < offset + NetworkId.BYTE_LENGTH) {
+      throw new IllegalArgumentException("networkId is truncated");
     }
-    final String chainId =
-        ConfidentialNoteScalars.canonicalText(
-            decodeUtf8(bytes, offset, chainLen.value, "chainId"), "chainId");
-    offset += chainLen.value;
+    final NetworkId networkId =
+        NetworkId.fromBytes(Arrays.copyOfRange(bytes, offset, offset + NetworkId.BYTE_LENGTH));
+    offset += NetworkId.BYTE_LENGTH;
     final Varint amountLen = readVarint(bytes, offset);
     offset += amountLen.encodedBytes;
     requireDecodedTextLength(amountLen.value, "amount");
@@ -230,7 +228,7 @@ final class ConfidentialNoteCrypto {
     if (offset != bytes.length) {
       throw new IllegalArgumentException("confidential note plaintext has trailing bytes");
     }
-    return new DecodedPlaintext(rho, ownerTag, asset, chainId, amount);
+    return new DecodedPlaintext(rho, ownerTag, asset, networkId, amount);
   }
 
   private static byte[] derivePayloadKey(
@@ -496,19 +494,19 @@ final class ConfidentialNoteCrypto {
     private final byte[] rho;
     private final byte[] ownerTag;
     private final String asset;
-    private final String chainId;
+    private final NetworkId networkId;
     private final String amount;
 
     private DecodedPlaintext(
         final byte[] rho,
         final byte[] ownerTag,
         final String asset,
-        final String chainId,
+        final NetworkId networkId,
         final String amount) {
       this.rho = rho;
       this.ownerTag = ownerTag;
       this.asset = asset;
-      this.chainId = chainId;
+      this.networkId = networkId;
       this.amount = amount;
     }
   }

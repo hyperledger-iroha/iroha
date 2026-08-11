@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { blake3 } from "@noble/hashes/blake3";
+import { AccountAddress } from "./address.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";
 import { getNativeBinding } from "./native.js";
+import { NetworkId, networkIdBytes } from "./networkId.js";
 
 const DEFAULT_CHUNK_SIZE = 262_144;
 const DEFAULT_ERASURE_PROFILE = {
@@ -28,8 +30,19 @@ const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1 = Buffer.from(
   "iroha:da-ingest-request:v1\0",
   "utf8",
 );
+const DA_INGEST_REQUEST_CONTENT_DOMAIN_V1 = Buffer.from(
+  "iroha:da-ingest-request:content:v1\0",
+  "utf8",
+);
 
 export function buildDaIngestRequest(options = {}) {
+  networkIdBytes(options.networkId, "networkId");
+  const networkId = options.networkId.toString();
+  const owner = requireNonEmptyString(options.owner, "owner");
+  if (owner !== options.owner) {
+    throw new TypeError("owner must be an exact canonical I105 account id");
+  }
+  AccountAddress.fromI105(owner);
   const payloadBuffer = toBuffer(options.payload, "payload");
   if (payloadBuffer.length === 0) {
     throw new Error("payload must contain at least one byte");
@@ -53,7 +66,10 @@ export function buildDaIngestRequest(options = {}) {
   const metadata = encodeMetadata(options.metadata);
 
   const { digestTuple, digestHex } = resolveClientBlobId(options.clientBlobId, payloadBuffer);
+  const payloadHash = Buffer.from(blake3(payloadBuffer));
   const request = {
+    network_id: networkId,
+    owner,
     client_blob_id: digestTuple,
     lane_id: laneId,
     epoch,
@@ -64,6 +80,7 @@ export function buildDaIngestRequest(options = {}) {
     retention_policy: retentionPolicy,
     chunk_size: chunkSize,
     total_size: payloadBuffer.length,
+    payload_hash: tupleWrap(encodeFixedBytes(payloadHash, 32)),
     payload: payloadBuffer.toString("base64"),
     metadata,
   };
@@ -82,14 +99,17 @@ export function buildDaIngestRequest(options = {}) {
 
   const signingDigest = computeDaIngestSigningDigest(request);
   const signatureInfo = resolveSignature(options, signingDigest);
-  request.submitter = signatureInfo.submitterPublicKey;
-  request.signature = signatureInfo.signatureHex;
+  request.signatures = [{
+    signer: signatureInfo.signerPublicKey,
+    signature: signatureInfo.signatureHex,
+  }];
 
   return {
     request,
     artifacts: {
       clientBlobIdHex: digestHex,
-      submitterPublicKey: signatureInfo.submitterPublicKey,
+      payloadHashHex: bufferToHex(payloadHash),
+      signerPublicKey: signatureInfo.signerPublicKey,
       signatureHex: signatureInfo.signatureHex,
       signingDigestHex: bufferToHex(signingDigest),
       payloadLength: payloadBuffer.length,
@@ -101,17 +121,14 @@ export function buildDaIngestRequest(options = {}) {
  * Compute the version-one domain-separated DA request signing digest.
  *
  * The input is the normalized request object returned by
- * {@link buildDaIngestRequest}, excluding `submitter` and `signature`.
+ * {@link buildDaIngestRequest}, excluding the `signatures` witness vector.
  */
 export function computeDaIngestSigningDigest(requestInput) {
   const request = ensureRecord(requestInput, "DA ingest signing request");
-  const parts = [DA_INGEST_REQUEST_SIGNING_DOMAIN_V1];
+  const contentParts = [DA_INGEST_REQUEST_CONTENT_DOMAIN_V1];
 
-  parts.push(
+  contentParts.push(
     fixedDigestFromTuple(request.client_blob_id, "client_blob_id"),
-    encodeUnsignedLe(request.lane_id, 4, "lane_id"),
-    encodeUnsignedLe(request.epoch, 8, "epoch"),
-    encodeUnsignedLe(request.sequence, 8, "sequence"),
   );
 
   const blobClass = ensureRecord(request.blob_class, "blob_class");
@@ -122,14 +139,14 @@ export function computeDaIngestSigningDigest(requestInput) {
     Custom: 3,
   };
   const blobClassName = requireEnumKey(blobClass.class, blobClassTags, "blob_class.class");
-  parts.push(
+  contentParts.push(
     Buffer.of(blobClassTags[blobClassName]),
     encodeUnsignedLe(blobClassName === "Custom" ? blobClass.value : 0, 2, "blob_class.value"),
   );
-  parts.push(encodeLengthPrefixedUtf8(unwrapTupleString(request.codec, "codec")));
+  contentParts.push(encodeLengthPrefixedUtf8(unwrapTupleString(request.codec, "codec")));
 
   const erasure = ensureRecord(request.erasure_profile, "erasure_profile");
-  parts.push(
+  contentParts.push(
     encodeUnsignedLe(erasure.data_shards, 2, "erasure_profile.data_shards"),
     encodeUnsignedLe(erasure.parity_shards, 2, "erasure_profile.parity_shards"),
     encodeUnsignedLe(erasure.row_parity_stripes ?? 0, 2, "erasure_profile.row_parity_stripes"),
@@ -138,13 +155,13 @@ export function computeDaIngestSigningDigest(requestInput) {
   const fec = ensureRecord(erasure.fec_scheme, "erasure_profile.fec_scheme");
   const fecTags = { Rs12_10: 0, RsWin14_10: 1, Rs18_14: 2, Custom: 3 };
   const fecName = requireEnumKey(fec.scheme, fecTags, "erasure_profile.fec_scheme.scheme");
-  parts.push(
+  contentParts.push(
     Buffer.of(fecTags[fecName]),
     encodeUnsignedLe(fecName === "Custom" ? fec.value : 0, 2, "erasure_profile.fec_scheme.value"),
   );
 
   const retention = ensureRecord(request.retention_policy, "retention_policy");
-  parts.push(
+  contentParts.push(
     encodeUnsignedLe(retention.hot_retention_secs, 8, "retention_policy.hot_retention_secs"),
     encodeUnsignedLe(retention.cold_retention_secs, 8, "retention_policy.cold_retention_secs"),
     encodeUnsignedLe(retention.required_replicas, 2, "retention_policy.required_replicas"),
@@ -156,11 +173,10 @@ export function computeDaIngestSigningDigest(requestInput) {
     storageTags,
     "retention_policy.storage_class.type",
   );
-  parts.push(
+  contentParts.push(
     Buffer.of(storageTags[storageName]),
     encodeLengthPrefixedUtf8(unwrapTupleString(retention.governance_tag, "governance_tag")),
     encodeUnsignedLe(request.chunk_size, 4, "chunk_size"),
-    encodeUnsignedLe(request.total_size, 8, "total_size"),
   );
 
   const compressionTags = { Identity: 0, Gzip: 1, Deflate: 2, Zstd: 3 };
@@ -169,12 +185,12 @@ export function computeDaIngestSigningDigest(requestInput) {
     compressionTags,
     "compression",
   );
-  parts.push(Buffer.of(compressionTags[compressionName]));
+  contentParts.push(Buffer.of(compressionTags[compressionName]));
 
   if (request.norito_manifest === undefined || request.norito_manifest === null) {
-    parts.push(Buffer.of(0));
+    contentParts.push(Buffer.of(0));
   } else {
-    parts.push(
+    contentParts.push(
       Buffer.of(1),
       encodeLengthPrefixedBytes(
         Buffer.from(request.norito_manifest, "base64"),
@@ -182,16 +198,16 @@ export function computeDaIngestSigningDigest(requestInput) {
       ),
     );
   }
-  parts.push(
+  contentParts.push(
     encodeLengthPrefixedBytes(Buffer.from(request.payload, "base64"), "payload"),
   );
 
   const metadata = ensureRecord(request.metadata, "metadata");
   const items = Array.isArray(metadata.items) ? metadata.items : [];
-  parts.push(encodeUnsignedLe(items.length, 8, "metadata.items.length"));
+  contentParts.push(encodeUnsignedLe(items.length, 8, "metadata.items.length"));
   items.forEach((entryInput, index) => {
     const entry = ensureRecord(entryInput, `metadata.items[${index}]`);
-    parts.push(
+    contentParts.push(
       encodeLengthPrefixedUtf8(entry.key),
       encodeLengthPrefixedBytes(
         Buffer.from(entry.value, "base64"),
@@ -208,21 +224,21 @@ export function computeDaIngestSigningDigest(requestInput) {
       visibilityTags,
       `metadata.items[${index}].visibility.visibility`,
     );
-    parts.push(Buffer.of(visibilityTags[visibilityName]));
+    contentParts.push(Buffer.of(visibilityTags[visibilityName]));
 
     const encryption = ensureRecord(
       entry.encryption,
       `metadata.items[${index}].encryption`,
     );
     if (encryption.cipher === "None") {
-      parts.push(Buffer.of(0));
+      contentParts.push(Buffer.of(0));
     } else if (encryption.cipher === "ChaCha20Poly1305") {
-      parts.push(Buffer.of(1));
+      contentParts.push(Buffer.of(1));
       const label = encryption.params?.key_label;
       if (label === undefined || label === null) {
-        parts.push(Buffer.of(0));
+        contentParts.push(Buffer.of(0));
       } else {
-        parts.push(Buffer.of(1), encodeLengthPrefixedUtf8(String(label)));
+        contentParts.push(Buffer.of(1), encodeLengthPrefixedUtf8(String(label)));
       }
     } else {
       throw new TypeError(
@@ -231,7 +247,25 @@ export function computeDaIngestSigningDigest(requestInput) {
     }
   });
 
-  return Buffer.from(blake3(Buffer.concat(parts)));
+  const contentHash = Buffer.from(blake3(Buffer.concat(contentParts)));
+  const networkId = NetworkId.parse(
+    requireNonEmptyString(request.network_id, "network_id"),
+  );
+  const owner = requireNonEmptyString(request.owner, "owner");
+  const ownerAddress = AccountAddress.fromI105(owner);
+  const payloadHash = fixedDigestFromTuple(request.payload_hash, "payload_hash");
+  const authorizationParts = [
+    DA_INGEST_REQUEST_SIGNING_DOMAIN_V1,
+    Buffer.from(networkIdBytes(networkId, "network_id")),
+    encodeLengthPrefixedBytes(Buffer.from(ownerAddress.canonicalBytes()), "owner"),
+    encodeUnsignedLe(request.lane_id, 4, "lane_id"),
+    encodeUnsignedLe(request.epoch, 8, "epoch"),
+    encodeUnsignedLe(request.sequence, 8, "sequence"),
+    payloadHash,
+    encodeUnsignedLe(request.total_size, 8, "total_size"),
+    contentHash,
+  ];
+  return Buffer.from(blake3(Buffer.concat(authorizationParts)));
 }
 
 export function deriveDaChunkerHandle(manifestBytes, options = {}) {
@@ -388,28 +422,28 @@ function resolveClientBlobId(explicit, payloadBuffer) {
 }
 
 function resolveSignature(options, signingDigest) {
-  const submitter = options.submitterPublicKey
-    ? canonicalizePublicKey(options.submitterPublicKey, "submitterPublicKey")
+  const signer = options.signerPublicKey
+    ? canonicalizePublicKey(options.signerPublicKey, "signerPublicKey")
     : null;
 
   if (options.signatureHex) {
     const signatureHex = canonicalizeHex(options.signatureHex, "signatureHex");
-    if (!submitter && !options.privateKey && !options.privateKeyHex) {
-      throw new TypeError("submitterPublicKey or privateKey is required when providing signatureHex");
+    if (!signer && !options.privateKey && !options.privateKeyHex) {
+      throw new TypeError("signerPublicKey or privateKey is required when providing signatureHex");
     }
     return {
       signatureHex,
-      submitterPublicKey:
-        submitter ?? encodeEd25519Multihash(publicKeyFromPrivate(normalizePrivateKey(options))),
+      signerPublicKey:
+        signer ?? encodeEd25519Multihash(publicKeyFromPrivate(normalizePrivateKey(options))),
     };
   }
 
   const privateKey = normalizePrivateKey(options);
   const signature = signEd25519(signingDigest, privateKey);
   const signatureHex = bufferToHex(signature);
-  const submitterPublicKey =
-    submitter ?? encodeEd25519Multihash(publicKeyFromPrivate(privateKey));
-  return { signatureHex, submitterPublicKey };
+  const signerPublicKey =
+    signer ?? encodeEd25519Multihash(publicKeyFromPrivate(privateKey));
+  return { signatureHex, signerPublicKey };
 }
 
 function fixedDigestFromTuple(value, name) {

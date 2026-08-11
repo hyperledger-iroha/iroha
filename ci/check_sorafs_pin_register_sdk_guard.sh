@@ -62,17 +62,26 @@ required_paths = (
     "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs",
     "crates/iroha_torii/src/routing.rs",
     "crates/iroha_torii/tests/sorafs_discovery.rs",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ApprovePinManifestInstruction.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RetirePinManifestInstruction.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/PinManifestLifecycleInstructionTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
+    "javascript/iroha_js/src/transaction.js",
     "javascript/iroha_js/src/toriiClient.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/test/toriiClient.test.js",
     "javascript/iroha_js/test/sorafsPinRegisterSdkGuard.test.js",
+    "javascript/iroha_js/test/transactionBuilder.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/client.py",
     "python/iroha_python/tests/client_sorafs_pin_register_test.py",
@@ -168,6 +177,10 @@ negative_control_commands = (
         f"{main_command} --negative-control-rust-client-dual-manifest-source",
     ),
     (
+        "Rust client retired submitted-epoch negative control",
+        f"{main_command} --negative-control-rust-client-submitted-epoch",
+    ),
+    (
         "Rust client canonical wire-key negative control",
         f"{main_command} --negative-control-rust-client-manifest-b64-wire",
     ),
@@ -214,6 +227,18 @@ negative_control_commands = (
     ("Kotlin successor digest test negative control", f"{main_command} --negative-control-kotlin-successor-digest-test"),
     ("Java builder test negative control", f"{main_command} --negative-control-java-builder-test"),
     ("Java successor digest test negative control", f"{main_command} --negative-control-java-successor-digest-test"),
+    (
+        "JavaScript retired submitted-epoch type negative control",
+        f"{main_command} --negative-control-js-submitted-epoch-type",
+    ),
+    (
+        "Kotlin retired submitted-epoch model negative control",
+        f"{main_command} --negative-control-kotlin-submitted-epoch-model",
+    ),
+    (
+        "Java retired submitted-epoch model negative control",
+        f"{main_command} --negative-control-java-submitted-epoch-model",
+    ),
 )
 
 
@@ -463,7 +488,9 @@ def check_workflow():
 
 
 def check_scripts():
-    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'registerSorafsPinManifest|SoraFS pin-register SDK guard|SoraFS .* SDK runner', "focused JS test pattern")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "buildRegisterPinManifestInstruction", "focused JS instruction-builder test pattern")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "rejects a retired submitted epoch", "focused JS retired-time test pattern")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "test/transactionBuilder.test.js", "JavaScript instruction-builder test file")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'NODE_OVERRIDE="${SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-}"', "JavaScript SDK Node override variable")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "resolve_node_24_bin()", "JavaScript SDK Node 24 resolver")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "is_node_24_bin()", "JavaScript SDK Node 24 version predicate")
@@ -496,7 +523,9 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", '"${ROOT_DIR}/python/iroha_torii_client"', "Python SDK local Torii package install")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"', "Python SDK local source path")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "RegisterPinManifestInstructionTest", "Kotlin paid-pin builder test")
+    require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "PinManifestLifecycleInstructionTest", "Kotlin pin lifecycle hard-cut test")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "SorafsRegisterPinManifestBuilderTests", "Java Android paid-pin builder harness")
+    require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "SorafsManifestInstructionBuilderTests", "Java Android pin lifecycle hard-cut harness")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", 'JAVA_HOME_OVERRIDE="${SORAFS_PIN_REGISTER_JVM_SDK_JAVA_HOME:-}"', "JVM SDK Java home override variable")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "SORAFS_PIN_REGISTER_JVM_SDK_JAVA_HOME must point to a JDK 21 home.", "JVM SDK explicit Java home override rejection")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "JAVA_HOME must point to a JDK 21 home for SoraFS pin-register JVM SDK tests.", "JVM SDK inherited Java home rejection")
@@ -524,12 +553,14 @@ def check_rust_wire_contract():
     )
     require_exact_fields(
         rust_named_field_names(client_args),
-        ["manifest_payload", "submitted_epoch", "alias", "successor_of"],
+        ["manifest_payload", "alias", "successor_of"],
         "Rust client SorafsPinRegisterArgs",
     )
     require(
-        "authority" not in client_args and "private_key" not in client_args,
-        "Rust pin-register arguments must not transport signing material",
+        "authority" not in client_args
+        and "private_key" not in client_args
+        and "submitted_epoch" not in client_args,
+        "Rust pin-register arguments must not transport signing material or caller time",
     )
     for needle, label in (
         ("quote_and_sign_transaction_payload(payload)?", "local quote and signing"),
@@ -585,7 +616,7 @@ def check_rust_wire_contract():
         "Torii signed instruction validator",
     )
     for needle, label in (
-        ("transaction.chain() != chain_id", "chain validation"),
+        ("transaction.network_id() != Some(network_id)", "network validation"),
         ("transaction.verify_signature()", "signature validation"),
         ("let [instruction] = instructions.as_ref()", "exact instruction count"),
         ("downcast_ref::<T>()", "exact instruction type"),
@@ -597,7 +628,7 @@ def check_rust_wire_contract():
         ("sorafs_pin_register_route_accepts_caller_signed_transaction", "signed JSON test"),
         ("sorafs_pin_register_route_accepts_versioned_norito_transaction", "signed Norito test"),
         ("sorafs_pin_register_rejects_secret_bearing_legacy_body", "secret rejection"),
-        ("sorafs_pin_register_rejects_wrong_shape_chain_and_signature", "validation rejection"),
+        ("sorafs_pin_register_rejects_wrong_shape_network_and_signature", "validation rejection"),
         ("admission response must not claim a fee, custody result, or finalized pin status", "admission claim guard"),
     ):
         require(needle in route_tests, f"Torii route tests missing {label}")
@@ -673,9 +704,21 @@ def check_javascript_contract():
         require_contains(path, "buildRegisterPinManifestTransaction", "local quote-and-sign builder")
         require_contains(path, "instructions: [instruction]", "exactly-one instruction assembly")
         require_contains(path, "quoteAndSignTransaction", "local signing")
+        require_contains(path, "no longer accepts a submitted epoch", "retired caller-time rejection")
 
     dts = read("javascript/iroha_js/index.d.ts")
     require("interface SorafsPinRegisterRequest" not in dts, "TypeScript secret request DTO remains")
+    instruction_input = require_regex_slice(
+        "javascript/iroha_js/index.d.ts",
+        r"^export interface RegisterPinManifestInstructionInput\s*\{.*?^\}",
+        "TypeScript register-pin instruction input",
+    )
+    input_fields = re.findall(r"(?m)^\s+([A-Za-z][A-Za-z0-9_]*)(?:\?)?:", instruction_input)
+    require_exact_fields(
+        input_fields,
+        ["manifestPayload", "alias", "successorOf"],
+        "TypeScript RegisterPinManifestInstructionInput",
+    )
     for needle, label in (
         ("registerSorafsPinManifest(", "signed register declaration"),
         ("signedTransaction: Buffer | ArrayBuffer | ArrayBufferView", "signed input"),
@@ -692,6 +735,13 @@ def check_javascript_contract():
         ("rejects pre-finality fee or custody claims", "admission response guard"),
     ):
         require(needle in tests, f"JavaScript tests missing {label}")
+    transaction_tests = read("javascript/iroha_js/test/transactionBuilder.test.js")
+    for needle, label in (
+        ("buildRegisterPinManifestInstruction binds the canonical pin fields", "canonical instruction test"),
+        ("buildRegisterPinManifestTransaction rejects a retired submitted epoch", "retired transaction epoch test"),
+        ('["submittedEpoch", "submitted_epoch"]', "camel- and snake-case retired epoch rejection"),
+    ):
+        require(needle in transaction_tests, f"JavaScript transaction tests missing {label}")
 
 
 def check_python_contract():
@@ -711,8 +761,11 @@ def check_python_contract():
     ):
         require(needle in method, f"Python pin-register method missing {label}")
     require(
-        "private_key" not in method and "manifest_payload" not in method,
-        "Python pin-register method must transport only signed bytes",
+        "private_key" not in method
+        and "manifest_payload" not in method
+        and "submitted_epoch" not in method
+        and "fee_payment" not in method,
+        "Python pin-register method must transport only signed bytes without retired request fields",
     )
     require(
         "_normalize_sorafs_pin_register_request" not in source,
@@ -802,16 +855,37 @@ def check_csharp_contract():
 
 
 def check_jvm_contract():
-    require_contains("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt", "RegisterPinManifestInstruction", "Kotlin paid-pin instruction")
+    kotlin_register_path = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
+    kotlin_approve_path = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ApprovePinManifestInstruction.kt"
+    kotlin_retire_path = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RetirePinManifestInstruction.kt"
+    java_register_path = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
+    java_approve_path = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java"
+    java_retire_path = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java"
+    require_contains(kotlin_register_path, "RegisterPinManifestInstruction", "Kotlin paid-pin instruction")
+    for path, retired_name in (
+        (kotlin_register_path, "submittedEpoch"),
+        (kotlin_approve_path, "approvedEpoch"),
+        (kotlin_retire_path, "retiredEpoch"),
+        (java_register_path, "submittedEpoch"),
+        (java_approve_path, "approvedEpoch"),
+        (java_retire_path, "retiredEpoch"),
+    ):
+        require(retired_name not in read(path), f"{path} retains caller-supplied lifecycle time")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "builder rejects empty invalid noncanonical and oversized manifest payloads", "Kotlin manifest-payload fail-closed test")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "successor digest requires nonzero canonical lowercase 32 byte hex", "Kotlin successor adversarial test")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "alias fields are all or nothing and bounded canonical hex", "Kotlin alias adversarial test")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects legacy unknown and missing fields", "Kotlin first-release schema adversarial test")
-    require_contains("java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java", "RegisterPinManifest", "Java paid-pin instruction")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects retired caller supplied epoch", "Kotlin retired registration epoch test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/PinManifestLifecycleInstructionTest.kt", "approval rejects retired caller supplied epoch", "Kotlin retired approval epoch test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/PinManifestLifecycleInstructionTest.kt", "retirement rejects retired caller supplied epoch", "Kotlin retired retirement epoch test")
+    require_contains(java_register_path, "RegisterPinManifest", "Java paid-pin instruction")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsOversizedManifestPayload();", "Java manifest size adversarial test invocation")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsLegacyAndUnknownArguments();", "Java first-release schema adversarial test invocation")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsMalformedSuccessorDigest();", "Java successor adversarial test invocation")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsPartialAliasBinding();", "Java alias adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsRetiredSubmittedEpoch();", "Java retired registration epoch test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java", "approvePinManifestRejectsRetiredEpochField();", "Java retired approval epoch test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java", "retirePinManifestRejectsRetiredEpochField();", "Java retired retirement epoch test invocation")
 
 
 def run_checks():
@@ -1174,6 +1248,13 @@ source_modes = {
         "    pub manifest_bytes: Option<&'a [u8]>,\n",
         "Rust client dual manifest source drift",
     ),
+    "--negative-control-rust-client-submitted-epoch": (
+        "crates/iroha/src/client.rs",
+        "    pub manifest_payload: &'a [u8],\n",
+        "    pub manifest_payload: &'a [u8],\n"
+        "    pub submitted_epoch: u64,\n",
+        "Rust client retired submitted-epoch drift",
+    ),
     "--negative-control-rust-client-manifest-b64-wire": (
         "crates/iroha/src/client.rs",
         '            "manifest_payload".into(),\n',
@@ -1238,8 +1319,9 @@ source_modes = {
     ),
     "--negative-control-python-fee-payment-field": (
         "python/iroha_python/src/iroha_python/client.py",
-        '        "submitted_epoch",\n',
-        '        "submitted_epoch",\n        "fee_payment",\n',
+        '        transaction: "SignedTransactionEnvelope",\n',
+        '        transaction: "SignedTransactionEnvelope",\n'
+        "        fee_payment: object | None = None,\n",
         "Python retired fee_payment field drift",
     ),
     "--negative-control-js-source-endpoint": (
@@ -1256,8 +1338,8 @@ source_modes = {
     ),
     "--negative-control-python-adversarial-test": (
         "python/iroha_python/tests/client_sorafs_pin_register_test.py",
-        "test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields",
-        "test_register_sorafs_pin_manifest_retired_fields_disabled",
+        "test_pin_register_rejects_pre_finality_fee_claim",
+        "test_pin_register_pre_finality_fee_claim_disabled",
         "Python adversarial test drift",
     ),
     "--negative-control-swift-contract-test": (
@@ -1301,6 +1383,27 @@ source_modes = {
         "rejectsMalformedSuccessorDigest();",
         "rejectsMalformedSuccessorDigestDisabled();",
         "Java successor canonicality test drift",
+    ),
+    "--negative-control-js-submitted-epoch-type": (
+        "javascript/iroha_js/index.d.ts",
+        "  manifestPayload: Buffer | ArrayBuffer | ArrayBufferView;\n",
+        "  manifestPayload: Buffer | ArrayBuffer | ArrayBufferView;\n"
+        "  submittedEpoch: NumericLike;\n",
+        "JavaScript retired submitted-epoch type drift",
+    ),
+    "--negative-control-kotlin-submitted-epoch-model": (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt",
+        "    @JvmField val manifestPayloadBase64: String,\n",
+        "    @JvmField val manifestPayloadBase64: String,\n"
+        "    @JvmField val submittedEpoch: Long,\n",
+        "Kotlin retired submitted-epoch model drift",
+    ),
+    "--negative-control-java-submitted-epoch-model": (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java",
+        "  private final String manifestPayloadBase64;\n",
+        "  private final String manifestPayloadBase64;\n"
+        "  private final long submittedEpoch;\n",
+        "Java retired submitted-epoch model drift",
     ),
 }
 

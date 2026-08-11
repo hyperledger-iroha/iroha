@@ -37,6 +37,7 @@ use self::{
 #[cfg(feature = "fault_injection")]
 use crate::transaction::ExecutionStep;
 use crate::{
+    NetworkId,
     account::{Account, AccountId},
     asset::{
         definition::AssetDefinition,
@@ -221,8 +222,20 @@ pub mod json_wrappers {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct QueryRequestWithAuthorityJson {
+        /// Exact genesis-lineage identity for the target network.
+        pub network_id: NetworkId,
         /// Account that authorised the query.
         pub authority: crate::account::AccountId,
+        /// Unix creation timestamp in milliseconds.
+        pub creation_time_ms: u64,
+        /// Mandatory nonzero request lifetime in milliseconds.
+        pub time_to_live_ms: NonZeroU64,
+        /// Caller-generated one-shot replay nonce.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub nonce: [u8; 32],
         /// Request being authorised.
         pub request: QueryRequestJson,
     }
@@ -309,16 +322,13 @@ pub mod json_wrappers {
                     let request = query_request_from_json(v1.payload.request)
                         .map_err(SignedQueryValidationError::InvalidRequest)?;
                     let payload = QueryRequestWithAuthority {
+                        network_id: v1.payload.network_id,
                         authority: v1.payload.authority,
+                        creation_time_ms: v1.payload.creation_time_ms,
+                        time_to_live_ms: v1.payload.time_to_live_ms,
+                        nonce: v1.payload.nonce,
                         request,
                     };
-                    let QuerySignature(sig) = &v1.signature;
-                    let signatory = payload
-                        .authority
-                        .try_signatory()
-                        .ok_or(SignedQueryValidationError::AuthorityNotSingleKey)?;
-                    verify_query_signature_for_signer(sig, signatory, &payload)?;
-
                     Ok(SignedQuery {
                         signature: v1.signature,
                         payload,
@@ -334,7 +344,11 @@ pub mod json_wrappers {
             SignedQueryJson::Canonical(SignedQueryCanonicalJson {
                 signature: sq.signature.clone(),
                 payload: QueryRequestWithAuthorityJson {
+                    network_id: sq.payload.network_id,
                     authority: sq.payload.authority.clone(),
+                    creation_time_ms: sq.payload.creation_time_ms,
+                    time_to_live_ms: sq.payload.time_to_live_ms,
+                    nonce: sq.payload.nonce,
                     request: req_json,
                 },
             })
@@ -1003,6 +1017,8 @@ mod model {
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch one finalized chain-authoritative `SoraFS` pin manifest.
         FindSorafsPinManifest(sorafs::prelude::FindSorafsPinManifest),
+        /// Fetch a finalized, keyset-bounded page of `SoraFS` pin manifests.
+        FindSorafsPinManifests(sorafs::prelude::FindSorafsPinManifests),
         /// Fetch the active authoritative `SoraFS` orderbook policy.
         FindSorafsOrderbookPolicy(sorafs::prelude::FindSorafsOrderbookPolicy),
         /// Fetch one authoritative `SoraFS` order by identifier.
@@ -1213,6 +1229,8 @@ mod model {
         FeeSponsorProgram(crate::nexus::FeeSponsorProgram),
         /// Finalized chain-authoritative `SoraFS` pin manifest.
         SorafsPinManifest(crate::sorafs::pin_registry::PinManifestFinalizedRecordV1),
+        /// Finalized, keyset-bounded `SoraFS` pin-manifest page.
+        SorafsPinManifestPage(crate::sorafs::pin_registry::PinManifestPageV1),
         /// Active authoritative `SoraFS` orderbook policy payload.
         SorafsOrderbookPolicy(crate::sorafs::orderbook::OrderbookAdmissionPolicyRecord),
         /// Authoritative `SoraFS` order payload.
@@ -1778,8 +1796,20 @@ mod model {
     /// A [`QueryRequest`], combined with an authority that wants to execute the query
     #[derive(Decode, Encode, IntoSchema)]
     pub struct QueryRequestWithAuthority {
+        /// Exact genesis-lineage identity for the target network.
+        pub network_id: NetworkId,
         /// Account executing the query.
         pub authority: AccountId,
+        /// Unix creation timestamp in milliseconds.
+        pub creation_time_ms: u64,
+        /// Mandatory nonzero request lifetime in milliseconds.
+        pub time_to_live_ms: NonZeroU64,
+        /// Caller-generated one-shot replay nonce.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub nonce: [u8; 32],
         /// Query payload.
         pub request: QueryRequest,
     }
@@ -3070,12 +3100,37 @@ impl QueryOutput {
 }
 
 impl QueryRequest {
-    /// Construct a [`QueryRequestWithAuthority`] from this [`QueryRequest`] and an authority
-    pub fn with_authority(self, authority: AccountId) -> QueryRequestWithAuthority {
+    /// Construct the exact network-, time-, and nonce-bound payload an authority will sign.
+    pub fn with_authority(
+        self,
+        network_id: NetworkId,
+        authority: AccountId,
+        creation_time_ms: u64,
+        time_to_live_ms: NonZeroU64,
+        nonce: [u8; 32],
+    ) -> QueryRequestWithAuthority {
         QueryRequestWithAuthority {
+            network_id,
             authority,
+            creation_time_ms,
+            time_to_live_ms,
+            nonce,
             request: self,
         }
+    }
+
+    #[cfg(test)]
+    fn with_test_authority(self, authority: AccountId) -> QueryRequestWithAuthority {
+        let genesis_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xA5; Hash::LENGTH]),
+        );
+        self.with_authority(
+            NetworkId::from_genesis_hash(genesis_hash),
+            authority,
+            1_000_000,
+            NonZeroU64::new(10_000).expect("nonzero test query TTL"),
+            [0x5A; 32],
+        )
     }
 }
 
@@ -3088,6 +3143,12 @@ impl QueryWithParams {
 }
 
 impl QueryRequestWithAuthority {
+    /// Return the exact genesis-lineage identity this request targets.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
+    }
+
     /// Return the authority that issued this request.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
@@ -3098,6 +3159,24 @@ impl QueryRequestWithAuthority {
     #[must_use]
     pub fn request(&self) -> &QueryRequest {
         &self.request
+    }
+
+    /// Return the signed Unix creation timestamp in milliseconds.
+    #[must_use]
+    pub const fn creation_time_ms(&self) -> u64 {
+        self.creation_time_ms
+    }
+
+    /// Return the signed nonzero request lifetime in milliseconds.
+    #[must_use]
+    pub const fn time_to_live_ms(&self) -> NonZeroU64 {
+        self.time_to_live_ms
+    }
+
+    /// Return the signed one-shot replay nonce.
+    #[must_use]
+    pub const fn nonce(&self) -> &[u8; 32] {
+        &self.nonce
     }
 
     /// Consume `self`, returning its components.
@@ -3144,6 +3223,28 @@ impl SignedQuery {
     pub fn request(&self) -> &QueryRequest {
         &self.payload.request
     }
+
+    /// Verify that the single-key authority signed the complete query payload.
+    ///
+    /// Decoding a [`SignedQuery`] is intentionally structural only. Network
+    /// ingress must validate inexpensive network and freshness bounds before
+    /// calling this method, then consume the request nonce before performing
+    /// authorization or query work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the authority is not single-key, the signature
+    /// material is malformed, or the signature does not authenticate the
+    /// complete payload.
+    pub fn verify_signature(&self) -> Result<(), SignedQueryValidationError> {
+        let QuerySignature(signature) = &self.signature;
+        let signatory = self
+            .payload
+            .authority
+            .try_signatory()
+            .ok_or(SignedQueryValidationError::AuthorityNotSingleKey)?;
+        verify_query_signature_for_signer(signature, signatory, &self.payload)
+    }
 }
 
 mod candidate {
@@ -3156,19 +3257,11 @@ mod candidate {
     }
 
     impl SignedQueryCandidate {
-        fn validate(self) -> Result<SignedQuery, SignedQueryValidationError> {
-            let QuerySignature(signature) = &self.signature;
-            let signatory = self
-                .payload
-                .authority
-                .try_signatory()
-                .ok_or(SignedQueryValidationError::AuthorityNotSingleKey)?;
-            verify_query_signature_for_signer(signature, signatory, &self.payload)?;
-
-            Ok(SignedQuery {
+        fn into_signed(self) -> SignedQuery {
+            SignedQuery {
                 payload: self.payload,
                 signature: self.signature,
-            })
+            }
         }
     }
 
@@ -3180,10 +3273,7 @@ mod candidate {
                 <SignedQueryCandidate as norito::codec::Decode>::decode(&mut cursor)?;
             let used = usize::try_from(cursor.position())
                 .map_err(|_| norito::core::Error::LengthMismatch)?;
-            let decoded = candidate
-                .validate()
-                .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-            Ok((decoded, used))
+            Ok((candidate.into_signed(), used))
         }
     }
 
@@ -3192,7 +3282,7 @@ mod candidate {
             let candidate = <SignedQueryCandidate as norito::core::NoritoDeserialize>::deserialize(
                 archived.cast(),
             );
-            candidate.validate().expect("invalid SignedQuery")
+            candidate.into_signed()
         }
 
         fn try_deserialize(
@@ -3202,9 +3292,7 @@ mod candidate {
                 <SignedQueryCandidate as norito::core::NoritoDeserialize>::try_deserialize(
                     archived.cast(),
                 )?;
-            candidate
-                .validate()
-                .map_err(|error| norito::core::Error::Message(error.to_string()))
+            Ok(candidate.into_signed())
         }
     }
 
@@ -3221,9 +3309,8 @@ mod candidate {
         use crate::{
             account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
-                FindExecutorDataModel, QueryRequest, QueryRequestWithAuthority,
-                SignedQueryValidationError, SingularQueryBox, candidate::SignedQueryCandidate,
-                parameters,
+                FindExecutorDataModel, QueryRequest, SignedQueryValidationError, SingularQueryBox,
+                candidate::SignedQueryCandidate, parameters,
             },
         };
 
@@ -3287,7 +3374,7 @@ mod candidate {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
                 FindExecutorDataModel,
             ))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
             let candidate = SignedQueryCandidate {
@@ -3295,7 +3382,7 @@ mod candidate {
                 payload: signed_query.payload,
             };
 
-            candidate.validate().unwrap();
+            candidate.into_signed().verify_signature().unwrap();
         }
 
         #[test]
@@ -3303,7 +3390,7 @@ mod candidate {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
                 FindExecutorDataModel,
             ))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
             let mut candidate = SignedQueryCandidate {
@@ -3319,7 +3406,8 @@ mod candidate {
                 .expect("tampered query signature remains structurally admissible");
 
             let err = candidate
-                .validate()
+                .into_signed()
+                .verify_signature()
                 .err()
                 .expect("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
@@ -3344,7 +3432,7 @@ mod candidate {
                 let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
                     FindExecutorDataModel,
                 ))
-                .with_authority(ALICE_ID.clone())
+                .with_test_authority(ALICE_ID.clone())
                 .sign(&ALICE_KEYPAIR);
                 let mut candidate = SignedQueryCandidate {
                     signature: signed_query.signature,
@@ -3355,7 +3443,8 @@ mod candidate {
                 *candidate.signature.0 = iroha_crypto::Signature::from_bytes(&sig_bytes);
 
                 let err = candidate
-                    .validate()
+                    .into_signed()
+                    .verify_signature()
                     .err()
                     .unwrap_or_else(|| panic!("{label} Ed25519 signature R must be rejected"));
                 assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
@@ -3370,7 +3459,7 @@ mod candidate {
                 QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
                     FindExecutorDataModel,
                 ))
-                .with_authority(AccountId::new(keypair.public_key().clone()))
+                .with_test_authority(AccountId::new(keypair.public_key().clone()))
                 .sign(&keypair)
             };
             let signed_query = make_signed_query();
@@ -3398,7 +3487,8 @@ mod candidate {
                     iroha_crypto::Signature::from_bytes(&replacement_signature);
 
                 let err = candidate
-                    .validate()
+                    .into_signed()
+                    .verify_signature()
                     .err()
                     .unwrap_or_else(|| panic!("{label} ML-DSA signature length must be rejected"));
                 assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
@@ -3411,7 +3501,7 @@ mod candidate {
                 FindExecutorDataModel,
             ))
             // signing with a wrong key here
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&BOB_KEYPAIR);
 
             let candidate = SignedQueryCandidate {
@@ -3420,7 +3510,8 @@ mod candidate {
             };
 
             let err = candidate
-                .validate()
+                .into_signed()
+                .verify_signature()
                 .err()
                 .expect("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
@@ -3431,17 +3522,16 @@ mod candidate {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
                 FindExecutorDataModel,
             ))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
+            let mut payload = signed_query.payload;
+            payload.authority = multisig_authority();
             let candidate = SignedQueryCandidate {
                 signature: signed_query.signature,
-                payload: QueryRequestWithAuthority {
-                    authority: multisig_authority(),
-                    request: signed_query.payload.request,
-                },
+                payload,
             };
 
-            let error = match candidate.validate() {
+            let error = match candidate.into_signed().verify_signature() {
                 Ok(_) => panic!("multisig query authority must be rejected"),
                 Err(error) => error,
             };
@@ -3502,7 +3592,7 @@ mod json_roundtrip_tests {
     #[test]
     fn signed_query_versioned_roundtrip() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
         let bytes = signed.encode_versioned();
@@ -3548,7 +3638,7 @@ mod json_roundtrip_tests {
     #[test]
     fn signed_query_versioned_decode_rejects_trailing_bytes() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
         let mut bytes = signed.encode_versioned();
         bytes.push(0);
@@ -3564,7 +3654,7 @@ mod json_roundtrip_tests {
     #[test]
     fn signed_query_versioned_decode_rejects_unsupported_version_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
         let mut bytes = signed.encode_versioned();
         bytes[0] = 2;
@@ -3585,9 +3675,9 @@ mod json_roundtrip_tests {
     }
 
     #[test]
-    fn signed_query_versioned_decode_rejects_invalid_signature_without_decode_panic() {
+    fn signed_query_versioned_decode_is_structural_then_signature_is_verified_explicitly() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
         let mut signature = signed.signature.0.payload().to_vec();
@@ -3603,61 +3693,42 @@ mod json_roundtrip_tests {
             payload: signed.payload,
         };
 
-        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
-            Ok(_) => panic!("invalid query signature must be rejected"),
-            Err(err) => err,
-        };
-        let message = err.to_string();
-        assert!(
-            message.contains("Query request signature is not valid"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            !message.contains("panic during decode"),
-            "invalid signatures should not surface as decode panics: {message}"
+        let decoded = SignedQuery::decode_all_versioned(&invalid.encode_versioned())
+            .expect("decoding must not spend cryptographic work");
+        assert_eq!(
+            decoded.verify_signature(),
+            Err(SignedQueryValidationError::InvalidSignature)
         );
     }
 
     #[test]
-    fn signed_query_decode_rejects_multisig_authority_without_decode_panic() {
+    fn signed_query_decode_is_structural_then_multisig_authority_is_rejected_explicitly() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
+        let mut payload = signed.payload;
+        payload.authority = multisig_authority();
         let invalid = SignedQuery {
             signature: signed.signature,
-            payload: QueryRequestWithAuthority {
-                authority: multisig_authority(),
-                request: signed.payload.request,
-            },
+            payload,
         };
 
         let encoded = norito::to_bytes(&invalid).expect("encode multisig query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive multisig query fixture");
-        let archived_error =
-            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
-                Ok(_) => panic!("multisig archived query authority must be rejected"),
-                Err(error) => error,
-            };
-        assert!(
-            archived_error
-                .to_string()
-                .contains("Query request authority must be single-key"),
-            "unexpected archived query error: {archived_error}"
+        let decoded =
+            <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+                .expect("structural archived decode must not perform authorization");
+        assert_eq!(
+            decoded.verify_signature(),
+            Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
 
-        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
-            Ok(_) => panic!("multisig query authority must be rejected"),
-            Err(error) => error,
-        };
-        let message = err.to_string();
-        assert!(
-            message.contains("Query request authority must be single-key"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            !message.contains("panic during decode"),
-            "multisig authorities must not surface as decode panics: {message}"
+        let decoded = SignedQuery::decode_all_versioned(&invalid.encode_versioned())
+            .expect("versioned decode must remain structural");
+        assert_eq!(
+            decoded.verify_signature(),
+            Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
     }
 
@@ -3675,7 +3746,7 @@ mod json_roundtrip_tests {
         ];
 
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
         for (label, replacement_r) in [
@@ -3688,14 +3759,12 @@ mod json_roundtrip_tests {
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);
             *canonical.signature.0 = Signature::from_bytes(&signature);
 
-            let err = match SignedQuery::try_from(json) {
-                Ok(_) => panic!("JSON signed query with malformed Ed25519 R must fail admission"),
-                Err(err) => err,
-            };
+            let decoded = SignedQuery::try_from(json)
+                .expect("JSON conversion must remain structural before ingress admission");
 
             assert_eq!(
-                err,
-                SignedQueryValidationError::InvalidSignatureMaterial,
+                decoded.verify_signature(),
+                Err(SignedQueryValidationError::InvalidSignatureMaterial),
                 "{label} signed query signature R was not rejected"
             );
         }
@@ -3704,23 +3773,73 @@ mod json_roundtrip_tests {
     #[test]
     fn signed_query_json_rejects_multisig_authority_without_unwinding() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
         let mut json = SignedQueryJson::from(&signed);
         let SignedQueryJson::Canonical(canonical) = &mut json;
         canonical.payload.authority = multisig_authority();
 
-        let error = match SignedQuery::try_from(json) {
-            Ok(_) => panic!("multisig JSON query authority must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(error, SignedQueryValidationError::AuthorityNotSingleKey);
+        let decoded = SignedQuery::try_from(json)
+            .expect("JSON conversion must remain structural before ingress admission");
+        assert_eq!(
+            decoded.verify_signature(),
+            Err(SignedQueryValidationError::AuthorityNotSingleKey)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn signed_query_json_requires_every_replay_context_field() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_test_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let canonical = SignedQueryJson::from(&signed);
+        let value = norito::json::to_value(&canonical).expect("serialize signed query JSON");
+
+        for field in ["network_id", "creation_time_ms", "time_to_live_ms", "nonce"] {
+            let mut missing = value.clone();
+            missing
+                .get_mut("content")
+                .and_then(|content| content.get_mut("payload"))
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("canonical signed-query payload object")
+                .remove(field);
+
+            assert!(
+                norito::json::from_value::<SignedQueryJson>(missing).is_err(),
+                "signed-query JSON without `{field}` must fail closed"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn signed_query_json_rejects_zero_time_to_live() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_test_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut value = norito::json::to_value(&SignedQueryJson::from(&signed))
+            .expect("serialize signed query JSON");
+        value
+            .get_mut("content")
+            .and_then(|content| content.get_mut("payload"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("canonical signed-query payload object")
+            .insert(
+                "time_to_live_ms".to_owned(),
+                norito::json::Value::from(0_u64),
+            );
+
+        assert!(
+            norito::json::from_value::<SignedQueryJson>(value).is_err(),
+            "signed-query JSON must reject a zero lifetime before admission"
+        );
     }
 
     #[test]
     fn signed_query_decode_rejects_empty_signature_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
         let invalid = SignedQuery {
             signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(&[]))),
@@ -3759,7 +3878,7 @@ mod json_roundtrip_tests {
     #[test]
     fn signed_query_decode_rejects_all_zero_signature_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
         let invalid = SignedQuery {
             signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(
@@ -3812,7 +3931,7 @@ mod json_roundtrip_tests {
             params: parameters::QueryParams::default(),
         };
         let signed = QueryRequest::Start(qwp)
-            .with_authority(ALICE_ID.clone())
+            .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
 
         let json = SignedQueryJson::from(&signed);

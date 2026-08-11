@@ -35,13 +35,13 @@ use crate::{
         current_axt_slot_from_block,
     },
 };
-use iroha_crypto::{Hash, HashOf, streaming::TransportCapabilityResolutionSnapshot};
+use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
 use iroha_data_model::soracloud::{
     SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
 };
 use iroha_data_model::{
-    DataSpaceId, ValidationFail,
+    DataSpaceId, NetworkId, ValidationFail,
     account::rekey::AccountAlias,
     asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
@@ -60,11 +60,11 @@ use iroha_data_model::{
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
-        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtPolicySnapshotValidationError, AxtProofEnvelope as ModelAxtProofEnvelope,
-        AxtProofFragment, AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
-        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
-        TouchManifest as ModelTouchManifest,
+        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
+        AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        AxtProofEnvelope as ModelAxtProofEnvelope, AxtProofFragment, AxtRejectContext,
+        AxtRejectReason, AxtReplayRecord, AxtTouchFragment, AxtTouchSpec as ModelAxtTouchSpec,
+        ProofBlob as ModelProofBlob, TouchManifest as ModelTouchManifest, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX,
@@ -147,12 +147,13 @@ const AXT_PROOF_CACHE_REJECT: &str = "reject";
 // contracts address the unscoped suffix and must not address another contract's
 // physical namespace directly.
 //
-// Keep these lists in sync with the native key constructors in `state.rs` and
-// `tx.rs`. Entries either include their delimiter or name a canonical root;
-// matching reserves only the exact root and `_`/`/` descendants so similarly
-// named user keys remain available.
+// Keep these lists in sync with the native key constructors in `state.rs`,
+// `tx.rs`, and `da/quota.rs`. Entries either include their delimiter or name a
+// canonical root; matching reserves only the exact root and `_`/`/` descendants
+// so similarly named user keys remain available.
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
+    "da_ingest_quota_v1/",
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
@@ -216,6 +217,13 @@ struct CachedProofEntry {
     manifest_root: Option<[u8; 32]>,
     valid: bool,
     status: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AxtIssuerKeyBinding {
+    manifest_root: [u8; 32],
+    issuer: UniversalAccountId,
+    public_key: PublicKey,
 }
 
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
@@ -566,7 +574,7 @@ impl std::io::Write for BoundedCountingWriter {
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
     backend_label: Arc<str>,
-    ipa_k: Option<u32>,
+    material: Option<crate::zk::PreparedVerifyingKeyMaterialV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -697,6 +705,8 @@ pub struct CoreHostImpl<QS> {
     public_inputs: BTreeMap<Name, PublicInputRecord>,
     // Chain id bytes for domain-tag binding.
     chain_id_bytes: Vec<u8>,
+    // Exact genesis-derived security domain for AXT issuer authentication.
+    network_id: Option<NetworkId>,
     // Policy hook for AXT validation (deny-wins).
     axt_policy: Arc<dyn ivm::axt::AxtPolicy>,
     // AXT timing configuration sourced from `iroha_config`.
@@ -710,6 +720,8 @@ pub struct CoreHostImpl<QS> {
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
+    // Issuer keys resolved only from committed Space Directory/UAID state.
+    axt_issuer_keys: Arc<BTreeMap<DataSpaceId, AxtIssuerKeyBinding>>,
     // Bounded replay ledger hydrated from WSV.
     axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     // Slot for which cached AXT proofs were verified.
@@ -1704,7 +1716,9 @@ mod durable_state_merge_tests {
     #[test]
     fn scoped_path_and_scan_reject_physical_length_overflow_before_state_access() {
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &ALICE_ID,
             703,
             DataSpaceId::UNIVERSAL,
@@ -2509,9 +2523,9 @@ impl HostExecutionArtifacts {
     pub(crate) fn record_completed_axt_states(
         tx: &mut StateTransaction<'_, '_>,
         completed_axt: Vec<axt::HostAxtState>,
-    ) {
+    ) -> Result<(), ValidationFail> {
         if completed_axt.is_empty() {
-            return;
+            return Ok(());
         }
         let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
         let commit_height = tx.block_height();
@@ -2520,8 +2534,10 @@ impl HostExecutionArtifacts {
                 &state,
                 lane,
                 commit_height,
-            ));
+            ))
+            .map_err(ValidationFail::InstructionFailed)?;
         }
+        Ok(())
     }
 
     pub(crate) fn apply_to_transaction(
@@ -2635,7 +2651,7 @@ impl HostExecutionArtifacts {
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
-        Self::record_completed_axt_states(tx, self.completed_axt);
+        Self::record_completed_axt_states(tx, self.completed_axt)?;
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
                 if let Some(authorization) = self
@@ -2837,6 +2853,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
+            network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -2845,6 +2862,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -2965,6 +2983,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
+            network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -2973,6 +2992,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -3046,6 +3066,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
+            network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -3055,6 +3076,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
@@ -3512,6 +3534,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = policy;
         self.axt_policy_snapshot = None;
+        self.axt_issuer_keys = Arc::new(BTreeMap::new());
         self.clear_axt_proof_cache();
         self
     }
@@ -3545,8 +3568,53 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = Arc::new(policy);
         self.axt_policy_snapshot = Some(snapshot.clone());
+        self.axt_issuer_keys = Arc::new(BTreeMap::new());
         self.clear_axt_proof_cache();
         self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
+    }
+
+    /// Install an issuer key for an explicitly constructed test policy.
+    ///
+    /// Production hosts obtain this map only through [`Self::hydrate_axt_state`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[must_use]
+    pub fn with_axt_issuer_key_for_tests(
+        mut self,
+        dataspace: DataSpaceId,
+        manifest_root: [u8; 32],
+        issuer: UniversalAccountId,
+        public_key: PublicKey,
+    ) -> Self {
+        Arc::make_mut(&mut self.axt_issuer_keys).insert(
+            dataspace,
+            AxtIssuerKeyBinding {
+                manifest_root,
+                issuer,
+                public_key,
+            },
+        );
+        self
+    }
+
+    /// Install an issuer key into an already constructed test host.
+    ///
+    /// Production hosts obtain this map only through [`Self::hydrate_axt_state`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn set_axt_issuer_key_for_tests(
+        &mut self,
+        dataspace: DataSpaceId,
+        manifest_root: [u8; 32],
+        issuer: UniversalAccountId,
+        public_key: PublicKey,
+    ) {
+        Arc::make_mut(&mut self.axt_issuer_keys).insert(
+            dataspace,
+            AxtIssuerKeyBinding {
+                manifest_root,
+                issuer,
+                public_key,
+            },
+        );
     }
 
     fn clear_axt_proof_cache(&mut self) {
@@ -3713,11 +3781,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 let entry = AxtPolicyEntry {
                     manifest_root,
                     target_lane,
-                    min_handle_era: record
+                    active_handle_era: record
                         .lifecycle
                         .activated_epoch
                         .unwrap_or(record.manifest.activation_epoch),
-                    min_sub_nonce: 0,
+                    next_handle_counter: 1,
                     current_slot,
                 };
                 let activated_epoch = record.lifecycle.activated_epoch;
@@ -3754,8 +3822,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         AxtPolicyEntry {
                             manifest_root: [0; 32],
                             target_lane,
-                            min_handle_era: 0,
-                            min_sub_nonce: 0,
+                            active_handle_era: 0,
+                            next_handle_counter: 0,
                             current_slot,
                         },
                         None,
@@ -3994,8 +4062,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         dataspace: Option<DataSpaceId>,
         lane: Option<LaneId>,
         detail: impl Into<String>,
-        next_min_handle_era: Option<u64>,
-        next_min_sub_nonce: Option<u64>,
+        active_handle_era: Option<u64>,
+        next_handle_counter: Option<u64>,
     ) {
         let detail = detail.into();
         let ctx = AxtRejectContext {
@@ -4004,18 +4072,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             lane,
             snapshot_version: self.current_axt_policy_version(),
             detail,
-            next_min_handle_era,
-            next_min_sub_nonce,
+            active_handle_era,
+            next_handle_counter,
         };
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry.as_ref() {
             if let (Some(lane), Some(snapshot_version)) = (lane, ctx.snapshot_version) {
                 telemetry.note_axt_policy_reject(lane, reason, snapshot_version);
             }
-            if let (Some(dsid), Some(lane), Some(min_handle_era), Some(min_sub_nonce)) =
-                (dataspace, lane, next_min_handle_era, next_min_sub_nonce)
+            if let (Some(dsid), Some(lane), Some(active_handle_era), Some(next_handle_counter)) =
+                (dataspace, lane, active_handle_era, next_handle_counter)
             {
-                telemetry.set_axt_reject_hint(dsid, lane, min_handle_era, min_sub_nonce, reason);
+                telemetry.set_axt_reject_hint(
+                    dsid,
+                    lane,
+                    active_handle_era,
+                    next_handle_counter,
+                    reason,
+                );
             }
         }
         iroha_logger::warn!(
@@ -4025,8 +4099,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ?dataspace,
             ?lane,
             detail = %ctx.detail,
-            next_min_handle_era = ?ctx.next_min_handle_era,
-            next_min_sub_nonce = ?ctx.next_min_sub_nonce,
+            active_handle_era = ?ctx.active_handle_era,
+            next_handle_counter = ?ctx.next_handle_counter,
             "AXT policy rejection recorded"
         );
         self.last_axt_reject = Some(ctx);
@@ -4091,10 +4165,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    /// Set chain id for VRF binding. When set, the underlying `DefaultHost` will
-    /// enforce and use this chain id for VRF prehashing.
+    /// Set the human-readable chain label returned by the chain-id sysvar.
     pub fn set_chain_id(&mut self, chain: &iroha_data_model::ChainId) {
-        // Mutably set chain id in the underlying DefaultHost (no reset of other state)
         self.default
             .set_chain_id_bytes(chain.to_string().into_bytes());
         self.chain_id_bytes = chain.to_string().into_bytes();
@@ -4279,10 +4351,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_authorizations.clear();
     }
 
-    /// Set the chain id for ZK domain binding.
+    /// Set the human-readable chain label returned by the chain-id sysvar.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id_bytes = chain_id;
         self.default.set_chain_id_bytes(self.chain_id_bytes.clone());
+    }
+
+    /// Set the exact genesis-derived security domain used by signatures and VRF proofs.
+    pub fn set_network_id(&mut self, network_id: NetworkId) {
+        self.default.set_network_id(network_id);
+        self.network_id = Some(network_id);
     }
 
     /// Set the current manifest id for namespace binding.
@@ -4293,7 +4371,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Apply the active VK registry snapshot for verification-time binding.
     ///
     /// # Errors
-    /// Returns an error when a stored commitment does not match the stored verifying key bytes.
+    /// Returns an error when registry metadata or bounded backend material is
+    /// non-canonical, or when a stored commitment does not match the key bytes.
     pub fn set_verifying_keys(
         &mut self,
         map: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
@@ -4334,25 +4413,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if !Self::production_backend_label_matches_record(&backend_label, rec.backend) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if let Some(ref vk) = rec.key {
-                let c = crate::zk::hash_vk(vk);
-                if c != rec.commitment {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-            }
-            let ipa_k = if crate::zk::is_stark_fri_v1_backend(&backend_label) {
-                None
-            } else {
-                rec.key
-                    .as_ref()
-                    .and_then(|vk| Self::parse_zk1_ipa_k(&vk.bytes))
-            };
+            let material = crate::zk::validate_and_prepare_verifying_key_record_v1(&id, &rec)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
             let commitment = rec.commitment;
             let record = Arc::new(rec);
             let prepared = PreparedVerifyingKey {
                 record: Arc::clone(&record),
                 backend_label: Arc::from(backend_label),
-                ipa_k,
+                material,
             };
             if prepared_by_commitment
                 .insert(commitment, prepared)
@@ -4612,29 +4680,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         ivm::host::map_open_verify_validation_error(err)
     }
 
-    fn parse_zk1_ipa_k(vk_bytes: &[u8]) -> Option<u32> {
-        const MAGIC: &[u8; 4] = b"ZK1\0";
-        if vk_bytes.len() < 4 || &vk_bytes[..4] != MAGIC {
-            return None;
-        }
-        let mut cursor = 4usize;
-        while cursor.checked_add(8)? <= vk_bytes.len() {
-            let tag = &vk_bytes[cursor..cursor + 4];
-            cursor += 4;
-            let len = u32::from_le_bytes(vk_bytes[cursor..cursor + 4].try_into().ok()?) as usize;
-            cursor += 4;
-            let end = cursor.checked_add(len)?;
-            if end > vk_bytes.len() {
-                return None;
-            }
-            if tag == b"IPAK" && len == 4 {
-                return Some(u32::from_le_bytes(vk_bytes[cursor..end].try_into().ok()?));
-            }
-            cursor = end;
-        }
-        None
-    }
-
     fn curve_is_allowed(&self, backend_label: &str, curve_label: &str) -> bool {
         if crate::zk::is_stark_fri_v1_backend(backend_label) {
             return curve_label == "goldilocks";
@@ -4695,7 +4740,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::host::ERR_CURVE);
         }
         if !crate::zk::is_stark_fri_v1_backend(backend_label) {
-            let Some(k) = prepared.ipa_k else {
+            let Some(k) = prepared
+                .material
+                .as_ref()
+                .and_then(crate::zk::PreparedVerifyingKeyMaterialV1::ipa_k)
+            else {
                 return Err(ivm::host::ERR_DECODE);
             };
             if k > self.halo2_config.max_k {
@@ -5299,7 +5348,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 tx.record_confidential_gas_delta(delta);
             }
         }
-        self.flush_completed_axt(tx);
+        self.flush_completed_axt(tx)?;
         self.flush_durable_state(tx)?;
         Ok(queued
             .into_iter()
@@ -6349,6 +6398,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map(|binding| binding.policy)
     }
 
+    /// Return the exact AXT policy/issuer/key tuple installed by state hydration.
+    #[cfg(test)]
+    pub(crate) fn axt_hydrated_authorization_for_tests(
+        &self,
+        dsid: DataSpaceId,
+    ) -> Option<(AxtPolicyEntry, UniversalAccountId, PublicKey)> {
+        let policy = self.policy_entry_for(dsid)?;
+        let issuer = self.axt_issuer_keys.get(&dsid)?;
+        Some((policy, issuer.issuer, issuer.public_key.clone()))
+    }
+
     fn current_axt_policy_version(&self) -> Option<u64> {
         self.axt_policy_snapshot
             .as_ref()
@@ -6376,7 +6436,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         expiry_slot.max(retention_cap)
     }
 
-    /// Atomically hydrate AXT timing, policy, and replay state from one immutable snapshot.
+    /// Atomically hydrate AXT timing, policy, issuer keys, and replay state.
     ///
     /// Policy construction and replay-ledger projection complete before the
     /// host is mutated. Entries already expired at the snapshot's current AXT
@@ -6392,7 +6452,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         state: &impl StateReadOnly,
     ) -> Result<(), AxtPolicySnapshotValidationError> {
         let timing = state.nexus().axt;
-        let snapshot = state.axt_policy_snapshot();
+        let snapshot = state
+            .axt_execution_policy_snapshot()
+            .unwrap_or_else(|| state.axt_policy_snapshot());
         let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
             &snapshot,
             timing.slot_length_ms,
@@ -6406,10 +6468,37 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 replay_ledger.insert(*key, *entry);
             }
         }
+        let mut issuer_keys = BTreeMap::new();
+        for binding in &snapshot.entries {
+            if binding.policy.manifest_root.iter().all(|byte| *byte == 0) {
+                continue;
+            }
+            let resolved = if let Some(block_start) = state.axt_block_start_snapshot() {
+                block_start.issuer_binding(binding.dsid).cloned()
+            } else {
+                crate::nexus::space_directory::resolve_axt_issuer_binding(
+                    state.world(),
+                    binding.dsid,
+                    binding.policy.manifest_root,
+                )
+            };
+            if let Ok(resolved) = resolved {
+                issuer_keys.insert(
+                    binding.dsid,
+                    AxtIssuerKeyBinding {
+                        manifest_root: binding.policy.manifest_root,
+                        issuer: resolved.issuer,
+                        public_key: resolved.public_key,
+                    },
+                );
+            }
+        }
 
         self.axt_timing = timing;
+        self.set_network_id(*state.network_id());
         self.axt_replay_ledger = Arc::new(replay_ledger);
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
+        self.axt_issuer_keys = Arc::new(issuer_keys);
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
@@ -9443,6 +9532,80 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(gas)
     }
 
+    fn authenticate_axt_handle_usage(
+        &mut self,
+        vm: &IVM,
+        usage: &axt::HandleUsage,
+    ) -> Result<(), ivm::VMError> {
+        let dsid = usage.intent.asset_dsid;
+        let Some(network_id) = self.network_id else {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(usage.handle.target_lane),
+                "AXT issuer authentication requires the exact genesis-derived network id",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        let Some(policy) = self.policy_entry_for(dsid) else {
+            self.record_axt_reject(
+                AxtRejectReason::MissingPolicy,
+                Some(dsid),
+                Some(usage.handle.target_lane),
+                "no policy entry for handle issuer authentication",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        let Some(issuer) = self.axt_issuer_keys.get(&dsid).cloned() else {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                "committed AXT policy has no unambiguous single-key issuer",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        if issuer.manifest_root != policy.manifest_root {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                "cached AXT issuer key does not match the active manifest root",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let model_usage = AxtHandleFragment::try_from(usage).map_err(|error| {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("failed to canonicalize handle for issuer authentication: {error:?}"),
+            );
+            ivm::VMError::PermissionDenied
+        })?;
+        let issuer_context = AxtHandleIssuerContextV1 {
+            network_id,
+            asset_dsid: dsid,
+            issuer: issuer.issuer,
+            issuer_manifest_root: policy.manifest_root,
+            code_root: vm.code_hash(),
+            abi_version: u16::from(vm.abi_version()),
+            abi_hash: ivm::syscalls::compute_abi_hash(vm.syscall_policy()),
+        };
+        model_usage
+            .handle
+            .verify_issuer_signature_v1(issuer_context, &issuer.public_key)
+            .map_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::PolicyDenied,
+                    Some(dsid),
+                    Some(policy.target_lane),
+                    "AXT handle issuer signature is invalid",
+                );
+                ivm::VMError::PermissionDenied
+            })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn enforce_axt_policy(&mut self, usage: &axt::HandleUsage) -> Result<(), ivm::VMError> {
         let dsid = usage.intent.asset_dsid;
@@ -9464,8 +9627,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 );
                 return Err(ivm::VMError::PermissionDenied);
             };
-            let policy = &binding.policy;
-            policy_bounds = Some((policy.min_handle_era, policy.min_sub_nonce));
+            let policy = binding.policy;
+            let prior_handle_count = self.axt_state.as_ref().map_or(0_usize, |state| {
+                state
+                    .handles()
+                    .iter()
+                    .filter(|prior| prior.intent.asset_dsid == dsid)
+                    .count()
+            });
+            let expected_sub_nonce = u64::try_from(prior_handle_count)
+                .ok()
+                .and_then(|count| policy.next_handle_counter.checked_add(count))
+                .ok_or_else(|| {
+                    self.record_axt_reject_detail(
+                        AxtRejectReason::SubNonce,
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        "AXT handle counter is exhausted",
+                        Some(policy.active_handle_era),
+                        Some(policy.next_handle_counter),
+                    );
+                    ivm::VMError::PermissionDenied
+                })?;
+            policy_bounds = Some((policy.active_handle_era, expected_sub_nonce));
             policy_lane = Some(policy.target_lane);
             record_slot = policy.current_slot;
             let policy_root_zeroed = policy.manifest_root.iter().all(|byte| *byte == 0);
@@ -9480,8 +9664,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 rejection = Some((
                     AxtRejectReason::Manifest,
                     "policy or handle manifest root is zeroed".to_owned(),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
+                    Some(policy.active_handle_era),
+                    Some(policy.next_handle_counter),
                 ));
             } else if policy.target_lane != usage.handle.target_lane {
                 rejection = Some((
@@ -9491,8 +9675,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         usage.handle.target_lane.as_u32(),
                         policy.target_lane.as_u32()
                     ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
+                    Some(policy.active_handle_era),
+                    Some(policy.next_handle_counter),
                 ));
             } else if policy.manifest_root.as_slice() != usage.handle.manifest_view_root.as_slice()
             {
@@ -9503,30 +9687,37 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         hex::encode(&usage.handle.manifest_view_root),
                         hex::encode(policy.manifest_root)
                     ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
-                ));
-            } else if usage.handle.handle_era < policy.min_handle_era {
-                rejection = Some((
-                    AxtRejectReason::HandleEra,
-                    format!(
-                        "handle era {} below policy minimum {}",
-                        usage.handle.handle_era, policy.min_handle_era
-                    ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
-                ));
-            } else if usage.handle.sub_nonce < policy.min_sub_nonce {
-                rejection = Some((
-                    AxtRejectReason::SubNonce,
-                    format!(
-                        "handle sub-nonce {} below policy minimum {}",
-                        usage.handle.sub_nonce, policy.min_sub_nonce
-                    ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
+                    Some(policy.active_handle_era),
+                    Some(policy.next_handle_counter),
                 ));
             } else {
+                let mut working_policy = policy;
+                working_policy.next_handle_counter = expected_sub_nonce;
+                if let Err(error) = iroha_data_model::nexus::next_axt_handle_sub_nonce(
+                    &working_policy,
+                    &model_usage.handle,
+                ) {
+                    let reason = match error {
+                        iroha_data_model::nexus::AxtHandleSequenceError::EraMismatch { .. } => {
+                            AxtRejectReason::HandleEra
+                        }
+                        iroha_data_model::nexus::AxtHandleSequenceError::SubNonceMismatch {
+                            ..
+                        }
+                        | iroha_data_model::nexus::AxtHandleSequenceError::CounterExhausted => {
+                            AxtRejectReason::SubNonce
+                        }
+                    };
+                    rejection = Some((
+                        reason,
+                        error.to_string(),
+                        Some(policy.active_handle_era),
+                        Some(expected_sub_nonce),
+                    ));
+                }
+            }
+
+            if rejection.is_none() {
                 let requested_skew_ms = usage
                     .handle
                     .max_clock_skew_ms
@@ -9538,8 +9729,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                             "handle requested max_clock_skew_ms={} exceeding configured bound {}",
                             requested_skew_ms, self.axt_timing.max_clock_skew_ms
                         ),
-                        Some(policy.min_handle_era),
-                        Some(policy.min_sub_nonce),
+                        Some(policy.active_handle_era),
+                        Some(expected_sub_nonce),
                     ));
                 } else {
                     let expiry_slot = self.axt_expiry_slot_with_skew(
@@ -9553,8 +9744,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                                 "handle expired for current policy slot={} (expiry_slot={expiry_slot})",
                                 policy.current_slot
                             ),
-                            Some(policy.min_handle_era),
-                            Some(policy.min_sub_nonce),
+                            Some(policy.active_handle_era),
+                            Some(expected_sub_nonce),
                         ));
                     }
                 }
@@ -9848,25 +10039,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(blob) = proof.as_ref() {
-            let policy = self.policy_entry_for(intent.asset_dsid).ok_or_else(|| {
-                self.record_axt_reject(
-                    AxtRejectReason::MissingPolicy,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "no policy entry for dataspace",
-                );
-                ivm::VMError::PermissionDenied
-            })?;
-            self.validate_axt_proof(intent.asset_dsid, blob, policy)?;
-        }
 
         if let Err(error) = axt::validate_asset_handle(&handle) {
             self.record_axt_reject(
                 AxtRejectReason::PolicyDenied,
                 Some(intent.asset_dsid),
                 Some(handle.target_lane),
-                "handle fields are not canonical or usable",
+                "handle fields are not canonical, authenticated, or usable",
             );
             return Err(error);
         }
@@ -9886,6 +10065,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount,
             amount_commitment: resolved_amount.amount_commitment,
         };
+        // Capability authentication is deliberately cheaper and earlier than
+        // the attacker-amplifiable FASTPQ verification below.
+        self.authenticate_axt_handle_usage(vm, &usage)?;
+
+        if let Some(blob) = usage.proof.as_ref() {
+            let policy = self
+                .policy_entry_for(usage.intent.asset_dsid)
+                .ok_or_else(|| {
+                    self.record_axt_reject(
+                        AxtRejectReason::MissingPolicy,
+                        Some(usage.intent.asset_dsid),
+                        Some(usage.handle.target_lane),
+                        "no policy entry for dataspace",
+                    );
+                    ivm::VMError::PermissionDenied
+                })?;
+            self.validate_axt_proof(usage.intent.asset_dsid, blob, policy)?;
+        }
         self.enforce_axt_policy(&usage)?;
         let output_count_before = self.instruction_queue_count;
         let output_bytes_before = self.instruction_queue_encoded_bytes;
@@ -10107,10 +10304,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn flush_completed_axt(&mut self, tx: &mut StateTransaction<'_, '_>) {
+    fn flush_completed_axt(
+        &mut self,
+        tx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), ValidationFail> {
         self.amx_budget_violation = None;
         if self.completed_axt.is_empty() {
-            return;
+            return Ok(());
         }
         let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
         let commit_height = tx.block_height();
@@ -10122,8 +10322,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map(|state| Self::materialize_axt_record(&state, lane, commit_height))
             .collect();
         for envelope in envelopes {
-            tx.record_axt_envelope(envelope);
+            tx.record_axt_envelope(envelope)
+                .map_err(ValidationFail::InstructionFailed)?;
         }
+        Ok(())
     }
 
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
@@ -12364,7 +12566,9 @@ mod pointer_abi_tests {
     fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -12603,7 +12807,9 @@ seiyaku ReadOnlyBinding {
     fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -12776,7 +12982,9 @@ seiyaku ReadOnlyBinding {
         host.queue_instruction(attempted.clone());
 
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             49,
             DataSpaceId::UNIVERSAL,
@@ -12835,7 +13043,9 @@ seiyaku ReadOnlyBinding {
     fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             48,
             DataSpaceId::UNIVERSAL,
@@ -12901,7 +13111,9 @@ seiyaku ReadOnlyBinding {
     fn prevalidated_runtime_binding_captures_exact_root_authorization() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -13112,7 +13324,9 @@ seiyaku PrivilegedBinding {
     fn contract_runtime_state_rejects_manifest_free_vm_image() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -13634,8 +13848,8 @@ seiyaku PrivilegedBinding {
             touches: Vec::new(),
         };
         let mut snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        snapshot.entries[0].policy.min_handle_era = 0;
-        snapshot.entries[0].policy.min_sub_nonce = 0;
+        snapshot.entries[0].policy.active_handle_era = 0;
+        snapshot.entries[0].policy.next_handle_counter = 0;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
@@ -13683,6 +13897,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -13767,6 +13983,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: vec![0x11; 31],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -13850,6 +14068,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -13969,8 +14189,8 @@ seiyaku PrivilegedBinding {
         };
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        snapshot.entries[0].policy.min_handle_era = 5;
-        snapshot.entries[0].policy.min_sub_nonce = 3;
+        snapshot.entries[0].policy.active_handle_era = 5;
+        snapshot.entries[0].policy.next_handle_counter = 3;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = fixture_account("alice");
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
@@ -14025,6 +14245,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14051,8 +14273,8 @@ seiyaku PrivilegedBinding {
         let hint = &hints[0];
         assert_eq!(hint.dataspace, dsid);
         assert_eq!(hint.target_lane, LaneId::new(1));
-        assert_eq!(hint.next_min_handle_era, 5);
-        assert_eq!(hint.next_min_sub_nonce, 3);
+        assert_eq!(hint.active_handle_era, 5);
+        assert_eq!(hint.next_handle_counter, 3);
         assert_eq!(hint.reason, AxtRejectReason::HandleEra);
 
         let ctx = host
@@ -14065,8 +14287,8 @@ seiyaku PrivilegedBinding {
             ctx.snapshot_version,
             Some(AxtPolicySnapshot::compute_version(&snapshot.entries))
         );
-        assert_eq!(ctx.next_min_handle_era, Some(5));
-        assert_eq!(ctx.next_min_sub_nonce, Some(3));
+        assert_eq!(ctx.active_handle_era, Some(5));
+        assert_eq!(ctx.next_handle_counter, Some(3));
     }
 
     #[test]
@@ -14081,8 +14303,8 @@ seiyaku PrivilegedBinding {
         };
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        snapshot.entries[0].policy.min_handle_era = 5;
-        snapshot.entries[0].policy.min_sub_nonce = 2;
+        snapshot.entries[0].policy.active_handle_era = 5;
+        snapshot.entries[0].policy.next_handle_counter = 2;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
@@ -14127,6 +14349,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
 
         let mut vm = IVM::new(10_000);
@@ -14158,13 +14382,13 @@ seiyaku PrivilegedBinding {
         let ctx = host
             .take_axt_reject_for_tests()
             .expect("reject context captured");
-        assert_eq!(ctx.next_min_handle_era, Some(5));
-        assert_eq!(ctx.next_min_sub_nonce, Some(2));
+        assert_eq!(ctx.active_handle_era, Some(5));
+        assert_eq!(ctx.next_handle_counter, Some(2));
         assert_eq!(ctx.snapshot_version, Some(snapshot.version));
 
         let mut refreshed = snapshot.clone();
-        refreshed.entries[0].policy.min_handle_era = 9;
-        refreshed.entries[0].policy.min_sub_nonce = 4;
+        refreshed.entries[0].policy.active_handle_era = 9;
+        refreshed.entries[0].policy.next_handle_counter = 4;
         refreshed.version = AxtPolicySnapshot::compute_version(&refreshed.entries);
         host.refresh_axt_policy_snapshot(&refreshed)
             .expect("canonical refreshed snapshot");
@@ -14198,8 +14422,8 @@ seiyaku PrivilegedBinding {
         let refreshed_ctx = host
             .take_axt_reject_for_tests()
             .expect("refreshed reject context captured");
-        assert_eq!(refreshed_ctx.next_min_handle_era, Some(9));
-        assert_eq!(refreshed_ctx.next_min_sub_nonce, Some(4));
+        assert_eq!(refreshed_ctx.active_handle_era, Some(9));
+        assert_eq!(refreshed_ctx.next_handle_counter, Some(4));
         assert_eq!(refreshed_ctx.snapshot_version, Some(refreshed.version));
     }
 
@@ -14542,8 +14766,8 @@ seiyaku PrivilegedBinding {
                 AxtPolicyEntry {
                     manifest_root,
                     target_lane: lane,
-                    min_handle_era: 3,
-                    min_sub_nonce: 5,
+                    active_handle_era: 3,
+                    next_handle_counter: 5,
                     current_slot: u64::MAX,
                 },
             );
@@ -14616,8 +14840,8 @@ seiyaku PrivilegedBinding {
         let policy = AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 2,
-            min_sub_nonce: 3,
+            active_handle_era: 2,
+            next_handle_counter: 3,
             current_slot: 10,
         };
         let replay_key = AxtHandleReplayKey {
@@ -14671,6 +14895,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 60,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14743,6 +14969,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: current_slot + 2,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14837,6 +15065,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: current_slot + 20,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14876,8 +15106,8 @@ seiyaku PrivilegedBinding {
         let policy = AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 2,
         };
         let stale_entry = AxtReplayRecord {
@@ -14938,6 +15168,8 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 10,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -15201,7 +15433,9 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &host.authority,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15232,7 +15466,9 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &host.authority,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15258,7 +15494,9 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_reject_direct_binding_syscalls_before_metering() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             211,
             DataSpaceId::UNIVERSAL,
@@ -15318,7 +15556,9 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_cannot_smuggle_binding_mutations_through_opaque_syscall() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             212,
             DataSpaceId::UNIVERSAL,
@@ -16395,7 +16635,9 @@ seiyaku PrivilegedBinding {
         let caller = fixture_account("alice");
         let owner = fixture_account("bob");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &caller,
             91,
             DataSpaceId::UNIVERSAL,
@@ -17072,7 +17314,7 @@ seiyaku StaleRuntimeBinding {
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
         let tx = TransactionBuilder::new(
-            ChainId::from("test-chain"),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -19888,7 +20130,9 @@ seiyaku DedicatedQueryContract {
     fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
         let authority = host.authority.clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -21000,8 +21244,8 @@ seiyaku OpaqueInstructionSubmission {
             policy: AxtPolicyEntry {
                 manifest_root,
                 target_lane: LaneId::new(1),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot,
             },
         };
@@ -23681,7 +23925,9 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             404,
             DataSpaceId::UNIVERSAL,
@@ -26515,7 +26761,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -26523,10 +26769,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new(
-                "halo2/ipa",
-                "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
-            ),
+            VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless"),
             rec,
         );
 
@@ -26543,7 +26786,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -26551,10 +26794,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new(
-                "halo2/ipa",
-                "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            ),
+            VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless"),
             rec,
         );
         host.set_verifying_keys(map)
@@ -26566,19 +26806,83 @@ seiyaku DurableOwner {
         assert_eq!(prepared.backend_label.as_ref(), "halo2/ipa");
     }
 
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn set_verifying_keys_rejects_malformed_halo2_material_during_rehydration() {
+        crate::test_alias::ensure();
+        let backend = "halo2/ipa";
+        let mut vk_bytes = b"ZK1\0CID1".to_vec();
+        vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let record = active_vk_record(
+            commitment,
+            [0x42; 32],
+            backend,
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            "core",
+            vk_bytes,
+        );
+        let mut host = CoreHost::new(fixture_account("alice"));
+        assert!(
+            host.set_verifying_keys(BTreeMap::from([(
+                VerifyingKeyId::new(backend, "malformed-halo2"),
+                record,
+            )]))
+            .is_err(),
+            "state hydration must run the strict Halo2 registration validator"
+        );
+        assert!(host.verifying_keys.is_empty());
+        assert!(host.prepared_verifying_keys.is_empty());
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn set_verifying_keys_rejects_weak_stark_parameters_during_rehydration() {
+        crate::test_alias::ensure();
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = "stark/fri/sha256-goldilocks:weak-rehydrated-key";
+        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_owned(),
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES - 1,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::encode_canonical(&payload).expect("encode weak STARK key");
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let record = active_vk_record(
+            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
+        );
+        let mut host = CoreHost::new(fixture_account("alice"));
+        assert!(
+            host.set_verifying_keys(BTreeMap::from([(
+                VerifyingKeyId::new(backend, "weak-stark"),
+                record,
+            )]))
+            .is_err(),
+            "state hydration must enforce the STARK consensus parameter floor"
+        );
+        assert!(host.verifying_keys.is_empty());
+        assert!(host.prepared_verifying_keys.is_empty());
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_shares_records_and_caches_ipa_metadata() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let backend = "halo2/ipa";
-        let vk_bytes = minimal_zk1_vk_bytes(9);
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let id = VerifyingKeyId::new(backend, "cached-vk");
         let rec = active_vk_record(
             commitment,
             [0x42; 32],
             backend,
-            "halo2/ipa:cached-circuit",
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
             vk_bytes,
         );
@@ -26592,14 +26896,22 @@ seiyaku DurableOwner {
             .expect("commitment index");
         assert!(Arc::ptr_eq(registry_record, &prepared.record));
         assert_eq!(prepared.backend_label.as_ref(), backend);
-        assert_eq!(prepared.ipa_k, Some(9));
+        assert_eq!(
+            prepared
+                .material
+                .as_ref()
+                .and_then(crate::zk::PreparedVerifyingKeyMaterialV1::ipa_k),
+            Some(crate::zk::IVM_EXECUTION_V1_IPA_K)
+        );
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_rejects_missing_schedule_duplicates_and_updates_atomically() {
         crate::test_alias::ensure();
         let backend = "halo2/ipa";
-        let vk_bytes = minimal_zk1_vk_bytes(7);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let mut host = CoreHost::new(fixture_account("alice"));
         let id = VerifyingKeyId::new(backend, "original");
@@ -26607,7 +26919,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             backend,
-            "halo2/ipa:original",
+            circuit_id,
             "core",
             vk_bytes.clone(),
         );
@@ -26619,7 +26931,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             backend,
-            "halo2/ipa:missing-schedule",
+            circuit_id,
             "core",
             vk_bytes.clone(),
         );
@@ -26641,17 +26953,12 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             backend,
-            "halo2/ipa:first",
+            circuit_id,
             "core",
             vk_bytes.clone(),
         );
         let second = active_vk_record(
-            commitment,
-            [0x43; 32],
-            backend,
-            "halo2/ipa:second",
-            "core",
-            vk_bytes,
+            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
         );
         assert!(
             host.set_verifying_keys(BTreeMap::from([
@@ -26778,13 +27085,16 @@ seiyaku DurableOwner {
         let record = active_vk_record(
             commitment, [0x42; 32], backend, &near_miss, "core", vk_bytes,
         );
-        host.set_verifying_keys(BTreeMap::from([(
-            VerifyingKeyId::new(backend, "vk"),
-            record,
-        )]))
-        .expect("portable near-miss circuit id must rehydrate");
-        assert_eq!(host.verifying_keys.len(), 1);
-        assert_eq!(host.prepared_verifying_keys.len(), 1);
+        assert!(
+            host.set_verifying_keys(BTreeMap::from([(
+                VerifyingKeyId::new(backend, "vk"),
+                record,
+            )]))
+            .is_err(),
+            "a portable but unregistered circuit must not bypass the production circuit registry"
+        );
+        assert!(host.verifying_keys.is_empty());
+        assert!(host.prepared_verifying_keys.is_empty());
     }
 
     #[test]
@@ -27285,6 +27595,8 @@ seiyaku DurableOwner {
         for key in [
             "sc",
             "sc/0123456789abcdef/counter",
+            "da_ingest_quota_v1",
+            "da_ingest_quota_v1/authority/deadbeef",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -27327,6 +27639,7 @@ seiyaku DurableOwner {
         }
         for key in [
             "scatter/counter",
+            "da_ingest_quota_v1x",
             "merge_lane_frontier_v1x",
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",
@@ -27360,7 +27673,9 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             178,
             DataSpaceId::UNIVERSAL,
@@ -27432,7 +27747,9 @@ seiyaku DurableOwner {
             .expect("frontier marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             177,
             DataSpaceId::UNIVERSAL,
@@ -27748,7 +28065,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             701,
             DataSpaceId::UNIVERSAL,
@@ -27852,7 +28171,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             702,
             DataSpaceId::UNIVERSAL,
@@ -27980,7 +28301,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -28176,7 +28499,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -28314,7 +28639,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0x51a7e,
             DataSpaceId::UNIVERSAL,
@@ -28765,7 +29092,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             203,
             DataSpaceId::UNIVERSAL,
@@ -28821,7 +29150,9 @@ seiyaku DurableOwner {
             &norito::to_bytes(&expected).expect("encode state value"),
         );
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -28877,7 +29208,9 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             46,
             DataSpaceId::UNIVERSAL,
@@ -28945,7 +29278,9 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             146,
             DataSpaceId::UNIVERSAL,
@@ -29056,7 +29391,9 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -29151,7 +29488,9 @@ seiyaku DurableOwner {
         let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             45,
             DataSpaceId::UNIVERSAL,
@@ -29223,7 +29562,9 @@ seiyaku DurableOwner {
         let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         let contract_a = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -29253,7 +29594,9 @@ seiyaku DurableOwner {
         );
 
         let contract_b = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -29348,7 +29691,9 @@ seiyaku DurableOwner {
             CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -29563,18 +29908,18 @@ seiyaku DurableOwner {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:vote-tally";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let commitment = [0x61; 32];
         let schema_hash = [5u8; 32];
-        let rec = active_vk_record(
+        let mut rec = active_vk_record(
             commitment,
             schema_hash,
             backend,
             circuit_id,
             "transfer",
-            vk_bytes,
+            Vec::new(),
         );
+        rec.key = None;
         let vk_id = VerifyingKeyId::new(backend, "vk");
         world.verifying_keys.insert(vk_id.clone(), rec);
 
@@ -29837,18 +30182,18 @@ seiyaku DurableOwner {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:state-hydrate";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let commitment = [0x62; 32];
         let schema_hash = [7u8; 32];
-        let rec = active_vk_record(
+        let mut rec = active_vk_record(
             commitment,
             schema_hash,
             backend,
             circuit_id,
             "transfer",
-            vk_bytes,
+            Vec::new(),
         );
+        rec.key = None;
         let vk_id = VerifyingKeyId::new(backend, "vk");
         world.verifying_keys.insert(vk_id.clone(), rec);
 
@@ -30123,13 +30468,11 @@ seiyaku DurableOwner {
         norito::to_bytes(&env).expect("serialize mutated envelope")
     }
 
-    fn minimal_zk1_vk_bytes(k: u32) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"ZK1\0");
-        bytes.extend_from_slice(b"IPAK");
-        bytes.extend_from_slice(&(4u32).to_le_bytes());
-        bytes.extend_from_slice(&k.to_le_bytes());
-        bytes
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn canonical_ivm_execution_vk_bytes() -> Vec<u8> {
+        crate::zk::halo2_ipa_ivm_execution_vk_box()
+            .expect("canonical IVM execution verifier key")
+            .bytes
     }
 
     fn schema_hash(public_inputs: &[u8]) -> [u8; 32] {
@@ -30169,6 +30512,7 @@ seiyaku DurableOwner {
             }
             .to_owned(),
         );
+        rec.vk_len = u32::try_from(vk_bytes.len()).expect("test verifying key length fits u32");
         rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
     }
@@ -30192,14 +30536,21 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-halo2-ipa")]
     fn registered_halo2_batch_fixture(
         host: &mut CoreHost,
-        circuit_id: &str,
         namespace: &str,
     ) -> iroha_data_model::zk::OpenVerifyEnvelope {
         let backend = "halo2/ipa";
-        let fixture_seed = crate::zk::test_utils::halo2_fixture_envelope(circuit_id, [0u8; 32]);
-        let vk_bytes = fixture_seed.vk_bytes.expect("fixture vk bytes");
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"host-batch-code"),
+            Hash::new(b"host-batch-overlay"),
+            Hash::new(b"host-batch-events"),
+            Hash::new(b"host-batch-gas-policy"),
+        );
+        let vk_bytes = fixture.vk_bytes.clone().expect("fixture vk bytes");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let fixture = crate::zk::test_utils::halo2_fixture_envelope(circuit_id, commitment);
+        let envelope = ivm::host::decode_canonical_zk_envelope(&fixture.proof_bytes)
+            .expect("decode fixture envelope");
+        assert_eq!(envelope.vk_hash, commitment);
         let rec = active_vk_record(
             commitment,
             fixture.schema_hash,
@@ -30211,10 +30562,10 @@ seiyaku DurableOwner {
         let mut map = BTreeMap::new();
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
-        ivm::host::decode_canonical_zk_envelope(&fixture.proof_bytes)
-            .expect("decode fixture envelope")
+        envelope
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn enforce_zk_envelope_maps_errors_and_ok() {
         crate::test_alias::ensure();
@@ -30223,8 +30574,8 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![1u8, 2, 3, 4];
         let schema_hash = schema_hash(&public_inputs);
@@ -30260,6 +30611,7 @@ seiyaku DurableOwner {
         );
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
         crate::test_alias::ensure();
@@ -30270,8 +30622,8 @@ seiyaku DurableOwner {
         host.halo2_config.max_proof_bytes = usize::MAX;
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![1u8, 2, 3, 4];
         let schema_hash = schema_hash(&public_inputs);
@@ -30376,6 +30728,7 @@ seiyaku DurableOwner {
         );
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
         crate::test_alias::ensure();
@@ -30384,8 +30737,8 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![9u8, 8, 7, 6];
         let schema_hash = schema_hash(&public_inputs);
@@ -30431,6 +30784,7 @@ seiyaku DurableOwner {
         );
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
         crate::test_alias::ensure();
@@ -30439,8 +30793,8 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![1u8, 2, 3, 4];
         let schema_hash = schema_hash(&public_inputs);
@@ -30720,7 +31074,7 @@ seiyaku DurableOwner {
                 PreparedVerifyingKey {
                     record,
                     backend_label: Arc::from(backend),
-                    ipa_k: None,
+                    material: None,
                 },
             );
 
@@ -30743,6 +31097,54 @@ seiyaku DurableOwner {
                 "case {backend} must fail as backend admission"
             );
         }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
+        crate::test_alias::ensure();
+        let backend = "halo2/ipa";
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let public_inputs = vec![1_u8, 2, 3, 4];
+        let mut vk_bytes = b"ZK1\0H2VK".to_vec();
+        vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let record = Arc::new(active_vk_record(
+            commitment,
+            schema_hash(&public_inputs),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
+        ));
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_owned()));
+        // Simulate a corrupt in-memory snapshot that bypassed installation.
+        // Dispatch must still invoke the shared strict material validator.
+        host.verifying_keys.insert(
+            VerifyingKeyId::new(backend, "forged-inline-key"),
+            Arc::clone(&record),
+        );
+        host.prepared_verifying_keys.insert(
+            commitment,
+            PreparedVerifyingKey {
+                record,
+                backend_label: Arc::from(backend),
+                material: Some(crate::zk::PreparedVerifyingKeyMaterialV1::Halo2IpaPasta {
+                    ipa_k: crate::zk::IVM_EXECUTION_V1_IPA_K,
+                }),
+            },
+        );
+
+        let payload = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+        host.syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
+            .expect("malformed key is a reported verification failure");
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
     }
 
     #[cfg(feature = "zk-stark")]
@@ -30768,7 +31170,7 @@ seiyaku DurableOwner {
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode STARK vk");
+        let vk_bytes = norito::encode_canonical(&vk_payload).expect("encode canonical STARK vk");
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
         let schema_descriptor = b"ivm-syscall-schema-v1";
         let proof = crate::zk::prove_stark_fri_open_verify_envelope(
@@ -30824,8 +31226,7 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
         enable_halo2_batch_verifier(&mut host, 8, 18);
 
-        let env_ok =
-            registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add-public", "transfer");
+        let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
         assert!(
             !env_ok.public_inputs.is_empty(),
             "fixture circuit must expose public inputs for schema mismatch coverage"
@@ -30858,8 +31259,7 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
         enable_halo2_batch_verifier(&mut host, 8, 18);
 
-        let env_ok =
-            registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add-public", "transfer");
+        let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
         let mut env_bad = env_ok.clone();
         let last = env_bad
             .proof_bytes
@@ -30883,6 +31283,7 @@ seiyaku DurableOwner {
         assert_eq!(vm.register(12), 1);
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
         crate::test_alias::ensure();
@@ -30891,8 +31292,8 @@ seiyaku DurableOwner {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check";
-        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![3u8, 1, 4, 1, 5, 9];
         let schema_hash = schema_hash(&public_inputs);

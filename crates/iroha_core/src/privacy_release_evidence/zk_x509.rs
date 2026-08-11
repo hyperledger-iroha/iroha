@@ -2,6 +2,8 @@
 
 // This is a private continuation of the parent release-evidence module.
 use super::*;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use crate::privacy_engines::zk_x509::{
     engine::construct_zk_x509_compiled_profile_v1,
     profile::{
@@ -12,9 +14,21 @@ use crate::privacy_engines::zk_x509::{
         zk_x509_native_release_expectation_capture_open_v1,
         zk_x509_native_release_expectation_digests_match_v1,
     },
+    relation::release_fixture::{
+        ZkX509ReleaseFixtureV1, build_zk_x509_network_release_fixture_v1,
+        build_zk_x509_network_release_successor_fixture_v1,
+    },
+};
+use iroha_crypto::PrivateKey;
+use iroha_data_model::{
+    isi::InstructionBox,
+    privacy::{
+        PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+        PrivacyZkX509TrustAnchorRecordV1,
+    },
+    transaction::SignedTransaction,
 };
 
-const ZK_X509_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-zk-x509-v1";
 const ZK_X509_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x95; 32];
 const ZK_X509_RELEASE_ACTION_INDEX_V1: u32 = 0;
 
@@ -156,6 +170,42 @@ pub struct PrivacyReleaseZkX509ResourceCertificateV1 {
     pub maximum: PrivacyReleaseZkX509ResourceObservationV1,
     /// SHA-256 of the domain-separated typed payload above.
     pub certificate_sha256: [u8; 32],
+}
+
+/// One genuine native X.509 action and a separately signed malformed proof.
+///
+/// This non-shipping release-gate value exposes only ordinary production
+/// transactions and their public governance inputs. Certificate, CRL,
+/// ownership-signature, and disclosure-opening witness bytes remain inside
+/// `iroha_core`.
+#[derive(Clone, Debug)]
+pub struct PrivacyReleaseZkX509NetworkActionsV1 {
+    /// Ordinary production transaction carrying a valid native X5S1 proof.
+    pub canonical_transaction: SignedTransaction,
+    /// Independently signed transaction whose proof magic is corrupted.
+    pub malformed_transaction: SignedTransaction,
+    /// Exact trust-anchor origin required by the canonical statement.
+    pub trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    /// Exact certificate-policy origin required by the canonical statement.
+    pub certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
+    /// Exact signed-CRL origin required by the canonical statement.
+    pub crl: PrivacyZkX509CrlRecordV1,
+    /// Exact public statement carried by the canonical and malformed transactions.
+    pub statement: IrohaZkX509StarkP256StatementV1,
+}
+
+/// One independently proved post-restart action and its signed CRL successor.
+///
+/// This remains ordinary non-shipping release-gate material. It carries no
+/// timing, memory, readiness, or operational-authority claim.
+#[derive(Clone, Debug)]
+pub struct PrivacyReleaseZkX509SemanticReplayV1 {
+    /// Ordinary production transaction carrying the fresh native X5S1 proof.
+    pub transaction: SignedTransaction,
+    /// Exact active CRL successor selected by the fresh statement.
+    pub crl_successor: PrivacyZkX509CrlRecordV1,
+    /// Exact public statement carried by `transaction`.
+    pub statement: IrohaZkX509StarkP256StatementV1,
 }
 
 fn public_resource_environment_v1(
@@ -395,6 +445,501 @@ pub const fn privacy_release_process_profile_v1(
     }
 }
 
+fn zk_x509_network_transaction_payload_v1(
+    context: &PrivacyReleaseTransactionContextV1,
+    envelope: PrivacyProofEnvelopeV1,
+) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
+    if context.network_id.as_bytes() != &context.genesis_hash {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
+    let instructions = vec![InstructionBox::from(SubmitPrivacyProofV1::new(envelope))];
+    let mut builder = TransactionBuilder::new(
+        context.network_id,
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_instructions(instructions)
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(time_to_live) = context.time_to_live {
+        builder.set_ttl(time_to_live);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder
+        .into_payload()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+}
+
+fn zk_x509_network_envelope_v1(
+    profile: CompiledPrivacyProfileV1,
+    statement: &IrohaZkX509StarkP256StatementV1,
+    proof: Vec<u8>,
+) -> Result<PrivacyProofEnvelopeV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone());
+    let envelope = PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest: typed_statement
+            .digest()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
+        statement: typed_statement,
+        proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(proof)),
+    };
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    Ok(envelope)
+}
+
+fn sign_zk_x509_network_payload_v1(
+    payload: TransactionPayload,
+    expected_intent: PrivacyTransactionIntentDigestV1,
+    private_key: &PrivateKey,
+) -> Result<SignedTransaction, PrivacyReleaseEvidenceErrorClassV1> {
+    if payload
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        != expected_intent
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let transaction = TransactionBuilder::from_payload(payload)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?
+        .try_sign(private_key)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    transaction
+        .verify_signature()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    Ok(transaction)
+}
+
+/// Authenticate and return the reviewed wall-clock ceiling for one native proof.
+///
+/// The network path runs one genuine positive-shape proof. It does not infer a
+/// second-proof, process-RSS, or address-space measurement from the installed
+/// positive observation; those remain properties of the authenticated native
+/// resource capture rather than measurements made by this in-process builder.
+fn zk_x509_network_proof_ceiling_v1(
+    certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    admission_reserve: Duration,
+) -> Result<Duration, PrivacyReleaseEvidenceErrorClassV1> {
+    if !privacy_release_zk_x509_resource_certificate_matches_source_v1(certificate) {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable);
+    }
+    let ceiling_millis = certificate.process_limits.elapsed_ceiling_millis;
+    let admission_reserve_millis = u64::try_from(admission_reserve.as_millis())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    let Some(proof_ceiling_millis) = ceiling_millis.checked_sub(admission_reserve_millis) else {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
+    };
+    if admission_reserve_millis == 0
+        || proof_ceiling_millis == 0
+        || certificate.positive.elapsed_millis == 0
+        || certificate.positive.elapsed_millis > proof_ceiling_millis
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
+    }
+    Ok(Duration::from_millis(proof_ceiling_millis))
+}
+
+fn zk_x509_network_window_has_reserve_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    trusted_block_timestamp_ms: u64,
+    build_elapsed: Duration,
+    admission_reserve: Duration,
+) -> Result<bool, PrivacyReleaseEvidenceErrorClassV1> {
+    let build_elapsed_millis = u64::try_from(build_elapsed.as_millis())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    let admission_reserve_millis = u64::try_from(admission_reserve.as_millis())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    if admission_reserve_millis == 0 {
+        return Ok(false);
+    }
+    let deadline_exclusive_millis = statement
+        .presentation_not_after_unix_seconds
+        .checked_add(1)
+        .and_then(|seconds| seconds.checked_mul(1_000))
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let estimated_finish_with_reserve = trusted_block_timestamp_ms
+        .checked_add(build_elapsed_millis)
+        .and_then(|millis| millis.checked_add(admission_reserve_millis))
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    let actual_wall_millis = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?
+            .as_millis(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    let actual_finish_with_reserve = actual_wall_millis
+        .checked_add(admission_reserve_millis)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded)?;
+    Ok(estimated_finish_with_reserve <= deadline_exclusive_millis
+        && actual_finish_with_reserve <= deadline_exclusive_millis)
+}
+
+fn prove_zk_x509_network_fixture_v1(
+    profile: CompiledPrivacyProfileV1,
+    fixture: &ZkX509ReleaseFixtureV1,
+    trusted_block_timestamp_ms: u64,
+    genesis_hash: [u8; 32],
+    expected_action_index: u32,
+    proof_seed: [u8; 32],
+) -> Result<Vec<u8>, PrivacyReleaseEvidenceErrorClassV1> {
+    let encoded_witness = fixture
+        .witness
+        .encode_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let limits = PrivacyConsensusLimitsV1::taira_default();
+    let mut proof_rng = StdRng::from_seed(proof_seed);
+    let proof = std::thread::scope(|scope| {
+        let proof_thread = std::thread::Builder::new()
+            .name(format!(
+                "zk-x509-release-network-action-{expected_action_index}"
+            ))
+            .stack_size(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1)
+            .spawn_scoped(scope, || {
+                prove_zk_x509_credential_proof_v1_with_rng(
+                    &fixture.statement,
+                    &fixture.authoritative_state,
+                    trusted_block_timestamp_ms,
+                    &limits,
+                    genesis_hash,
+                    &encoded_witness,
+                    &mut proof_rng,
+                )
+            })
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+        proof_thread
+            .join()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)
+    })?;
+    verify_zk_x509_credential_proof_v1(
+        &fixture.statement,
+        &fixture.authoritative_state,
+        genesis_hash,
+        &proof,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
+    verify_zk_x509_release_production_envelope_v1(
+        &profile,
+        &fixture.statement,
+        Some(&fixture.authoritative_state),
+        false,
+        &proof,
+        &fixture.statement.context.network_id,
+        genesis_hash,
+        expected_action_index,
+        trusted_block_timestamp_ms,
+    )?;
+    Ok(proof)
+}
+
+fn zk_x509_network_statement_context_v1(
+    profile: CompiledPrivacyProfileV1,
+    network_id: NetworkId,
+    action_index: u32,
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+) -> PrivacyStatementContextV1 {
+    PrivacyStatementContextV1 {
+        network_id,
+        action_index,
+        transaction_intent_digest,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+    }
+}
+
+fn zk_x509_network_draft_envelope_v1(
+    profile: CompiledPrivacyProfileV1,
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> PrivacyProofEnvelopeV1 {
+    PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest: PrivacyStatementDigestV1::new([0; 32]),
+        statement: PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone()),
+        proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(Vec::new())),
+    }
+}
+
+/// Build one genuine canonical X.509 action and a corruption control.
+///
+/// The production compiled-profile accessor is deliberately the first gate.
+/// Until every authenticated expectation and resource pin is installed this
+/// function returns [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`]
+/// and cannot expose candidate material as a network action.
+///
+/// `resource_certificate` must be the canonical installed certificate and must
+/// match every authenticated source pin. The authenticated process ceiling is
+/// reduced by `admission_reserve`, which must be nonzero and must fit after the
+/// authenticated positive observation. The resulting proof ceiling and the
+/// live statement deadline are enforced against this call's actual elapsed
+/// time. This builder does not invent or record RSS, address-space, or
+/// second-proof measurements.
+///
+/// The caller must pass an actual committed block timestamp and submit the
+/// returned action within the closed five-minute presentation window.
+pub fn build_privacy_release_zk_x509_network_actions_v1(
+    transaction_context: PrivacyReleaseTransactionContextV1,
+    trusted_block_timestamp_ms: u64,
+    proof_seed: [u8; 32],
+    resource_certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    admission_reserve: Duration,
+    private_key: &PrivateKey,
+) -> Result<PrivacyReleaseZkX509NetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let build_started = Instant::now();
+    let PreparedZkX509NetworkActionV1 {
+        profile,
+        fixture,
+        proof,
+        intent,
+        transaction: canonical_transaction,
+    } = prepare_zk_x509_network_action_v1(
+        &transaction_context,
+        trusted_block_timestamp_ms,
+        proof_seed,
+        resource_certificate,
+        admission_reserve,
+        private_key,
+        &ZkX509NetworkCrlLineageV1::Origin,
+        &build_started,
+    )?;
+
+    let mut malformed_proof = proof;
+    let magic = malformed_proof
+        .first_mut()
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    *magic ^= 0x80;
+    if verify_zk_x509_credential_proof_v1(
+        &fixture.statement,
+        &fixture.authoritative_state,
+        transaction_context.genesis_hash,
+        &malformed_proof,
+    )
+    .is_ok()
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
+    }
+    let malformed_payload = zk_x509_network_transaction_payload_v1(
+        &transaction_context,
+        zk_x509_network_envelope_v1(profile, &fixture.statement, malformed_proof)?,
+    )?;
+    let malformed_transaction =
+        sign_zk_x509_network_payload_v1(malformed_payload, intent, private_key)?;
+    if malformed_transaction.hash() == canonical_transaction.hash() {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    if !zk_x509_network_window_has_reserve_v1(
+        &fixture.statement,
+        trusted_block_timestamp_ms,
+        build_started.elapsed(),
+        admission_reserve,
+    )? {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
+    }
+
+    Ok(PrivacyReleaseZkX509NetworkActionsV1 {
+        canonical_transaction,
+        malformed_transaction,
+        trust_anchor: fixture.authoritative_state.trust_anchor(),
+        certificate_policy: fixture.authoritative_state.certificate_policy().clone(),
+        crl: fixture.authoritative_state.crl_record(),
+        statement: fixture.statement,
+    })
+}
+
+/// Build one fresh semantic replay against a newly signed active CRL
+/// successor.
+///
+/// This invokes exactly one independent native prover run with its own
+/// authenticated proof ceiling and `admission_reserve`. The supplied current
+/// CRL is used only to derive and validate the exact epoch, CRLNumber, and
+/// predecessor-digest transition. No pair-time or process-memory observation
+/// is produced.
+#[allow(clippy::too_many_arguments)]
+pub fn build_privacy_release_zk_x509_semantic_replay_v1(
+    transaction_context: PrivacyReleaseTransactionContextV1,
+    trusted_block_timestamp_ms: u64,
+    current_crl: PrivacyZkX509CrlRecordV1,
+    proof_seed: [u8; 32],
+    resource_certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    admission_reserve: Duration,
+    private_key: &PrivateKey,
+) -> Result<PrivacyReleaseZkX509SemanticReplayV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let build_started = Instant::now();
+    let prepared = prepare_zk_x509_network_action_v1(
+        &transaction_context,
+        trusted_block_timestamp_ms,
+        proof_seed,
+        resource_certificate,
+        admission_reserve,
+        private_key,
+        &ZkX509NetworkCrlLineageV1::Successor(current_crl),
+        &build_started,
+    )?;
+    Ok(PrivacyReleaseZkX509SemanticReplayV1 {
+        transaction: prepared.transaction,
+        crl_successor: prepared.fixture.authoritative_state.crl_record(),
+        statement: prepared.fixture.statement,
+    })
+}
+
+#[derive(Clone)]
+enum ZkX509NetworkCrlLineageV1 {
+    Origin,
+    Successor(PrivacyZkX509CrlRecordV1),
+}
+
+struct PreparedZkX509NetworkActionV1 {
+    profile: CompiledPrivacyProfileV1,
+    fixture: ZkX509ReleaseFixtureV1,
+    proof: Vec<u8>,
+    intent: PrivacyTransactionIntentDigestV1,
+    transaction: SignedTransaction,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_zk_x509_network_action_v1(
+    transaction_context: &PrivacyReleaseTransactionContextV1,
+    trusted_block_timestamp_ms: u64,
+    proof_seed: [u8; 32],
+    resource_certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    admission_reserve: Duration,
+    private_key: &PrivateKey,
+    crl_lineage: &ZkX509NetworkCrlLineageV1,
+    build_started: &Instant,
+) -> Result<PreparedZkX509NetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+    let profile = compiled_privacy_profile_v1(protocol_id)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
+    if transaction_context.network_id.as_bytes() != &transaction_context.genesis_hash
+        || transaction_context.nonce.is_none()
+        || proof_seed.iter().all(|byte| *byte == 0)
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
+
+    let draft_context = zk_x509_network_statement_context_v1(
+        profile,
+        transaction_context.network_id,
+        ZK_X509_RELEASE_ACTION_INDEX_V1,
+        PrivacyTransactionIntentDigestV1::new([0; 32]),
+    );
+    let draft_fixture = build_zk_x509_network_fixture_for_lineage_v1(
+        draft_context,
+        trusted_block_timestamp_ms,
+        transaction_context.authority.clone(),
+        crl_lineage,
+    )?;
+    if draft_fixture.statement.wallet_account != transaction_context.authority {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+
+    let intent = zk_x509_network_transaction_payload_v1(
+        transaction_context,
+        zk_x509_network_draft_envelope_v1(profile, &draft_fixture.statement),
+    )?
+    .privacy_transaction_intent_digest_v1()
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    if intent.is_zero() {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+
+    let mut final_context = draft_context;
+    final_context.transaction_intent_digest = intent;
+    let fixture = build_zk_x509_network_fixture_for_lineage_v1(
+        final_context,
+        trusted_block_timestamp_ms,
+        transaction_context.authority.clone(),
+        crl_lineage,
+    )?;
+    if fixture.statement.wallet_account != transaction_context.authority
+        || fixture.authoritative_state.crl_record()
+            != draft_fixture.authoritative_state.crl_record()
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let proof_ceiling = zk_x509_network_proof_ceiling_v1(resource_certificate, admission_reserve)?;
+
+    let proof_started = Instant::now();
+    let proof = prove_zk_x509_network_fixture_v1(
+        profile,
+        &fixture,
+        trusted_block_timestamp_ms,
+        transaction_context.genesis_hash,
+        ZK_X509_RELEASE_ACTION_INDEX_V1,
+        proof_seed,
+    )?;
+    if proof_started.elapsed() > proof_ceiling {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
+    }
+
+    let canonical_payload = zk_x509_network_transaction_payload_v1(
+        transaction_context,
+        zk_x509_network_envelope_v1(profile, &fixture.statement, proof.clone())?,
+    )?;
+    let transaction = sign_zk_x509_network_payload_v1(canonical_payload, intent, private_key)?;
+    if !zk_x509_network_window_has_reserve_v1(
+        &fixture.statement,
+        trusted_block_timestamp_ms,
+        build_started.elapsed(),
+        admission_reserve,
+    )? {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
+    }
+
+    Ok(PreparedZkX509NetworkActionV1 {
+        profile,
+        fixture,
+        proof,
+        intent,
+        transaction,
+    })
+}
+
+fn build_zk_x509_network_fixture_for_lineage_v1(
+    context: PrivacyStatementContextV1,
+    trusted_block_timestamp_ms: u64,
+    wallet_account: AccountId,
+    crl_lineage: &ZkX509NetworkCrlLineageV1,
+) -> Result<ZkX509ReleaseFixtureV1, PrivacyReleaseEvidenceErrorClassV1> {
+    match crl_lineage {
+        ZkX509NetworkCrlLineageV1::Origin => build_zk_x509_network_release_fixture_v1(
+            context,
+            trusted_block_timestamp_ms,
+            wallet_account,
+        ),
+        ZkX509NetworkCrlLineageV1::Successor(current_crl) => {
+            build_zk_x509_network_release_successor_fixture_v1(
+                context,
+                trusted_block_timestamp_ms,
+                wallet_account,
+                (*current_crl).clone(),
+            )
+        }
+    }
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+}
+
 struct PreparedZkX509StageV1 {
     profile: CompiledPrivacyProfileV1,
     fixture: crate::privacy_engines::zk_x509::relation::release_fixture::ZkX509ReleaseFixtureV1,
@@ -410,7 +955,7 @@ fn prepare_zk_x509_stage_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
     let context =
         PrivacyStatementContextV1 {
-            chain_id: ChainId::from(ZK_X509_RELEASE_CHAIN_ID_V1),
+            network_id: release_network_id_from_genesis_hash(ZK_X509_RELEASE_GENESIS_HASH_V1),
             action_index: ZK_X509_RELEASE_ACTION_INDEX_V1,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
                 stage_purpose_seed_v1(protocol_id, case_kind, b"transaction-intent")?,
@@ -462,7 +1007,7 @@ fn prepare_zk_x509_stage_v1(
         Some(&fixture.authoritative_state),
         false,
         &proof,
-        &ChainId::from(ZK_X509_RELEASE_CHAIN_ID_V1),
+        &release_network_id_from_genesis_hash(ZK_X509_RELEASE_GENESIS_HASH_V1),
         ZK_X509_RELEASE_GENESIS_HASH_V1,
         ZK_X509_RELEASE_ACTION_INDEX_V1,
         trusted_block_timestamp_ms,
@@ -507,7 +1052,8 @@ pub(super) fn run_zk_x509_stage_v1(
     let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V0(fixture.statement.clone());
     let original_material = norito::encode_canonical(&typed_statement)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let authoritative_chain_id = ChainId::from(ZK_X509_RELEASE_CHAIN_ID_V1);
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(ZK_X509_RELEASE_GENESIS_HASH_V1);
     let (public_statement_material, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => (
@@ -535,9 +1081,8 @@ pub(super) fn run_zk_x509_stage_v1(
             wrong_disclosure.disclosed_attributes[0].attribute_digest.0[0] ^= 0x80;
             let mut wrong_challenge = fixture.statement.clone();
             wrong_challenge.wallet_challenge.0[0] ^= 0x80;
-            let mut wrong_chain = fixture.statement.clone();
-            wrong_chain.context.chain_id =
-                ChainId::from("taira-privacy-release-evidence-zk-x509-wrong-chain");
+            let mut wrong_network = fixture.statement.clone();
+            wrong_network.context.network_id = release_network_id_from_genesis_hash([0x96; 32]);
             let mut wrong_action = fixture.statement.clone();
             wrong_action.context.action_index = wrong_action
                 .context
@@ -555,7 +1100,7 @@ pub(super) fn run_zk_x509_stage_v1(
                 &wrong_root,
                 &wrong_disclosure,
                 &wrong_challenge,
-                &wrong_chain,
+                &wrong_network,
                 &wrong_action,
             ];
             for mutation in mutations {
@@ -572,7 +1117,7 @@ pub(super) fn run_zk_x509_stage_v1(
                         Some(&fixture.authoritative_state),
                         false,
                         &proof,
-                        &authoritative_chain_id,
+                        &authoritative_network_id,
                         ZK_X509_RELEASE_GENESIS_HASH_V1,
                         ZK_X509_RELEASE_ACTION_INDEX_V1,
                         trusted_block_timestamp_ms,
@@ -609,7 +1154,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -651,7 +1196,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -668,8 +1213,7 @@ pub(super) fn run_zk_x509_stage_v1(
 
             let mut wrong_genesis = ZK_X509_RELEASE_GENESIS_HASH_V1;
             wrong_genesis[0] ^= 0x80;
-            let wrong_authoritative_chain_id =
-                ChainId::from("taira-privacy-release-evidence-zk-x509-wrong-authoritative-chain");
+            let wrong_authoritative_network_id = release_network_id_from_genesis_hash([0x96; 32]);
             let wrong_authoritative_action_index =
                 ZK_X509_RELEASE_ACTION_INDEX_V1
                     .checked_add(1)
@@ -687,7 +1231,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     wrong_genesis,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -699,7 +1243,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &wrong_authoritative_chain_id,
+                    &wrong_authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -711,7 +1255,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     wrong_authoritative_action_index,
                     trusted_block_timestamp_ms,
@@ -723,7 +1267,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     None,
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -735,7 +1279,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     true,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -747,7 +1291,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     0,
@@ -795,7 +1339,7 @@ pub(super) fn run_zk_x509_stage_v1(
                         Some(&fixture.authoritative_state),
                         false,
                         corrupt,
-                        &authoritative_chain_id,
+                        &authoritative_network_id,
                         ZK_X509_RELEASE_GENESIS_HASH_V1,
                         ZK_X509_RELEASE_ACTION_INDEX_V1,
                         trusted_block_timestamp_ms,
@@ -823,7 +1367,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     Some(&fixture.authoritative_state),
                     false,
                     truncated,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
@@ -907,7 +1451,7 @@ fn verify_zk_x509_release_production_envelope_v1(
     authoritative_state: Option<&PrivacyZkX509AuthoritativeStateV1>,
     certificate_nullifier_consumed: bool,
     proof: &[u8],
-    authoritative_chain_id: &ChainId,
+    authoritative_network_id: &NetworkId,
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
@@ -918,7 +1462,7 @@ fn verify_zk_x509_release_production_envelope_v1(
         authoritative_state,
         certificate_nullifier_consumed,
         proof,
-        authoritative_chain_id,
+        authoritative_network_id,
         genesis_hash,
         authoritative_action_index,
         block_timestamp_ms,
@@ -937,7 +1481,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
     authoritative_state: Option<&PrivacyZkX509AuthoritativeStateV1>,
     certificate_nullifier_consumed: bool,
     proof: &[u8],
-    authoritative_chain_id: &ChainId,
+    authoritative_network_id: &NetworkId,
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
@@ -980,7 +1524,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         PrivacyVerificationContextV1 {
             activation: &activation,
             consensus_limits: &limits,
-            chain_id: authoritative_chain_id,
+            network_id: authoritative_network_id,
             genesis_hash,
             current_height: 2,
             expected_action_index: authoritative_action_index,

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.alias
 import java.math.BigInteger
 import java.util.Optional
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -199,6 +200,21 @@ object AliasNoritoCodec {
     private val CHAIN_ID_ADAPTER = object : TypeAdapter<String> {
         override fun encode(encoder: NoritoEncoder, value: String) = encodeField(encoder, STRING, value)
         override fun decode(decoder: NoritoDecoder): String = decodeField(decoder, STRING)
+    }
+
+    private val NETWORK_ID_ADAPTER = object : TypeAdapter<NetworkId> {
+        override fun encode(encoder: NoritoEncoder, value: NetworkId) {
+            encoder.writeBytes(value.bytes())
+        }
+
+        override fun decode(decoder: NoritoDecoder): NetworkId {
+            require(decoder.remaining() == NetworkId.BYTE_LENGTH) {
+                "NetworkId must contain exactly ${NetworkId.BYTE_LENGTH} bytes"
+            }
+            return NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH))
+        }
+
+        override fun fixedSize(): Int = NetworkId.BYTE_LENGTH
     }
 
     private val HASH_ADAPTER = object : TypeAdapter<String> {
@@ -644,7 +660,7 @@ object AliasNoritoCodec {
         override fun encode(encoder: NoritoEncoder, value: AliasTransactionPlanBodyV1) {
             encodeField(encoder, U8, value.version.toLong())
             encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
-            encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId)
             encodeField(encoder, ANCHOR_ADAPTER, value.anchor)
             encodeField(encoder, RESOURCE_LIST, value.resources)
             encodeField(encoder, INSTRUCTION_LIST, value.instructions)
@@ -657,7 +673,7 @@ object AliasNoritoCodec {
         override fun decode(decoder: NoritoDecoder): AliasTransactionPlanBodyV1 = AliasTransactionPlanBodyV1(
             Math.toIntExact(decodeField(decoder, U8)),
             decodeField(decoder, ACCOUNT_ID_ADAPTER),
-            decodeField(decoder, CHAIN_ID_ADAPTER),
+            decodeField(decoder, NETWORK_ID_ADAPTER),
             decodeField(decoder, ANCHOR_ADAPTER),
             decodeField(decoder, RESOURCE_LIST),
             decodeField(decoder, INSTRUCTION_LIST),
@@ -694,7 +710,7 @@ object AliasNoritoCodec {
             encodeField(encoder, U8, value.version.toLong())
             encodeField(encoder, ONBOARDING_REQUEST_ADAPTER, value.request)
             encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
-            encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId)
             encodeField(encoder, ANCHOR_ADAPTER, value.anchor)
             encodeField(encoder, PLAN_RESOURCE_ADAPTER, value.resource)
             encodeField(encoder, ACQUISITION_ADAPTER, value.acquisition)
@@ -713,7 +729,7 @@ object AliasNoritoCodec {
                 Math.toIntExact(decodeField(decoder, U8)),
                 decodeField(decoder, ONBOARDING_REQUEST_ADAPTER),
                 decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                decodeField(decoder, CHAIN_ID_ADAPTER),
+                decodeField(decoder, NETWORK_ID_ADAPTER),
                 decodeField(decoder, ANCHOR_ADAPTER),
                 decodeField(decoder, PLAN_RESOURCE_ADAPTER),
                 decodeField(decoder, ACQUISITION_ADAPTER),
@@ -728,7 +744,7 @@ object AliasNoritoCodec {
         override fun encode(encoder: NoritoEncoder, value: AliasLifecycleTransactionPlanBodyV1) {
             encodeField(encoder, U8, value.version.toLong())
             encodeField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
-            encodeField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeField(encoder, NETWORK_ID_ADAPTER, value.networkId)
             encodeField(encoder, ANCHOR_ADAPTER, value.anchor)
             encodeField(encoder, LIFECYCLE_OPERATION_ADAPTER, value.operation)
             encodeField(encoder, U32, value.disposition.ordinal.toLong())
@@ -744,7 +760,7 @@ object AliasNoritoCodec {
             AliasLifecycleTransactionPlanBodyV1(
                 Math.toIntExact(decodeField(decoder, U8)),
                 decodeField(decoder, ACCOUNT_ID_ADAPTER),
-                decodeField(decoder, CHAIN_ID_ADAPTER),
+                decodeField(decoder, NETWORK_ID_ADAPTER),
                 decodeField(decoder, ANCHOR_ADAPTER),
                 decodeField(decoder, LIFECYCLE_OPERATION_ADAPTER),
                 enumAt(

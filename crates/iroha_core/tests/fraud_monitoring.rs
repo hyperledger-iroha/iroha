@@ -39,7 +39,7 @@ fn fraud_monitoring_fixture_uses_checked_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
-fn build_state() -> (State, ChainId, AccountId, KeyPair) {
+fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
@@ -54,12 +54,13 @@ fn build_state() -> (State, ChainId, AccountId, KeyPair) {
 
     let chain_id = ChainId::from("fraud-monitor-chain");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 
-    (state, chain_id, account_id, key_pair)
+    (state, network_id, account_id, key_pair)
 }
 
 fn build_header() -> BlockHeader {
@@ -67,13 +68,13 @@ fn build_header() -> BlockHeader {
 }
 
 fn make_transaction(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     key_pair: &KeyPair,
     metadata: Metadata,
 ) -> AcceptedTransaction<'static> {
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

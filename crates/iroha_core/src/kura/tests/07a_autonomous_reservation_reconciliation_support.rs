@@ -25,12 +25,11 @@ fn two_reservation_autonomous_lane_payload_for_kura(
     dataspace_id: DataSpaceId,
     lane_block_height: u64,
     signer: &KeyPair,
-) -> (Hash, u64, LaneExecutablePayloadV1) {
-    let (chain_id_hash, epoch, source) =
+) -> (NetworkId, u64, LaneExecutablePayloadV1) {
+    let (network_id, epoch, source) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
-    let chain: ChainId = "kura-autonomous-view-checkpoint".parse().expect("chain id");
     let second = TransactionBuilder::new(
-        chain,
+        test_network_id(b"kura-autonomous-view-checkpoint"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -92,7 +91,7 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         .collect::<Vec<_>>();
     let validator = PeerId::new(signer.public_key().clone());
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         entrypoints,
@@ -103,7 +102,7 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         signer.private_key(),
     )
     .expect("two-reservation autonomous payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }
 
 use crate::sumeragi::v2_core::{
@@ -115,7 +114,7 @@ impl Kura {
     fn autonomous_lane_retirement_matching_reservation(
         &self,
         reservation: &LaneQueueReservationKeyV2,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
         let entry = self.lane_storage_entry(reservation.lane_id)?;
@@ -125,7 +124,7 @@ impl Kura {
             reservation.lane_id,
             reservation.lane_block_height,
             reservation.proposal_height,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             None,
         )?;
@@ -137,13 +136,13 @@ impl Kura {
     fn autonomous_lane_payload_matches_reservation(
         &self,
         reservation: &LaneQueueReservationKeyV2,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> bool {
         self.current_autonomous_lane_payload(
             reservation.lane_id,
             reservation.lane_block_height,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
         )
         .is_some_and(|(payload, _)| payload.reservation_keys.contains(reservation))

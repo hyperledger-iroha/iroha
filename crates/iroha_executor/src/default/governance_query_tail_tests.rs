@@ -264,8 +264,8 @@
     }
 
     #[test]
-    fn genesis_can_apply_typed_sccp_governance_without_seeded_permission() {
+    fn genesis_cannot_bypass_typed_sccp_referendum_governance() {
         let mut executor = MockExecutor::new(true);
         bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
-        assert!(executor.verdict().is_ok());
+        assert!(executor.verdict().is_err());
     }

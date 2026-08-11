@@ -4,6 +4,7 @@ import java.math.BigDecimal
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Strict parser for the typed response returned by `POST /v1/aliases/setup/plan`. */
 object AliasTransactionPlanJsonParser {
@@ -25,7 +26,7 @@ object AliasTransactionPlanJsonParser {
         exactKeys(
             root,
             setOf(
-                "version", "authority", "chain_id", "anchor", "resources", "instructions",
+                "version", "authority", "network_id", "anchor", "resources", "instructions",
                 "totals_by_asset", "warnings", "blockers", "valid_until_ms",
             ),
             "alias transaction plan.body",
@@ -33,7 +34,7 @@ object AliasTransactionPlanJsonParser {
         return AliasTransactionPlanBodyV1(
             intField(root, "version", "body.version"),
             stringField(root, "authority", "body.authority"),
-            stringField(root, "chain_id", "body.chain_id"),
+            NetworkId.parse(stringField(root, "network_id", "body.network_id")),
             parseAnchor(objectField(root, "anchor", "body.anchor")),
             arrayField(root, "resources", "body.resources").mapIndexed { index, value ->
                 parseResource(objectValue(value, "body.resources[$index]"), "body.resources[$index]")

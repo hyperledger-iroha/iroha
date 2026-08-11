@@ -15,9 +15,9 @@ use iroha::{
     data_model::{
         isi::{
             InstructionBox,
-            bridge::{ApplySccpRouteGovernance, RecordSccpMessage, SccpRouteGovernanceActionV1},
+            bridge::{RecordSccpMessage, SccpRouteGovernanceActionV1, SccpRouteGovernanceAnchorV1},
             decode_instruction_from_pair,
-            governance::RegisterCitizen,
+            governance::{ProposeSccpRouteGovernance, RegisterCitizen},
             verifying_keys,
         },
         metadata::Metadata,
@@ -106,8 +106,8 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         fee_payment_json: PathBuf,
     },
-    /// Apply one exact on-chain SCCP route-governance action from canonical JSON.
-    ApplySccpRouteGovernance {
+    /// Propose one exact NetworkId-bound SCCP route-governance action from canonical JSON.
+    ProposeSccpRouteGovernance {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]
@@ -343,7 +343,7 @@ fn print_sccp_route_governance_output(
     print_json_value(&norito::json::Value::Object(output))
 }
 
-fn apply_sccp_route_governance(
+fn propose_sccp_route_governance(
     config_path: &Path,
     action_path: &Path,
     fee_payment: &FeePaymentIntent,
@@ -353,7 +353,7 @@ fn apply_sccp_route_governance(
     let action = read_sccp_route_governance_action(action_path)?;
 
     let mut metadata = Metadata::default();
-    insert_string_metadata(&mut metadata, "action", "apply_sccp_route_governance")?;
+    insert_string_metadata(&mut metadata, "action", "propose_sccp_route_governance")?;
     insert_string_metadata(
         &mut metadata,
         "sccp_governance_action",
@@ -362,9 +362,14 @@ fn apply_sccp_route_governance(
 
     let tx = quote_and_sign_governance_transaction(
         &client,
-        vec![InstructionBox::from(ApplySccpRouteGovernance::new(
-            action.clone(),
-        ))],
+        vec![InstructionBox::from(ProposeSccpRouteGovernance {
+            anchor: SccpRouteGovernanceAnchorV1 {
+                network_id: client.network_id,
+                action: action.clone(),
+            },
+            window: None,
+            mode: None,
+        })],
         metadata,
         fee_payment,
         "failed to sign SCCP route-governance transaction",
@@ -648,13 +653,13 @@ fn main() -> Result<()> {
             output.insert("name".to_owned(), id.name.into());
             print_json_value(&norito::json::Value::Object(output))?;
         }
-        Command::ApplySccpRouteGovernance {
+        Command::ProposeSccpRouteGovernance {
             config,
             action,
             fee_payment_json,
         } => {
             let fee_payment = read_fee_payment(&fee_payment_json)?;
-            apply_sccp_route_governance(&config, &action, &fee_payment)?;
+            propose_sccp_route_governance(&config, &action, &fee_payment)?;
         }
     }
     Ok(())
@@ -709,6 +714,10 @@ mod tests {
         let account = AccountId::new(key_pair.public_key().clone());
         Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id:
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                    .parse()
+                    .expect("network id"),
             account,
             account_chain_discriminant: chain_discriminant,
             key_pair,

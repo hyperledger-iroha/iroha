@@ -67,14 +67,14 @@ struct Args {
 }
 
 fn sign_transaction(
-    chain: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     private_key: &PrivateKey,
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<SignedTransaction> {
     TransactionBuilder::new(
-        chain.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -198,7 +198,7 @@ fn deployment_transaction_sequence(
 }
 
 fn build_native_upload_plan(
-    chain: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     private_key: &PrivateKey,
     metadata: &Metadata,
@@ -241,7 +241,7 @@ fn build_native_upload_plan(
             }));
         }
         let transaction = sign_transaction(
-            chain,
+            network_id,
             authority,
             private_key,
             metadata.clone(),
@@ -334,7 +334,7 @@ fn read_fee_payment_file(path: &Path) -> Result<FeePaymentIntent> {
 
 #[allow(clippy::too_many_arguments)]
 fn build_commit_transaction(
-    chain: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     private_key: &PrivateKey,
     metadata: Metadata,
@@ -346,7 +346,7 @@ fn build_commit_transaction(
     expected_previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
 ) -> Result<SignedTransaction> {
     sign_transaction(
-        chain,
+        network_id,
         authority,
         private_key,
         metadata,
@@ -408,7 +408,7 @@ fn main() -> Result<()> {
     insert_contract_deployment_address_metadata(&mut tx_metadata, &contract_address);
 
     let upload_plan = build_native_upload_plan(
-        &client.chain,
+        &client.network_id,
         &authority,
         &private_key,
         &tx_metadata,
@@ -419,7 +419,7 @@ fn main() -> Result<()> {
         quote_native_upload_plan(&client, upload_plan, &fee_payment, &private_key)?;
     let upload_report = native_upload_report(&upload_plan);
     let register_manifest_tx = sign_transaction(
-        &client.chain,
+        &client.network_id,
         &authority,
         &private_key,
         tx_metadata.clone(),
@@ -429,7 +429,7 @@ fn main() -> Result<()> {
         quote_and_resign_transaction(&client, &register_manifest_tx, &fee_payment, &private_key)?;
     fee_quotes.push(register_manifest_quote);
     let commit_tx = build_commit_transaction(
-        &client.chain,
+        &client.network_id,
         &authority,
         &private_key,
         tx_metadata,
@@ -546,6 +546,14 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<iroha::data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(label),
+            ),
+        )
+    }
 
     fn checked_split_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
@@ -686,7 +694,7 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
 
         let tx = sign_transaction(
-            &ChainId::from("split-contract-deploy-sign-test"),
+            &test_network_id(b"split-contract-deploy-sign-test"),
             &authority,
             key_pair.private_key(),
             Metadata::default(),
@@ -703,8 +711,9 @@ mod tests {
     fn commit_transaction_uses_native_nonce_cas_without_generic_metadata_write() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
+        let network_id = test_network_id(b"split-contract-deploy-native-commit-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -713,7 +722,7 @@ mod tests {
             "validation_fee_pool::universal".parse()?;
         let code_hash = Hash::new(b"reviewed-contract-artifact");
         let transaction = build_commit_transaction(
-            &ChainId::from("split-contract-deploy-native-commit-test"),
+            &network_id,
             &authority,
             key_pair.private_key(),
             Metadata::default(),
@@ -753,7 +762,7 @@ mod tests {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let result = build_native_upload_plan(
-            &ChainId::from("split-contract-deploy-empty-upload-test"),
+            &test_network_id(b"split-contract-deploy-empty-upload-test"),
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
@@ -774,7 +783,7 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let code = [0x01, 0x02, 0x03];
         let result = build_native_upload_plan(
-            &ChainId::from("split-contract-deploy-wrong-hash-test"),
+            &test_network_id(b"split-contract-deploy-wrong-hash-test"),
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
@@ -795,7 +804,7 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let code = vec![0x5a; SMART_CONTRACT_CODE_CHUNK_BYTES];
         let plan = build_native_upload_plan(
-            &ChainId::from("split-contract-deploy-native-upload-test"),
+            &test_network_id(b"split-contract-deploy-native-upload-test"),
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
@@ -857,8 +866,9 @@ mod tests {
             .map(|index| u8::try_from(index % 251).expect("remainder fits u8"))
             .collect::<Vec<_>>();
         let mut metadata = Metadata::default();
+        let network_id = test_network_id(b"split-contract-deploy-large-native-upload-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &network_id,
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -866,7 +876,7 @@ mod tests {
         insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
         let code_hash = ivm::contract_code_hash(&code);
         let plan = build_native_upload_plan(
-            &ChainId::from("split-contract-deploy-large-native-upload-test"),
+            &network_id,
             &authority,
             key_pair.private_key(),
             &metadata,
@@ -1002,11 +1012,11 @@ mod tests {
     fn emit_sequence_writes_exact_ordered_native_filenames() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let chain = ChainId::from("split-contract-deploy-emit-sequence-test");
+        let network_id = test_network_id(b"split-contract-deploy-emit-sequence-test");
         let metadata = Metadata::default();
         let code = vec![0x83; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let upload_plan = build_native_upload_plan(
-            &chain,
+            &network_id,
             &authority,
             key_pair.private_key(),
             &metadata,
@@ -1015,7 +1025,7 @@ mod tests {
         )?;
         let trailing_transaction = || {
             sign_transaction(
-                &chain,
+                &network_id,
                 &authority,
                 key_pair.private_key(),
                 metadata.clone(),

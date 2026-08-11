@@ -269,7 +269,7 @@ public enum KagemushaSubmissionFailureClassifier {
         "offline_asset_scale_invalid",
         "offline_asset_scale_mismatch",
         "offline_authorization_invalid",
-        "offline_wrong_chain",
+        "offline_wrong_network",
         "operation_id_invalid",
     ]
     private static let topUpBadRequestRejectCodes: Set<String> = [

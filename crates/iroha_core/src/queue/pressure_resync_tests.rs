@@ -738,8 +738,6 @@ async fn push_requeued_with_routing_plan_rejects_committed_transaction() {
 
 #[tokio::test]
 async fn push_expired_tx_already_in_blockchain() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
 
     let kura = Kura::blank_kura_for_testing();
@@ -754,7 +752,7 @@ async fn push_expired_tx_already_in_blockchain() {
 
     let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
     let mut tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        state.network_id,
         alice_id,
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -766,7 +764,7 @@ async fn push_expired_tx_already_in_blockchain() {
         let crypto_cfg = state.crypto();
         AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain_id,
+            state.network_id_ref(),
             max_clock_drift,
             tx_limits,
             &crypto_cfg,

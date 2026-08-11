@@ -584,7 +584,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
                 exact.payload,
                 request: request(),
-                expectedChainId: "asset-transfer-test"
+                expectedNetworkId: TestNetworkIds.canonical
             )
         )
 
@@ -610,22 +610,22 @@ final class ToriiAssetTransferTests: XCTestCase {
                 try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
                     candidate.payload,
                     request: request(),
-                    expectedChainId: "asset-transfer-test"
+                    expectedNetworkId: TestNetworkIds.canonical
                 ),
                 "\(label) substitution must fail"
             )
         }
-        let wrongChainBytes = canonicalAssetPayload(chainId: "other-chain")
-        let wrongChain = try ToriiCanonicalTransactionDraft.decode(
-            transactionPayloadB64: wrongChainBytes.base64EncodedString(),
-            signingMessageB64: IrohaHash.hash(wrongChainBytes).base64EncodedString(),
-            context: "wrong-chain asset transfer test"
+        let wrongNetworkBytes = canonicalAssetPayload(networkId: TestNetworkIds.other)
+        let wrongNetwork = try ToriiCanonicalTransactionDraft.decode(
+            transactionPayloadB64: wrongNetworkBytes.base64EncodedString(),
+            signingMessageB64: IrohaHash.hash(wrongNetworkBytes).base64EncodedString(),
+            context: "wrong-network asset transfer test"
         )
         XCTAssertThrowsError(
             try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
-                wrongChain.payload,
+                wrongNetwork.payload,
                 request: request(),
-                expectedChainId: "asset-transfer-test"
+                expectedNetworkId: TestNetworkIds.canonical
             )
         )
 
@@ -1029,6 +1029,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
         XCTAssertEqual(
             try ToriiDetachedAssetTransferSubmissionEvidence(
+                networkId: evidence.networkId,
                 chainId: evidence.chainId,
                 submittedRequest: evidence.submittedRequest,
                 signedTransaction: evidence.signedTransaction,
@@ -1846,6 +1847,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         return ToriiClient(
             baseURL: URL(string: "https://torii.example")!,
             session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
             currentTimeMilliseconds: { now }
         )
     }
@@ -1861,6 +1865,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         return ToriiClient(
             baseURL: baseURL,
             session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
             currentTimeMilliseconds: { now },
             currentMonotonicMilliseconds: { monotonicNow }
         )
@@ -1883,7 +1890,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
         let transactionPayload = try CanonicalUnsignedTransactionTestSupport.assetPayload(
             request: request,
-            chainId: "asset-transfer-test"
+            networkId: TestNetworkIds.canonical
         )
         let signingMessage = IrohaHash.hash(transactionPayload)
         let intent: [String: Any] = [
@@ -1938,11 +1945,11 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     private func canonicalAssetPayload(
         _ requestOverride: ToriiAssetTransferRequest? = nil,
-        chainId: String = "asset-transfer-test"
+        networkId: NetworkId = TestNetworkIds.canonical
     ) -> Data {
         try! CanonicalUnsignedTransactionTestSupport.assetPayload(
             request: requestOverride ?? request(),
-            chainId: chainId
+            networkId: networkId
         )
     }
 

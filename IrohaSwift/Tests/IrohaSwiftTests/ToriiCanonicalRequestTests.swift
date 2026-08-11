@@ -21,10 +21,12 @@ final class ToriiCanonicalRequestTests: XCTestCase {
             body: body,
             accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             privateKey: seed,
+            networkId: TestNetworkIds.canonical,
             timestampMs: timestampMs,
             nonce: nonce
         )
         let message = ToriiCanonicalRequest.signatureMessage(
+            networkId: TestNetworkIds.canonical,
             method: "get",
             url: url,
             body: body,
@@ -42,6 +44,46 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
     }
 
+    func testExactNetworkHeadersCannotReplayAcrossGenesisHashes() throws {
+        let seed = Data(repeating: 7, count: 32)
+        let url = URL(string: "https://example.com/v1/gov/ballots/plain")!
+        let body = Data("{\"network_id\":\"exact\"}".utf8)
+        let timestampMs: UInt64 = 1_717_171_717_000
+        let nonce = "swift-governance-network-nonce"
+        let canonical = ToriiCanonicalRequest.signatureMessage(
+            networkId: TestNetworkIds.canonical,
+            method: "POST",
+            url: url,
+            body: body,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
+        let foreign = ToriiCanonicalRequest.signatureMessage(
+            networkId: TestNetworkIds.other,
+            method: "POST",
+            url: url,
+            body: body,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
+        XCTAssertNotEqual(canonical, foreign)
+        let headers = try ToriiCanonicalRequest.buildHeaders(
+            method: "POST",
+            url: url,
+            body: body,
+            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            privateKey: seed,
+            networkId: TestNetworkIds.canonical,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
+        let signatureBase64 = try XCTUnwrap(headers[ToriiCanonicalRequest.headerSignature])
+        let signature = try XCTUnwrap(Data(base64Encoded: signatureBase64))
+        let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
+        XCTAssertTrue(publicKey.isValidSignature(signature, for: canonical))
+        XCTAssertFalse(publicKey.isValidSignature(signature, for: foreign))
+    }
+
     func testHeadersRejectPaddedAccountAndNonce() throws {
         let seed = Data(repeating: 8, count: 32)
         let url = URL(string: "https://example.com/v1/accounts")!
@@ -52,6 +94,7 @@ final class ToriiCanonicalRequestTests: XCTestCase {
                 url: url,
                 accountId: " account",
                 privateKey: seed,
+                networkId: TestNetworkIds.canonical,
                 timestampMs: 1,
                 nonce: "nonce"
             )
@@ -65,6 +108,7 @@ final class ToriiCanonicalRequestTests: XCTestCase {
                 url: url,
                 accountId: "account",
                 privateKey: seed,
+                networkId: TestNetworkIds.canonical,
                 timestampMs: 1,
                 nonce: "nonce "
             )

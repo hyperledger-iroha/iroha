@@ -1,6 +1,3 @@
-// Deployment-bootstrap and genesis validation regression tests.
-// Included inside `block::tests` to preserve the exact libtest paths.
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
@@ -9,6 +6,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             "contract-deployment-bootstrap-block-{parallel_apply}"
         ))
         .expect("canonical contract-deployment test chain id");
+        let network_id = deterministic_test_network_id(0x10);
         let leader = crate::block::checked_keypair();
         let (authority, authority_keypair) = gen_account_in("bootstrap");
         let (adversary, adversary_keypair) = gen_account_in("adversary");
@@ -47,7 +45,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
                     .into(),
                 ];
                 let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    &network_id,
                     authority,
                     0,
                     DataSpaceId::UNIVERSAL,
@@ -63,7 +61,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
                 let (_time_handle, time_source) =
                     TimeSource::new_mock(Duration::from_millis(creation_time_ms));
                 TransactionBuilder::new_with_time_source(
-                    chain_id.clone(),
+                    network_id,
                     authority.clone(),
                     &time_source,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -92,12 +90,14 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             state.install_lane_manifests(&registry);
         };
 
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.clone(),
-        );
+            network_id,
+        )
+        .expect("test state must accept its explicit network id");
         install_lane_manifest(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.parallel_overlay = true;
@@ -284,8 +284,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
 
 #[tokio::test]
 async fn genesis_public_key_is_checked() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     // Predefined world state
     let genesis_correct_key = crate::block::checked_keypair();
     let genesis_wrong_key = crate::block::checked_keypair();
@@ -309,8 +307,7 @@ async fn genesis_public_key_is_checked() {
     // Create genesis transaction
     // Sign with `genesis_wrong_key` as peer which has incorrect genesis key pair
     // Bypass `accept_genesis` check to allow signing with wrong key
-    let tx = TransactionBuilder::new(
-        chain_id.clone(),
+    let tx = TransactionBuilder::new_genesis(
         genesis_wrong_account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -342,7 +339,6 @@ async fn genesis_public_key_is_checked() {
     let (_, error) = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_correct_account_id,
         &time_source,
         &mut state_block,
@@ -360,8 +356,6 @@ async fn genesis_public_key_is_checked() {
 
 #[tokio::test]
 async fn genesis_asset_definition_registration_is_not_domain_gated() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let genesis_key_pair = crate::block::checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let alice_key_pair = crate::block::checked_keypair();
@@ -395,8 +389,7 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
         None,
     ));
 
-    let tx = TransactionBuilder::new(
-        chain_id.clone(),
+    let tx = TransactionBuilder::new_genesis(
         genesis_account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -415,7 +408,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let _valid = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_account_id,
         &time_source,
         &mut state_block,
@@ -427,8 +419,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
 
 #[tokio::test]
 async fn genesis_domain_registration_bootstraps_domain_name_lease() {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let genesis_key_pair = crate::block::checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let wonderland_domain_id: DomainId =
@@ -445,8 +435,7 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
 
     let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
 
-    let tx = TransactionBuilder::new(
-        chain_id.clone(),
+    let tx = TransactionBuilder::new_genesis(
         genesis_account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -465,7 +454,6 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     let _valid = ValidBlock::validate(
         block,
         &topology,
-        &chain_id,
         &genesis_account_id,
         &time_source,
         &mut state_block,

@@ -50,7 +50,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 bytes = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["application", "soranet-record-io"] }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
 rand = { workspace = true, features = ["std_rng"] }
 blake3 = { workspace = true }

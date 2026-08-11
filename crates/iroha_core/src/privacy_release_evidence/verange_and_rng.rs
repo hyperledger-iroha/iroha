@@ -145,7 +145,7 @@ fn verange_binding_from_compiled_profile_v1(
     profile: &CompiledPrivacyProfileV1,
 ) -> TranscriptBindingV1<'static> {
     TranscriptBindingV1 {
-        chain_id: b"taira-privacy-release-evidence-v1",
+        network_id: &[0x11; 32],
         genesis_hash: [0x11; 32],
         action_index: 3,
         statement_digest,

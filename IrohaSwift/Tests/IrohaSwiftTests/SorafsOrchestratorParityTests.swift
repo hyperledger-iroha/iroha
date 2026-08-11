@@ -18,11 +18,11 @@ final class SorafsOrchestratorParityTests: XCTestCase {
 
     func testLocalFetchParityIsDeterministic() async throws {
         guard SorafsBridgeBootstrap.ensureLoaded() else {
-            XCTFail("ABI-21 SoraFS Norito bridge artifacts are required")
+            XCTFail("ABI-22 SoraFS Norito bridge artifacts are required")
             return
         }
         guard NoritoNativeBridge.shared.isAvailable else {
-            XCTFail("ABI-21 NoritoBridge is required on this platform")
+            XCTFail("ABI-22 NoritoBridge is required on this platform")
             return
         }
 

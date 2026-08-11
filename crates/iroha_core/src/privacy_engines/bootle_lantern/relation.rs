@@ -564,6 +564,7 @@ pub enum RelationErrorV1 {
 mod tests {
     use std::sync::OnceLock;
 
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, PrivacyBootleLanternIssuerPolicyDigestV1,
@@ -571,6 +572,7 @@ mod tests {
         PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
+    use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest as _, Sha256};
 
@@ -634,6 +636,12 @@ mod tests {
         [seed; 32]
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(raw(seed)),
+        ))
+    }
+
     fn matrix_seed() -> MatrixSeedV1 {
         matrix_seed_v1([0x31; 32]).expect("seed")
     }
@@ -644,7 +652,7 @@ mod tests {
 
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: "bootle-lantern-test".parse().expect("chain id"),
+            network_id: network_id(0x32),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
             parameter_id: PrivacyParameterIdV1::new(raw(2)),

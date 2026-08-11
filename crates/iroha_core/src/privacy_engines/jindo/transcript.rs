@@ -74,7 +74,7 @@ impl JindoTranscriptV1 {
         };
         transcript.append_message(b"domain", TRANSCRIPT_DOMAIN_V1)?;
         transcript.append_message(b"version", &[TRANSCRIPT_VERSION_V1])?;
-        transcript.append_message(b"chain_id", binding.chain_id)?;
+        transcript.append_message(b"network_id", binding.network_id)?;
         transcript.append_message(b"genesis_hash", &binding.genesis_hash)?;
         transcript.append_message(b"action_index", &binding.action_index.to_be_bytes())?;
         transcript.append_message(b"statement_digest", &binding.statement_digest)?;
@@ -243,7 +243,7 @@ mod tests {
 
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
-            chain_id: b"jindo-test",
+            network_id: &[1; 32],
             genesis_hash: [1; 32],
             action_index: 0,
             statement_digest: [2; 32],

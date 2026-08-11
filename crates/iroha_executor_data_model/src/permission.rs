@@ -181,6 +181,14 @@ pub mod asset_definition {
     }
 
     permission! {
+        /// Permission to manage confidential policy and verifier roles for the specified asset definition.
+        pub struct CanManageAssetDefinitionConfidentialPolicy {
+            /// Identifier of the asset definition whose confidential policy may be changed.
+            pub asset_definition: AssetDefinitionId,
+        }
+    }
+
+    permission! {
         /// Permission to register, bind, clear, or replace asset-definition aliases in one scope.
         ///
         /// This capability is intentionally independent from account-alias management.
@@ -242,6 +250,29 @@ pub mod asset_definition {
             assert!(json.contains("usd#banka.paynet"));
             assert!(json.contains("\"dataspace_id\":7"));
             assert!(json.contains("\"asset_definition_id\""));
+        }
+
+        #[test]
+        fn confidential_policy_permission_is_exactly_asset_definition_scoped() {
+            let pkr = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("currency", "paynet").expect("asset domain"),
+                "pkr".parse().expect("asset name"),
+            );
+            let usd = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("currency", "paynet").expect("asset domain"),
+                "usd".parse().expect("asset name"),
+            );
+            let permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: pkr.clone(),
+            };
+            let json = norito::json::to_json(&permission)
+                .expect("serialize confidential policy permission");
+            let decoded: CanManageAssetDefinitionConfidentialPolicy =
+                norito::json::from_str(&json).expect("deserialize confidential policy permission");
+
+            assert_eq!(decoded, permission);
+            assert_eq!(decoded.asset_definition, pkr);
+            assert_ne!(decoded.asset_definition, usd);
         }
     }
 }
@@ -861,14 +892,6 @@ pub mod settlement {
             pub policy_id: Name,
         }
     }
-
-    permission! {
-        /// Permission to execute settlements under one FX corridor policy.
-        pub struct CanSettleFxCorridor {
-            /// Stable corridor policy identifier.
-            pub policy_id: Name,
-        }
-    }
 }
 
 /// Nexus / Space Directory permissions.
@@ -917,14 +940,6 @@ pub mod nexus {
         /// Permission to enroll or unenroll beneficiaries in one exact sponsor program.
         pub struct CanEnrollFeeSponsorProgram {
             /// Exact program whose enrollment set may be managed.
-            pub program_id: FeeSponsorProgramId,
-        }
-    }
-
-    permission! {
-        /// Permission to withdraw assets from one exact sponsor-program vault.
-        pub struct CanWithdrawFeeSponsorProgram {
-            /// Exact program whose paused or closing vault may be withdrawn.
             pub program_id: FeeSponsorProgramId,
         }
     }
@@ -1008,24 +1023,6 @@ pub mod governance {
 pub mod sorafs {
     use super::*;
     use iroha_data_model::sorafs::prelude::ProviderId;
-
-    permission! {
-        /// Permission to register a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanRegisterSorafsPin;
-    }
-
-    permission! {
-        /// Permission to approve a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanApproveSorafsPin;
-    }
-
-    permission! {
-        /// Permission to retire a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanRetireSorafsPin;
-    }
 
     permission! {
         /// Permission to bind or update a `SoraFS` manifest alias.
@@ -1142,13 +1139,19 @@ pub mod sorafs {
     }
 
     permission! {
-        /// Permission to register or update a `SoraFS` provider owner binding.
+        /// Legacy permission accepted only for submitting a `SoraFS` provider-governance proposal.
+        ///
+        /// Holding or transferring this token never mutates provider ownership;
+        /// the proposal must still pass the native Parliament referendum.
         #[derive(Copy)]
         pub struct CanRegisterSorafsProviderOwner;
     }
 
     permission! {
-        /// Permission to remove a `SoraFS` provider owner binding.
+        /// Legacy permission accepted only for submitting a `SoraFS` provider-removal proposal.
+        ///
+        /// Holding or transferring this token never mutates provider ownership;
+        /// the proposal must still pass the native Parliament referendum.
         #[derive(Copy)]
         pub struct CanUnregisterSorafsProviderOwner;
     }

@@ -106,6 +106,7 @@ fn build_status_router() -> axum::Router {
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii,
         queue,

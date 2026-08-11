@@ -1146,47 +1146,56 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM HistoricalResponseItemsSeparateRotatedHopFromExactRequest ==
-  \A request, qc, archiveServer:
+  \A bodyRequest, certificateRequest, qc, archiveServer:
     /\ TypeInvariant
-    /\ AsyncItemTyped(request)
-    /\ request.kind = "CertifiedRequest"
+    /\ AsyncItemTyped(bodyRequest)
+    /\ bodyRequest.kind = "CertifiedRequest"
+    /\ AsyncItemTyped(certificateRequest)
+    /\ certificateRequest.kind = "CommitCertificateRequest"
+    /\ certificateRequest.envelope.recipient = archiveServer
     /\ qc \in QcRecordSet
     /\ archiveServer \in AsyncArchiveServerIds
     => LET bodyResponse ==
              CertifiedResponseItem(
-               AsyncUntrustedSource, archiveServer, request)
+               AsyncUntrustedSource, archiveServer, bodyRequest)
            certificateResponse ==
-             CommitCertificateResponseItem(request, qc)
+             CommitCertificateResponseItem(certificateRequest, qc)
        IN /\ bodyResponse.source = AsyncUntrustedSource
-          /\ certificateResponse.source = AsyncUntrustedSource
+          /\ certificateResponse.source = archiveServer
+          /\ bodyResponse.source # certificateResponse.source
           /\ AsyncUntrustedSource \in AsyncIngressSources
           /\ AsyncUntrustedSource \notin CurrentVoters
           /\ bodyResponse.envelope.requestHash =
-               AsyncCertifiedRequestHash(request)
+               AsyncCertifiedRequestHash(bodyRequest)
           /\ bodyResponse.envelope.archiveServer = archiveServer
           /\ bodyResponse.envelope.signatureOwner = archiveServer
-          /\ certificateResponse.envelope.request = request
+          /\ certificateResponse.envelope.request = certificateRequest
 PROOF
-  <1>1. ASSUME NEW request, NEW qc, NEW archiveServer,
+  <1>1. ASSUME NEW bodyRequest, NEW certificateRequest,
+                NEW qc, NEW archiveServer,
                 TypeInvariant,
-                AsyncItemTyped(request),
-                request.kind = "CertifiedRequest",
+                AsyncItemTyped(bodyRequest),
+                bodyRequest.kind = "CertifiedRequest",
+                AsyncItemTyped(certificateRequest),
+                certificateRequest.kind = "CommitCertificateRequest",
+                certificateRequest.envelope.recipient = archiveServer,
                 qc \in QcRecordSet,
                 archiveServer \in AsyncArchiveServerIds
          PROVE LET bodyResponse ==
                        CertifiedResponseItem(
-                         AsyncUntrustedSource, archiveServer, request)
+                         AsyncUntrustedSource, archiveServer, bodyRequest)
                    certificateResponse ==
-                     CommitCertificateResponseItem(request, qc)
+                     CommitCertificateResponseItem(certificateRequest, qc)
                IN /\ bodyResponse.source = AsyncUntrustedSource
-                  /\ certificateResponse.source = AsyncUntrustedSource
+                  /\ certificateResponse.source = archiveServer
+                  /\ bodyResponse.source # certificateResponse.source
                   /\ AsyncUntrustedSource \in AsyncIngressSources
                   /\ AsyncUntrustedSource \notin CurrentVoters
                   /\ bodyResponse.envelope.requestHash =
-                       AsyncCertifiedRequestHash(request)
+                       AsyncCertifiedRequestHash(bodyRequest)
                   /\ bodyResponse.envelope.archiveServer = archiveServer
                   /\ bodyResponse.envelope.signatureOwner = archiveServer
-                  /\ certificateResponse.envelope.request = request
+                  /\ certificateResponse.envelope.request = certificateRequest
     <2>1. CurrentVoters \subseteq ValidatorIds
       BY <1>1, RuntimeCurrentVotersAreFiniteValidators
     <2>2. AsyncUntrustedSource \notin ValidatorIds
@@ -4197,6 +4206,10 @@ PROOF
                \subseteq AsyncIngressSources
       BY Isa DEF IngressTimeoutVoteProtectedSourcesFor,
                  AsyncIngressSources
+    <2>4f. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \subseteq AsyncIngressSources
+      BY Isa DEF IngressCertifiedFenceEscapeProtectedSourcesFor,
+                 AsyncIngressSources
     <2>4c. IngressTransportCompletionProtectedSourcesFor(lanes, recipient)
                 \subseteq AsyncIngressSources
       BY Isa DEF IngressTransportCompletionProtectedSourcesFor,
@@ -4207,6 +4220,10 @@ PROOF
     <2>6. IsFiniteSet(
              IngressTimeoutVoteProtectedSourcesFor(lanes, recipient))
       BY <2>1, <2>4, FS_Subset
+    <2>6f. IsFiniteSet(
+              IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient))
+      BY <2>1, <2>4f, FS_Subset
     <2>6c. IsFiniteSet(
               IngressTransportCompletionProtectedSourcesFor(
                 lanes, recipient))
@@ -4217,11 +4234,15 @@ PROOF
     <2>8. Cardinality(
              IngressTimeoutVoteProtectedSourcesFor(lanes, recipient)) \in Nat
       BY <2>6, FS_CardinalityType
+    <2>8f. Cardinality(
+               IngressCertifiedFenceEscapeProtectedSourcesFor(
+                 lanes, recipient)) \in Nat
+      BY <2>6f, FS_CardinalityType
     <2>8c. Cardinality(
                IngressTransportCompletionProtectedSourcesFor(
                  lanes, recipient)) \in Nat
       BY <2>6c, FS_CardinalityType
-    <2> QED BY <2>2, <2>7, <2>8, <2>8c, SMT
+    <2> QED BY <2>2, <2>7, <2>8, <2>8f, <2>8c, SMT
          DEF IngressProtectedSlotCountFor
   <1> QED BY <1>1
 

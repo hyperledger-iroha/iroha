@@ -7,11 +7,11 @@ fn checked_random_keypair() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("test fixture random key generation should succeed")
 }
 
-fn sample_account() -> (ChainId, AccountId, iroha_crypto::KeyPair) {
-    let chain: ChainId = "fault-chain".parse().unwrap();
+fn sample_account() -> (NetworkId, AccountId, iroha_crypto::KeyPair) {
+    let network_id = test_network_id(0x2D);
     let keypair = checked_random_keypair();
     let account_id = AccountId::new(keypair.public_key().clone());
-    (chain, account_id, keypair)
+    (network_id, account_id, keypair)
 }
 
 fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
@@ -20,9 +20,9 @@ fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
 
 #[test]
 fn injects_into_ivm_bytecode_and_records_trailer() {
-    let (chain, account_id, keypair) = sample_account();
+    let (network_id, account_id, keypair) = sample_account();
     let mut tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -64,9 +64,9 @@ fn injects_into_ivm_bytecode_and_records_trailer() {
 
 #[test]
 fn repeated_injection_appends_trailer_instructions() {
-    let (chain, account_id, keypair) = sample_account();
+    let (network_id, account_id, keypair) = sample_account();
     let mut tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

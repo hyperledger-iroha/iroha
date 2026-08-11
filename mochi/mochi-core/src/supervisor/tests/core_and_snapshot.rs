@@ -79,23 +79,23 @@ esac
 
 #[cfg(unix)]
 fn write_long_running_irohad_stub(root: &Path) -> PathBuf {
-    let script_path = root.join("irohad-long-running-stub.sh");
+    let script_path = root.join("iroha3d-long-running-stub.sh");
     let script = r#"#!/bin/sh
 case "$1" in
   --version)
-    echo "irohad-long-running-stub iroha3"
+    echo "iroha3d-long-running-stub iroha3"
     exit 0
     ;;
 esac
 exec /usr/bin/tail -f /dev/null
 "#;
-    fs::write(&script_path, script).expect("write long-running irohad stub");
+    fs::write(&script_path, script).expect("write long-running iroha3d stub");
     let mut permissions = fs::metadata(&script_path)
-        .expect("long-running irohad stub metadata")
+        .expect("long-running iroha3d stub metadata")
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&script_path, permissions)
-        .expect("set long-running irohad stub permissions");
+        .expect("set long-running iroha3d stub permissions");
     script_path
 }
 
@@ -142,8 +142,8 @@ fi
 TARGET="${CARGO_TARGET_DIR:-target}"
 /bin/mkdir -p "$TARGET/debug"
 case "$*" in
-  *"-p irohad"*)
-    BIN="$TARGET/debug/irohad"
+  *"-p irohad --bin iroha3d"*)
+    BIN="$TARGET/debug/iroha3d"
     ;;
   *"-p iroha_kagami"*)
     BIN="$TARGET/debug/kagami"
@@ -674,7 +674,7 @@ fn binary_paths_auto_builds_when_enabled() {
     let _log_guard = RestoringEnvVarGuard::set("MOCHI_TEST_CARGO_LOG", cargo_log.as_os_str());
 
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
-    binaries.irohad = PathBuf::from("irohad");
+    binaries.irohad = PathBuf::from("iroha3d");
     binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
@@ -702,6 +702,11 @@ fn binary_paths_auto_builds_when_enabled() {
     );
 
     let log = fs::read_to_string(&cargo_log).expect("read cargo log");
+    assert!(
+        log.lines()
+            .any(|line| line == "build -p irohad --bin iroha3d"),
+        "daemon build must select only the iroha3d target: {log}"
+    );
     assert_eq!(
         log.lines().count(),
         3,
@@ -735,7 +740,7 @@ fn binary_paths_auto_build_failure_surfaces_error() {
     let _path_guard = RestoringEnvVarGuard::set("PATH", empty_path_dir.as_os_str());
 
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
-    binaries.irohad = PathBuf::from("irohad");
+    binaries.irohad = PathBuf::from("iroha3d");
     binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
@@ -746,7 +751,7 @@ fn binary_paths_auto_build_failure_surfaces_error() {
         .expect_err("auto-build should surface failure");
     match err {
         SupervisorError::BinaryUnavailable { binary, message } => {
-            assert_eq!(binary, "irohad");
+            assert_eq!(binary, "iroha3d");
             assert!(
                 message.contains("cargo build"),
                 "expected cargo build context, got `{message}`"
@@ -827,7 +832,7 @@ fn binary_paths_rejects_build_line_mismatch() {
             expected,
             found,
         } => {
-            assert_eq!(binary, "irohad");
+            assert_eq!(binary, "iroha3d");
             assert_eq!(expected, BuildLine::Iroha3);
             assert_eq!(found, BuildLine::Iroha2);
         }
@@ -853,8 +858,17 @@ fn builder_creates_peer_configs() {
 
     assert_eq!(supervisor.chain_id(), "test-chain");
     assert_eq!(supervisor.peers().len(), 4);
+    let network_id = supervisor
+        .network_id()
+        .expect("validated genesis hash yields an exact network id");
     let mut transport_public_keys = HashSet::new();
     for peer in supervisor.peers() {
+        assert_eq!(
+            peer.torii_client()
+                .expect("managed config yields a network-bound Torii client")
+                .network_id(),
+            Some(network_id)
+        );
         KeyPair::new(
             peer.spec.keys.soranet_transport_public_key.clone(),
             peer.spec.keys.soranet_transport_private_key.0.clone(),

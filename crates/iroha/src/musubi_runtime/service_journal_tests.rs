@@ -1,15 +1,17 @@
 // Service and journal test body included from the parent module.
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
 use super::*;
-use iroha_crypto::{Algorithm, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
+    ChainId,
     account::{MultisigMember, MultisigPolicy},
+    block::BlockHeader,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArtifactDescriptorV1,
         MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
@@ -26,6 +28,26 @@ use iroha_data_model::{
 };
 use norito::codec::Encode as _;
 use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
+
+fn test_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        [seed; 32],
+    )))
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_filesystem_owner_probe_reports_target_filesystem_owner() {
+    let root = tempfile::tempdir().expect("publication ownership probe root");
+    let expected_owner = std::fs::metadata(root.path())
+        .expect("publication ownership probe root metadata")
+        .uid();
+
+    let actual_owner = publication_filesystem_owner_probe(root.path())
+        .expect("probe publication filesystem owner");
+
+    assert_eq!(actual_owner, expected_owner);
+}
 
 #[derive(Clone)]
 struct TestPublicationClock {
@@ -706,7 +728,7 @@ fn control_service_fixture(
     )
     .expect("broker key");
     let broker = AccountId::new(broker_key.public_key().clone());
-    let genesis_block_hash = [0x99; 32];
+    let network_id = client.network_id;
     let commitment = control_commitment();
     let semantic_release_digest = MusubiSemanticReleaseDigestV1::new([0x9a; 32]);
     let verification_lock_digest = MusubiVerificationLockDigestV1::new([0x9b; 32]);
@@ -718,8 +740,7 @@ fn control_service_fixture(
                 .expect("provider key");
             let provider_owner = AccountId::new(provider_key.public_key().clone());
             let provider_binding = MusubiProviderBundleVerificationBindingV1 {
-                chain_id: client.chain.clone(),
-                genesis_block_hash,
+                network_id,
                 provider_id: ProviderId::new([0xb8 + index; 32]),
                 completed_by: provider_owner.clone(),
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
@@ -774,8 +795,7 @@ fn control_service_fixture(
     )
     .expect("canonical provider attestation set");
     let binding = MusubiSeedIngressReceiptBindingV1 {
-        chain_id: client.chain.clone(),
-        genesis_block_hash,
+        network_id,
         publisher: client.account.clone(),
         ingress_broker: broker.clone(),
         seed_provider: provider,
@@ -819,8 +839,7 @@ fn control_service_fixture(
         operation_id,
         generation: 1,
         prior_location_ids: Vec::new(),
-        chain_id: client.chain.clone(),
-        genesis_block_hash,
+        network_id,
         publisher: client.account.clone(),
         commitment: commitment.clone(),
         verification_lock_digest,
@@ -828,8 +847,7 @@ fn control_service_fixture(
         expected_policy_revision: 7,
         finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
             version: 1,
-            chain_id: client.chain.clone(),
-            genesis_block_hash,
+            network_id,
             transaction_hash: [0xa4; 32],
             snapshot: MusubiRegistrySnapshotV1 {
                 finalized_height: 55,
@@ -871,8 +889,7 @@ fn control_service_fixture(
     let readback_request = MusubiProviderReadbackRequestV1 {
         version: 1,
         operation_id,
-        chain_id: client.chain.clone(),
-        genesis_block_hash,
+        network_id,
         publisher: client.account.clone(),
         location,
         provider,
@@ -898,8 +915,7 @@ fn control_service_fixture(
         .validate_for(&readback_request)
         .expect("readback response");
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: client.chain,
-        genesis_block_hash,
+        network_id,
         ingress_broker: broker.clone(),
         seed_provider: provider,
         max_future_clock_skew_ms: 2_000,
@@ -1104,8 +1120,7 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
         version: 1,
         operation_id: [0x61; 32],
         binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: regressing_client.chain.clone(),
-            genesis_block_hash: [0x62; 32],
+            network_id: regressing_client.network_id,
             publisher: regressing_client.account.clone(),
             ingress_broker: broker.clone(),
             seed_provider: ProviderId::new([0x63; 32]),
@@ -1124,8 +1139,7 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
     let metadata = norito::encode_canonical(&request).expect("canonical metadata");
     let calls = Arc::new(Mutex::new(0));
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: regressing_client.chain,
-        genesis_block_hash: request.binding.genesis_block_hash,
+        network_id: request.binding.network_id,
         ingress_broker: broker.clone(),
         seed_provider: request.binding.seed_provider,
         max_future_clock_skew_ms: 2_000,
@@ -1192,8 +1206,7 @@ fn threshold_private_service_fixture(behavior: ThresholdSigningBehavior) -> Priv
     fixture.metadata =
         norito::encode_canonical(&fixture.request).expect("threshold stage metadata");
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: fixture.request.binding.chain_id.clone(),
-        genesis_block_hash: fixture.request.binding.genesis_block_hash,
+        network_id: fixture.request.binding.network_id,
         ingress_broker: broker.clone(),
         seed_provider: fixture.request.binding.seed_provider,
         max_future_clock_skew_ms: 2_000,
@@ -1330,6 +1343,7 @@ fn client() -> (Client, KeyPair) {
     let account = AccountId::new(key_pair.public_key().clone());
     let client = Client {
         chain: ChainId::from("musubi-runtime-test"),
+        network_id: crate::client::test_network_id(),
         torii_url: Url::parse("https://torii.example/").expect("Torii URL"),
         key_pair: key_pair.clone(),
         transaction_ttl: Some(Duration::from_secs(10)),
@@ -1393,7 +1407,7 @@ fn threshold_authorization_runtime(
         behavior,
     };
     AuthenticatedMusubiPublicationRuntimeClientV1::from_authorization_signer(
-        ChainId::from("musubi-runtime-threshold-test"),
+        test_network_id(0x71),
         publisher,
         Arc::new(signer),
         Duration::from_secs(5),

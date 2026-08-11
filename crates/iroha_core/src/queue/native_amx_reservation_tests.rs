@@ -123,7 +123,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         .plan_admission_context_with_state(&state, &plan)
         .expect("capture Native AMX admission context");
     let admission_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        state.chain_id_ref(),
+        state.network_id_ref(),
         transaction.entrypoint(),
         &plan,
         admission_context,

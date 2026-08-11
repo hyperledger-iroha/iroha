@@ -208,23 +208,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             .ok_or_else(|| eyre!("Musubi crash replay has no admitting peer"))?;
         let submitter = admitting_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
 
-        let provider_transaction = submitter.build_transaction(
-            [Box::new(RegisterProviderOwner::new(
-                musubi_fault_provider(),
-                submitter.account.clone(),
-            ))
-            .into_instruction_box()],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
-        submit_approved_and_wait_for_all_peers(
-            &network,
-            &submitter,
-            provider_transaction,
-            "register Musubi crash-replay seed provider",
-        )
-        .await?;
-
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let domain =
             DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");

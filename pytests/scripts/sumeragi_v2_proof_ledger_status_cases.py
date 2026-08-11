@@ -116,6 +116,30 @@ def test_exact_decision_lifecycle_contracts_reject_semantic_weakening() -> None:
             f"{symbol} must equal only" in error for error in errors
         ), errors
 
+    symbol = "ExactDecisionRequestFrozenServeBarrierPreservesTargetIngressCoalescing"
+    extracted = module._top_level_theorem_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "       /\\ \\E source \\in AsyncIngressSources:\n"
+        "            request \\in SequenceSet(\n"
+        "              IngressLane(archive, source))'\n",
+        "       /\\ request \\in SequenceSet(\n"
+        "            IngressLane(archive, IngressResourceSource(request)))'\n",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {module_name: mutated}
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
 
 def test_historical_certificate_lineage_quantifiers_are_current() -> None:
     """Unbounded certificates precede the responsive-node domain explicitly."""
@@ -170,6 +194,20 @@ def test_historical_certificate_lineage_rejects_mixed_binder_regression() -> Non
         assert any(
             f"{symbol} must equal only" in error for error in errors
         ), errors
+
+    response_symbol = "IndexedHistoricalCommitResponseIdentity"
+    mutated = mutate_tla_operator(
+        source,
+        response_symbol,
+        "  /\\ response.source = request.envelope.recipient\n",
+        "  /\\ response.source = IndexedAsync(initialContext)!AsyncUntrustedSource\n",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {module_name: mutated}
+    )
+    assert any(
+        f"{response_symbol} must equal only" in error for error in errors
+    ), errors
 
 
 def test_post_retransmit_cut_continuation_quantifier_is_pinned() -> None:
@@ -309,6 +347,27 @@ def test_timeout_physical_control_retransmission_typed_item_binder_is_pinned() -
         symbol,
         "\\A node \\in ValidatorIds, item \\in AsyncNetworkItems:",
         "\\A node \\in ValidatorIds, item:",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"], {module_name: mutated}
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+    symbol = "TimeoutPhysicalControlPacketAdmissionPreservesExactHandoff"
+    extracted = module._top_level_theorem_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "packet.authenticatedSource",
+        "item.source",
     )
     assert mutated != source
     errors = module._proof_obligation_architecture_errors(

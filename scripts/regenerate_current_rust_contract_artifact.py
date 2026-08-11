@@ -57,7 +57,7 @@ ROOT_PACKAGES = (Path("crates/ivm"),)
 # normal koto/verifier build. Excluding those developer-only trees keeps the
 # semantic closure exact and prevents unrelated fixture churn.
 NON_BUILD_PACKAGE_TREES = frozenset({"tests", "examples", "benches", "fuzz", "docs"})
-SOURCE_CLOSURE_DOMAIN = b"iroha-current-rust-contract-artifact-source-v2\0"
+SOURCE_CLOSURE_DOMAIN = b"iroha-current-rust-contract-artifact-source-v3\0"
 CONTRACT_HASH_DOMAIN = b"iroha:ivm:contract-artifact:v1\0"
 IVM_HEADER_BYTES = 49
 MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
@@ -66,6 +66,12 @@ OUTPUT_STAGE_NAME = re.compile(
     r"^current-rust-contract-artifact\.(?!work\.)(?:[A-Za-z0-9][A-Za-z0-9_-]{5,63})$"
 )
 WORK_STAGE_PREFIX = "current-rust-contract-artifact.work."
+INDEX_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+INDEX_MODES = frozenset({"100644", "100755", "120000", "160000"})
+REGULAR_INDEX_MODES = frozenset({"100644", "100755"})
+SOURCE_RECORD_FILE = "FILE"
+SOURCE_RECORD_ABSENT = "ABSENT"
+SOURCE_RECORD_UNTRACKED_FILE = "UNTRACKED_FILE"
 
 
 class FixtureError(RuntimeError):
@@ -86,6 +92,40 @@ class FileSnapshot:
     mode: int
     modified_ns: int
     changed_ns: int
+
+
+@dataclass(frozen=True)
+class GitIndexEntry:
+    """One exact stage-zero Git index entry."""
+
+    path: Path
+    mode: str
+    object_id: str
+    stage: int = 0
+
+
+@dataclass(frozen=True)
+class SourceClosureRecord:
+    """One typed, path-bound source state in the canonical closure."""
+
+    kind: str
+    path: Path
+    snapshot: FileSnapshot | None
+    index_entry: GitIndexEntry | None
+
+
+@dataclass(frozen=True)
+class SourceClosure:
+    """Authenticated source records and the inventories that selected them."""
+
+    records: tuple[SourceClosureRecord, ...]
+    files: dict[Path, FileSnapshot]
+    index_entries: dict[Path, GitIndexEntry]
+    untracked_paths: frozenset[Path]
+    package_directories: frozenset[Path]
+    required_present_paths: frozenset[Path]
+    closure_sha256: str
+    git_binding: str
 
 
 @dataclass
@@ -595,7 +635,76 @@ def _load_json_strict(path: Path, label: str) -> Any:
     return value
 
 
-def _tracked_paths(
+def _repository_relative_path(name: str, label: str) -> Path:
+    if not name:
+        raise FixtureError(f"{label} contains an empty path")
+    path = Path(name)
+    if path.is_absolute() or ".." in path.parts or os.fspath(path) != name:
+        raise FixtureError(f"{label} contains a noncanonical repository path: {name!r}")
+    return path
+
+
+def _index_entries(
+    git: FileSnapshot,
+    environment: Mapping[str, str],
+) -> tuple[dict[Path, tuple[GitIndexEntry, ...]], str]:
+    result, binding = _run_bound_executable(
+        git,
+        (
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+        ),
+        environment=environment,
+    )
+    entries: dict[Path, list[GitIndexEntry]] = {}
+    for raw in result.stdout.split("\0"):
+        if not raw:
+            continue
+        try:
+            header, name = raw.split("\t", 1)
+            mode, object_id, stage = header.split(" ")
+        except ValueError as error:
+            raise FixtureError(f"Git index inventory has malformed entry: {raw!r}") from error
+        if mode not in INDEX_MODES or INDEX_OBJECT_ID.fullmatch(object_id) is None:
+            raise FixtureError(f"Git index inventory has noncanonical entry: {raw!r}")
+        if stage not in {"0", "1", "2", "3"}:
+            raise FixtureError(f"Git index inventory has an invalid stage for {name!r}")
+        path = _repository_relative_path(name, "Git index inventory")
+        entries.setdefault(path, []).append(
+            GitIndexEntry(
+                path=path,
+                mode=mode,
+                object_id=object_id,
+                stage=int(stage),
+            )
+        )
+    return {
+        path: tuple(sorted(path_entries, key=lambda entry: entry.stage))
+        for path, path_entries in entries.items()
+    }, binding
+
+
+def _canonical_index_entry(
+    inventory: Mapping[Path, tuple[GitIndexEntry, ...]], path: Path
+) -> GitIndexEntry:
+    entries = inventory.get(path, ())
+    if len(entries) != 1 or entries[0].stage != 0:
+        raise FixtureError(f"relevant Git index path has unresolved stages: {path}")
+    entry = entries[0]
+    if not any(character != "0" for character in entry.object_id):
+        raise FixtureError(f"relevant Git index path is intent-to-add: {path}")
+    return entry
+
+
+def _untracked_paths(
     git: FileSnapshot,
     environment: Mapping[str, str],
 ) -> tuple[frozenset[Path], str]:
@@ -609,15 +718,22 @@ def _tracked_paths(
             "-c",
             "core.quotePath=false",
             "ls-files",
+            "--others",
+            "--exclude-standard",
             "-z",
+            "--",
         ),
         environment=environment,
     )
-    try:
-        names = result.stdout.split("\0")
-    except UnicodeError as error:
-        raise FixtureError(f"tracked source path is not UTF-8: {error}") from error
-    return frozenset(Path(name) for name in names if name), binding
+    paths: set[Path] = set()
+    for name in result.stdout.split("\0"):
+        if not name:
+            continue
+        path = _repository_relative_path(name, "Git untracked inventory")
+        if path in paths:
+            raise FixtureError(f"Git untracked inventory repeats path {name!r}")
+        paths.add(path)
+    return frozenset(paths), binding
 
 
 def _toml_document(snapshot: FileSnapshot) -> dict[str, Any]:
@@ -649,9 +765,14 @@ def _dependency_tables(manifest: dict[str, Any]) -> Iterable[dict[str, Any]]:
             yield table
 
 
-def _package_source_closure(tracked: frozenset[Path]) -> tuple[dict[Path, FileSnapshot], set[Path]]:
+def _package_source_closure(
+    available: frozenset[Path],
+    index_inventory: Mapping[Path, tuple[GitIndexEntry, ...]] | None = None,
+) -> tuple[dict[Path, FileSnapshot], set[Path]]:
     """Resolve every local build dependency from Cargo manifests without Cargo."""
 
+    if index_inventory is not None and ROOT_MANIFEST_PATH in index_inventory:
+        _canonical_index_entry(index_inventory, ROOT_MANIFEST_PATH)
     root_manifest = _snapshot_file(REPOSITORY_ROOT / ROOT_MANIFEST_PATH, "root Cargo manifest")
     root = _toml_document(root_manifest)
     workspace = root.get("workspace")
@@ -692,8 +813,13 @@ def _package_source_closure(tracked: frozenset[Path]) -> tuple[dict[Path, FileSn
         if package.is_absolute() or ".." in package.parts:
             raise FixtureError(f"local package escapes the repository: {package}")
         manifest_relative = package / "Cargo.toml"
-        if manifest_relative not in tracked:
-            raise FixtureError(f"local package manifest is not tracked: {manifest_relative}")
+        if manifest_relative not in available:
+            raise FixtureError(
+                "local package manifest is neither indexed nor nonignored-untracked: "
+                f"{manifest_relative}"
+            )
+        if index_inventory is not None and manifest_relative in index_inventory:
+            _canonical_index_entry(index_inventory, manifest_relative)
         snapshot = _snapshot_file(
             REPOSITORY_ROOT / manifest_relative,
             f"Cargo manifest {manifest_relative}",
@@ -726,52 +852,250 @@ def _package_source_closure(tracked: frozenset[Path]) -> tuple[dict[Path, FileSn
     return manifest_snapshots, package_directories
 
 
+def _is_build_package_path(relative: Path, package_directories: Iterable[Path]) -> bool:
+    for package in package_directories:
+        if relative == package or package not in relative.parents:
+            continue
+        package_relative = relative.relative_to(package)
+        return not (
+            package_relative.parts
+            and package_relative.parts[0] in NON_BUILD_PACKAGE_TREES
+        )
+    return False
+
+
+def _build_package_paths(
+    paths: Iterable[Path], package_directories: Iterable[Path]
+) -> frozenset[Path]:
+    packages = tuple(package_directories)
+    return frozenset(path for path in paths if _is_build_package_path(path, packages))
+
+
+def _assert_path_absent(path: Path, label: str) -> None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise FixtureError(f"failed to authenticate absent {label} {path}: {error}") from error
+    raise FixtureError(f"{label} is no longer absent: {path}")
+
+
+def _framed_digest_field(digest: Any, value: bytes) -> None:
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
+def _source_record_digest(records: Sequence[SourceClosureRecord]) -> str:
+    paths = tuple(os.fspath(record.path) for record in records)
+    if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
+        raise FixtureError("source closure records must have unique sorted paths")
+    digest = hashlib.sha256(SOURCE_CLOSURE_DOMAIN)
+    present = tuple(record for record in records if record.snapshot is not None)
+    digest.update(len(present).to_bytes(8, "big"))
+    for record in present:
+        _framed_digest_field(digest, SOURCE_RECORD_FILE.encode("ascii"))
+        _framed_digest_field(digest, os.fspath(record.path).encode("utf-8"))
+        assert record.snapshot is not None
+        digest.update(record.snapshot.size.to_bytes(8, "big"))
+        digest.update(record.snapshot.data)
+    return digest.hexdigest()
+
+
+def _source_inventory_document(closure: SourceClosure) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    counts = {
+        kind: sum(record.kind == kind for record in closure.records)
+        for kind in (
+            SOURCE_RECORD_FILE,
+            SOURCE_RECORD_ABSENT,
+            SOURCE_RECORD_UNTRACKED_FILE,
+        )
+    }
+    for record in closure.records:
+        item: dict[str, Any] = {
+            "kind": record.kind,
+            "path": os.fspath(record.path),
+        }
+        if record.index_entry is not None:
+            item["index_mode"] = record.index_entry.mode
+            item["index_object_id"] = record.index_entry.object_id
+        if record.snapshot is not None:
+            item["size"] = record.snapshot.size
+            item["sha256"] = record.snapshot.sha256
+        records.append(item)
+    body = {
+        "inventory_version": 1,
+        "tracked_file_count": counts[SOURCE_RECORD_FILE],
+        "tracked_absent_count": counts[SOURCE_RECORD_ABSENT],
+        "untracked_file_count": counts[SOURCE_RECORD_UNTRACKED_FILE],
+        "records": records,
+    }
+    return {
+        **body,
+        "inventory_sha256": _sha256(_render(body).encode("utf-8")),
+    }
+
+
+def _authenticate_source_closure(
+    closure: SourceClosure,
+    git: FileSnapshot,
+    environment: Mapping[str, str],
+) -> None:
+    index_now, index_binding = _index_entries(git, environment)
+    untracked_now, untracked_binding = _untracked_paths(git, environment)
+    if index_binding != closure.git_binding or untracked_binding != closure.git_binding:
+        raise FixtureError("Git executable binding changed during generation")
+    index_relevant_paths_now = {
+        path
+        for path in index_now
+        if path in closure.required_present_paths
+        or _is_build_package_path(path, closure.package_directories)
+    }
+    index_relevant_now = {
+        path: _canonical_index_entry(index_now, path)
+        for path in index_relevant_paths_now
+    }
+    if index_relevant_now != closure.index_entries:
+        changed = sorted(
+            path
+            for path in set(index_relevant_now) | set(closure.index_entries)
+            if index_relevant_now.get(path) != closure.index_entries.get(path)
+        )
+        raise FixtureError(
+            "Git index-stage inventory changed during generation: "
+            + ", ".join(map(os.fspath, changed[:32]))
+        )
+    untracked_relevant_now = _build_package_paths(
+        untracked_now, closure.package_directories
+    ) | frozenset(
+        path for path in closure.required_present_paths if path in untracked_now
+    )
+    if untracked_relevant_now != closure.untracked_paths:
+        changed = sorted(untracked_relevant_now ^ closure.untracked_paths)
+        raise FixtureError(
+            "untracked source inventory changed during generation: "
+            + ", ".join(map(os.fspath, changed[:32]))
+        )
+    for record in closure.records:
+        if record.snapshot is not None:
+            _authenticate_file(record.snapshot)
+        else:
+            _assert_path_absent(
+                REPOSITORY_ROOT / record.path,
+                f"tracked source closure {record.path}",
+            )
+
+
 def _source_closure(
     git: FileSnapshot,
     environment: Mapping[str, str],
-) -> tuple[dict[Path, FileSnapshot], str, str]:
-    tracked_before, binding_before = _tracked_paths(git, environment)
-    manifest_snapshots, package_directories = _package_source_closure(tracked_before)
+) -> SourceClosure:
+    index_before, index_binding = _index_entries(git, environment)
+    untracked_before, untracked_binding = _untracked_paths(git, environment)
+    if untracked_binding != index_binding:
+        raise FixtureError("Git executable binding changed during source inventory")
+    tracked_before = frozenset(index_before)
+    available_before = tracked_before | untracked_before
+    manifest_snapshots, package_directories = _package_source_closure(
+        available_before, index_before
+    )
+    required_present_paths = frozenset((*ROOT_INPUTS, *manifest_snapshots))
     paths = set(ROOT_INPUTS)
     paths.update(manifest_snapshots)
     for relative in tracked_before:
-        for package in package_directories:
-            if relative == package or package not in relative.parents:
-                continue
-            package_relative = relative.relative_to(package)
-            if package_relative.parts and package_relative.parts[0] in NON_BUILD_PACKAGE_TREES:
-                continue
+        if _is_build_package_path(relative, package_directories):
             paths.add(relative)
-            break
-    missing = sorted(path for path in paths if path not in tracked_before)
+    untracked_build_paths = _build_package_paths(untracked_before, package_directories)
+    indexed_build_paths = _build_package_paths(tracked_before, package_directories)
+    relevant_index_paths = indexed_build_paths | frozenset(
+        path for path in required_present_paths if path in index_before
+    )
+    relevant_index_entries = {
+        path: _canonical_index_entry(index_before, path)
+        for path in relevant_index_paths
+    }
+    paths.update(untracked_build_paths)
+    untracked_relevant_paths = untracked_build_paths | frozenset(
+        path for path in required_present_paths if path in untracked_before
+    )
+    missing = sorted(path for path in paths if path not in available_before)
     if missing:
         raise FixtureError(
-            "source closure contains untracked inputs: " + ", ".join(map(os.fspath, missing))
+            "source closure contains unavailable inputs: " + ", ".join(map(os.fspath, missing))
         )
 
-    snapshots: dict[Path, FileSnapshot] = {}
+    records: list[SourceClosureRecord] = []
+    files: dict[Path, FileSnapshot] = {}
     for relative in sorted(paths, key=os.fspath):
-        snapshots[relative] = manifest_snapshots.get(relative) or _snapshot_file(
-            REPOSITORY_ROOT / relative,
-            f"source closure {relative}",
-        )
+        if relative not in index_before:
+            snapshot = manifest_snapshots.get(relative) or _snapshot_file(
+                REPOSITORY_ROOT / relative,
+                f"untracked source closure {relative}",
+            )
+            record = SourceClosureRecord(
+                kind=SOURCE_RECORD_UNTRACKED_FILE,
+                path=relative,
+                snapshot=snapshot,
+                index_entry=None,
+            )
+            files[relative] = snapshot
+        else:
+            index_entry = _canonical_index_entry(index_before, relative)
+            if index_entry.mode not in REGULAR_INDEX_MODES:
+                raise FixtureError(
+                    f"source closure index entry is not a regular file: {relative}"
+                )
+            snapshot = manifest_snapshots.get(relative)
+            if snapshot is None:
+                try:
+                    (REPOSITORY_ROOT / relative).lstat()
+                except FileNotFoundError:
+                    if relative in required_present_paths:
+                        raise FixtureError(
+                            f"required source closure input is absent: {relative}"
+                        )
+                    _assert_path_absent(
+                        REPOSITORY_ROOT / relative,
+                        f"tracked source closure {relative}",
+                    )
+                    record = SourceClosureRecord(
+                        kind=SOURCE_RECORD_ABSENT,
+                        path=relative,
+                        snapshot=None,
+                        index_entry=index_entry,
+                    )
+                    records.append(record)
+                    continue
+                except OSError as error:
+                    raise FixtureError(
+                        f"failed to inspect source closure {relative}: {error}"
+                    ) from error
+                snapshot = _snapshot_file(
+                    REPOSITORY_ROOT / relative,
+                    f"source closure {relative}",
+                )
+            record = SourceClosureRecord(
+                kind=SOURCE_RECORD_FILE,
+                path=relative,
+                snapshot=snapshot,
+                index_entry=index_entry,
+            )
+            files[relative] = snapshot
+        records.append(record)
 
-    digest = hashlib.sha256(SOURCE_CLOSURE_DOMAIN)
-    for relative, snapshot in snapshots.items():
-        encoded_path = os.fspath(relative).encode("utf-8")
-        digest.update(len(encoded_path).to_bytes(4, "big"))
-        digest.update(encoded_path)
-        digest.update(snapshot.size.to_bytes(8, "big"))
-        digest.update(snapshot.data)
-
-    tracked_after, binding_after = _tracked_paths(git, environment)
-    if tracked_after != tracked_before:
-        raise FixtureError("tracked source inventory changed during generation")
-    if binding_after != binding_before:
-        raise FixtureError("Git executable binding changed during generation")
-    for snapshot in snapshots.values():
-        _authenticate_file(snapshot)
-    return snapshots, digest.hexdigest(), binding_before
+    closure = SourceClosure(
+        records=tuple(records),
+        files=files,
+        index_entries=relevant_index_entries,
+        untracked_paths=untracked_relevant_paths,
+        package_directories=frozenset(package_directories),
+        required_present_paths=required_present_paths,
+        closure_sha256=_source_record_digest(records),
+        git_binding=index_binding,
+    )
+    _authenticate_source_closure(closure, git, environment)
+    return closure
 
 
 def _manifest_hash(manifest: dict[str, Any], field: str) -> str:
@@ -922,15 +1246,15 @@ def _build_artifact(
 
 
 def _source_provenance(
-    sources: dict[Path, FileSnapshot], closure_sha256: str
+    closure: SourceClosure,
 ) -> dict[str, str | int]:
     return {
-        "scope": "tracked-semantic-source-closure-v1",
-        "closure_algorithm": "sha256-framed-path-and-bytes-v1",
-        "closure_sha256": closure_sha256,
-        "file_count": len(sources),
-        "contract_source_git_blob": _git_blob_id(sources[SOURCE_PATH].data),
-        "artifact_generator_git_blob": _git_blob_id(sources[GENERATOR_PATH].data),
+        "scope": "semantic-worktree-source-closure-v2",
+        "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
+        "closure_sha256": closure.closure_sha256,
+        "file_count": len(closure.files),
+        "contract_source_git_blob": _git_blob_id(closure.files[SOURCE_PATH].data),
+        "artifact_generator_git_blob": _git_blob_id(closure.files[GENERATOR_PATH].data),
     }
 
 
@@ -962,11 +1286,12 @@ def _attestation(
     executable_bindings: dict[str, str],
     fixture_text: str,
     fixture: dict[str, Any],
+    closure: SourceClosure,
 ) -> str:
     provenance = fixture["source_provenance"]
     return _render(
         {
-            "attestation_version": 1,
+            "attestation_version": 2,
             "canonical_fixture_sha256": _sha256(fixture_text.encode("utf-8")),
             "artifact_sha256": fixture["artifact_sha256"],
             "koto_sha256": koto.sha256,
@@ -985,6 +1310,7 @@ def _attestation(
             ),
             "source_closure_sha256": provenance["closure_sha256"],
             "source_file_count": provenance["file_count"],
+            "source_inventory": _source_inventory_document(closure),
         }
     )
 
@@ -994,7 +1320,8 @@ def _generate(koto_path: Path, git_path: Path, stage: BoundDirectory) -> tuple[s
     sealed_inputs, source, koto, git = _prepare_sealed_inputs(stage, koto_path, git_path)
     cargo_lock = _snapshot_file(REPOSITORY_ROOT / "Cargo.lock", "local Cargo.lock")
     try:
-        sources, closure_sha256, git_binding = _source_closure(git, environment)
+        closure = _source_closure(git, environment)
+        sources = closure.files
         if sources[SOURCE_PATH].sha256 != source.sha256:
             raise FixtureError("sealed Kotodama source differs from the tracked source closure")
         artifact, manifest, koto_binding = _build_artifact(
@@ -1004,22 +1331,22 @@ def _generate(koto_path: Path, git_path: Path, stage: BoundDirectory) -> tuple[s
             stage,
             environment,
         )
-        for snapshot in sources.values():
-            _authenticate_file(snapshot)
+        _authenticate_source_closure(closure, git, environment)
         _authenticate_file(cargo_lock)
         fixture = _fixture_document(
             artifact,
             manifest,
-            _source_provenance(sources, closure_sha256),
+            _source_provenance(closure),
         )
         fixture_text = _render(fixture)
         attestation_text = _attestation(
             koto,
             git,
             cargo_lock,
-            {"git": git_binding, "koto": koto_binding},
+            {"git": closure.git_binding, "koto": koto_binding},
             fixture_text,
             fixture,
+            closure,
         )
         _write_new_file(
             stage,

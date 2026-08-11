@@ -6,8 +6,11 @@
 
 use iroha_crypto::{Algorithm, KeyPair};
 #[cfg(test)]
+use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
+    block::BlockHeader,
     privacy::{
         PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
@@ -27,6 +30,7 @@ use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey,
     signature::{Signer as _, hazmat::PrehashSigner as _},
 };
+use time::OffsetDateTime;
 
 use super::*;
 use crate::{
@@ -38,7 +42,8 @@ use crate::{
         },
         profile::{
             ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CHAIN_DEPTH_V1,
-            ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_MIN_CHAIN_DEPTH_V1,
+            ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
+            ZK_X509_MIN_CHAIN_DEPTH_V1,
         },
     },
     privacy_state::{
@@ -54,6 +59,53 @@ const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;
 const CANONICAL_LEAF_SERIAL_V1: [u8; 1] = [2];
 const MAXIMUM_LEAF_SERIAL_V1: [u8; ZK_X509_MAX_SERIAL_BYTES_V1] =
     [0x40; ZK_X509_MAX_SERIAL_BYTES_V1];
+
+#[derive(Clone, Copy)]
+struct ZkX509ReleaseTimesV1 {
+    crl_this_update_unix_seconds: u64,
+    crl_next_update_unix_seconds: u64,
+    presentation_not_before_unix_seconds: u64,
+    presentation_not_after_unix_seconds: u64,
+    revoked_at_unix_seconds: u64,
+}
+
+impl ZkX509ReleaseTimesV1 {
+    const FIXED_V1: Self = Self {
+        crl_this_update_unix_seconds: CRL_THIS_UPDATE,
+        crl_next_update_unix_seconds: CRL_NEXT_UPDATE,
+        presentation_not_before_unix_seconds: VALIDATION_TIME,
+        presentation_not_after_unix_seconds: VALIDATION_TIME + 60,
+        revoked_at_unix_seconds: CRL_THIS_UPDATE - 86_400,
+    };
+
+    fn from_trusted_block_timestamp_ms_v1(
+        trusted_block_timestamp_ms: u64,
+    ) -> Result<Self, &'static str> {
+        let trusted_unix_seconds = trusted_block_timestamp_ms / 1_000;
+        let presentation_not_after_unix_seconds = trusted_unix_seconds
+            .checked_add(ZK_X509_MAX_CRL_AGE_SECONDS_V1)
+            .ok_or("network release presentation window overflow")?;
+        let crl_next_update_unix_seconds = presentation_not_after_unix_seconds
+            .checked_add(1)
+            .ok_or("network release CRL nextUpdate overflow")?;
+        let revoked_at_unix_seconds = trusted_unix_seconds
+            .checked_sub(1)
+            .ok_or("network release CRL revocation time underflow")?;
+        Ok(Self {
+            crl_this_update_unix_seconds: trusted_unix_seconds,
+            crl_next_update_unix_seconds,
+            presentation_not_before_unix_seconds: trusted_unix_seconds,
+            presentation_not_after_unix_seconds,
+            revoked_at_unix_seconds,
+        })
+    }
+}
+
+#[derive(Clone)]
+enum ZkX509ReleaseCrlLineageV1 {
+    Origin,
+    Successor(PrivacyZkX509CrlRecordV1),
+}
 
 /// Non-secret dimensions of one deterministic release fixture.
 ///
@@ -143,7 +195,9 @@ pub(crate) struct ZkX509ReleaseFixtureV1 {
 #[cfg(test)]
 pub(crate) fn reference_statement_context_v1() -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: ChainId::from("taira-zk-x509-reference-test"),
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x91; 32]),
+        )),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x62; 32]),
         parameter_id: PrivacyParameterIdV1::new([0x63; 32]),
@@ -157,7 +211,14 @@ pub(crate) fn reference_statement_context_v1() -> PrivacyStatementContextV1 {
 /// Build the canonical two-certificate, one-disclosure fixture.
 #[cfg(test)]
 pub(crate) fn build_zk_x509_reference_fixture_v1() -> Result<ZkX509ReleaseFixtureV1, &'static str> {
-    build_zk_x509_fixture_v1(reference_statement_context_v1(), false, &[])
+    build_zk_x509_fixture_v1(
+        reference_statement_context_v1(),
+        false,
+        &[],
+        ZkX509ReleaseTimesV1::FIXED_V1,
+        fixed_release_wallet_account_v1()?,
+        &ZkX509ReleaseCrlLineageV1::Origin,
+    )
 }
 
 /// Build either the canonical or closed maximum-shape release fixture.
@@ -176,13 +237,75 @@ pub(crate) fn build_zk_x509_release_fixture_v1(
     } else {
         Vec::new()
     };
-    build_zk_x509_fixture_v1(context, maximum_shape, &revoked_serials)
+    build_zk_x509_fixture_v1(
+        context,
+        maximum_shape,
+        &revoked_serials,
+        ZkX509ReleaseTimesV1::FIXED_V1,
+        fixed_release_wallet_account_v1()?,
+        &ZkX509ReleaseCrlLineageV1::Origin,
+    )
+}
+
+/// Build the canonical network fixture around one actual trusted block time.
+///
+/// This keeps the fixed release KAT byte-for-byte stable while giving the
+/// four-peer release gate a signed CRL and presentation window that can be
+/// admitted by live consensus. The inclusive presentation window consumes the
+/// complete five-minute freshness allowance; `nextUpdate` remains exclusive.
+pub(crate) fn build_zk_x509_network_release_fixture_v1(
+    context: PrivacyStatementContextV1,
+    trusted_block_timestamp_ms: u64,
+    wallet_account: AccountId,
+) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
+    build_zk_x509_fixture_v1(
+        context,
+        false,
+        &[],
+        ZkX509ReleaseTimesV1::from_trusted_block_timestamp_ms_v1(trusted_block_timestamp_ms)?,
+        wallet_account,
+        &ZkX509ReleaseCrlLineageV1::Origin,
+    )
+}
+
+/// Build a fresh network fixture whose complete signed CRL is the exact
+/// active successor of `current_crl`.
+pub(crate) fn build_zk_x509_network_release_successor_fixture_v1(
+    context: PrivacyStatementContextV1,
+    trusted_block_timestamp_ms: u64,
+    wallet_account: AccountId,
+    current_crl: PrivacyZkX509CrlRecordV1,
+) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
+    current_crl
+        .validate()
+        .map_err(|_| "network release current CRL record failed validation")?;
+    let times =
+        ZkX509ReleaseTimesV1::from_trusted_block_timestamp_ms_v1(trusted_block_timestamp_ms)?;
+    if times.crl_this_update_unix_seconds <= current_crl.this_update_unix_seconds {
+        return Err("network release successor CRL thisUpdate did not increase");
+    }
+    let crl_lineage = ZkX509ReleaseCrlLineageV1::Successor(current_crl.clone());
+    let fixture =
+        build_zk_x509_fixture_v1(context, false, &[], times, wallet_account, &crl_lineage)?;
+    let successor = fixture.authoritative_state.crl_record();
+    iroha_data_model::privacy::validate_zk_x509_crl_rotation_v1(&current_crl, &successor)
+        .map_err(|_| "network release successor CRL failed rotation validation")?;
+    Ok(fixture)
+}
+
+fn fixed_release_wallet_account_v1() -> Result<AccountId, &'static str> {
+    let wallet_key_pair = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+        .map_err(|_| "deterministic release wallet key failed")?;
+    Ok(AccountId::new(wallet_key_pair.public_key().clone()))
 }
 
 fn build_zk_x509_fixture_v1(
     context: PrivacyStatementContextV1,
     maximum_shape: bool,
     revoked_serials: &[Vec<u8>],
+    times: ZkX509ReleaseTimesV1,
+    wallet_account: AccountId,
+    crl_lineage: &ZkX509ReleaseCrlLineageV1,
 ) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
     let root_key = p256_key(1)?;
     let intermediate_key = p256_key(3)?;
@@ -258,13 +381,28 @@ fn build_zk_x509_fixture_v1(
         leaf_issuer_ski,
         None,
     );
+    let (crl_record_epoch, crl_number, previous_crl_record_digest) = match crl_lineage {
+        ZkX509ReleaseCrlLineageV1::Origin => (1, 7, None),
+        ZkX509ReleaseCrlLineageV1::Successor(current) => (
+            current
+                .record_epoch
+                .checked_add(1)
+                .ok_or("network release successor CRL epoch overflow")?,
+            current
+                .crl_number
+                .checked_add(1)
+                .ok_or("network release successor CRL number overflow")?,
+            Some(current.record_digest),
+        ),
+    };
     let crl_der = crl(
         leaf_issuer_name,
         leaf_issuer_key,
         leaf_issuer_ski,
-        7,
+        crl_number,
         revoked_serials,
-    );
+        times,
+    )?;
 
     let mut certificate_chain_der = vec![leaf_der];
     if let Some(intermediate_der) = intermediate_der {
@@ -340,19 +478,17 @@ fn build_zk_x509_fixture_v1(
     let crl = PrivacyZkX509CrlRecordV1::new(
         trust_anchor_id,
         policy_id,
-        1,
-        7,
+        crl_record_epoch,
+        crl_number,
         PrivacyX509CrlDerDigestV1::digest_exact_der(&crl_der),
         PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(issuer.spki_der),
-        CRL_THIS_UPDATE,
-        CRL_NEXT_UPDATE,
-        None,
+        times.crl_this_update_unix_seconds,
+        times.crl_next_update_unix_seconds,
+        previous_crl_record_digest,
         PrivacyZkX509RecordLifecycleV1::Active,
     )
     .map_err(|_| "deterministic release CRL record failed")?;
 
-    let wallet_key_pair = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
-        .map_err(|_| "deterministic release wallet key failed")?;
     let mut statement = IrohaZkX509StarkP256StatementV1 {
         context,
         trust_anchor_id,
@@ -376,9 +512,9 @@ fn build_zk_x509_fixture_v1(
                 attribute_digest: PrivacyAttributeDigestV1::new([0; 32]),
             })
             .collect(),
-        presentation_not_before_unix_seconds: VALIDATION_TIME,
-        presentation_not_after_unix_seconds: VALIDATION_TIME + 60,
-        wallet_account: AccountId::new(wallet_key_pair.public_key().clone()),
+        presentation_not_before_unix_seconds: times.presentation_not_before_unix_seconds,
+        presentation_not_after_unix_seconds: times.presentation_not_after_unix_seconds,
+        wallet_account,
         wallet_challenge: PrivacyChallengeV1::new([0x68; 32]),
         certificate_nullifier: PrivacyNullifierV1::new([0; 32]),
     };
@@ -718,7 +854,8 @@ fn crl(
     authority_key_identifier: &[u8],
     number: u64,
     revoked_serials: &[Vec<u8>],
-) -> Vec<u8> {
+    times: ZkX509ReleaseTimesV1,
+) -> Result<Vec<u8>, &'static str> {
     let extensions = sequence(&[
         extension(
             OID_AUTHORITY_KEY_IDENTIFIER,
@@ -731,25 +868,56 @@ fn crl(
         integer(1),
         ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         issuer.to_vec(),
-        tlv(0x17, b"230101000000Z"),
-        tlv(0x17, b"230101000500Z"),
+        tlv(
+            0x17,
+            &utc_time_contents_v1(times.crl_this_update_unix_seconds)?,
+        ),
+        tlv(
+            0x17,
+            &utc_time_contents_v1(times.crl_next_update_unix_seconds)?,
+        ),
     ];
     if !revoked_serials.is_empty() {
+        let revoked_at = utc_time_contents_v1(times.revoked_at_unix_seconds)?;
         fields.push(sequence(
             &revoked_serials
                 .iter()
-                .map(|serial| sequence(&[positive_integer(serial), tlv(0x17, b"221231000000Z")]))
+                .map(|serial| sequence(&[positive_integer(serial), tlv(0x17, &revoked_at)]))
                 .collect::<Vec<_>>(),
         ));
     }
     fields.push(tlv(0xa0, &extensions));
     let tbs = sequence(&fields);
     let signature: P256Signature = issuer_key.sign(&tbs);
-    sequence(&[
+    Ok(sequence(&[
         tbs,
         ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         bit_string(signature.to_der().as_bytes(), 0),
-    ])
+    ]))
+}
+
+fn utc_time_contents_v1(unix_seconds: u64) -> Result<[u8; 13], &'static str> {
+    let unix_seconds = i64::try_from(unix_seconds)
+        .map_err(|_| "release fixture UTCTime exceeds signed timestamp range")?;
+    let date_time = OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .map_err(|_| "release fixture UTCTime is outside the supported calendar")?;
+    let year = date_time.year();
+    if !(1950..=2049).contains(&year) {
+        return Err("release fixture UTCTime is outside RFC 5280 UTCTime years");
+    }
+    let encoded = format!(
+        "{:02}{:02}{:02}{:02}{:02}{:02}Z",
+        year.rem_euclid(100),
+        u8::from(date_time.month()),
+        date_time.day(),
+        date_time.hour(),
+        date_time.minute(),
+        date_time.second(),
+    );
+    encoded
+        .into_bytes()
+        .try_into()
+        .map_err(|_| "release fixture UTCTime encoded to a noncanonical width")
 }
 
 fn spki(key: &P256SigningKey) -> Vec<u8> {
@@ -888,6 +1056,91 @@ mod tests {
             ZkX509WitnessV1::decode_exact_v1(&encoded).expect("exact witness decode"),
             fixture.witness
         );
+    }
+
+    #[test]
+    fn network_release_fixture_binds_live_time_without_changing_the_fixed_kat_path() {
+        const TRUSTED_BLOCK_TIMESTAMP_MS: u64 = 1_785_024_000_123;
+        const TRUSTED_BLOCK_UNIX_SECONDS: u64 = TRUSTED_BLOCK_TIMESTAMP_MS / 1_000;
+
+        let network_wallet = AccountId::new(
+            KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+                .expect("network wallet key")
+                .public_key()
+                .clone(),
+        );
+        let fixture = build_zk_x509_network_release_fixture_v1(
+            reference_statement_context_v1(),
+            TRUSTED_BLOCK_TIMESTAMP_MS,
+            network_wallet.clone(),
+        )
+        .expect("live-time network release fixture");
+        let crl = fixture.authoritative_state.crl_record();
+        assert_eq!(
+            fixture.statement.presentation_not_before_unix_seconds,
+            TRUSTED_BLOCK_UNIX_SECONDS
+        );
+        assert_eq!(
+            fixture.statement.presentation_not_after_unix_seconds,
+            TRUSTED_BLOCK_UNIX_SECONDS + ZK_X509_MAX_CRL_AGE_SECONDS_V1
+        );
+        assert_eq!(crl.this_update_unix_seconds, TRUSTED_BLOCK_UNIX_SECONDS);
+        assert_eq!(
+            crl.next_update_unix_seconds,
+            TRUSTED_BLOCK_UNIX_SECONDS + ZK_X509_MAX_CRL_AGE_SECONDS_V1 + 1
+        );
+        let parsed_crl = parse_crl_v1(&fixture.witness.crl_der).expect("network release CRL");
+        assert_eq!(parsed_crl.this_update, crl.this_update_unix_seconds);
+        assert_eq!(parsed_crl.next_update, crl.next_update_unix_seconds);
+        assert_eq!(fixture.statement.wallet_account, network_wallet);
+        assert_ne!(
+            fixture.statement.wallet_account,
+            fixed_release_wallet_account_v1().expect("fixed KAT wallet")
+        );
+        prepare_zk_x509_prover_input_v1(
+            &fixture.statement,
+            &fixture.authoritative_state,
+            TRUSTED_BLOCK_TIMESTAMP_MS,
+            &PrivacyConsensusLimitsV1::taira_default(),
+            &fixture
+                .witness
+                .encode_v1()
+                .expect("network release witness encoding"),
+        )
+        .expect("network release production prover preflight");
+
+        let successor = build_zk_x509_network_release_successor_fixture_v1(
+            reference_statement_context_v1(),
+            TRUSTED_BLOCK_TIMESTAMP_MS + 1_000,
+            network_wallet,
+            crl.clone(),
+        )
+        .expect("signed network release CRL successor fixture");
+        let successor_crl = successor.authoritative_state.crl_record();
+        assert_eq!(successor_crl.record_epoch, crl.record_epoch + 1);
+        assert_eq!(successor_crl.crl_number, crl.crl_number + 1);
+        assert_eq!(
+            successor_crl.previous_record_digest,
+            Some(crl.record_digest)
+        );
+        assert_ne!(successor_crl.crl_der_digest, crl.crl_der_digest);
+        assert_eq!(
+            successor.statement.certificate_nullifier,
+            fixture.statement.certificate_nullifier
+        );
+        assert_eq!(
+            parse_crl_v1(&successor.witness.crl_der)
+                .expect("signed successor CRL")
+                .crl_number,
+            successor_crl.crl_number
+        );
+        iroha_data_model::privacy::validate_zk_x509_crl_rotation_v1(&crl, &successor_crl)
+            .expect("canonical release CRL rotation");
+
+        let fixed = build_zk_x509_reference_fixture_v1().expect("fixed KAT fixture");
+        let fixed_crl = parse_crl_v1(&fixed.witness.crl_der).expect("fixed KAT CRL");
+        assert_eq!(fixed_crl.this_update, CRL_THIS_UPDATE);
+        assert_eq!(fixed_crl.next_update, CRL_NEXT_UPDATE);
     }
 
     #[test]
@@ -1125,7 +1378,15 @@ mod tests {
         let root_key = p256_key(1).expect("deterministic root key");
         let root_name = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]);
         let root_ski = [0x31; 20];
-        let crl_der = crl(&root_name, &root_key, &root_ski, 7, revoked_serials);
+        let crl_der = crl(
+            &root_name,
+            &root_key,
+            &root_ski,
+            7,
+            revoked_serials,
+            ZkX509ReleaseTimesV1::FIXED_V1,
+        )
+        .expect("matching authoritative CRL DER");
         let issuer = parse_certificate_v1(&fixture.witness.certificate_chain_der[1])
             .expect("canonical issuer");
         let trust_anchor = fixture.authoritative_state.trust_anchor();

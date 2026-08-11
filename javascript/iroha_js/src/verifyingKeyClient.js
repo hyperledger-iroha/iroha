@@ -478,7 +478,7 @@ export function createVerifyingKeyClient(
   function normalizeVerifyingKeyTransactionDraft(
     input,
     context,
-    { chainId, operation, request },
+    { networkId, operation, request },
   ) {
     const record = ensureRecord(input, context);
     assertSupportedOptionKeys(
@@ -525,7 +525,7 @@ export function createVerifyingKeyClient(
       decodedInstruction = decodeCanonicalVerifyingKeyTransactionPayload(
         transactionPayload,
         {
-          expectedChainId: chainId,
+          expectedNetworkId: networkId,
           expectedAuthority: request.authority,
           operation,
         },

@@ -228,7 +228,7 @@ fn build_transfer(
         .wrap_err("system clock before Unix epoch")?;
     build_signed_zk_ace_privacy_transfer_v1(
         ZkAcePrivacyActionTransactionContextV1 {
-            chain_id: client.chain.clone(),
+            network_id: client.network_id,
             authority: ALICE_ID.clone(),
             creation_time,
             time_to_live: Some(Duration::from_secs(3_600)),
@@ -252,9 +252,12 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     let asset_definition_id = asset_definition_id();
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let builder = NetworkBuilder::new()
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone(), "zkace_typed".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None),
-        ))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "zkace_typed".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
         .with_genesis_instruction(Mint::asset_quantity(100_u64, alice_asset))
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);

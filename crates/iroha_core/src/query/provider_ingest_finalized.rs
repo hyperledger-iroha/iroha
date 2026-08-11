@@ -6,13 +6,19 @@
 //! immutable record stores only changed provider projections, links the exact
 //! preceding height, and commits to the complete provider-indexed state.
 //!
-//! The first record for a chain is an explicit activation floor. Authenticated
+//! The first record for a network is an explicit activation floor. Authenticated
 //! retention may replace a prefix with a content-addressed virtual base while
 //! preserving the exact page and cursor bytes at the new floor. Queries below
 //! an activation or retention floor fail with distinct typed errors; no
 //! current-head fallback or inferred historical coverage exists. Runtime
 //! credentials, grants, endpoints, private keys, and payload bytes are absent
 //! from every public and durable type.
+//!
+//! First-release records always encode the optional consensus Musubi archive
+//! binding, including an explicit `None` for generic orders. Pre-release
+//! archive bytes that lack that field also use a retired state-root domain and
+//! cannot pass canonical decode/validation; operators must reset that
+//! disposable archive namespace rather than migrate it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,8 +35,9 @@ use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
+    musubi::MusubiReplicationOrderArchiveBindingV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -74,7 +81,8 @@ const RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1: &[u8] =
 const RETENTION_APPROVAL_REVISION_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.provider-ingest.finalized-archive-retention-approval.v1\0";
 const RETENTION_APPROVAL_NAMESPACE_V1: [u8; 32] = *b"sorafs.pi.archive.retention.v1.0";
-const STATE_ROOT_DOMAIN_V1: &[u8] = b"iroha.sorafs.provider-ingest.finalized-provider-state.v1\0";
+const STATE_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.provider-ingest.finalized-provider-state.first-release.v1\0";
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 const MAX_DECODE_NESTING_DEPTH: usize = 128;
@@ -268,8 +276,8 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
 /// Exact finalized identity of one archived committed view.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveKeyV1 {
-    /// Chain containing the committed state.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network containing the committed state.
+    pub network_id: NetworkId,
     /// One-based finalized block height.
     pub height: u64,
     /// Exact finalized block hash.
@@ -283,16 +291,16 @@ impl ProviderIngestFinalizedArchiveKeyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an empty chain, zero height/hash/time, or the reserved maximum
-    /// timestamp.
+    /// Rejects an unmarked network identity, zero height/hash/time, or the
+    /// reserved maximum timestamp.
     pub fn try_new(
-        chain_id: ChainId,
+        network_id: NetworkId,
         height: u64,
         block_hash: [u8; 32],
         finalized_at_unix_ms: u64,
     ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
         let key = Self {
-            chain_id,
+            network_id,
             height,
             block_hash,
             finalized_at_unix_ms,
@@ -307,9 +315,9 @@ impl ProviderIngestFinalizedArchiveKeyV1 {
     ///
     /// Returns a stable key-validation failure.
     pub fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if self.chain_id.as_str().is_empty() {
+        if self.network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact genesis-derived identity",
             });
         }
         if self.height == 0 {
@@ -345,6 +353,9 @@ pub struct ProviderIngestFinalizedArchivedOrderV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication-order record.
     pub replication_order: ReplicationOrderRecord,
+    /// Consensus-authenticated Musubi archive binding, absent for generic
+    /// non-Musubi replication orders.
+    pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
 }
 
 impl ProviderIngestFinalizedArchivedOrderV1 {
@@ -404,6 +415,7 @@ impl ProviderIngestFinalizedProjectionV1 {
             (
                 &PinManifestRecord,
                 &ReplicationOrderRecord,
+                &Option<MusubiReplicationOrderArchiveBindingV1>,
                 BTreeSet<ProviderId>,
             ),
         > = BTreeMap::new();
@@ -477,13 +489,15 @@ impl ProviderIngestFinalizedProjectionV1 {
                         entry.insert((
                             &archived.pin_manifest,
                             &archived.replication_order,
+                            &archived.musubi_archive,
                             assigned,
                         ));
                     }
                     std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        let (pin, order, assigned) = entry.get_mut();
+                        let (pin, order, musubi_archive, assigned) = entry.get_mut();
                         if *pin != &archived.pin_manifest
                             || *order != &archived.replication_order
+                            || *musubi_archive != &archived.musubi_archive
                             || !assigned.insert(provider.provider_id)
                         {
                             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
@@ -494,7 +508,7 @@ impl ProviderIngestFinalizedProjectionV1 {
                 }
             }
         }
-        for (order_id, (_, order, projected_providers)) in orders_by_id {
+        for (order_id, (_, order, _, projected_providers)) in orders_by_id {
             let decoded = validated_replication_order_from_record(&order_id, order)?;
             let assigned = decoded
                 .assignments
@@ -530,6 +544,9 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication order.
     pub replication_order: ReplicationOrderRecord,
+    /// Consensus-authenticated Musubi archive binding, absent for generic
+    /// non-Musubi replication orders.
+    pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
     /// Current authoritative completion epoch, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
@@ -975,7 +992,7 @@ pub enum ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 
 /// Deployment-owned sealed monotonic CAS authority for archive retention.
 ///
-/// Implementations own all credentials and durable state. Each `chain_id`
+/// Implementations own all credentials and durable state. Each `network_id`
 /// identifies an independent linearizable namespace containing only canonical
 /// [`ProviderIngestFinalizedArchiveRetentionApprovalRecordV1`] values.
 pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
@@ -994,14 +1011,14 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
         ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
 
-    /// Load the exact latest authoritative record for `chain_id`.
+    /// Load the exact latest authoritative record for `network_id`.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free provider failure.
     fn load_latest(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<
         Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
         ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
@@ -1018,7 +1035,7 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
     /// Returns a fixed payload-free provider failure.
     fn compare_and_swap_latest(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         expected_revision: Option<[u8; 32]>,
         next: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     ) -> Result<(), ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1>;
@@ -1196,7 +1213,7 @@ impl ProviderIngestFinalizedArchiveRecordV1 {
             .predecessor
             .as_ref()
             .is_none_or(|predecessor| {
-                predecessor.key.chain_id == self.material.key.chain_id
+                predecessor.key.network_id == self.material.key.network_id
                     && predecessor
                         .key
                         .height
@@ -1266,7 +1283,7 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
         }
         material.original_activation_floor.validate()?;
         material.retention_floor.validate()?;
-        if material.original_activation_floor.chain_id != material.retention_floor.chain_id
+        if material.original_activation_floor.network_id != material.retention_floor.network_id
             || material.original_activation_floor.height > material.retention_floor.height
             || material.projection.key != material.retention_floor
         {
@@ -1382,7 +1399,7 @@ struct ArchiveVirtualBaseV1 {
 struct PreparedArchiveCompactionV1 {
     checkpoint: ProviderIngestFinalizedArchiveCheckpointV1,
     canonical_bytes: Vec<u8>,
-    obsolete: Vec<((ChainId, u64), ArchiveRecordEntryV1)>,
+    obsolete: Vec<((NetworkId, u64), ArchiveRecordEntryV1)>,
     previous_base: Option<ArchiveVirtualBaseV1>,
 }
 
@@ -1403,8 +1420,8 @@ struct ArchiveRecordEntryV1 {
 
 #[derive(Debug, Default)]
 struct ArchiveIndexV1 {
-    by_height: BTreeMap<(ChainId, u64), ArchiveRecordEntryV1>,
-    virtual_bases: BTreeMap<ChainId, ArchiveVirtualBaseV1>,
+    by_height: BTreeMap<(NetworkId, u64), ArchiveRecordEntryV1>,
+    virtual_bases: BTreeMap<NetworkId, ArchiveVirtualBaseV1>,
     total_bytes: u64,
     generation: u64,
 }
@@ -1467,20 +1484,20 @@ impl ProviderIngestFinalizedArchiveV1 {
     pub fn try_open_with_retention_authority(
         root: impl Into<PathBuf>,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
     ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact genesis-derived identity",
             });
         }
         assert_retention_authority_identity(binding, authority)?;
         let (archive, checkpoint_candidates) = Self::open_unreconciled(root, bounds)?;
         archive.recover_approved_retention(
-            chain_id,
+            network_id,
             kura,
             binding,
             authority,
@@ -1564,19 +1581,18 @@ impl ProviderIngestFinalizedArchiveV1 {
 
     fn recover_approved_retention(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
         checkpoint_candidates: Vec<ArchiveVirtualBaseV1>,
     ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if checkpoint_candidates
-            .iter()
-            .any(|candidate| &candidate.checkpoint.material.retention_floor.chain_id != chain_id)
-        {
+        if checkpoint_candidates.iter().any(|candidate| {
+            &candidate.checkpoint.material.retention_floor.network_id != network_id
+        }) {
             return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
         }
-        let approval = load_retention_approval(binding, authority, chain_id)?;
+        let approval = load_retention_approval(binding, authority, network_id)?;
         let Some(approval) = approval else {
             if !checkpoint_candidates.is_empty() {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
@@ -1586,11 +1602,11 @@ impl ProviderIngestFinalizedArchiveV1 {
             validate_index_coverage(&index, self.bounds)?;
             return Ok(());
         };
-        validate_retention_approval_record(&approval, binding, chain_id)?;
+        validate_retention_approval_record(&approval, binding, network_id)?;
         validate_retention_checkpoint_candidate_inventory(
             &checkpoint_candidates,
             &approval,
-            chain_id,
+            network_id,
         )?;
         authenticate_retention_fence(approval.proposal().fence(), kura)?;
 
@@ -1605,13 +1621,13 @@ impl ProviderIngestFinalizedArchiveV1 {
             install_virtual_bases(&mut index, &checkpoint_candidates, self.bounds)?;
             if index
                 .virtual_bases
-                .get(chain_id)
+                .get(network_id)
                 .map(|base| base.checkpoint.checkpoint_digest)
                 != Some(approval.proposal().checkpoint_digest())
             {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
             }
-            require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+            require_exact_retention_readback(binding, authority, network_id, &approval)?;
             finish_compaction_cleanup(
                 &self.records,
                 self.records_identity,
@@ -1635,13 +1651,13 @@ impl ProviderIngestFinalizedArchiveV1 {
             install_virtual_bases(&mut index, &checkpoint_candidates, self.bounds)?;
             if index
                 .virtual_bases
-                .get(chain_id)
+                .get(network_id)
                 .map(|base| base.checkpoint.checkpoint_digest)
                 != approval.predecessor_checkpoint_digest()
             {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRollback);
             }
-            require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+            require_exact_retention_readback(binding, authority, network_id, &approval)?;
             finish_compaction_cleanup(
                 &self.records,
                 self.records_identity,
@@ -1668,61 +1684,61 @@ impl ProviderIngestFinalizedArchiveV1 {
             approval.proposal(),
             approval.predecessor_checkpoint_digest(),
         )?;
-        require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+        require_exact_retention_readback(binding, authority, network_id, &approval)?;
         let _recovered =
             self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})?;
         Ok(())
     }
 
-    /// Return the explicit first archived key for `chain_id`.
+    /// Return the explicit first archived key for `network_id`.
     ///
     /// # Errors
     ///
     /// Returns an integrity error if archive boundaries changed.
     pub fn activation_floor(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<Option<ProviderIngestFinalizedArchiveKeyV1>, ProviderIngestFinalizedArchiveErrorV1>
     {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact genesis-derived identity",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(base) = index.virtual_bases.get(chain_id) {
+        if let Some(base) = index.virtual_bases.get(network_id) {
             verify_checkpoint_entry(base, self.bounds)?;
             return Ok(Some(base.checkpoint.material.retention_floor.clone()));
         }
-        let floor = first_record_for_chain(&index, chain_id);
+        let floor = first_record_for_network(&index, network_id);
         if let Some(entry) = floor {
             verify_record_entry(entry, self.bounds)?;
         }
         Ok(floor.map(|entry| entry.record.material.key.clone()))
     }
 
-    /// Return the installed compaction floor for `chain_id`, when one exists.
+    /// Return the installed compaction floor for `network_id`, when one exists.
     ///
     /// Unlike [`Self::activation_floor`], this returns `None` for an
     /// uncompacted archive even when its original activation record exists.
     ///
     /// # Errors
     ///
-    /// Rejects an empty chain identity or a damaged checkpoint.
+    /// Rejects an unmarked network identity or a damaged checkpoint.
     pub fn retention_floor(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<Option<ProviderIngestFinalizedArchiveKeyV1>, ProviderIngestFinalizedArchiveErrorV1>
     {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact genesis-derived identity",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        let Some(base) = index.virtual_bases.get(chain_id) else {
+        let Some(base) = index.virtual_bases.get(network_id) else {
             return Ok(None);
         };
         verify_checkpoint_entry(base, self.bounds)?;
@@ -1741,50 +1757,47 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// floor, a missing exact height, a hash fork, or damaged immutable bytes.
     pub fn resolve_exact_key(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         height: u64,
         block_hash: [u8; 32],
     ) -> Result<ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchiveErrorV1> {
-        if chain_id.as_str().is_empty() || height == 0 || block_hash == [0; 32] {
+        if network_id.as_bytes()[31] & 1 != 1 || height == 0 || block_hash == [0; 32] {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized cursor must contain a non-empty chain and non-zero height/hash",
+                reason: "finalized cursor must contain an exact network and non-zero height/hash",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        let floor = activation_floor_from_index(&index, chain_id)?.ok_or(
+        let floor = activation_floor_from_index(&index, network_id)?.ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-                reason: "no finalized provider-ingest anchor exists for the requested chain",
+                reason: "no finalized provider-ingest anchor exists for the requested network",
             },
         )?;
         if height < floor.height {
-            return Err(below_floor_error(&index, chain_id, height, floor.height));
+            return Err(below_floor_error(&index, network_id, height, floor.height));
         }
         if height == floor.height
-            && let Some(base) = index.virtual_bases.get(chain_id)
+            && let Some(base) = index.virtual_bases.get(network_id)
         {
             verify_checkpoint_entry(base, self.bounds)?;
             if base.checkpoint.material.retention_floor.block_hash != block_hash {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: chain_id.clone(),
+                    network_id: *network_id,
                     height,
                 });
             }
             return Ok(base.checkpoint.material.retention_floor.clone());
         }
-        let entry = index
-            .by_height
-            .get(&(chain_id.clone(), height))
-            .ok_or_else(
-                || ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-                    chain_id: chain_id.clone(),
-                    height,
-                },
-            )?;
+        let entry = index.by_height.get(&(*network_id, height)).ok_or_else(|| {
+            ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
+                network_id: *network_id,
+                height,
+            }
+        })?;
         verify_record_entry(entry, self.bounds)?;
         if entry.record.material.key.block_hash != block_hash {
             return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                chain_id: chain_id.clone(),
+                network_id: *network_id,
                 height,
             });
         }
@@ -1808,8 +1821,8 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// This is the only state accepted when a fresh height-zero node enables
     /// the archive before genesis capture. The durable namespace is rescanned
-    /// so an archive for another chain cannot be mistaken for an empty
-    /// current-chain activation floor.
+    /// so an archive for another network cannot be mistaken for an empty
+    /// current-network activation floor.
     ///
     /// # Errors
     ///
@@ -1842,32 +1855,32 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// qualification boundary.
     pub fn qualify_against_kura_tip(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         maximum_kura_tip_lag_blocks: u64,
     ) -> Result<ProviderIngestFinalizedArchiveQualificationV1, ProviderIngestFinalizedArchiveErrorV1>
     {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact genesis-derived identity",
             });
         }
         let generation = self.health_generation()?;
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
         validate_index_coverage(&index, self.bounds)?;
-        let chain_range = (
-            std::ops::Bound::Included((chain_id.clone(), 0)),
-            std::ops::Bound::Included((chain_id.clone(), u64::MAX)),
+        let network_range = (
+            std::ops::Bound::Included((*network_id, 0)),
+            std::ops::Bound::Included((*network_id, u64::MAX)),
         );
-        let activation_floor = activation_floor_from_index(&index, chain_id)?.ok_or(
+        let activation_floor = activation_floor_from_index(&index, network_id)?.ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-                reason: "no exact anchor exists for the requested chain",
+                reason: "no exact anchor exists for the requested network",
             },
         )?;
         let archive_tip = index
             .by_height
-            .range(chain_range.clone())
+            .range(network_range.clone())
             .next_back()
             .map(|(_, entry)| entry.record.material.key.clone())
             .unwrap_or_else(|| activation_floor.clone());
@@ -1894,7 +1907,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 },
             );
         }
-        if let Some(base) = index.virtual_bases.get(chain_id) {
+        if let Some(base) = index.virtual_bases.get(network_id) {
             verify_checkpoint_entry(base, self.bounds)?;
             authenticate_archive_anchor_against_kura(
                 &base.checkpoint.material.retention_floor,
@@ -1911,7 +1924,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 )?
                 .ok_or(
                     ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                        chain_id: chain_id.clone(),
+                        network_id: *network_id,
                         height: base.checkpoint.material.retention_floor.height,
                         reason: "virtual base has no authenticated v2 finality artifact",
                     },
@@ -1921,14 +1934,14 @@ impl ProviderIngestFinalizedArchiveV1 {
             {
                 return Err(
                     ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                        chain_id: chain_id.clone(),
+                        network_id: *network_id,
                         height: base.checkpoint.material.retention_floor.height,
                         reason: "virtual-base finality-artifact identity differs from Kura",
                     },
                 );
             }
         }
-        for (_, entry) in index.by_height.range(chain_range) {
+        for (_, entry) in index.by_height.range(network_range) {
             verify_record_entry(entry, self.bounds)?;
             authenticate_archive_anchor_against_kura(&entry.record.material.key, kura, &boundary)?;
         }
@@ -2007,9 +2020,9 @@ impl ProviderIngestFinalizedArchiveV1 {
                 },
             )?;
         let expected_state_tip = authenticate_capture_view(state_ro, kura, &receipt)?;
-        let activation_floor_before = self.activation_floor(state_ro.chain_id())?;
+        let activation_floor_before = self.activation_floor(state_ro.network_id())?;
         let insertion = self.capture_kura_authenticated_view(state_ro, kura, &receipt)?;
-        let qualification = self.qualify_against_kura_tip(state_ro.chain_id(), kura, 0)?;
+        let qualification = self.qualify_against_kura_tip(state_ro.network_id(), kura, 0)?;
         if qualification.archive_tip() != &expected_state_tip {
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
@@ -2109,8 +2122,8 @@ impl ProviderIngestFinalizedArchiveV1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionProposalMismatch);
         }
 
-        let chain_id = &fence.key.chain_id;
-        let current = load_retention_approval(binding, authority, chain_id)?;
+        let network_id = &fence.key.network_id;
+        let current = load_retention_approval(binding, authority, network_id)?;
         let expected_checkpoint = prepared
             .previous_base
             .as_ref()
@@ -2129,7 +2142,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             current.clone()
         } else {
             if let Some(current) = &current {
-                validate_retention_approval_record(current, binding, chain_id)?;
+                validate_retention_approval_record(current, binding, network_id)?;
             }
             validate_retention_authority_predecessor(current.as_ref(), expected_checkpoint, fence)?;
             let sequence = current.as_ref().map_or(Ok(1), |record| {
@@ -2151,13 +2164,13 @@ impl ProviderIngestFinalizedArchiveV1 {
             compare_and_read_back_retention_approval(
                 binding,
                 authority,
-                chain_id,
+                network_id,
                 current.as_ref(),
                 &next,
             )?;
             next
         };
-        let readback = load_retention_approval(binding, authority, chain_id)?;
+        let readback = load_retention_approval(binding, authority, network_id)?;
         if readback.as_ref() != Some(&next) {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation);
         }
@@ -2228,10 +2241,9 @@ impl ProviderIngestFinalizedArchiveV1 {
             path: checkpoint_path,
             canonical_bytes: checkpoint_bytes,
         };
-        index.virtual_bases.insert(
-            checkpoint.material.retention_floor.chain_id.clone(),
-            virtual_base,
-        );
+        index
+            .virtual_bases
+            .insert(checkpoint.material.retention_floor.network_id, virtual_base);
         for (position, (subject, entry)) in prepared.obsolete.iter().enumerate() {
             unlink_verified_archive_file(&self.records, self.records_identity, &entry.path)?;
             after_unlink(position);
@@ -2274,8 +2286,8 @@ impl ProviderIngestFinalizedArchiveV1 {
         projection.validate(self.bounds)?;
         let mut index = self.write_index()?;
         self.verify_storage_boundaries()?;
-        let subject = (projection.key.chain_id.clone(), projection.key.height);
-        if let Some(base) = index.virtual_bases.get(&projection.key.chain_id) {
+        let subject = (projection.key.network_id, projection.key.height);
+        if let Some(base) = index.virtual_bases.get(&projection.key.network_id) {
             let floor = &base.checkpoint.material.retention_floor;
             if projection.key.height < floor.height {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor {
@@ -2286,7 +2298,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             if projection.key.height == floor.height {
                 if projection.key != *floor {
                     return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                        chain_id: projection.key.chain_id.clone(),
+                        network_id: projection.key.network_id,
                         height: projection.key.height,
                     });
                 }
@@ -2295,7 +2307,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 }
                 return Err(
                     ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection {
-                        chain_id: projection.key.chain_id.clone(),
+                        network_id: projection.key.network_id,
                         height: projection.key.height,
                     },
                 );
@@ -2304,7 +2316,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         if let Some(existing) = index.by_height.get(&subject) {
             if existing.record.material.key != projection.key {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id,
                     height: projection.key.height,
                 });
             }
@@ -2314,7 +2326,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id,
                     height: projection.key.height,
                 },
             );
@@ -2323,8 +2335,8 @@ impl ProviderIngestFinalizedArchiveV1 {
         let previous_entry = index
             .by_height
             .range((
-                std::ops::Bound::Included((projection.key.chain_id.clone(), 0)),
-                std::ops::Bound::Included((projection.key.chain_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((projection.key.network_id, 0)),
+                std::ops::Bound::Included((projection.key.network_id, u64::MAX)),
             ))
             .next_back()
             .map(|(_, entry)| entry.clone());
@@ -2337,20 +2349,20 @@ impl ProviderIngestFinalizedArchiveV1 {
         } else {
             index
                 .virtual_bases
-                .get(&projection.key.chain_id)
+                .get(&projection.key.network_id)
                 .map(|base| base.checkpoint.material.projection.clone())
         };
         if let Some(previous) = &previous_projection {
             let expected_height = previous.key.height.checked_add(1).ok_or(
                 ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id,
                     missing_height: u64::MAX,
                     observed_height: projection.key.height,
                 },
             )?;
             if projection.key.height != expected_height {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id,
                     missing_height: expected_height,
                     observed_height: projection.key.height,
                 });
@@ -2366,7 +2378,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             || {
                 index
                     .virtual_bases
-                    .get(&projection.key.chain_id)
+                    .get(&projection.key.network_id)
                     .map(|base| ProviderIngestFinalizedArchivePredecessorV1 {
                         key: base.checkpoint.material.retention_floor.clone(),
                         record_digest: base.checkpoint.material.original_terminal_record_digest,
@@ -2396,7 +2408,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         if loaded != record {
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection {
-                    chain_id: projection.key.chain_id,
+                    network_id: projection.key.network_id,
                     height: projection.key.height,
                 },
             );
@@ -2429,7 +2441,7 @@ impl ProviderIngestFinalizedArchiveV1 {
 
     /// Read one bounded provider-indexed page at an exact finalized anchor.
     ///
-    /// `cursor` is exclusive and must belong to the same chain, block,
+    /// `cursor` is exclusive and must belong to the same network, block,
     /// timestamp, provider, and committed provider-state root. Missing provider
     /// state returns an empty terminal page; another provider is never scanned
     /// or returned.
@@ -2459,40 +2471,40 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        let floor = activation_floor_from_index(&index, &key.chain_id)?.ok_or(
+        let floor = activation_floor_from_index(&index, &key.network_id)?.ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-                reason: "no finalized provider-ingest anchor exists for the requested chain",
+                reason: "no finalized provider-ingest anchor exists for the requested network",
             },
         )?;
         if key.height < floor.height {
             return Err(below_floor_error(
                 &index,
-                &key.chain_id,
+                &key.network_id,
                 key.height,
                 floor.height,
             ));
         }
         let root = if key.height == floor.height
-            && let Some(base) = index.virtual_bases.get(&key.chain_id)
+            && let Some(base) = index.virtual_bases.get(&key.network_id)
         {
             verify_checkpoint_entry(base, self.bounds)?;
             if &base.checkpoint.material.retention_floor != key {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id,
                     height: key.height,
                 });
             }
             base.checkpoint.material.provider_state_root
         } else {
-            let Some(entry) = index.by_height.get(&(key.chain_id.clone(), key.height)) else {
+            let Some(entry) = index.by_height.get(&(key.network_id, key.height)) else {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id,
                     height: key.height,
                 });
             };
             if &entry.record.material.key != key {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id,
                     height: key.height,
                 });
             }
@@ -2550,6 +2562,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 finalized_at_unix_ms: key.finalized_at_unix_ms,
                 pin_manifest: order.pin_manifest.clone(),
                 replication_order: order.replication_order.clone(),
+                musubi_archive: order.musubi_archive.clone(),
                 completion_epoch,
             }
         }));
@@ -2716,9 +2729,54 @@ fn capture_projection(
                 reason: "replication order and pin manifest bindings differ",
             });
         }
+        let musubi_archive = match (
+            order_record.musubi_archive,
+            world.musubi_locations_by_replication_order().get(order_id),
+        ) {
+            (None, None) => None,
+            (Some(archive_id), Some(reference)) => {
+                reference.validate().map_err(|_| {
+                    ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi replication-order/archive binding is noncanonical",
+                    }
+                })?;
+                if reference.binding.replication_order != *order_id
+                    || reference.binding.archive_id != archive_id
+                {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi replication-order purpose and projected archive binding disagree",
+                    });
+                }
+                let archive = world
+                    .musubi_archives()
+                    .get(&reference.binding.archive_id)
+                    .ok_or(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding targets a missing archive",
+                    })?;
+                archive.validate().map_err(|_| {
+                    ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding targets a noncanonical archive",
+                    }
+                })?;
+                if archive.archive_id != reference.binding.archive_id
+                    || archive.commitment != reference.binding.commitment
+                {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding differs from authoritative registry state",
+                    });
+                }
+                Some(reference.binding.clone())
+            }
+            (None, Some(_)) | (Some(_), None) => {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi replication-order purpose and projected archive binding disagree",
+                });
+            }
+        };
         let archived = ProviderIngestFinalizedArchivedOrderV1 {
             pin_manifest: pin,
             replication_order: order_record.clone(),
+            musubi_archive,
         };
         for assignment in &decoded.assignments {
             let provider_id = ProviderId::new(assignment.provider_id);
@@ -2866,6 +2924,38 @@ fn validate_archived_order(
             reason: "provider, order, and pin-manifest bindings are inconsistent",
         });
     }
+    match (
+        archived.replication_order.musubi_archive,
+        &archived.musubi_archive,
+    ) {
+        (None, None) => {}
+        (Some(archive_id), Some(binding)) => {
+            binding.validate().map_err(|_| {
+                ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi replication-order/archive binding is noncanonical",
+                }
+            })?;
+            let commitment = &binding.commitment;
+            if binding.replication_order != archived.replication_order.order_id
+                || binding.archive_id != archive_id
+                || commitment.root_cid != archived.pin_manifest.root_cid
+                || commitment.chunker != archived.pin_manifest.chunker
+                || commitment.chunk_plan_digest.as_bytes()
+                    != &archived.pin_manifest.chunk_digest_sha3_256
+                || commitment.por_root.as_bytes() != &archived.pin_manifest.por_root
+                || commitment.content_length != archived.pin_manifest.content_length
+            {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi archive binding differs from its replication-order purpose or pin commitment",
+                });
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "Musubi replication-order purpose and projected archive binding disagree",
+            });
+        }
+    }
     validate_pin_manifest_lifecycle(&archived.pin_manifest)?;
     if matches!(
         archived.pin_manifest.status,
@@ -2939,7 +3029,7 @@ fn validate_projection_transition(
     previous: &ProviderIngestFinalizedProjectionV1,
     current: &ProviderIngestFinalizedProjectionV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    if current.key.chain_id != previous.key.chain_id
+    if current.key.network_id != previous.key.network_id
         || previous
             .key
             .height
@@ -3014,10 +3104,10 @@ fn validate_historical_policy_transition(
         mut providers,
         mut history,
         seeded: mut history_seeded,
-    } = policy_history_seed_from_virtual_base(index, &projection.key.chain_id)?;
+    } = policy_history_seed_from_virtual_base(index, &projection.key.network_id)?;
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((projection.key.chain_id.clone(), 0)),
-        std::ops::Bound::Included((projection.key.chain_id.clone(), u64::MAX)),
+        std::ops::Bound::Included((projection.key.network_id, 0)),
+        std::ops::Bound::Included((projection.key.network_id, u64::MAX)),
     )) {
         verify_record_entry(entry, bounds)?;
         apply_provider_deltas(&mut providers, &entry.record.material.deltas);
@@ -3051,10 +3141,10 @@ fn validate_historical_order_transition(
         mut active,
         mut seen,
         seeded: mut history_seeded,
-    } = order_history_seed_from_virtual_base(index, &projection.key.chain_id);
+    } = order_history_seed_from_virtual_base(index, &projection.key.network_id);
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((projection.key.chain_id.clone(), 0)),
-        std::ops::Bound::Included((projection.key.chain_id.clone(), u64::MAX)),
+        std::ops::Bound::Included((projection.key.network_id, 0)),
+        std::ops::Bound::Included((projection.key.network_id, u64::MAX)),
     )) {
         verify_record_entry(entry, bounds)?;
         apply_provider_deltas(&mut providers, &entry.record.material.deltas);
@@ -3211,7 +3301,7 @@ fn validate_projection_completion_anchors_before_insert(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let floor_height = activation_floor_from_index(index, &projection.key.chain_id)?
+    let floor_height = activation_floor_from_index(index, &projection.key.network_id)?
         .map_or(projection.key.height, |floor| floor.height);
     for provider in &projection.providers {
         for order in &provider.orders {
@@ -3231,7 +3321,7 @@ fn validate_projection_completion_anchors_before_insert(
                     anchor.block_hash == projection.key.block_hash
                 } else if index
                     .virtual_bases
-                    .get(&projection.key.chain_id)
+                    .get(&projection.key.network_id)
                     .is_some_and(|base| {
                         base.checkpoint.material.retention_floor.height == anchor.height
                             && base.checkpoint.material.retention_floor.block_hash
@@ -3242,7 +3332,7 @@ fn validate_projection_completion_anchors_before_insert(
                 } else {
                     index
                         .by_height
-                        .get(&(projection.key.chain_id.clone(), anchor.height))
+                        .get(&(projection.key.network_id, anchor.height))
                         .is_some_and(|entry| {
                             entry.record.material.key.block_hash == anchor.block_hash
                         })
@@ -3345,6 +3435,8 @@ fn validate_order_transition(
         || previous_record.issued_by != current_record.issued_by
         || previous_record.issued_epoch != current_record.issued_epoch
         || previous_record.deadline_epoch != current_record.deadline_epoch
+        || previous_record.musubi_archive != current_record.musubi_archive
+        || previous.musubi_archive != current.musubi_archive
         || !pin_manifest_immutable_fields_match(&previous.pin_manifest, &current.pin_manifest)
     {
         return Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution {
@@ -3557,15 +3649,15 @@ fn apply_provider_deltas(
     }
 }
 
-fn first_record_for_chain<'index>(
+fn first_record_for_network<'index>(
     index: &'index ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Option<&'index ArchiveRecordEntryV1> {
     index
         .by_height
         .range((
-            std::ops::Bound::Included((chain_id.clone(), 0)),
-            std::ops::Bound::Included((chain_id.clone(), u64::MAX)),
+            std::ops::Bound::Included((*network_id, 0)),
+            std::ops::Bound::Included((*network_id, u64::MAX)),
         ))
         .next()
         .map(|(_, entry)| entry)
@@ -3573,11 +3665,11 @@ fn first_record_for_chain<'index>(
 
 fn below_floor_error(
     index: &ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     requested_height: u64,
     floor_height: u64,
 ) -> ProviderIngestFinalizedArchiveErrorV1 {
-    if index.virtual_bases.contains_key(chain_id) {
+    if index.virtual_bases.contains_key(network_id) {
         ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor {
             requested_height,
             retention_height: floor_height,
@@ -3718,9 +3810,9 @@ fn validate_policy_history_checkpoint(
 
 fn policy_history_seed_from_virtual_base(
     index: &ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<ProviderPolicyHistorySeedV1, ProviderIngestFinalizedArchiveErrorV1> {
-    let Some(base) = index.virtual_bases.get(chain_id) else {
+    let Some(base) = index.virtual_bases.get(network_id) else {
         return Ok(ProviderPolicyHistorySeedV1 {
             providers: BTreeMap::new(),
             history: BTreeMap::new(),
@@ -3743,9 +3835,9 @@ fn policy_history_seed_from_virtual_base(
 
 fn order_history_seed_from_virtual_base(
     index: &ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> ProviderOrderHistorySeedV1 {
-    let Some(base) = index.virtual_bases.get(chain_id) else {
+    let Some(base) = index.virtual_bases.get(network_id) else {
         return ProviderOrderHistorySeedV1 {
             providers: BTreeMap::new(),
             active: BTreeSet::new(),
@@ -3827,7 +3919,7 @@ fn validate_approval_checkpoint(
 fn validate_retention_checkpoint_candidate_inventory(
     candidates: &[ArchiveVirtualBaseV1],
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     let approved = approval.proposal().checkpoint_digest();
     let predecessor = approval.predecessor_checkpoint_digest();
@@ -3837,7 +3929,7 @@ fn validate_retention_checkpoint_candidate_inventory(
 
     let mut observed = BTreeSet::new();
     for candidate in candidates {
-        if &candidate.checkpoint.material.retention_floor.chain_id != chain_id
+        if &candidate.checkpoint.material.retention_floor.network_id != network_id
             || !observed.insert(candidate.checkpoint.checkpoint_digest)
         {
             return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
@@ -3872,7 +3964,7 @@ fn validate_approval_for_prepared(
     proposal: &ProviderIngestFinalizedArchiveCompactionProposalV1,
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    validate_retention_approval_record(approval, binding, &proposal.fence().key.chain_id)?;
+    validate_retention_approval_record(approval, binding, &proposal.fence().key.network_id)?;
     if approval.proposal() != proposal
         || approval.predecessor_checkpoint_digest() != predecessor_checkpoint_digest
         || prepared.checkpoint.material.prior_checkpoint_digest != predecessor_checkpoint_digest
@@ -3890,11 +3982,11 @@ fn validate_approval_for_prepared(
 fn validate_retention_approval_record(
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     approval.validate()?;
     if approval.authority_qualification() != binding.qualification()
-        || &approval.proposal().fence().key.chain_id != chain_id
+        || &approval.proposal().fence().key.network_id != network_id
     {
         return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthoritySubstitution);
     }
@@ -3969,18 +4061,18 @@ fn assert_retention_authority_identity(
 fn load_retention_approval(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<
     Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
     ProviderIngestFinalizedArchiveErrorV1,
 > {
     assert_retention_authority_identity(binding, authority)?;
     let record = authority
-        .load_latest(chain_id)
+        .load_latest(network_id)
         .map_err(retention_authority_external_error)?;
     assert_retention_authority_identity(binding, authority)?;
     if let Some(record) = &record {
-        validate_retention_approval_record(record, binding, chain_id)?;
+        validate_retention_approval_record(record, binding, network_id)?;
     }
     Ok(record)
 }
@@ -3988,10 +4080,10 @@ fn load_retention_approval(
 fn require_exact_retention_readback(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     expected: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    match load_retention_approval(binding, authority, chain_id) {
+    match load_retention_approval(binding, authority, network_id) {
         Ok(Some(observed)) if observed == *expected => Ok(()),
         Ok(_) => Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation),
         Err(_) => Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasAmbiguous),
@@ -4001,23 +4093,23 @@ fn require_exact_retention_readback(
 fn compare_and_read_back_retention_approval(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     expected: Option<&ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
     next: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    validate_retention_approval_record(next, binding, chain_id)?;
-    if load_retention_approval(binding, authority, chain_id)?.as_ref() != expected {
+    validate_retention_approval_record(next, binding, network_id)?;
+    if load_retention_approval(binding, authority, network_id)?.as_ref() != expected {
         return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation);
     }
     let compare_result = authority.compare_and_swap_latest(
-        chain_id,
+        network_id,
         expected.map(ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::revision),
         next,
     );
     if assert_retention_authority_identity(binding, authority).is_err() {
         return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasAmbiguous);
     }
-    let readback = match load_retention_approval(binding, authority, chain_id) {
+    let readback = match load_retention_approval(binding, authority, network_id) {
         Ok(readback) => readback,
         Err(_) => {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasAmbiguous);
@@ -4144,7 +4236,7 @@ fn authenticate_retention_prefix(
             kura_height: boundary.count,
         });
     }
-    if let Some(base) = index.virtual_bases.get(&fence.key.chain_id) {
+    if let Some(base) = index.virtual_bases.get(&fence.key.network_id) {
         authenticate_archive_anchor_against_kura(
             &base.checkpoint.material.retention_floor,
             kura,
@@ -4152,8 +4244,8 @@ fn authenticate_retention_prefix(
         )?;
     }
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((fence.key.chain_id.clone(), 0)),
-        std::ops::Bound::Included((fence.key.chain_id.clone(), fence.key.height)),
+        std::ops::Bound::Included((fence.key.network_id, 0)),
+        std::ops::Bound::Included((fence.key.network_id, fence.key.height)),
     )) {
         verify_record_entry(entry, bounds)?;
         authenticate_archive_anchor_against_kura(&entry.record.material.key, kura, &boundary)?;
@@ -4181,8 +4273,8 @@ fn prepare_archive_compaction(
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<PreparedArchiveCompactionV1, ProviderIngestFinalizedArchiveErrorV1> {
-    let chain_id = &fence.key.chain_id;
-    let previous_base = index.virtual_bases.get(chain_id).cloned();
+    let network_id = &fence.key.network_id;
+    let previous_base = index.virtual_bases.get(network_id).cloned();
     if previous_base
         .as_ref()
         .is_some_and(|base| fence.key.height <= base.checkpoint.material.retention_floor.height)
@@ -4195,16 +4287,16 @@ fn prepare_archive_compaction(
     }
     let terminal = index
         .by_height
-        .get(&(chain_id.clone(), fence.key.height))
+        .get(&(*network_id, fence.key.height))
         .ok_or_else(
             || ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-                chain_id: chain_id.clone(),
+                network_id: *network_id,
                 height: fence.key.height,
             },
         )?;
     if terminal.record.material.key != fence.key {
         return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             height: fence.key.height,
         });
     }
@@ -4213,11 +4305,11 @@ fn prepare_archive_compaction(
     if provider_state_root != terminal.record.material.provider_state_root {
         return Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch);
     }
-    let history = checkpoint_history_through(index, chain_id, fence.key.height, bounds)?;
+    let history = checkpoint_history_through(index, network_id, fence.key.height, bounds)?;
     let mut obsolete = Vec::new();
     for (subject, entry) in index.by_height.range((
-        std::ops::Bound::Included((chain_id.clone(), 0)),
-        std::ops::Bound::Included((chain_id.clone(), fence.key.height)),
+        std::ops::Bound::Included((*network_id, 0)),
+        std::ops::Bound::Included((*network_id, fence.key.height)),
     )) {
         obsolete.try_reserve(1).map_err(|_| {
             ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
@@ -4230,10 +4322,10 @@ fn prepare_archive_compaction(
         cumulative_pruned_accounting(previous_base.as_ref(), &obsolete)?;
     let original_activation_floor = previous_base.as_ref().map_or_else(
         || {
-            first_record_for_chain(index, chain_id)
+            first_record_for_network(index, network_id)
                 .map(|entry| entry.record.material.key.clone())
                 .ok_or(ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-                    reason: "retention chain has no activation floor",
+                    reason: "retention network has no activation floor",
                 })
         },
         |base| Ok(base.checkpoint.material.original_activation_floor.clone()),
@@ -4271,7 +4363,7 @@ fn prepare_archive_compaction(
 
 fn cumulative_pruned_accounting(
     previous_base: Option<&ArchiveVirtualBaseV1>,
-    obsolete: &[((ChainId, u64), ArchiveRecordEntryV1)],
+    obsolete: &[((NetworkId, u64), ArchiveRecordEntryV1)],
 ) -> Result<(u64, u64), ProviderIngestFinalizedArchiveErrorV1> {
     let newly_pruned_entries = u64::try_from(obsolete.len()).map_err(|_| {
         ProviderIngestFinalizedArchiveErrorV1::InvalidCheckpoint {
@@ -4355,11 +4447,11 @@ fn validate_prepared_compaction_capacity(
 
 fn checkpoint_history_through(
     index: &ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     retention_height: u64,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<ArchiveCompactionHistoryV1, ProviderIngestFinalizedArchiveErrorV1> {
-    let base = index.virtual_bases.get(chain_id);
+    let base = index.virtual_bases.get(network_id);
     let mut providers = base.map_or_else(BTreeMap::new, |base| {
         base.checkpoint
             .material
@@ -4401,8 +4493,8 @@ fn checkpoint_history_through(
     let mut observed_retention = base
         .is_some_and(|base| base.checkpoint.material.retention_floor.height == retention_height);
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((chain_id.clone(), start_height)),
-        std::ops::Bound::Included((chain_id.clone(), retention_height)),
+        std::ops::Bound::Included((*network_id, start_height)),
+        std::ops::Bound::Included((*network_id, retention_height)),
     )) {
         verify_record_entry(entry, bounds)?;
         apply_provider_deltas(&mut providers, &entry.record.material.deltas);
@@ -4431,7 +4523,7 @@ fn checkpoint_history_through(
     }
     if !observed_retention {
         return Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             height: retention_height,
         });
     }
@@ -4456,20 +4548,20 @@ fn reconstruct_provider_projection(
     Option<ProviderIngestFinalizedProviderProjectionV1>,
     ProviderIngestFinalizedArchiveErrorV1,
 > {
-    let floor = activation_floor_from_index(index, &key.chain_id)?.ok_or(
+    let floor = activation_floor_from_index(index, &key.network_id)?.ok_or(
         ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-            reason: "requested chain has no archived anchors",
+            reason: "requested network has no archived anchors",
         },
     )?;
     if key.height < floor.height {
         return Err(below_floor_error(
             index,
-            &key.chain_id,
+            &key.network_id,
             key.height,
             floor.height,
         ));
     }
-    let base = index.virtual_bases.get(&key.chain_id);
+    let base = index.virtual_bases.get(&key.network_id);
     let mut provider = base.and_then(|base| {
         base.checkpoint
             .material
@@ -4481,8 +4573,8 @@ fn reconstruct_provider_projection(
     });
     let mut found = base.is_some_and(|base| base.checkpoint.material.retention_floor == *key);
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((key.chain_id.clone(), floor.height)),
-        std::ops::Bound::Included((key.chain_id.clone(), key.height)),
+        std::ops::Bound::Included((key.network_id, floor.height)),
+        std::ops::Bound::Included((key.network_id, key.height)),
     )) {
         verify_record_entry(entry, bounds)?;
         if let Ok(delta_index) = entry
@@ -4496,7 +4588,7 @@ fn reconstruct_provider_projection(
         if entry.record.material.key.height == key.height {
             if &entry.record.material.key != key {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id,
                     height: key.height,
                 });
             }
@@ -4505,7 +4597,7 @@ fn reconstruct_provider_projection(
     }
     if !found {
         return Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id,
             height: key.height,
         });
     }
@@ -4525,20 +4617,20 @@ fn reconstruct_projection(
     key: &ProviderIngestFinalizedArchiveKeyV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<ProviderIngestFinalizedProjectionV1, ProviderIngestFinalizedArchiveErrorV1> {
-    let floor = activation_floor_from_index(index, &key.chain_id)?.ok_or(
+    let floor = activation_floor_from_index(index, &key.network_id)?.ok_or(
         ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-            reason: "requested chain has no archived anchors",
+            reason: "requested network has no archived anchors",
         },
     )?;
     if key.height < floor.height {
         return Err(below_floor_error(
             index,
-            &key.chain_id,
+            &key.network_id,
             key.height,
             floor.height,
         ));
     }
-    let base = index.virtual_bases.get(&key.chain_id);
+    let base = index.virtual_bases.get(&key.network_id);
     let mut providers = base.map_or_else(BTreeMap::new, |base| {
         base.checkpoint
             .material
@@ -4550,8 +4642,8 @@ fn reconstruct_projection(
     });
     let mut found = base.is_some_and(|base| base.checkpoint.material.retention_floor == *key);
     for (_, entry) in index.by_height.range((
-        std::ops::Bound::Included((key.chain_id.clone(), floor.height)),
-        std::ops::Bound::Included((key.chain_id.clone(), key.height)),
+        std::ops::Bound::Included((key.network_id, floor.height)),
+        std::ops::Bound::Included((key.network_id, key.height)),
     )) {
         verify_record_entry(entry, bounds)?;
         apply_provider_deltas(&mut providers, &entry.record.material.deltas);
@@ -4562,7 +4654,7 @@ fn reconstruct_projection(
         if entry.record.material.key.height == key.height {
             if &entry.record.material.key != key {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id,
                     height: key.height,
                 });
             }
@@ -4571,7 +4663,7 @@ fn reconstruct_projection(
     }
     if !found {
         return Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id,
             height: key.height,
         });
     }
@@ -4631,14 +4723,14 @@ fn validate_index_coverage(
             },
         );
     }
-    let chain_ids = index
+    let network_ids = index
         .by_height
         .keys()
-        .map(|(chain_id, _)| chain_id.clone())
+        .map(|(network_id, _)| *network_id)
         .chain(index.virtual_bases.keys().cloned())
         .collect::<BTreeSet<_>>();
-    for chain_id in chain_ids {
-        let virtual_base = index.virtual_bases.get(&chain_id);
+    for network_id in network_ids {
+        let virtual_base = index.virtual_bases.get(&network_id);
         if let Some(base) = virtual_base {
             verify_checkpoint_entry(base, bounds)?;
         }
@@ -4676,8 +4768,8 @@ fn validate_index_coverage(
                 .collect()
         });
         let entries = index.by_height.range((
-            std::ops::Bound::Included((chain_id.clone(), 0)),
-            std::ops::Bound::Included((chain_id.clone(), u64::MAX)),
+            std::ops::Bound::Included((network_id, 0)),
+            std::ops::Bound::Included((network_id, u64::MAX)),
         ));
         for (_, entry) in entries {
             entry.record.validate()?;
@@ -4690,14 +4782,14 @@ fn validate_index_coverage(
                 Some(previous) => {
                     let expected_height = previous.height.checked_add(1).ok_or(
                         ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                            chain_id: chain_id.clone(),
+                            network_id,
                             missing_height: u64::MAX,
                             observed_height: entry.record.material.key.height,
                         },
                     )?;
                     if entry.record.material.key.height != expected_height {
                         return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                            chain_id: chain_id.clone(),
+                            network_id,
                             missing_height: expected_height,
                             observed_height: entry.record.material.key.height,
                         });
@@ -4713,7 +4805,7 @@ fn validate_index_coverage(
                     if entry.record.material.predecessor.as_ref() != Some(&expected) {
                         return Err(
                             ProviderIngestFinalizedArchiveErrorV1::PredecessorSubstitution {
-                                chain_id: chain_id.clone(),
+                                network_id,
                                 height: entry.record.material.key.height,
                             },
                         );
@@ -4785,9 +4877,9 @@ fn validate_completion_anchors(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let floor = activation_floor_from_index(index, &projection.key.chain_id)?.ok_or(
+    let floor = activation_floor_from_index(index, &projection.key.network_id)?.ok_or(
         ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
-            reason: "no exact activation floor exists for the projection chain",
+            reason: "no exact activation floor exists for the projection network",
         },
     )?;
     for provider in &projection.providers {
@@ -4799,7 +4891,7 @@ fn validate_completion_anchors(
                 if completion.finalized_anchor.height == floor.height
                     && index
                         .virtual_bases
-                        .get(&projection.key.chain_id)
+                        .get(&projection.key.network_id)
                         .is_some_and(|base| {
                             base.checkpoint.material.retention_floor.block_hash
                                 == completion.finalized_anchor.block_hash
@@ -4808,7 +4900,7 @@ fn validate_completion_anchors(
                     continue;
                 }
                 let Some(anchor) = index.by_height.get(&(
-                    projection.key.chain_id.clone(),
+                    projection.key.network_id,
                     completion.finalized_anchor.height,
                 )) else {
                     return Err(
@@ -4832,17 +4924,17 @@ fn validate_completion_anchors(
 
 fn activation_floor_from_index(
     index: &ArchiveIndexV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<Option<ProviderIngestFinalizedArchiveKeyV1>, ProviderIngestFinalizedArchiveErrorV1> {
-    if chain_id.as_str().is_empty() {
+    if network_id.as_bytes()[31] & 1 != 1 {
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-            reason: "chain id must be non-empty",
+            reason: "network id must be an exact genesis-derived identity",
         });
     }
-    if let Some(base) = index.virtual_bases.get(chain_id) {
+    if let Some(base) = index.virtual_bases.get(network_id) {
         return Ok(Some(base.checkpoint.material.retention_floor.clone()));
     }
-    Ok(first_record_for_chain(index, chain_id).map(|entry| entry.record.material.key.clone()))
+    Ok(first_record_for_network(index, network_id).map(|entry| entry.record.material.key.clone()))
 }
 
 fn provider_state_root(
@@ -4872,7 +4964,7 @@ fn authenticate_archive_anchor_against_kura(
         .and_then(NonZeroUsize::new)
         .ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive height is not representable by Kura",
             },
@@ -4883,7 +4975,7 @@ fn authenticate_archive_anchor_against_kura(
         .map(|hash| *hash.as_ref())
         .ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive height is absent from the exact Kura boundary",
             },
@@ -4891,7 +4983,7 @@ fn authenticate_archive_anchor_against_kura(
     if boundary_hash != key.block_hash {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive hash differs from the exact Kura hash journal",
             },
@@ -4907,20 +4999,19 @@ fn authenticate_archive_anchor_against_kura(
         )?
         .ok_or(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive height has no authenticated v2 finality artifact",
             },
         )?;
-    if &artifact.height_context.chain_id != &key.chain_id
-        || artifact.height != key.height
+    if artifact.height != key.height
         || *artifact.block_hash.as_ref() != key.block_hash
         || receipt.height() != key.height
         || *receipt.block_hash().as_ref() != key.block_hash
     {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive key differs from its authenticated v2 finality artifact",
             },
@@ -4928,7 +5019,7 @@ fn authenticate_archive_anchor_against_kura(
     }
     let block = kura.get_block(height_index).ok_or(
         ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id,
             height: key.height,
             reason: "result-bearing block is unavailable for archive qualification",
         },
@@ -4939,7 +5030,7 @@ fn authenticate_archive_anchor_against_kura(
     {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
                 reason: "archive timestamp or identity differs from the canonical block",
             },
@@ -5018,7 +5109,7 @@ fn authenticate_capture_view(
             },
         )?;
     if !same_kura_receipt(receipt, &recovered_receipt)
-        || &artifact.height_context.chain_id != state_ro.chain_id()
+        || &artifact.height_context.network_id != state_ro.network_id()
         || artifact.height != height
         || *artifact.block_hash.as_ref() != block_hash
     {
@@ -5046,7 +5137,7 @@ fn authenticate_capture_view(
         );
     }
     ProviderIngestFinalizedArchiveKeyV1::try_new(
-        state_ro.chain_id().clone(),
+        state_ro.network_id().clone(),
         height,
         block_hash,
         finalized_at_unix_ms,
@@ -5162,20 +5253,17 @@ fn load_archive_index(
                 },
             );
         }
-        let subject = (
-            record.material.key.chain_id.clone(),
-            record.material.key.height,
-        );
+        let subject = (record.material.key.network_id, record.material.key.height);
         if let Some(existing) = index.by_height.get(&subject) {
             return Err(
                 if existing.record.material.key.block_hash == record.material.key.block_hash {
                     ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection {
-                        chain_id: subject.0,
+                        network_id: subject.0,
                         height: subject.1,
                     }
                 } else {
                     ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                        chain_id: subject.0,
+                        network_id: subject.0,
                         height: subject.1,
                     }
                 },
@@ -5350,52 +5438,45 @@ fn install_virtual_bases(
     candidates: &[ArchiveVirtualBaseV1],
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let mut by_chain: BTreeMap<ChainId, Vec<&ArchiveVirtualBaseV1>> = BTreeMap::new();
+    let mut by_network: BTreeMap<NetworkId, Vec<&ArchiveVirtualBaseV1>> = BTreeMap::new();
     for candidate in candidates {
         candidate.checkpoint.validate(bounds)?;
-        let chain = by_chain
-            .entry(
-                candidate
-                    .checkpoint
-                    .material
-                    .retention_floor
-                    .chain_id
-                    .clone(),
-            )
+        let network = by_network
+            .entry(candidate.checkpoint.material.retention_floor.network_id)
             .or_default();
-        chain.try_reserve(1).map_err(|_| {
+        network.try_reserve(1).map_err(|_| {
             ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
-                resource: "checkpoint chain inventory",
+                resource: "checkpoint network inventory",
             }
         })?;
-        chain.push(candidate);
+        network.push(candidate);
     }
-    for (chain_id, mut chain_candidates) in by_chain {
-        chain_candidates.sort_by_key(|candidate| {
+    for (network_id, mut network_candidates) in by_network {
+        network_candidates.sort_by_key(|candidate| {
             (
                 candidate.checkpoint.material.retention_floor.height,
                 candidate.checkpoint.checkpoint_digest,
             )
         });
-        for pair in chain_candidates.windows(2) {
+        for pair in network_candidates.windows(2) {
             let previous = pair[0];
             let next = pair[1];
             if previous.checkpoint.material.retention_floor.height
                 == next.checkpoint.material.retention_floor.height
             {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::AmbiguousCheckpoint {
-                    chain_id: chain_id.clone(),
+                    network_id,
                     retention_height: next.checkpoint.material.retention_floor.height,
                 });
             }
         }
-        let active = chain_candidates.last().copied().ok_or(
+        let active = network_candidates.last().copied().ok_or(
             ProviderIngestFinalizedArchiveErrorV1::InvalidCheckpoint {
                 reason: "checkpoint candidate set is empty",
             },
         )?;
-        if chain_candidates.len() > 1 {
-            let prior = chain_candidates[chain_candidates.len() - 2];
+        if network_candidates.len() > 1 {
+            let prior = network_candidates[network_candidates.len() - 2];
             if active.checkpoint.material.prior_checkpoint_digest
                 != Some(prior.checkpoint.checkpoint_digest)
             {
@@ -5419,7 +5500,7 @@ fn install_virtual_bases(
             }
         }
         let floor = &active.checkpoint.material.retention_floor;
-        if let Some(original) = index.by_height.get(&(chain_id.clone(), floor.height)) {
+        if let Some(original) = index.by_height.get(&(network_id, floor.height)) {
             if original.record.material.key != *floor
                 || original.record.record_digest
                     != active.checkpoint.material.original_terminal_record_digest
@@ -5431,7 +5512,7 @@ fn install_virtual_bases(
                 });
             }
         }
-        index.virtual_bases.insert(chain_id, (*active).clone());
+        index.virtual_bases.insert(network_id, (*active).clone());
     }
     Ok(())
 }
@@ -5447,10 +5528,10 @@ fn finish_compaction_cleanup(
     let obsolete_records = index
         .by_height
         .iter()
-        .filter(|((chain_id, height), _)| {
+        .filter(|((network_id, height), _)| {
             index
                 .virtual_bases
-                .get(chain_id)
+                .get(network_id)
                 .is_some_and(|base| *height <= base.checkpoint.material.retention_floor.height)
         })
         .map(|(subject, entry)| (subject.to_owned(), entry.path.clone()))
@@ -6856,37 +6937,39 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     CheckpointDigestMismatch,
     /// More than one checkpoint claims the same newest retention floor.
     #[error(
-        "ambiguous finalized provider-ingest checkpoint for `{chain_id}` at retention height {retention_height}"
+        "ambiguous finalized provider-ingest checkpoint for `{network_id}` at retention height {retention_height}"
     )]
     AmbiguousCheckpoint {
-        /// Chain with competing virtual bases.
-        chain_id: ChainId,
+        /// Network with competing virtual bases.
+        network_id: NetworkId,
         /// Conflicted retention height.
         retention_height: u64,
     },
-    /// Two block hashes or timestamps claim one chain height.
-    #[error("finalized provider-ingest archive fork for `{chain_id}` at height {height}")]
+    /// Two block hashes or timestamps claim one network height.
+    #[error("finalized provider-ingest archive fork for `{network_id}` at height {height}")]
     FinalizedFork {
-        /// Conflicted chain.
-        chain_id: ChainId,
+        /// Conflicted network.
+        network_id: NetworkId,
         /// Conflicted height.
         height: u64,
     },
     /// One exact key resolves to different typed provider state.
-    #[error("conflicting finalized provider-ingest projection for `{chain_id}` at height {height}")]
+    #[error(
+        "conflicting finalized provider-ingest projection for `{network_id}` at height {height}"
+    )]
     ConflictingProjection {
-        /// Conflicted chain.
-        chain_id: ChainId,
+        /// Conflicted network.
+        network_id: NetworkId,
         /// Conflicted height.
         height: u64,
     },
     /// Exact archive coverage skipped a height after activation.
     #[error(
-        "finalized provider-ingest archive for `{chain_id}` is missing height {missing_height} before {observed_height}"
+        "finalized provider-ingest archive for `{network_id}` is missing height {missing_height} before {observed_height}"
     )]
     ArchiveCoverageGap {
-        /// Chain with incomplete coverage.
-        chain_id: ChainId,
+        /// Network with incomplete coverage.
+        network_id: NetworkId,
         /// First required missing height.
         missing_height: u64,
         /// Observed non-successor height.
@@ -6918,11 +7001,11 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     },
     /// One immutable anchor differs from authenticated Kura material.
     #[error(
-        "finalized provider-ingest archive anchor `{chain_id}` height {height} failed Kura qualification: {reason}"
+        "finalized provider-ingest archive anchor `{network_id}` height {height} failed Kura qualification: {reason}"
     )]
     ArchiveKuraAnchorMismatch {
-        /// Archived chain.
-        chain_id: ChainId,
+        /// Archived network.
+        network_id: NetworkId,
         /// Archived height.
         height: u64,
         /// Stable payload-free mismatch category.
@@ -6956,7 +7039,7 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
         /// Configured maximum.
         maximum: usize,
     },
-    /// The requested chain has no qualified exact anchor.
+    /// The requested network has no qualified exact anchor.
     #[error("finalized provider-ingest archive is unavailable: {reason}")]
     ArchiveUnavailable {
         /// Stable availability failure.
@@ -6983,14 +7066,14 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
         retention_height: u64,
     },
     /// No immutable record exists at the requested exact height.
-    #[error("unknown finalized provider-ingest anchor for `{chain_id}` at height {height}")]
+    #[error("unknown finalized provider-ingest anchor for `{network_id}` at height {height}")]
     UnknownExactAnchor {
-        /// Requested chain.
-        chain_id: ChainId,
+        /// Requested network.
+        network_id: NetworkId,
         /// Requested height.
         height: u64,
     },
-    /// A cursor belongs to another chain, block, provider, or state root.
+    /// A cursor belongs to another network, block, provider, or state root.
     #[error("finalized provider-ingest page cursor context was substituted")]
     CursorSubstitution,
     /// A cursor's exclusive order identity is absent from the exact page state.
@@ -7157,11 +7240,11 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     },
     /// A record does not name the exact prior record and digest.
     #[error(
-        "finalized provider-ingest predecessor substitution for `{chain_id}` at height {height}"
+        "finalized provider-ingest predecessor substitution for `{network_id}` at height {height}"
     )]
     PredecessorSubstitution {
-        /// Affected chain.
-        chain_id: ChainId,
+        /// Affected network.
+        network_id: NetworkId,
         /// Affected height.
         height: u64,
     },
@@ -7181,8 +7264,9 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        block::BlockHeader,
         metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy, PinStatus,
@@ -7233,9 +7317,15 @@ mod tests {
         }
     }
 
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            [seed; 32],
+        )))
+    }
+
     fn key(height: u64) -> ProviderIngestFinalizedArchiveKeyV1 {
         ProviderIngestFinalizedArchiveKeyV1::try_new(
-            ChainId::from("provider-ingest-archive-test"),
+            test_network_id(0x31),
             height,
             [u8::try_from(height).unwrap_or(0xFE); 32],
             height.saturating_mul(1_000),
@@ -7304,6 +7394,7 @@ mod tests {
                 order_id: ReplicationOrderId::new(order_id),
                 manifest_digest: digest,
                 manifest_root_cid: root,
+                musubi_archive: None,
                 issued_by: account(1),
                 issued_epoch: 1,
                 deadline_epoch: 1_000,
@@ -7312,6 +7403,7 @@ mod tests {
                 provider_completions: Vec::new(),
                 status: ReplicationOrderStatus::Pending,
             },
+            musubi_archive: None,
         }
     }
 
@@ -7344,6 +7436,8 @@ mod tests {
         }
     }
 
+    include!("provider_ingest_finalized/musubi_archive_binding_tests.rs");
+
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
         let directory = physical_tempdir().expect("create archive directory");
@@ -7353,6 +7447,47 @@ mod tests {
         assert!(archive.is_empty().expect("inspect empty archive"));
         archive.insert(projection(1)).expect("insert projection");
         assert!(!archive.is_empty().expect("inspect populated archive"));
+    }
+
+    #[test]
+    fn pre_release_archive_state_root_is_not_accepted_by_first_release_layout() {
+        let projection = projection(7);
+        let pre_release_root = canonical_domain_digest(
+            b"iroha.sorafs.provider-ingest.finalized-provider-state.v1\0",
+            &projection.providers,
+        )
+        .expect("pre-release root fixture");
+        let first_release_root =
+            provider_state_root(&projection.providers).expect("first-release root");
+        assert_ne!(pre_release_root, first_release_root);
+
+        let directory = physical_tempdir().expect("archive record directory");
+        let path = directory.path().join("pre-release-root-record.norito");
+        let record = ProviderIngestFinalizedArchiveRecordV1::try_new(
+            ProviderIngestFinalizedArchiveRecordMaterialV1 {
+                version: ARCHIVE_VERSION_V1,
+                key: projection.key.clone(),
+                predecessor: None,
+                deltas: build_provider_deltas(None, &projection),
+                provider_state_root: pre_release_root,
+            },
+        )
+        .expect("pre-release state root still forms a self-consistent outer record");
+        let bytes = encode_bounded_record(&record, bounds()).expect("encode record fixture");
+        fs::write(&path, &bytes).expect("write record fixture");
+        let mut index = ArchiveIndexV1::default();
+        index.by_height.insert(
+            (projection.key.network_id, projection.key.height),
+            ArchiveRecordEntryV1 {
+                record,
+                path,
+                canonical_bytes: bounded_bytes_len(&bytes),
+            },
+        );
+        assert!(matches!(
+            reconstruct_projection(&index, &projection.key, bounds()),
+            Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch)
+        ));
     }
 
     fn advance_projection(
@@ -7444,7 +7579,7 @@ mod tests {
 
         fn load_latest(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
         ) -> Result<
             Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
             ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
@@ -7454,7 +7589,7 @@ mod tests {
 
         fn compare_and_swap_latest(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             expected_revision: Option<[u8; 32]>,
             next: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
         ) -> Result<(), ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1> {
@@ -7621,7 +7756,7 @@ mod tests {
             3,
             "predecessor, approved, and extra checkpoints model the interrupted namespace"
         );
-        let chain_id = third.key.chain_id.clone();
+        let network_id = third.key.network_id;
         drop(archive);
 
         let kura = Kura::blank_kura_for_testing();
@@ -7629,7 +7764,7 @@ mod tests {
             ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
                 &root,
                 bounds(),
-                &chain_id,
+                &network_id,
                 kura.as_ref(),
                 &binding,
                 &authority,
@@ -7685,7 +7820,7 @@ mod tests {
         compare_and_read_back_retention_approval(
             &binding,
             &authority,
-            &second.key.chain_id,
+            &second.key.network_id,
             None,
             &approval,
         )
@@ -7698,7 +7833,7 @@ mod tests {
             "authority approval alone must not mutate local archive storage"
         );
 
-        require_exact_retention_readback(&binding, &authority, &second.key.chain_id, &approval)
+        require_exact_retention_readback(&binding, &authority, &second.key.network_id, &approval)
             .expect("approval remains authoritative");
         let mut index = archive.write_index().expect("lock approved compaction");
         let outcome = archive
@@ -7708,7 +7843,7 @@ mod tests {
         drop(index);
         assert_eq!(
             archive
-                .retention_floor(&second.key.chain_id)
+                .retention_floor(&second.key.network_id)
                 .expect("retention floor"),
             Some(second.key)
         );
@@ -7743,7 +7878,7 @@ mod tests {
             compare_and_read_back_retention_approval(
                 &binding,
                 &authority,
-                &second.key.chain_id,
+                &second.key.network_id,
                 None,
                 &approval,
             ),
@@ -7770,7 +7905,7 @@ mod tests {
             compare_and_read_back_retention_approval(
                 &binding,
                 &authority,
-                &second.key.chain_id,
+                &second.key.network_id,
                 None,
                 &approval,
             ),
@@ -7825,6 +7960,33 @@ mod tests {
                 &vec![0; RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1 + 1]
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn retention_approval_rejects_same_label_foreign_genesis_network() {
+        let authority = TestRetentionAuthority::new();
+        let binding = authority.binding();
+        let proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
+            retention_fence(key(7), 1),
+            [0xC3; 32],
+            [0xC4; 32],
+        )
+        .expect("construct exact-network proposal");
+        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
+            1,
+            binding.qualification(),
+            proposal,
+            None,
+            None,
+        )
+        .expect("construct exact-network approval");
+
+        // Both deployments may carry the same human-facing ChainName. Only the
+        // genesis-derived NetworkId enters this durable approval namespace.
+        assert!(
+            validate_retention_approval_record(&approval, &binding, &test_network_id(0x33),)
+                .is_err()
         );
     }
 
@@ -7889,13 +8051,17 @@ mod tests {
         );
         assert_eq!(
             archive
-                .activation_floor(&first.key.chain_id)
+                .activation_floor(&first.key.network_id)
                 .expect("activation floor"),
             Some(first.key.clone())
         );
         assert_eq!(
             archive
-                .resolve_exact_key(&first.key.chain_id, first.key.height, first.key.block_hash)
+                .resolve_exact_key(
+                    &first.key.network_id,
+                    first.key.height,
+                    first.key.block_hash
+                )
                 .expect("resolve height/hash cursor"),
             first.key
         );
@@ -8077,7 +8243,11 @@ mod tests {
             ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
         );
         assert!(matches!(
-            archive.resolve_exact_key(&first.key.chain_id, first.key.height, first.key.block_hash),
+            archive.resolve_exact_key(
+                &first.key.network_id,
+                first.key.height,
+                first.key.block_hash
+            ),
             Err(ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor {
                 requested_height: 7,
                 retention_height: 8
@@ -8158,7 +8328,11 @@ mod tests {
             .expect("reclaimed capacity accepts exact successor");
         assert_eq!(
             archive
-                .resolve_exact_key(&third.key.chain_id, third.key.height, third.key.block_hash)
+                .resolve_exact_key(
+                    &third.key.network_id,
+                    third.key.height,
+                    third.key.block_hash
+                )
                 .expect("retained suffix"),
             third.key
         );
@@ -8187,7 +8361,7 @@ mod tests {
         let index = archive.read_index().expect("read repeated compaction");
         let base = index
             .virtual_bases
-            .get(&third.key.chain_id)
+            .get(&third.key.network_id)
             .expect("advanced virtual base");
         assert_eq!(
             base.checkpoint.material.prior_checkpoint_digest,
@@ -8203,7 +8377,7 @@ mod tests {
         );
         assert!(matches!(
             archive.resolve_exact_key(
-                &second.key.chain_id,
+                &second.key.network_id,
                 second.key.height,
                 second.key.block_hash
             ),
@@ -8442,7 +8616,11 @@ mod tests {
             ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).expect("reopen archive");
         assert_eq!(
             reopened
-                .resolve_exact_key(&first.key.chain_id, first.key.height, first.key.block_hash)
+                .resolve_exact_key(
+                    &first.key.network_id,
+                    first.key.height,
+                    first.key.block_hash
+                )
                 .expect("resolve reopened key"),
             first.key
         );
@@ -8527,7 +8705,7 @@ mod tests {
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
         assert!(matches!(
-            archive.resolve_exact_key(&first.key.chain_id, 6, key(6).block_hash),
+            archive.resolve_exact_key(&first.key.network_id, 6, key(6).block_hash),
             Err(
                 ProviderIngestFinalizedArchiveErrorV1::BelowActivationFloor {
                     requested_height: 6,
@@ -8536,11 +8714,11 @@ mod tests {
             )
         ));
         assert!(matches!(
-            archive.resolve_exact_key(&first.key.chain_id, 7, [0xF7; 32]),
+            archive.resolve_exact_key(&first.key.network_id, 7, [0xF7; 32]),
             Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork { .. })
         ));
         assert!(matches!(
-            archive.resolve_exact_key(&first.key.chain_id, 8, key(8).block_hash),
+            archive.resolve_exact_key(&first.key.network_id, 8, key(8).block_hash),
             Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor { .. })
         ));
         assert!(matches!(
@@ -8985,7 +9163,7 @@ mod tests {
                 .read_provider_page(&first.key, PROVIDER_A, None, 1)
                 .is_err()
         );
-        assert!(archive.activation_floor(&first.key.chain_id).is_err());
+        assert!(archive.activation_floor(&first.key.network_id).is_err());
         drop(archive);
         assert!(ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).is_err());
     }

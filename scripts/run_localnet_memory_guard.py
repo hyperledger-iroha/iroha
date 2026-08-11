@@ -341,8 +341,8 @@ def command_binary_name(command: str) -> str:
 
 
 def command_is_irohad(command: str) -> bool:
-    """Return whether a ps command line starts with the irohad executable."""
-    return command_binary_name(command) == binary_name("irohad")
+    """Return whether a ps command line starts with the iroha3d executable."""
+    return command_binary_name(command) == binary_name("iroha3d")
 
 
 def command_owns_peer(command: str, config_path: Path) -> bool:
@@ -419,7 +419,7 @@ def existing_irohad_preflight_message(processes: Sequence[ExistingIrohadProcess]
     if len(processes) > 5:
         preview = f"{preview}, ..."
     return (
-        "refusing to start guarded localnet because unrelated irohad processes "
+        "refusing to start guarded localnet because unrelated iroha3d processes "
         f"are already running ({len(processes)} process(es), {total_rss} bytes RSS: "
         f"{preview}). Stop the old localnets first, or pass --allow-existing-irohad "
         "to record them separately while guarding only this run."
@@ -738,7 +738,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXISTING_IROHAD_EXIT_CODE
     can_skip_build = all(
         profile_binary_exists(target_dir, profile, binary)
-        for binary in ["kagami", "irohad", "iroha"]
+        for binary in ["kagami", "iroha3d", "iroha"]
     )
     if not args.no_skip_build and can_skip_build:
         env = os.environ.copy()

@@ -84,10 +84,10 @@ run_cargo() {{
   mkdir -p -- "$CARGO_TARGET_DIR/release"
   case " $* " in
     *" -p irohad "*" --features test-network-message-control "*)
-      output="$CARGO_TARGET_DIR/release/irohad"
+      output="$CARGO_TARGET_DIR/release/iroha3d"
       ;;
     *" -p irohad "*)
-      output="$CARGO_TARGET_DIR/release/irohad"
+      output="$CARGO_TARGET_DIR/release/iroha3d"
       ;;
     *" -p iroha_cli "*)
       output="$CARGO_TARGET_DIR/release/iroha"
@@ -163,8 +163,8 @@ printf '%s\\n' \
     assert bundle.name.startswith("invocation.")
     assert len(lines[1]) == 64
     assert lines[2:] == [
-        str(bundle / "release" / "irohad"),
-        str(bundle / "message-control" / "release" / "irohad"),
+        str(bundle / "release" / "iroha3d"),
+        str(bundle / "message-control" / "release" / "iroha3d"),
         str(bundle / "release" / "iroha"),
         str(bundle / "release" / "kagami"),
     ]

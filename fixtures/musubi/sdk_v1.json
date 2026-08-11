@@ -165,8 +165,7 @@
         }
       },
       "response": {
-        "chain_id": "musubi-fixture-chain",
-        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
         "snapshot": {
           "finalized_height": 50,
           "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
@@ -289,8 +288,7 @@
           "payload": {
             "version": 1,
             "binding": {
-              "chain_id": "musubi-fixture-chain",
-              "genesis_block_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+              "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
               "provider_id": ["D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1"],
               "completed_by": "sorauﾛ1Nwﾖﾖ4ヰﾃtﾀvｴｹﾁnﾒEﾆSwKHﾏMｽoヱVｹﾍ9ｻCｱﾛVDｳ8xLHB99X",
               "completion_authority": {
@@ -356,8 +354,7 @@
           },
           "page": {"limit": 50, "cursor": null}
         },
-        "chain_id": "musubi-fixture-chain",
-        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
         "items": [],
         "next_cursor": null,
         "snapshot": {
@@ -468,8 +465,7 @@
         "page": {"limit": 50, "cursor": null}
       },
       "response": {
-        "chain_id": "musubi-fixture-chain",
-        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
         "archive": {
           "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
           "commitment": {
@@ -490,8 +486,7 @@
             "payload": {
               "version": 1,
               "binding": {
-                "chain_id": "musubi-fixture-chain",
-                "genesis_block_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+                "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
                 "publisher": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "ingress_broker": "sorauﾛ1Nuｱeﾌ4Tﾂg84yxｸL8dk6zｻｱﾛ2ﾖﾘNﾆﾔﾄrCﾐﾃ88FFzXLA2L4",
                 "seed_provider": ["1616161616161616161616161616161616161616161616161616161616161616"],
@@ -540,8 +535,7 @@
         }
       },
       "response": {
-        "chain_id": "musubi-fixture-chain",
-        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
         "items": [
           {
             "archive_id": [[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16]],
@@ -659,8 +653,7 @@
       "request": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
       "response": {
         "query": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
-        "chain_id": "musubi-fixture-chain",
-        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
         "namespace_binding": {
           "namespace": ["sora"],
           "home_dataspace": 7,

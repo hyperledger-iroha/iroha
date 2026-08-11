@@ -916,7 +916,9 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
 
     let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &authority,
         3,
         DataSpaceId::UNIVERSAL,

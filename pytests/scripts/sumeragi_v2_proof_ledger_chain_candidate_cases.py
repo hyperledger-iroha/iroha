@@ -616,6 +616,23 @@ def test_async_historical_recovery_operator_mutations_fail_closed(
     errors = module._async_historical_recovery_source_fidelity_errors(formal_dir)
 
     assert any(f"{symbol} must equal only" in error for error in errors), errors
+    if symbol == "HistoricalCommitDecisionResponseEvidence" and "causalOrigin" in old:
+        path.write_text(
+            mutate_tla_operator(
+                source,
+                symbol,
+                "  /\\ candidate.evidence.source =\n"
+                "       candidate.evidence.envelope.request.envelope.recipient\n",
+                "  /\\ candidate.evidence.source = AsyncUntrustedSource\n",
+            ),
+            encoding="utf-8",
+        )
+        source_errors = module._async_historical_recovery_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(
+            f"{symbol} must equal only" in error for error in source_errors
+        ), source_errors
 
 
 @pytest.mark.parametrize(

@@ -14,6 +14,8 @@ use ivm::{
     vrf::{VrfVerifyBatchRequest, VrfVerifyRequest},
 };
 
+mod common;
+
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -56,9 +58,10 @@ fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
     let host = if let Some(arguments) = arguments {
         let key: Name = "trigger_event_json".parse().expect("public input key");
         DefaultHost::new()
+            .with_network_id(common::test_network_id(0x71))
             .with_public_inputs(BTreeMap::from([(key, argument_record_tlv(run, arguments))]))
     } else {
-        DefaultHost::new()
+        DefaultHost::new().with_network_id(common::test_network_id(0x71))
     };
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load VRF transport contract");
@@ -80,11 +83,11 @@ fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
     let public_key = (G1Projective::generator() * secret)
         .to_affine()
         .to_compressed();
-    let chain_id = b"kotodama-vrf-transport";
+    let network_id = common::test_network_id(0x71);
     let input = b"entrypoint-bytes";
     let mut preimage = Vec::new();
     preimage.extend_from_slice(b"iroha:vrf:v1:input|");
-    preimage.extend_from_slice(chain_id);
+    preimage.extend_from_slice(network_id.as_bytes());
     preimage.push(b'|');
     preimage.extend_from_slice(input);
     let message: [u8; 32] = Hash::new(&preimage).into();
@@ -100,7 +103,7 @@ fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
         variant: 1,
         pk: public_key.to_vec(),
         proof: proof.to_vec(),
-        chain_id: chain_id.to_vec(),
+        network_id,
         input: input.to_vec(),
     };
     (

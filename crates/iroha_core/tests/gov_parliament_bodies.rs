@@ -3,9 +3,9 @@
 
 use iroha_config::parameters::actual::Governance;
 use iroha_core::governance::{draw::derive_parliament_bodies, state::ParliamentTerm};
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, account::AccountId, governance::types::ParliamentBody,
+    NetworkId, account::AccountId, block::BlockHeader, governance::types::ParliamentBody,
     isi::governance::CouncilDerivationKind,
 };
 
@@ -16,9 +16,15 @@ fn account(tag: u8) -> AccountId {
     AccountId::new(public_key)
 }
 
+fn network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        label,
+    )))
+}
+
 #[test]
 fn derive_bodies_populates_all_rosters() {
-    let chain: ChainId = "demo-chain".into();
+    let network_id = network_id(b"demo-chain");
     let beacon = [0xAB; 32];
     let cfg = Governance {
         rules_committee_size: 2,
@@ -40,7 +46,7 @@ fn derive_bodies_populates_all_rosters() {
         derived_by: CouncilDerivationKind::Sortition,
     };
 
-    let bodies = derive_parliament_bodies(&cfg, &chain, council.epoch, &beacon, &council);
+    let bodies = derive_parliament_bodies(&cfg, &network_id, council.epoch, &beacon, &council);
     assert_eq!(bodies.selection_epoch, council.epoch);
 
     for body in [

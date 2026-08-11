@@ -427,28 +427,30 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             return XCTFail("request fixture decoded to the wrong v2 payload")
         }
         XCTAssertEqual(request.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
-        XCTAssertEqual(request.chainID.value, "sumeragi-v2-test")
+        XCTAssertEqual(request.networkID.bytes, Data(repeating: 0x71, count: 32))
         XCTAssertEqual(request.height, 1)
         XCTAssertEqual(request.signature.count, 48)
         XCTAssertEqual(request.signaturePreimage(), try Data(sumeragiV2Hex: requestPreimage.hex))
         let reSignedRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: request.contextID,
             height: request.height,
             requester: request.requester,
             signature: Data([1])
         )
         XCTAssertEqual(request.signaturePreimage(), reSignedRequest.signaturePreimage())
-        let crossChainRequest = try SumeragiV2CommitCertificateRequest(
+        var otherNetworkBytes = request.networkID.bytes
+        otherNetworkBytes[otherNetworkBytes.startIndex] ^= 1
+        let crossNetworkRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: SumeragiV2ChainID("other-chain"),
+            networkID: NetworkId(bytes: otherNetworkBytes),
             contextID: request.contextID,
             height: request.height,
             requester: request.requester,
             signature: Data([1])
         )
-        XCTAssertNotEqual(request.signaturePreimage(), crossChainRequest.signaturePreimage())
+        XCTAssertNotEqual(request.signaturePreimage(), crossNetworkRequest.signaturePreimage())
 
         let decodedResponse = try SumeragiV2ConsensusMessage.decodeCanonical(
             Data(sumeragiV2Hex: responseMessage.hex)
@@ -487,7 +489,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         changedContextBytes[changedContextBytes.startIndex] ^= 1
         let changedContextRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: SumeragiV2HeightContextID(
                 hash: try SumeragiV2Hash(changedContextBytes)
             ),
@@ -507,7 +509,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
 
         let changedHeightRequest = try SumeragiV2CommitCertificateRequest(
             protocolVersion: request.protocolVersion,
-            chainID: request.chainID,
+            networkID: request.networkID,
             contextID: request.contextID,
             height: request.height + 1,
             requester: request.requester,

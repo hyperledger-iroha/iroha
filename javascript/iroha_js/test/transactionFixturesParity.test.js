@@ -19,9 +19,9 @@ function loadJsonRelative(relativePath) {
 
 const sourceFixtureFields = new Set([
   "authority",
-  "chain",
   "creation_time_ms",
   "name",
+  "network_id",
   "nonce",
   "payload",
   "payload_base64",
@@ -32,11 +32,11 @@ const sourceFixtureFields = new Set([
 ]);
 const payloadFields = new Set([
   "authority",
-  "chain",
   "creation_time_ms",
   "executable",
   "fee_payment",
   "metadata",
+  "network_id",
   "nonce",
   "time_to_live_ms",
 ]);
@@ -56,11 +56,11 @@ const contractCallFields = new Set([
 const manifestFields = new Set(["fixtures"]);
 const manifestFixtureFields = new Set([
   "authority",
-  "chain",
   "creation_time_ms",
   "encoded_file",
   "encoded_len",
   "name",
+  "network_id",
   "nonce",
   "payload_base64",
   "payload_hash",
@@ -76,6 +76,9 @@ const canonicalManifest = loadJsonRelative(
 const sourcePayloadFixtures = loadJsonRelative(
   "fixtures/norito_rpc/transaction_payloads.json",
 );
+const fixtureNetworkId =
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+const networkIdPattern = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
 
 function decodeCanonicalBase64(value, context) {
   if (
@@ -112,10 +115,41 @@ function requireExactFields(record, expected, context) {
   }
 }
 
-function validateTransactionMetadata(record, context) {
-  if (typeof record.chain !== "string" || record.chain.length === 0) {
-    throw new Error(`${context}.chain must be a non-empty string`);
+function crc16CcittFalse(bytes) {
+  let crc = 0xffff;
+  for (const byte of bytes) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
   }
+  return crc;
+}
+
+function validateNetworkId(value, context) {
+  const match = typeof value === "string" ? networkIdPattern.exec(value) : null;
+  if (match === null) {
+    throw new Error(`${context}.network_id must be a canonical NetworkId`);
+  }
+  const [, hashBody, checksum] = match;
+  const expectedChecksum = crc16CcittFalse(
+    Buffer.from(`hash:${hashBody}`, "ascii"),
+  )
+    .toString(16)
+    .toUpperCase()
+    .padStart(4, "0");
+  const hashBytes = Buffer.from(hashBody, "hex");
+  if (
+    checksum !== expectedChecksum ||
+    (hashBytes[hashBytes.length - 1] & 1) !== 1
+  ) {
+    throw new Error(`${context}.network_id must be a canonical NetworkId`);
+  }
+}
+
+function validateTransactionMetadata(record, context) {
+  validateNetworkId(record.network_id, context);
   if (typeof record.authority !== "string" || record.authority.length === 0) {
     throw new Error(`${context}.authority must be a non-empty string`);
   }
@@ -249,8 +283,8 @@ function validateSourceFixtureSchema(fixture, context) {
   requireRecord(fixture.payload.metadata, `${context}.payload.metadata`);
   for (const field of [
     "authority",
-    "chain",
     "creation_time_ms",
+    "network_id",
     "nonce",
     "time_to_live_ms",
   ]) {
@@ -496,8 +530,8 @@ function externalTransactionEntrypointHashHex(canonicalPayload) {
 function makeSourceFixture(name = "alpha") {
   const common = {
     authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-    chain: "00000002",
     creation_time_ms: 1,
+    network_id: fixtureNetworkId,
     nonce: null,
     time_to_live_ms: 100_000,
   };
@@ -523,11 +557,11 @@ function makeSourceFixture(name = "alpha") {
 function makeManifestFixture(name = "alpha") {
   return {
     authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-    chain: "00000002",
     creation_time_ms: 1,
     encoded_file: `${name}.norito`,
     encoded_len: 1,
     name,
+    network_id: fixtureNetworkId,
     nonce: null,
     payload_base64: "AA==",
     payload_hash: "payload-hash",
@@ -608,6 +642,51 @@ test("source descriptors require exact fields and one executable variant", () =>
   };
   assert.doesNotThrow(() =>
     validateSourceFixtureSchema(directCall, directCall.name),
+  );
+});
+
+test("fixture schemas require canonical network identity and reject legacy chain", () => {
+  const source = makeSourceFixture();
+  const manifest = makeManifestFixture();
+  assert.doesNotThrow(() => validateNetworkId(fixtureNetworkId, "fixture"));
+
+  for (const invalidNetworkId of [
+    "00000002",
+    fixtureNetworkId.toLowerCase(),
+    `${fixtureNetworkId.slice(0, -4)}0000`,
+  ]) {
+    assert.throws(
+      () =>
+        validateSourceFixtureSchema(
+          { ...source, network_id: invalidNetworkId },
+          source.name,
+        ),
+      /network_id must be a canonical NetworkId/,
+    );
+  }
+
+  const legacySource = { ...source, chain: source.network_id };
+  delete legacySource.network_id;
+  assert.throws(
+    () => validateSourceFixtureSchema(legacySource, legacySource.name),
+    /missing=\["network_id"\], unexpected=\["chain"\]/,
+  );
+
+  const legacyPayload = {
+    ...source,
+    payload: { ...source.payload, chain: source.payload.network_id },
+  };
+  delete legacyPayload.payload.network_id;
+  assert.throws(
+    () => validateSourceFixtureSchema(legacyPayload, legacyPayload.name),
+    /missing=\["network_id"\], unexpected=\["chain"\]/,
+  );
+
+  const legacyManifest = { ...manifest, chain: manifest.network_id };
+  delete legacyManifest.network_id;
+  assert.throws(
+    () => validateManifestFixtureSchema(legacyManifest, legacyManifest.name),
+    /missing=\["network_id"\], unexpected=\["chain"\]/,
   );
 });
 
@@ -935,9 +1014,9 @@ test("source payload metadata matches canonical manifest metadata", () => {
       `${fixture.name}: source fixture is missing payload metadata`,
     );
     assert.equal(
-      payload.chain,
-      fixture.chain,
-      `${fixture.name}: chain mismatch`,
+      payload.network_id,
+      fixture.network_id,
+      `${fixture.name}: network_id mismatch`,
     );
     assert.equal(
       payload.authority,

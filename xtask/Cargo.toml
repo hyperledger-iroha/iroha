@@ -61,7 +61,7 @@ iroha_data_model = { workspace = true, features = ["application-model", "transpa
 iroha_telemetry = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
-iroha = { workspace = true }
+iroha = { workspace = true, features = ["test-fixtures"] }
 ivm = { workspace = true, default-features = false, features = ["runtime"] }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }

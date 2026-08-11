@@ -308,7 +308,11 @@ public sealed partial class ToriiClient
         }
 
         var credentials = Options.CanonicalRequestCredentials!;
+        var signingContext = Options.LocalSigningContext
+            ?? throw new InvalidOperationException(
+                "Authenticated SoraFS reputation requests require ToriiClientOptions.LocalSigningContext.");
         var canonicalHeaders = CanonicalRequest.BuildHeadersForExactPath(
+            signingContext.NetworkId,
             credentials.AccountId,
             credentials.PrivateKeySeed,
             "GET",

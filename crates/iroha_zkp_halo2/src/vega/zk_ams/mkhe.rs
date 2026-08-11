@@ -21,6 +21,63 @@ use super::super::{
 };
 use super::MaskedRelaxedRandomSourceV1;
 
+/// Fixed-size entropy owner erased on success, error, and unwind.
+///
+/// Callers borrow the fixed array during decoding so no unmanaged array copy
+/// is created before this owner is cleared.
+struct ZeroizingRandomBytesV1<const N: usize>([u8; N]);
+
+impl<const N: usize> ZeroizingRandomBytesV1<N> {
+    const fn zeroed() -> Self {
+        Self([0; N])
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    const fn as_array(&self) -> &[u8; N] {
+        &self.0
+    }
+}
+
+impl<const N: usize> Drop for ZeroizingRandomBytesV1<N> {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+    }
+}
+
+type ZeroizingScalarEntropyV1 = ZeroizingRandomBytesV1<64>;
+
+/// Move-only owner for one named secret scalar.
+struct ZeroizingScalarV1(Scalar);
+
+impl ZeroizingScalarV1 {
+    const fn new(value: Scalar) -> Self {
+        Self(value)
+    }
+
+    const fn as_ref(&self) -> &Scalar {
+        &self.0
+    }
+
+    const fn expose_copy(&self) -> Scalar {
+        self.0
+    }
+}
+
+impl Drop for ZeroizingScalarV1 {
+    fn drop(&mut self) {
+        let scalar = core::hint::black_box(&mut self.0);
+        scalar.clear_secret();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *scalar);
+    }
+}
+
 #[path = "mkhe/active.rs"]
 mod active;
 #[path = "mkhe/active_exact_binding.rs"]
@@ -67,6 +124,8 @@ mod manifest;
 mod noise;
 #[path = "mkhe/packing.rs"]
 mod packing;
+#[path = "mkhe/persistent_decryption_equality.rs"]
+mod persistent_decryption_equality;
 #[allow(
     dead_code,
     reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
@@ -81,6 +140,20 @@ mod phase23_encrypted;
 mod phase23_ingress;
 #[path = "mkhe/phase23_mask_proof.rs"]
 mod phase23_mask_proof;
+#[path = "mkhe/phase23_rns_link.rs"]
+mod phase23_rns_link;
+#[allow(
+    dead_code,
+    reason = "the release-shape RNS-Link codec remains private while its relation responses are algebraically unverified"
+)]
+#[path = "mkhe/phase23_rns_link_wire.rs"]
+mod phase23_rns_link_wire;
+#[allow(
+    dead_code,
+    reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
+)]
+#[path = "mkhe/receipt_capability_audit.rs"]
+mod receipt_capability_audit;
 #[path = "mkhe/resource.rs"]
 mod resource;
 #[path = "mkhe/security.rs"]
@@ -139,15 +212,23 @@ pub use collective_keys::{
 };
 pub use decryption::{
     ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
-    ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1, ZkAmsMkheAuthenticatedDecryptionShareV1,
-    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1,
+    ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
+    ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheDecryptedPlaintextV1,
+    ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1, ZkAmsMkheDecryptionProofViewV1,
     ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionSplitTransportV1,
-    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionTransportComponentKindV1,
-    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
-    ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1,
-    prove_zk_ams_mkhe_decryption_share_v1, reconstruct_zk_ams_mkhe_decryption_share_v1,
-    split_zk_ams_mkhe_decryption_share_v1, verify_combine_decode_zk_ams_mkhe_decryption_v1,
-    verify_zk_ams_mkhe_decryption_share_v1, zk_ams_mkhe_decryption_resource_evidence_v1,
+    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionStreamingBlockerV1,
+    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
+    ZkAmsMkheDecryptionTransportComponentKindV1, ZkAmsMkheDecryptionTransportManifestV1,
+    ZkAmsMkheDecryptionTransportPointerV1, ZkAmsMkheFullRosterDecryptionResultV1,
+    ZkAmsMkheIdentifiableDecryptionAbortV1, ZkAmsMkheStagedDecryptionShareV1,
+    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    prove_zk_ams_mkhe_decryption_share_staged_v1, prove_zk_ams_mkhe_decryption_share_v1,
+    reconstruct_zk_ams_mkhe_decryption_share_v1, split_zk_ams_mkhe_decryption_share_v1,
+    verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
+    verify_combine_decode_zk_ams_mkhe_decryption_v1, verify_zk_ams_mkhe_decryption_share_v1,
+    zk_ams_mkhe_decryption_resource_evidence_v1,
+    zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
 };
 pub use direct_collective_eval_ceremony::{
     ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
@@ -198,6 +279,10 @@ pub use packing::{
     zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
     zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
     zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
+};
+pub use persistent_decryption_equality::{
+    ZkAmsMkhePersistentDecryptionPartyUseV1, ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    ZkAmsMkheStreamingDecryptionAuthorityV1,
 };
 pub use phase23::{
     ZkAmsPhase23EquationCertificateV1, zk_ams_phase23_cross_term_v1,
@@ -450,23 +535,25 @@ impl AuthenticationSecret {
     fn generate<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
             let scalar = random_scalar(random)?;
-            if !scalar.is_zero() {
+            if !scalar.as_ref().is_zero() {
                 return Ok(Self {
-                    scalar_be: scalar.to_be_bytes(),
+                    scalar_be: scalar.expose_copy().to_be_bytes(),
                 });
             }
         }
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     }
 
-    fn scalar(&self) -> Result<Scalar, ZkAmsMkheErrorV1> {
+    fn scalar(&self) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
         Scalar::from_be_bytes_exact(self.scalar_be)
+            .map(ZeroizingScalarV1::new)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)
     }
 
     fn public_key(&self) -> Result<[u8; 33], ZkAmsMkheErrorV1> {
+        let scalar = self.scalar()?;
         auth_generator()?
-            .mul_scalar(self.scalar()?)
+            .mul_scalar(scalar.expose_copy())
             .to_non_identity_wire_bytes()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)
     }
@@ -478,7 +565,10 @@ impl AuthenticationSecret {
 
 impl Drop for AuthenticationSecret {
     fn drop(&mut self) {
-        self.scalar_be.fill(0);
+        let bytes = core::hint::black_box(&mut self.scalar_be);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
     }
 }
 
@@ -511,13 +601,13 @@ impl ArtifactAuthentication {
         let mut nonce = None;
         for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
             let candidate = random_scalar(random)?;
-            if !candidate.is_zero() {
+            if !candidate.as_ref().is_zero() {
                 nonce = Some(candidate);
                 break;
             }
         }
         let nonce = nonce.ok_or(ZkAmsMkheErrorV1::RandomUnavailable)?;
-        let commitment = auth_generator()?.mul_scalar(nonce);
+        let commitment = auth_generator()?.mul_scalar(nonce.expose_copy());
         let commitment_bytes = commitment
             .to_non_identity_wire_bytes()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
@@ -528,7 +618,8 @@ impl ArtifactAuthentication {
             &public_key,
             &commitment_bytes,
         )?;
-        let response = nonce + challenge * secret.scalar()?;
+        let secret_scalar = secret.scalar()?;
+        let response = nonce.expose_copy() + challenge * secret_scalar.expose_copy();
         let mut signature = [0_u8; SCHNORR_SIGNATURE_BYTES_V1];
         signature[..33].copy_from_slice(&commitment_bytes);
         signature[33..].copy_from_slice(&response.to_be_bytes());
@@ -606,12 +697,14 @@ fn authentication_challenge(
 
 fn random_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
-) -> Result<Scalar, ZkAmsMkheErrorV1> {
-    let mut uniform = [0_u8; 64];
+) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
+    let mut uniform = ZeroizingScalarEntropyV1::zeroed();
     random
-        .fill_bytes(&mut uniform)
+        .fill_bytes(uniform.as_mut_slice())
         .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-    Ok(Scalar::from_uniform_le_bytes(uniform))
+    Ok(ZeroizingScalarV1::new(Scalar::from_uniform_le_bytes_ref(
+        uniform.as_array(),
+    )))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1118,7 +1211,13 @@ impl SecretPolynomial {
         profile: &BgvProfile,
         random: &mut R,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let mut coefficients = Vec::with_capacity(profile.ring_degree);
+        let mut owner = Self {
+            coefficients: Vec::new(),
+        };
+        owner
+            .coefficients
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         let max_bytes = profile
             .ring_degree
             .checked_mul(MAX_TERNARY_SAMPLE_BYTES_PER_COEFFICIENT_V1)
@@ -1128,13 +1227,13 @@ impl SecretPolynomial {
             let byte = random_byte(random)?;
             for shift in [0, 2, 4, 6] {
                 match (byte >> shift) & 0x03 {
-                    0 => coefficients.push(-1),
-                    1 => coefficients.push(0),
-                    2 => coefficients.push(1),
+                    0 => owner.coefficients.push(-1),
+                    1 => owner.coefficients.push(0),
+                    2 => owner.coefficients.push(1),
                     _ => continue,
                 }
-                if coefficients.len() == profile.ring_degree {
-                    return Ok(Self { coefficients });
+                if owner.coefficients.len() == profile.ring_degree {
+                    return Ok(owner);
                 }
             }
         }
@@ -1151,7 +1250,13 @@ impl SecretPolynomial {
             .and_then(|value| value.checked_mul(2))
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         checked_rng_bytes(profile, max_bytes)?;
-        let mut coefficients = Vec::with_capacity(profile.ring_degree);
+        let mut owner = Self {
+            coefficients: Vec::new(),
+        };
+        owner
+            .coefficients
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for _ in 0..profile.ring_degree {
             let mut positive = 0_i64;
             let mut negative = 0_i64;
@@ -1159,9 +1264,9 @@ impl SecretPolynomial {
                 positive += i64::from(random_byte(random)? & 1);
                 negative += i64::from(random_byte(random)? & 1);
             }
-            coefficients.push(positive - negative);
+            owner.coefficients.push(positive - negative);
         }
-        Ok(Self { coefficients })
+        Ok(owner)
     }
 
     fn as_rns(&self, profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
@@ -1221,7 +1326,10 @@ impl SecretPolynomial {
 
 impl Drop for SecretPolynomial {
     fn drop(&mut self) {
-        self.coefficients.fill(0);
+        let coefficients = core::hint::black_box(&mut self.coefficients);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *coefficients);
     }
 }
 
@@ -3164,11 +3272,11 @@ fn sample_uniform_rns<R: MaskedRelaxedRandomSourceV1>(
 }
 
 fn random_byte<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<u8, ZkAmsMkheErrorV1> {
-    let mut byte = [0_u8; 1];
+    let mut byte = ZeroizingRandomBytesV1::<1>::zeroed();
     random
-        .fill_bytes(&mut byte)
+        .fill_bytes(byte.as_mut_slice())
         .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-    Ok(byte[0])
+    Ok(byte.as_array()[0])
 }
 
 fn sample_below<R: MaskedRelaxedRandomSourceV1>(
@@ -3177,11 +3285,17 @@ fn sample_below<R: MaskedRelaxedRandomSourceV1>(
 ) -> Result<u64, ZkAmsMkheErrorV1> {
     let zone = u64::MAX - u64::MAX % modulus;
     for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut bytes = [0_u8; 8];
+        let mut bytes = ZeroizingRandomBytesV1::<8>::zeroed();
         random
-            .fill_bytes(&mut bytes)
+            .fill_bytes(bytes.as_mut_slice())
             .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-        let candidate = u64::from_le_bytes(bytes);
+        let candidate = bytes
+            .as_array()
+            .iter()
+            .enumerate()
+            .fold(0_u64, |value, (index, byte)| {
+                value | (u64::from(*byte) << (index * 8))
+            });
         if candidate < zone {
             return Ok(candidate % modulus);
         }
@@ -3823,6 +3937,8 @@ mod tests {
         assert_ne!(manifest.security_candidate_input_digest, [0; 32]);
         assert_ne!(manifest.resource_certificate_digest, [0; 32]);
         assert_ne!(manifest.phase23_equation_certificate_digest, [0; 32]);
+        assert_ne!(manifest.active_exact_binding_audit_digest, [0; 32]);
+        assert_ne!(manifest.decryption_resource_evidence_digest, [0; 32]);
         assert_eq!(manifest.release_kat_digest, [0; 32]);
 
         let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
@@ -3874,15 +3990,26 @@ mod tests {
             48_452_611_616
         );
         assert_eq!(resource.proof_envelope_header_wire_bytes, 151);
-        assert_eq!(resource.streamed_hybrid_workspace_bytes, 161_481_912);
-        assert_eq!(resource.max_composed_rotation_work_units, 177_154_818_048);
-        assert!(!resource.composed_rotation_work_ceiling_met);
+        assert_eq!(resource.streamed_hybrid_workspace_bytes, 166_723_776);
+        assert_eq!(resource.max_composed_rotation_work_units, 83_915_440_128);
+        assert!(resource.composed_rotation_work_ceiling_met);
         assert!(!resource.evaluated_key_artifact_transport_certified);
         assert!(!resource.is_release_ready());
         assert_eq!(
             manifest.resource_certificate_digest,
             zk_ams_mkhe_resource_certificate_digest_v1().unwrap()
         );
+
+        let phase23 = zk_ams_phase23_equation_certificate_v1();
+        assert!(phase23.encrypted_sparse_maps_complete);
+        assert!(phase23.encrypted_cross_term_complete);
+        assert!(phase23.encrypted_commitment_complete);
+        assert!(phase23.accumulator_materialization_complete);
+        assert!(phase23.padding_and_final_proof_complete);
+        assert!(!phase23.hidden_mask_proof_complete);
+        assert_eq!(phase23.hidden_mask_proof_blocker_mask, 0b1111);
+        assert_ne!(phase23.hidden_mask_proof_audit_digest, [0; 32]);
+        assert!(!phase23.is_complete());
 
         assert_ne!(zk_ams_mkhe_manifest_digest_v1().unwrap(), [0; 32]);
         assert_ne!(zk_ams_mkhe_readiness_digest_v1().unwrap(), [0; 32]);
@@ -3896,6 +4023,8 @@ mod tests {
         assert!(!readiness.decryption_share_gate);
         assert!(readiness.packing_gate);
         assert!(!readiness.phase23_gate);
+        assert!(!readiness.receipt_capability_gate);
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0xff);
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());
         assert_eq!(

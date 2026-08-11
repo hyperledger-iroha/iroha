@@ -4,7 +4,6 @@
 
 use iroha_crypto::{KeyPair, MerkleTree};
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     block::{SignedBlock, decode_framed_signed_block},
     domain::DomainId,
@@ -18,23 +17,18 @@ fn checked_random_keypair() -> KeyPair {
 
 fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTransaction>) {
     let keypair = checked_random_keypair();
-    let chain: ChainId = "constvec-roundtrip-chain"
-        .parse()
-        .expect("chain id for sample block");
     let _domain: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain for sample block");
     let authority: AccountId = AccountId::new(keypair.public_key().clone());
 
     let txs = vec![
-        TransactionBuilder::new(
-            chain.clone(),
+        TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::empty::<InstructionBox>())
         .sign(keypair.private_key()),
-        TransactionBuilder::new(
-            chain,
+        TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

@@ -105,9 +105,10 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
 
 1. **Watch for drift.** Torii emits
    `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
+   a caller submits stale retention values. Compare finalized replication-order
+   queries with the governed policy to spot replica shortfalls or delayed
+   redeployments; Torii deliberately does not rebuild these inventories for
+   periodic telemetry.
 2. **Diff intent vs live replicas.** Use the new audit helper:
 
    ```bash

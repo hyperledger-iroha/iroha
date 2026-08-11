@@ -52,8 +52,7 @@ const DEFAULT_PACKET_LOSS_PERCENT: u8 = 10;
 const DEFAULT_MAX_HEIGHT_SKEW: u64 = 2;
 const DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS: u64 = 30;
 const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
-// Under process+membership churn, a rejoining validator can briefly trail by >10 blocks
-// while quorum remains healthy; keep this as a hard guardrail rather than a steady-state SLA.
+// Rejoining validators may briefly trail >10 blocks; this is a guardrail, not a steady-state SLA.
 const DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW: u64 = 32;
 const DEFAULT_MAX_VIEW_CHANGE_RATE: f64 = 0.2;
 const DEFAULT_MAX_LAGGED_CYCLE_RATIO: f64 = 0.35;
@@ -587,7 +586,7 @@ impl ManagedLocalnet {
         cmd.stderr(Stdio::from(log_file_err));
 
         cmd.spawn()
-            .wrap_err_with(|| format!("spawn irohad for {node_label}"))
+            .wrap_err_with(|| format!("spawn iroha3d for {node_label}"))
     }
 
     fn unexpected_validator_exit_report(&mut self) -> Result<Option<String>> {
@@ -640,7 +639,7 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-bootstrap")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let harness = setup_taira_harness(&out_dir, "taira-bootstrap", 0).await?;
+        let harness = setup_taira_harness::<false>(&out_dir, "taira-bootstrap", 0).await?;
         wait_for_cluster_convergence(
             &harness.validator_clients,
             harness.primary_client.get_status()?.blocks,
@@ -663,7 +662,6 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
         Ok(())
     }
     .await;
-
     finalize_result(temp_dir, "taira_localnet_bootstrap_validators", result)
 }
 
@@ -672,18 +670,16 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
 async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let temp_dir = localnet_tempdir("taira-membership")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-membership", 0).await?;
+        let mut harness = setup_taira_harness::<false>(&out_dir, "taira-membership", 0).await?;
         let mut joiner_warning_state = JoinerCatchupWarningState::default();
         let _ = membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
         let _ = membership_leave_cycle(&mut harness).await?;
         Ok(())
     }
     .await;
-
     finalize_result(
         temp_dir,
         "taira_localnet_joiner_register_unregister_behavior",
@@ -691,31 +687,13 @@ async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires local process orchestration"]
-async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
-    init_instruction_registry();
-    let _guard = sandbox::serial_guard();
-
-    let temp_dir = localnet_tempdir("taira-restart")?;
-    let out_dir = temp_dir.path().join("localnet");
-    let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-restart", 0).await?;
-        let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
-            .await?;
-        Ok(())
-    }
-    .await;
-
-    finalize_result(temp_dir, "taira_localnet_restart_catchup_behavior", result)
-}
+mod strict_restart;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "24-hour Taira-profile soak with validator restarts and packet impairment"]
 async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let cfg = SimulationConfig::from_env();
     let workspace_source_manifest_sha256 = required_release_source_manifest_sha256()?;
     let evidence_path = required_release_evidence_path()?;
@@ -727,7 +705,8 @@ async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-simulation")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async move {
-        let mut harness = setup_taira_harness(&out_dir, &seed, cfg.packet_loss_percent).await?;
+        let mut harness =
+            setup_taira_harness::<false>(&out_dir, &seed, cfg.packet_loss_percent).await?;
         let summary = run_taira_simulation(
             &mut harness,
             cfg,
@@ -1410,6 +1389,7 @@ async fn process_churn_cycle(
     )
     .await
     {
+        lagged = true;
         eprintln!(
             "validator restart all-validator convergence lagged; quorum convergence is healthy: timeout={interim_convergence_timeout:?}, err={err:?}"
         );
@@ -1705,7 +1685,7 @@ async fn membership_leave_cycle(harness: &mut TairaHarness) -> Result<Membership
     Ok(outcome)
 }
 
-async fn setup_taira_harness(
+async fn setup_taira_harness<const STRICT_ALL_VALIDATORS: bool>(
     out_dir: &Path,
     seed: &str,
     packet_loss_percent: u8,
@@ -1714,7 +1694,6 @@ async fn setup_taira_harness(
     let p2p_ports = alloc_port_block(TAIRA_TOTAL_PORT_SLOTS)?;
     let base_api_port = api_ports.base();
     let base_p2p_port = p2p_ports.base();
-
     let generated = generate_localnet(
         out_dir,
         base_api_port,
@@ -1725,7 +1704,7 @@ async fn setup_taira_harness(
     )?;
     let irohad_bin = Program::Irohad
         .resolve()
-        .wrap_err("resolve irohad binary")?;
+        .wrap_err("resolve iroha3d binary")?;
     let daemon_binary_blake2b_256 = file_blake2b_256(&irohad_bin)?;
     let test_binary_path = std::env::current_exe()
         .wrap_err("resolve current Taira test binary")?
@@ -1739,7 +1718,6 @@ async fn setup_taira_harness(
         TAIRA_VALIDATORS,
         (api_ports, p2p_ports),
     )?;
-
     let generic_client = load_localnet_client(out_dir)?;
     let mut primary_client =
         load_validator_authority_client(out_dir, &generic_client, base_api_port, 0)?;
@@ -1781,9 +1759,11 @@ async fn setup_taira_harness(
     )
     .await
     {
+        if STRICT_ALL_VALIDATORS {
+            return Err(err);
+        }
         eprintln!("initial all-validator convergence lagged; continuing on quorum: {err:?}");
     }
-
     let joiner_api_port = base_api_port + TAIRA_VALIDATORS;
     let joiner_p2p_port = base_p2p_port + TAIRA_VALIDATORS;
     let joiner = build_joiner_peer(
@@ -1794,7 +1774,6 @@ async fn setup_taira_harness(
         joiner_p2p_port,
     )?;
     let generated_config_blake2b_256 = generated_config_blake2b_256(out_dir)?;
-
     Ok(TairaHarness {
         out_dir: out_dir.to_path_buf(),
         seed: seed.to_owned(),
@@ -3749,7 +3728,7 @@ fn sample_simulation_summary() -> SimulationSummary {
         build_profile: "release".to_owned(),
         cargo_net_offline: true,
         localnet_artifact_path: "/tmp/taira-localnet".to_owned(),
-        daemon_binary_path: "/tmp/irohad".to_owned(),
+        daemon_binary_path: "/tmp/iroha3d".to_owned(),
         daemon_binary_blake2b_256: "b".repeat(64),
         kagami_binary_path: "/tmp/kagami".to_owned(),
         kagami_binary_blake2b_256: "c".repeat(64),

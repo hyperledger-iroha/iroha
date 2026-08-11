@@ -23,7 +23,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="irohad sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
+ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
@@ -180,7 +180,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --x509-resource-norito /app/fixtures/privacy/zk_x509_native_resource_v1.norito \
                 --x509-resource-json /app/fixtures/privacy/zk_x509_native_resource_v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
-                --validator-binary /outbin/irohad \
+                --validator-binary /outbin/iroha3d \
                 --command-manifest-norito-out /outprovenance/privacy-native/command-manifest-v1.norito \
                 --command-manifest-json-out /outprovenance/privacy-native/command-manifest-v1.json \
                 --stage-artifacts-norito-out /outprovenance/privacy-native/stage-artifacts-v1.norito \
@@ -216,7 +216,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --x509-resource-norito /outprovenance/privacy-native/zk-x509-resource-v1.norito \
                 --x509-resource-json /outprovenance/privacy-native/zk-x509-resource-v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
-                --validator-binary /outbin/irohad \
+                --validator-binary /outbin/iroha3d \
                 --command-manifest-norito /outprovenance/privacy-native/command-manifest-v1.norito \
                 --command-manifest-json /outprovenance/privacy-native/command-manifest-v1.json \
                 --stage-artifacts-norito /outprovenance/privacy-native/stage-artifacts-v1.norito \
@@ -347,7 +347,7 @@ RUN set -eu; \
       --x509-resource-norito /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.norito \
       --x509-resource-json /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.json \
       --cargo-lock /opt/iroha/provenance/Cargo.lock \
-      --validator-binary /usr/local/bin/irohad \
+      --validator-binary /usr/local/bin/iroha3d \
       --command-manifest-norito /opt/iroha/provenance/privacy-native/command-manifest-v1.norito \
       --command-manifest-json /opt/iroha/provenance/privacy-native/command-manifest-v1.json \
       --stage-artifacts-norito /opt/iroha/provenance/privacy-native/stage-artifacts-v1.norito \

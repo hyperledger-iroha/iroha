@@ -173,6 +173,7 @@ async fn router_builds_under_current_features() {
             };
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -190,6 +191,7 @@ async fn router_builds_under_current_features() {
         {
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -431,6 +433,7 @@ async fn router_exposes_status_when_telemetry_enabled() {
     };
     let torii = iroha_torii::Torii::new(
         ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

@@ -20,8 +20,8 @@ clap = { workspace = true, features = ["derive"] }
 displaydoc.workspace = true
 pathdiff = "0.2.3"
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
+base64.workspace = true
 
 [dev-dependencies]
 iroha_config.workspace = true
-expect-test.workspace = true
 nonzero_ext.workspace = true

@@ -30,7 +30,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
-    ChainId,
     account::{AccountId, ParsedAccountId},
     asset::id::AssetDefinitionId,
     isi::{
@@ -134,7 +133,6 @@ enum DurableWorkStatus {
 pub struct NexusFeeRelayWorker {
     config: NexusRelayWorkerConfig,
     state_path: PathBuf,
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
     sumeragi: SumeragiHandle,
@@ -149,8 +147,6 @@ pub struct NexusFeeRelayWorker {
 pub struct NexusFeeRelayWorkerContext {
     /// Private durable worker-state directory.
     pub storage_root: PathBuf,
-    /// Chain identity used for internally submitted transactions.
-    pub chain_id: Arc<ChainId>,
     /// Transaction queue used for ordinary admission.
     pub queue: Arc<Queue>,
     /// Committed state used for finalized reads.
@@ -178,7 +174,6 @@ impl NexusFeeRelayWorker {
     ) -> Result<Self> {
         let NexusFeeRelayWorkerContext {
             storage_root,
-            chain_id,
             queue,
             state,
             sumeragi,
@@ -196,7 +191,6 @@ impl NexusFeeRelayWorker {
                 );
             }
         }
-
         let state_path = storage_root.join(WORKER_STATE_FILE);
         let mut durable = load_durable_state(&state_path).unwrap_or_else(|error| {
             iroha_logger::warn!(
@@ -214,7 +208,6 @@ impl NexusFeeRelayWorker {
         Ok(Self {
             config,
             state_path,
-            chain_id,
             queue,
             state,
             sumeragi,
@@ -379,14 +372,30 @@ impl NexusFeeRelayWorker {
         let current_height = self.committed_height();
         let expiry_slot =
             current_height.saturating_add(self.state.view().nexus.axt.replay_retention_slots.get());
-        let (proven_envelope, proof_blob) =
-            match prove_lane_relay_envelope(&envelope, expiry_slot, current_height, &self.fastpq) {
-                Ok(proven) => proven,
-                Err(error) => {
-                    self.reject_or_retry_relay(key, envelope, &error)?;
-                    return Ok(());
-                }
-            };
+        let execution_commitment = match self
+            .state
+            .authenticated_lane_relay_execution_commitment(&envelope)
+        {
+            Ok(commitment) => commitment,
+            Err(error) => {
+                self.reject_or_retry_relay(key, envelope, &eyre::eyre!(error))?;
+                return Ok(());
+            }
+        };
+        let (proven_envelope, proof_blob) = match prove_lane_relay_envelope(
+            &envelope,
+            execution_commitment.parent_state_root,
+            execution_commitment.post_state_root,
+            expiry_slot,
+            current_height,
+            &self.fastpq,
+        ) {
+            Ok(proven) => proven,
+            Err(error) => {
+                self.reject_or_retry_relay(key, envelope, &error)?;
+                return Ok(());
+            }
+        };
         self.update_relay_status(
             key,
             DurableWorkStatus::Submitted,
@@ -929,7 +938,7 @@ impl NexusFeeRelayWorker {
         endpoint: &'static str,
     ) -> Result<()> {
         let tx = sign_nexus_fee_relay_submission_transaction(
-            (*self.chain_id).clone(),
+            *self.state.network_id_ref(),
             self.authority.clone(),
             instruction,
             worker_submission_metadata(endpoint),
@@ -940,7 +949,7 @@ impl NexusFeeRelayWorker {
         let params = view.world().parameters();
         let accepted = AcceptedTransaction::accept(
             tx,
-            &self.chain_id,
+            self.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             self.state.crypto().as_ref(),
@@ -977,7 +986,7 @@ fn prepare_relay_attempt(
 }
 
 fn sign_nexus_fee_relay_submission_transaction(
-    chain_id: ChainId,
+    network_id: iroha_data_model::NetworkId,
     authority: AccountId,
     instruction: InstructionBox,
     metadata: Metadata,
@@ -985,7 +994,7 @@ fn sign_nexus_fee_relay_submission_transaction(
     endpoint: &'static str,
 ) -> Result<SignedTransaction> {
     TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1070,7 +1079,7 @@ fn authoritative_status_relay<'a>(
         candidate.lane_incarnation,
         candidate.block_height,
     )?;
-    (recorded.qc.is_some() && recorded == candidate).then_some(recorded)
+    (recorded.finality_authority.is_some() && recorded == candidate).then_some(recorded)
 }
 
 fn allocation_work_key(work: &DurableAllocationWork) -> String {
@@ -1214,6 +1223,8 @@ fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
 
 fn prove_lane_relay_envelope(
     envelope: &LaneRelayEnvelope,
+    parent_state_root: Hash,
+    post_state_root: Hash,
     expiry_slot: u64,
     verified_at_height: u64,
     fastpq: &Fastpq,
@@ -1224,10 +1235,9 @@ fn prove_lane_relay_envelope(
     if manifest_root.iter().all(|byte| *byte == 0) {
         eyre::bail!("lane relay envelope has zero manifest_root");
     }
-    let qc = envelope
-        .qc
-        .as_ref()
-        .ok_or_else(|| eyre::eyre!("lane relay proof requires a finalized QC"))?;
+    envelope
+        .validate_finality_authority_ref()
+        .wrap_err("lane relay proof requires global finality authority")?;
     let lane_finality_statement_hash = envelope
         .lane_finality_statement_hash()
         .wrap_err("derive finalized lane relay statement")?;
@@ -1266,8 +1276,8 @@ fn prove_lane_relay_envelope(
     let mut batch = transition_batch(
         dsid,
         expiry_slot,
-        qc.parent_state_root,
-        qc.post_state_root,
+        parent_state_root,
+        post_state_root,
         worker_digest(
             b"nexus-fee-relay:lane-relay-perm-root:v1",
             &[&manifest_root],
@@ -1594,7 +1604,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
+        LaneRelayEnvelope::new(header, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
             .with_lane_block_descriptor_hash(Some(Hash::new(
@@ -1892,7 +1902,11 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let endpoint = "/internal/nexus/fee-relay/test";
         let tx = sign_nexus_fee_relay_submission_transaction(
-            ChainId::from("nexus-fee-relay-sign-test"),
+            iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x15; Hash::LENGTH],
+                )),
+            ),
             authority.clone(),
             InstructionBox::from(Log::new(Level::INFO, "checked fee relay signing".into())),
             worker_submission_metadata(endpoint),

@@ -1,3 +1,5 @@
+//! VRF envelope type, decoding, and verification-status tests.
+
 #![cfg(feature = "ivm_vrf_tests")]
 use group::prime::PrimeCurveAffine;
 use ivm::{self, IVM, IVMHost, Memory, PointerType};
@@ -64,20 +66,20 @@ fn vrf_verify_malformed_payload_sets_err_decode() {
 }
 
 #[test]
-fn vrf_verify_with_valid_lengths_and_chain_yields_verify_error() {
+fn vrf_verify_with_valid_lengths_and_network_yields_verify_error() {
     use blstrs::{G1Affine, G2Affine};
-    // Host with matching chain id
-    let host = ivm::host::DefaultHost::new().with_chain_id(b"net".to_vec());
+    let network_id = common::test_network_id(0x61);
+    let host = ivm::host::DefaultHost::new().with_network_id(network_id);
     let mut vm = IVM::new(0);
     vm.set_host(host);
-    // Build a request with decompressible pk/proof (generators), variant 1, and matching chain id
+    // Build a request with decompressible pk/proof and a matching network identity.
     let pk = G1Affine::generator().to_compressed();
     let sig = G2Affine::generator().to_compressed();
     let req = ivm::vrf::VrfVerifyRequest {
         variant: 1,
         pk: pk.to_vec(),
         proof: sig.to_vec(),
-        chain_id: b"net".to_vec(),
+        network_id,
         input: b"hello".to_vec(),
     };
     let body = norito::to_bytes(&req).expect("encode");

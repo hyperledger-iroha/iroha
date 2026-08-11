@@ -1,4 +1,1531 @@
 #[test]
+fn proposal_registry_preserves_the_first_exact_semantic_envelope() {
+    let context = context();
+    let mut registry = WireRegistry::new(&context).expect("registry");
+    let wire::ConsensusMessageV2Payload::Proposal(first) =
+        proposal(&context, context.leader(0), subject(0x40)).payload
+    else {
+        unreachable!("proposal fixture")
+    };
+    let mut later = first.clone();
+    later.signature = vec![0x40; 96];
+
+    registry
+        .proposal_to_core(&first, &context)
+        .expect("register first exact proposal envelope");
+    registry
+        .proposal_to_core(&later, &context)
+        .expect("the same semantic proposal remains convertible");
+
+    let key = (
+        reducer::Round::new(first.round.height, first.round.view),
+        reducer::Subject::new(Hash::new(first.subject.encode()).into()),
+    );
+    assert_eq!(
+        registry.proposals.get(&key),
+        Some(&first),
+        "a later exact-envelope alias cannot retarget durable re-signing"
+    );
+}
+
+#[test]
+fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, _) = open_test(&directory).expect("open adapter");
+    let context = adapter.wire_context.clone();
+    let proposer = adapter.status().expect("status").leader;
+    let subject = subject(0x3F);
+    let canonical = proposal(&context, proposer, subject);
+    let wire::ConsensusMessageV2Payload::Proposal(canonical_proposal) = &canonical.payload
+    else {
+        panic!("fixture is a proposal")
+    };
+    let canonical_manifest = canonical_proposal.manifest.clone();
+    let round = canonical_manifest.round;
+
+    let mut conflicting = proposal(&context, proposer, subject);
+    let conflicting_proposal = {
+        let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) =
+            &mut conflicting.payload
+        else {
+            panic!("fixture is a proposal")
+        };
+        let alternate_body = b"other";
+        let alternate_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+            .expect("encode complete canonical alternate-body chunks");
+        // Deliberately bind the complete canonical alternate body to the
+        // original subject so this remains a manifest-conflict negative.
+        conflicting_proposal.manifest = wire::PayloadManifest::derive(
+            &context,
+            conflicting_proposal.round,
+            conflicting_proposal.subject,
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &alternate_chunks,
+        )
+        .expect("structurally valid alternate manifest");
+        conflicting_proposal.clone()
+    };
+    let conflicting_wire_identity = Arc::<[u8]>::from(conflicting.encode());
+    let deferred = adapter
+        .registry
+        .proposal_to_core(&conflicting_proposal, &context)
+        .expect("convert authenticated proposal before reducer reports Busy");
+    let deferred_tag = adapter.current_tag();
+    adapter.deferred_inputs.push_back(DeferredInput {
+        admission_ordinal: 1,
+        admission_capability: DeferredAdmissionCapability::for_authenticated_test(1),
+        event: reducer::Event::ProposalReceived {
+            tag: deferred_tag,
+            proposal: deferred,
+        },
+        completion_evidence: None,
+        retag_authenticated_ingress: true,
+        priority: DeferredPriority::Normal,
+        protected_progress: false,
+        admission: None,
+        authenticated_wire_identity: Some(conflicting_wire_identity),
+        admitted_at: Instant::now(),
+        eligible_skips: 0,
+    });
+    let admission_key = IngressSemanticKey::Proposal { round, proposer };
+    adapter.ingress_equivocations.insert(
+        admission_key,
+        IngressEquivocationRecord {
+            fingerprint: IngressFingerprint::Proposal(Hash::new(
+                conflicting_proposal.signature_preimage(),
+            )),
+            artifact: IngressEquivocationArtifact::Proposal(Arc::new(
+                conflicting_proposal.clone(),
+            )),
+            equivocation_reported: true,
+            capacity_bypass: false,
+            admitted_at: Instant::now(),
+        },
+    );
+    adapter.ingress_deliveries.insert(
+        admission_key,
+        IngressDeliveryRecord {
+            fingerprint: IngressFingerprint::Proposal(Hash::new(
+                conflicting_proposal.signature_preimage(),
+            )),
+            generation: deferred_tag.generation(),
+            locked_commit_progress: false,
+        },
+    );
+    let body_command = super::super::v2_runtime::AdapterCommand::BodyAvailable {
+        manifest: canonical_manifest.clone(),
+    };
+    adapter
+        .deferred_inputs
+        .front_mut()
+        .expect("the conflicting proposal remains deferred")
+        .retag_authenticated_ingress = false;
+    assert_eq!(
+        adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+        super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Reject,
+        "a generic deferred item cannot authorize proposal-registry rollback"
+    );
+    adapter
+        .deferred_inputs
+        .front_mut()
+        .expect("the conflicting proposal remains deferred")
+        .retag_authenticated_ingress = true;
+    assert_eq!(
+        adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+        super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Admit,
+        "preflight must project the exact rollback supported by dispatch"
+    );
+
+    let retained_qc = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment: execution_commitment(0x3F),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x3F; 96],
+    };
+    adapter
+        .registry
+        .qc_to_core(&retained_qc, &context)
+        .expect("register independently authenticated QC material");
+    let retained_certificates = adapter.registry.certificates.clone();
+    let retained_execution_commitments = adapter.registry.execution_commitments.clone();
+    assert!(adapter.registry.manifest_conflicts(&canonical_manifest));
+    let DirectCertifiedBodyAvailablePreparation::Inactive(conflict) = adapter
+        .prepare_direct_certified_body_available(deferred_tag, &canonical_manifest)
+        .expect("classify the legacy deferred conflict without mutating it")
+    else {
+        panic!("legacy conflict must remain a non-applied classification")
+    };
+    assert_eq!(
+        conflict.disposition(),
+        DirectCertifiedBodyAvailableInactive::LegacyDeferredConflict
+    );
+    drop(conflict);
+    assert_eq!(adapter.deferred_inputs.len(), 1);
+    assert!(adapter.registry.manifest_conflicts(&canonical_manifest));
+
+    let outcome = adapter
+        .body_available(deferred_tag, canonical_manifest.clone())
+        .expect("canonical body supersedes only its Busy-deferred proposal authority");
+    assert_eq!(
+        outcome.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+    );
+    assert!(adapter.deferred_inputs.is_empty());
+    assert!(!adapter.ingress_equivocations.contains_key(&admission_key));
+    assert!(!adapter.ingress_deliveries.contains_key(&admission_key));
+    assert!(adapter.registry.proposals.is_empty());
+    assert_eq!(
+        adapter.registry.manifests.values().next(),
+        Some(&canonical_manifest)
+    );
+    assert_eq!(adapter.registry.certificates, retained_certificates);
+    assert_eq!(
+        adapter.registry.execution_commitments,
+        retained_execution_commitments
+    );
+    assert!(!adapter.fail_closed);
+}
+
+#[test]
+fn forged_body_receipt_cannot_cross_the_prepare_durability_boundary() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, _) = open_test(&directory).expect("open adapter");
+    let proposer = adapter.status().expect("status").leader;
+    let proposed_subject = subject(31);
+    let fetch = adapter
+        .receive_verified(proposal(&adapter.wire_context, proposer, proposed_subject))
+        .expect("accept proposal")
+        .into_effects();
+    let (tag, manifest) = match fetch.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(manifest),
+                ..
+            },
+        ] => (*tag, manifest.clone()),
+        effects => panic!("unexpected proposal effects: {effects:?}"),
+    };
+    let round = manifest.round;
+    adapter
+        .body_available(tag, manifest)
+        .expect("body available");
+    let correct = durable_body_receipt(&adapter, round, proposed_subject);
+    let forged = DurableBodyReceipt::for_test(
+        adapter.wire_context.id(),
+        round,
+        subject(32),
+        correct.manifest_hash(),
+    );
+    assert!(matches!(
+        adapter.body_stored(tag, round, proposed_subject, &forged),
+        Err(AdapterError::DurableBodyMismatch)
+    ));
+    assert!(matches!(
+        adapter
+            .body_stored(tag, round, proposed_subject, &correct)
+            .expect("the real durable receipt remains usable")
+            .effects(),
+        [AdapterEffect::ValidateBody { .. }]
+    ));
+}
+
+#[test]
+fn local_proposal_and_prepare_are_each_persisted_before_signing() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let subject = subject(8);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+    let proposal_tag = adapter.current_tag();
+    let sign = adapter
+        .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
+        .expect("submit local proposal")
+        .into_effects();
+    let tag = match sign.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(proposal),
+            },
+        ] => {
+            assert!(proposal.signature.is_empty());
+            *tag
+        }
+        effects => panic!("unexpected local proposal effects: {effects:?}"),
+    };
+    assert_eq!(adapter.wal.recovered_records().len(), 1);
+
+    let effects = adapter
+        .signature_completed(tag, vec![0xD1; 96])
+        .expect("sign local proposal")
+        .into_effects();
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                ..
+            }),
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(_),
+                ..
+            }
+        ]
+    ));
+    assert_eq!(adapter.wal.recovered_records().len(), 2);
+    assert_eq!(adapter.reducer.durable_state().last_id().get(), 2);
+}
+
+#[test]
+fn local_proposal_commitment_conflict_is_transactional() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let proposed_subject = subject(0x7b);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, proposed_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let round = reducer::Round::new(manifest.round.height, manifest.round.view);
+    let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+    let conflicting = execution_commitment(0x7c);
+    assert_ne!(conflicting, validated.execution_commitment());
+    adapter
+        .registry
+        .register_execution_commitment(round, core_subject, conflicting)
+        .expect("pre-bind a conflicting authenticated commitment");
+
+    let subjects_before = adapter.registry.subjects.clone();
+    let manifests_before = adapter.registry.manifests.clone();
+    let commitments_before = adapter.registry.execution_commitments.clone();
+    let active_before = adapter.active_subject;
+    let reducer_before = adapter.reducer.clone();
+    let wal_len_before = adapter.wal.recovered_records().len();
+
+    assert!(matches!(
+        adapter.local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated,),
+        Err(AdapterError::ConflictingExecutionCommitment)
+    ));
+    assert_eq!(adapter.registry.subjects, subjects_before);
+    assert_eq!(adapter.registry.manifests, manifests_before);
+    assert_eq!(adapter.registry.execution_commitments, commitments_before);
+    assert_eq!(adapter.active_subject, active_before);
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_eq!(adapter.wal.recovered_records().len(), wal_len_before);
+}
+
+#[test]
+fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+
+    let decided_subject = subject(0x7c);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: decided_subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x7c; 96],
+    };
+    let decided = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+        ))
+        .expect("install the exact durable Decision");
+    assert!(matches!(
+        decided.effects(),
+        [AdapterEffect::FetchBody { .. }]
+    ));
+    assert!(adapter.serviced_candidates_decision_reclaimed);
+    assert!(adapter.serviced_candidates.is_empty());
+    assert!(adapter.durable_serviced_candidates.is_empty());
+    assert!(adapter.producer_continuations.is_empty());
+    assert!(adapter.durable_producer_continuations.is_empty());
+    let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+        .expect("read reclaimed owner snapshot");
+
+    adapter
+        .bind_selected_producer_lifecycle(Hash::new(b"post-Decision validated body"), 1)
+        .expect("bind post-Decision validation lifecycle");
+    let applied = adapter
+        .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
+        .expect("service selected post-Decision validation without a producer owner");
+    adapter.clear_selected_producer_lifecycle();
+    let apply_tag = match applied.effects() {
+        [
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            },
+        ] if *subject == decided_subject && certificate == &decision => *tag,
+        effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+    };
+    assert!(applied.producer_handoff().is_none());
+
+    adapter
+        .bind_selected_producer_lifecycle(Hash::new(b"post-Decision application"), 2)
+        .expect("bind post-Decision application lifecycle");
+    let completed = adapter
+        .application_completed(apply_tag, decided_subject)
+        .expect("service selected post-Decision application completion");
+    adapter.clear_selected_producer_lifecycle();
+    assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+    assert!(completed.effects().is_empty());
+    assert!(completed.producer_handoff().is_none());
+
+    assert!(adapter.serviced_candidates_decision_reclaimed);
+    assert!(adapter.serviced_candidates.is_empty());
+    assert!(adapter.durable_serviced_candidates.is_empty());
+    assert!(adapter.producer_continuations.is_empty());
+    assert!(adapter.durable_producer_continuations.is_empty());
+    assert!(adapter.restored_dormant_producer_continuations.is_empty());
+    assert!(adapter.deferred_producer_continuations.is_empty());
+    assert!(adapter.pending_producer_handoffs.is_empty());
+    assert_eq!(
+        std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("reread reclaimed owner snapshot"),
+        reclaimed_snapshot,
+        "post-Decision service cannot republish or mutate the reclaimed owner epoch"
+    );
+}
+
+#[test]
+fn exact_local_completion_after_decision_reports_body_validated_progress() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let predecision_a = unowned_body_event(&adapter, 0x79);
+    adapter
+        .step(predecision_a)
+        .expect("service pre-Decision candidate A");
+    let predecision_b = unowned_body_event(&adapter, 0x7A);
+    adapter
+        .step(predecision_b)
+        .expect("service pre-Decision candidate B");
+    assert_eq!(adapter.serviced_candidate_count_for_test(), 2);
+    assert_eq!(adapter.durable_serviced_candidates.len(), 2);
+    let decided_subject = subject(0x7d);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: decided_subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x7d; 96],
+    };
+    let decided = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+        ))
+        .expect("install the exact durable Decision");
+    assert!(matches!(
+        decided.effects(),
+        [AdapterEffect::FetchBody { .. }]
+    ));
+    assert!(adapter.serviced_candidates_decision_reclaimed);
+    assert_eq!(
+        adapter.serviced_candidate_count_for_test(),
+        0,
+        "durable Decision reclaims the complete candidate-service epoch, including its triggering occurrence"
+    );
+
+    let applied = adapter
+        .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
+        .expect("transfer trusted local validation to the Decision");
+    let apply_tag = match applied.effects() {
+        [
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            },
+        ] if *subject == decided_subject && certificate == &decision => *tag,
+        effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+    };
+    assert!(matches!(
+        adapter.status().expect("liveness snapshot").liveness.last_progress,
+        Some(wire::SumeragiV2ProgressTransitionStatus {
+            round,
+            transition: wire::SumeragiV2ProgressTransition::BodyValidated,
+            ..
+        }) if round == decision.round
+    ));
+    assert_eq!(
+        adapter.serviced_candidate_count_for_test(),
+        0,
+        "post-Decision application progress cannot resurrect candidate tombstones"
+    );
+    let completed = adapter
+        .application_completed(apply_tag, decided_subject)
+        .expect("retire the exact Decision application lifecycle");
+    assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+    assert!(completed.effects().is_empty());
+    let expected_retransmit = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+    ));
+    for attempt in 0..3 {
+        let retransmit = adapter
+            .retransmit_elapsed(adapter.current_tag())
+            .unwrap_or_else(|error| panic!("post-drain retransmission {attempt}: {error}"));
+        assert_eq!(
+            retransmit.effects(),
+            std::slice::from_ref(&expected_retransmit),
+            "a drained exact Decision may retransmit only its exact durable CommitQC control"
+        );
+    }
+    assert!(adapter.deferred_completions.is_empty());
+    assert!(adapter.durable_serviced_candidates.is_empty());
+    assert_eq!(
+        adapter.serviced_candidate_count_for_test(),
+        0,
+        "monotone applied state, not a recycled dormant ordinal or tombstone, suppresses resurrection"
+    );
+}
+
+#[test]
+fn busy_local_completion_during_decision_wal_reaches_apply_once() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let decided_subject = subject(0x7e);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: decided_subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x7e; 96],
+    };
+    let context = adapter.wire_context.clone();
+    let certificate = adapter
+        .registry
+        .qc_to_core(&decision, &context)
+        .expect("convert exact Decision certificate");
+    let decision_tag = adapter.current_tag();
+    let pending_decision = adapter
+        .reducer
+        .step(reducer::Event::QuorumCertificateReceived {
+            tag: decision_tag,
+            certificate,
+        })
+        .expect("stage Decision WAL persistence");
+    assert!(matches!(
+        pending_decision.effects(),
+        [reducer::Effect::Persist { .. }]
+    ));
+
+    let busy = adapter
+        .local_proposal_ready(decision_tag, manifest, &durable, &validated)
+        .expect("Busy boundary retains the trusted local completion");
+    assert_eq!(
+        busy.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    assert!(busy.effects().is_empty());
+    assert_eq!(adapter.deferred_completions.len(), 1);
+
+    let decision_effects = adapter
+        .drive_effects(pending_decision.into_effects())
+        .expect("fsync and acknowledge the Decision WAL record");
+    assert!(matches!(
+        decision_effects.as_slice(),
+        [AdapterEffect::FetchBody {
+            subject,
+            certificate: Some(certificate),
+            ..
+        }] if *subject == decided_subject && certificate == &decision
+    ));
+    let completion_effects = adapter
+        .drain_deferred()
+        .expect("fairly service the Busy-deferred completion");
+    assert!(matches!(
+        completion_effects.as_slice(),
+        [AdapterEffect::Apply {
+            subject,
+            certificate,
+            ..
+        }] if *subject == decided_subject && certificate == &decision
+    ));
+    assert!(adapter.deferred_completions.is_empty());
+    assert!(
+        adapter
+            .drain_deferred()
+            .expect("completion cannot be applied twice")
+            .is_empty()
+    );
+}
+
+#[test]
+fn busy_deferred_input_blocks_terminal_readiness_until_serviced() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let decided_subject = subject(0x7f);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: decided_subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x7f; 96],
+    };
+    let context = adapter.wire_context.clone();
+    let certificate = adapter
+        .registry
+        .qc_to_core(&decision, &context)
+        .expect("convert exact Decision certificate");
+    let decision_tag = adapter.current_tag();
+    let pending_decision = adapter
+        .reducer
+        .step(reducer::Event::QuorumCertificateReceived {
+            tag: decision_tag,
+            certificate,
+        })
+        .expect("stage Decision WAL persistence");
+    assert!(matches!(
+        pending_decision.effects(),
+        [reducer::Effect::Persist { .. }]
+    ));
+
+    let busy_completion = adapter
+        .local_proposal_ready(decision_tag, manifest.clone(), &durable, &validated)
+        .expect("retain the trusted completion across the Busy fence");
+    assert_eq!(
+        busy_completion.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    let terminal_vote = wire::Vote {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: decided_subject,
+        execution_commitment: validated.execution_commitment(),
+        signer: 3,
+        signature: vec![0x80; 96],
+    };
+    let busy_vote = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(terminal_vote)),
+        ))
+        .expect("retain authenticated ingress across the Busy fence");
+    assert_eq!(
+        busy_vote.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    assert_eq!(adapter.deferred_completions.len(), 1);
+    assert_eq!(adapter.deferred_inputs.len(), 1);
+
+    let decision_effects = adapter
+        .drive_effects(pending_decision.into_effects())
+        .expect("fsync and acknowledge the Decision WAL record");
+    assert!(matches!(
+        decision_effects.as_slice(),
+        [AdapterEffect::FetchBody { subject, .. }] if *subject == decided_subject
+    ));
+    let completion_effects = adapter
+        .drain_deferred()
+        .expect("service the retained completion first");
+    assert!(matches!(
+        completion_effects.as_slice(),
+        [AdapterEffect::Apply { subject, .. }] if *subject == decided_subject
+    ));
+    assert!(adapter.deferred_completions.is_empty());
+    assert_eq!(adapter.deferred_inputs.len(), 1);
+
+    let applied = adapter
+        .application_completed(decision_tag, decided_subject)
+        .expect("acknowledge exact decision application");
+    assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+    assert!(applied.effects().is_empty());
+    assert!(adapter.reducer.ready_to_finish());
+    assert!(adapter.deferred_work_is_serviceable());
+    assert!(
+        !adapter.ready_to_finish(),
+        "adapter-owned Busy debt must block terminal height rollover"
+    );
+
+    assert!(
+        adapter
+            .drain_deferred()
+            .expect("retire the authenticated terminal vote")
+            .is_empty()
+    );
+    assert!(adapter.deferred_inputs.is_empty());
+    assert!(adapter.ready_to_finish());
+}
+
+#[test]
+fn saturated_normal_lane_retains_exact_local_proposal_completion() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+
+    let proposed_subject = subject(0x81);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, proposed_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
+        manifest: manifest.clone(),
+        durable_receipt: durable.clone(),
+        validated_receipt: validated.clone(),
+    };
+    let proposal_tag = adapter.current_tag();
+    let sign = adapter
+        .local_proposal_ready(proposal_tag, manifest.clone(), &durable, &validated)
+        .expect("persist the local proposal before signing")
+        .into_effects();
+    let sign_tag = match sign.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(_),
+            },
+        ] => *tag,
+        effects => panic!("unexpected local proposal effects: {effects:?}"),
+    };
+
+    let deferred_vote = wire::Vote {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: subject(0x82),
+        execution_commitment: execution_commitment(0x82),
+        signer: 0,
+        signature: vec![0x82; 96],
+    };
+    let busy = adapter
+        .receive_verified(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(deferred_vote),
+        ))
+        .expect("defer normal ingress behind the proposal signature");
+    assert_eq!(
+        busy.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    let filler = adapter
+        .deferred_inputs
+        .front()
+        .expect("normal ingress owns one deferred slot")
+        .clone();
+    assert_eq!(filler.priority, DeferredPriority::Normal);
+    let mut saturated_inputs = VecDeque::from([filler.clone()]);
+    for _ in 1..MAX_DEFERRED_INPUTS {
+        let admission_capability = adapter
+            .deferred_admission_ordinals
+            .mint(filler.admission_capability.origin)
+            .expect("each saturated fixture owns a distinct adapter admission");
+        let mut distinct_filler = filler.clone();
+        distinct_filler.admission_ordinal = admission_capability.ordinal;
+        distinct_filler.admission_capability = admission_capability;
+        saturated_inputs.push_back(distinct_filler);
+    }
+    adapter.deferred_inputs = saturated_inputs;
+
+    let first_retry = adapter
+        .local_proposal_ready(proposal_tag, manifest.clone(), &durable, &validated)
+        .expect("trusted local completion bypasses saturated normal ingress");
+    assert_eq!(
+        first_retry.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (1, 1),
+        "the full manifest and both receipts have exactly one completion owner"
+    );
+    assert!(matches!(
+        adapter.deferred_completions.front(),
+        Some(DeferredInput {
+            event: reducer::Event::LocalProposalReady { .. },
+            priority: DeferredPriority::Completion,
+            ..
+        })
+    ));
+    let first_completion_ordinal = adapter
+        .deferred_completions
+        .front()
+        .expect("first completion retains an exact owner")
+        .admission_ordinal;
+    let next_ordinal_before_duplicate = adapter.deferred_admission_ordinals.next_for_test();
+
+    let exact_retry = adapter
+        .local_proposal_ready(proposal_tag, manifest, &durable, &validated)
+        .expect("an exact retry coalesces with its existing owner");
+    assert_eq!(
+        exact_retry.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (1, 1),
+        "an exact retry cannot duplicate completion ownership"
+    );
+    assert_eq!(
+        adapter
+            .deferred_completions
+            .front()
+            .expect("duplicate retains the original owner")
+            .admission_ordinal,
+        first_completion_ordinal,
+        "an exact duplicate must not mint or reset its admission ordinal"
+    );
+    assert_eq!(
+        adapter.deferred_admission_ordinals.next_for_test(),
+        next_ordinal_before_duplicate,
+        "duplicate coalescing must not consume an actor ordinal"
+    );
+
+    let completed = adapter
+        .signature_completed(sign_tag, vec![0x81; 96])
+        .expect("signature completion drains the retained proposal retry")
+        .into_effects();
+    assert!(completed.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(_),
+            ..
+        })
+    )));
+    let prepare_sign_tag = completed
+        .iter()
+        .find_map(|effect| match effect {
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            } if vote.phase == wire::GlobalPhase::Prepare
+                && vote.subject == proposed_subject =>
+            {
+                Some(*tag)
+            }
+            _ => None,
+        })
+        .expect("proposal completion opens its serialized Prepare signature");
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (1, 1),
+        "the retry remains owned while the causally next signature is outstanding"
+    );
+    assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+
+    let prepare_completed = adapter
+        .signature_completed(prepare_sign_tag, vec![0x82; 96])
+        .expect("Prepare signature releases all deferred reducer work")
+        .into_effects();
+    assert!(prepare_completed.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        }) if vote.phase == wire::GlobalPhase::Prepare
+            && vote.subject == proposed_subject
+    )));
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (1, 1),
+        "signature completion cannot concatenate a second reducer macro-step"
+    );
+    assert!(adapter.deferred_work_is_serviceable());
+    assert!(
+        adapter
+            .drain_deferred()
+            .expect("service the retained local completion in its own turn")
+            .is_empty()
+    );
+    assert_eq!(
+        adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+        (0, 0),
+        "one explicit deferred turn retires the sole completion owner"
+    );
+    assert!(adapter.deferred_inputs.len() <= MAX_DEFERRED_INPUTS);
+    assert!(adapter.ingress_ready());
+    assert!(!adapter.fail_closed);
+}
+
+#[test]
+fn replay_resigns_a_durable_proposal_before_prepare() {
+    let directory = TempDir::new().expect("temporary directory");
+    {
+        let (mut adapter, _) = open_test_as_leader(&directory).expect("open leader");
+        let subject = subject(10);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+        let proposal_tag = adapter.current_tag();
+        let sign = adapter
+            .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
+            .expect("persist proposal intent");
+        assert!(matches!(
+            sign.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }]
+        ));
+    }
+
+    let (adapter, startup) = open_test_as_leader(&directory).expect("replay leader");
+    assert!(adapter.ingress_ready());
+    assert!(matches!(
+        startup.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }]
+    ));
+    assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
+}
+
+#[test]
+fn proposal_signed_callback_is_restart_scoped_before_control_delivery() {
+    let directory = TempDir::new().expect("temporary directory");
+    let proposal_signature = vec![0xD1; 96];
+    {
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+        let proposed_subject = subject(0xA8);
+        let proposal = proposal(
+            &adapter.wire_context,
+            adapter.wire_context.leader(0),
+            proposed_subject,
+        );
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal fixture")
+        };
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+        let sign = adapter
+            .local_proposal_ready(
+                adapter.current_tag(),
+                proposal.manifest,
+                &durable,
+                &validated,
+            )
+            .expect("persist proposal intent before signing");
+        let sign_tag = match sign.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::Proposal(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected proposal sign effects: {effects:?}"),
+        };
+        let retained = adapter.serviced_candidate_count_for_test();
+        let signed = adapter
+            .signature_completed(sign_tag, proposal_signature.clone())
+            .expect("complete proposal signature before simulated control loss");
+        assert!(signed.effects().iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                ..
+            })
+        )));
+        assert!(signed.effects().iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if vote.phase == wire::GlobalPhase::Prepare
+        )));
+        assert_eq!(
+            adapter.serviced_candidate_count_for_test(),
+            retained,
+            "a Signed callback is not a durable candidate tombstone"
+        );
+        // Drop both returned controls: the WAL contains ProposalIntent and
+        // PrepareIntent, while neither broadcast reached transport.
+    }
+
+    let context = context();
+    let leader = context.leader(0);
+    let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("leader-safety.wal"),
+        verified_genesis(context),
+        Some(leader),
+        reducer::Generation::new(2),
+        [0x22; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("recover proposal and Prepare intents");
+    let proposal_tag = match startup.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(_),
+            },
+        ] => *tag,
+        effects => panic!("unexpected recovered proposal frontier: {effects:?}"),
+    };
+    let retained = recovered.serviced_candidate_count_for_test();
+    let replayed = recovered
+        .signature_completed(proposal_tag, proposal_signature)
+        .expect("new generation accepts the replay-issued proposal callback");
+    assert!(replayed.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(_),
+            ..
+        })
+    )));
+    let prepare_tag = replayed
+        .effects()
+        .iter()
+        .find_map(|effect| match effect {
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            } if vote.phase == wire::GlobalPhase::Prepare => Some(*tag),
+            _ => None,
+        })
+        .expect("recovered proposal releases its durable Prepare signature");
+    assert_eq!(recovered.serviced_candidate_count_for_test(), retained);
+    let prepare_signature = vec![0xD2; 96];
+    let prepared = recovered
+        .signature_completed(prepare_tag, prepare_signature.clone())
+        .expect("complete replayed Prepare signature");
+    assert!(prepared.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        }) if vote.phase == wire::GlobalPhase::Prepare
+    )));
+    assert_eq!(
+        recovered
+            .signature_completed(prepare_tag, prepare_signature)
+            .expect("same-episode duplicate is reducer-idempotent")
+            .disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+    );
+}
+
+#[test]
+fn vote_signed_callback_is_restart_scoped_before_control_delivery() {
+    let directory = TempDir::new().expect("temporary directory");
+    let vote_signature = vec![0xE1; 96];
+    let prepared_subject = subject(0xA9);
+    {
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let proposer = adapter.status().expect("status").leader;
+        let fetch = adapter
+            .receive_verified(proposal(&adapter.wire_context, proposer, prepared_subject))
+            .expect("accept remote proposal");
+        let (tag, manifest) = match fetch.effects() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+        let round = manifest.round;
+        adapter
+            .body_available(tag, manifest)
+            .expect("make remote body available");
+        let receipt = durable_body_receipt(&adapter, round, prepared_subject);
+        adapter
+            .body_stored(tag, round, prepared_subject, &receipt)
+            .expect("acknowledge durable body");
+        let validated = ValidatedBodyReceipt::for_test(receipt);
+        let sign = adapter
+            .validation_succeeded(tag, round, prepared_subject, &validated)
+            .expect("persist Prepare intent");
+        let sign_tag = match sign.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::Vote(vote),
+                },
+            ] if vote.phase == wire::GlobalPhase::Prepare => *tag,
+            effects => panic!("unexpected Prepare sign effects: {effects:?}"),
+        };
+        let retained = adapter.serviced_candidate_count_for_test();
+        let signed = adapter
+            .signature_completed(sign_tag, vote_signature.clone())
+            .expect("complete Prepare signature before simulated transport loss");
+        assert!(signed.effects().iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote),
+                ..
+            }) if vote.phase == wire::GlobalPhase::Prepare
+        )));
+        assert_eq!(adapter.serviced_candidate_count_for_test(), retained);
+    }
+
+    let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("safety.wal"),
+        verified_genesis(context()),
+        Some(0),
+        reducer::Generation::new(2),
+        [0x11; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("recover durable Prepare intent");
+    let sign_tag = match startup.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            },
+        ] if vote.phase == wire::GlobalPhase::Prepare && vote.subject == prepared_subject => {
+            *tag
+        }
+        effects => panic!("unexpected recovered Prepare frontier: {effects:?}"),
+    };
+    let validation_authority = recovered
+        .recovered_validation_authority(&startup)
+        .expect("WAL replay mints the exact bounded validation frontier");
+    assert_eq!(validation_authority.len(), 1);
+    assert!(validation_authority.authorizes(
+        wire::ConsensusRound {
+            context_id: context().id(),
+            height: context().height,
+            view: 0,
+        },
+        prepared_subject,
+    ));
+    let signed = recovered
+        .signature_completed(sign_tag, vote_signature.clone())
+        .expect("new generation accepts the replay-issued Prepare callback");
+    assert!(signed.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        }) if vote.phase == wire::GlobalPhase::Prepare
+            && vote.subject == prepared_subject
+    )));
+    assert_eq!(
+        recovered
+            .signature_completed(sign_tag, vote_signature)
+            .expect("same-episode duplicate is reducer-idempotent")
+            .disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+    );
+}
+
+#[test]
+fn recovered_validation_authority_uses_locked_proposal_round() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+
+    let proposal_round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: 0,
+    };
+    let certificate_round = wire::ConsensusRound {
+        view: 2,
+        ..proposal_round
+    };
+    let timeout = |view, marker| wire::TimeoutCertificate {
+        round: wire::ConsensusRound {
+            view,
+            ..proposal_round
+        },
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc: None,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![marker; 96],
+        }],
+    };
+    let timeout_zero = adapter
+        .registry
+        .tc_to_core(&timeout(0, 0xA8), &adapter.wire_context)
+        .expect("register the view-zero timeout certificate");
+    let timeout_one = adapter
+        .registry
+        .tc_to_core(&timeout(1, 0xA9), &adapter.wire_context)
+        .expect("register the view-one timeout certificate");
+    let locked_subject = subject(0xAA);
+    let wire_prepare = wire::QuorumCertificate {
+        round: certificate_round,
+        proposal_round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: locked_subject,
+        execution_commitment: execution_commitment(0xAA),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xAA; 96],
+    };
+    let core_context = adapter.reducer.context().clone();
+    let prepare = adapter
+        .registry
+        .qc_to_core(&wire_prepare, &adapter.wire_context)
+        .expect("register the carried durable PrepareQC");
+    let local_validator = adapter
+        .registry
+        .validator_id(0)
+        .expect("local fixture validator");
+    let lock_entry = reducer::WalEntry::new(
+        reducer::PersistenceId::new(3),
+        reducer::WalRecord::LockAndCommit {
+            vote: reducer::Vote::new_with_proposal_round(
+                core_context.id(),
+                prepare.round(),
+                prepare.proposal_round(),
+                reducer::Phase::Commit,
+                prepare.subject(),
+                local_validator,
+            ),
+            prepare,
+        },
+    );
+    adapter.reducer = reducer::Reducer::recover(
+        core_context,
+        Some(local_validator),
+        reducer::Generation::new(2),
+        [
+            reducer::WalEntry::new(
+                reducer::PersistenceId::new(1),
+                reducer::WalRecord::InstallTimeout(timeout_zero),
+            ),
+            reducer::WalEntry::new(
+                reducer::PersistenceId::new(2),
+                reducer::WalRecord::InstallTimeout(timeout_one),
+            ),
+            lock_entry,
+        ],
+    )
+    .expect("recover the carried durable lock");
+
+    let authority = adapter
+        .recovered_validation_authority(&[])
+        .expect("mint the recovered lock frontier");
+    assert_eq!(authority.len(), 1);
+    assert!(authority.authorizes(proposal_round, locked_subject));
+    assert!(!authority.authorizes(certificate_round, locked_subject));
+}
+
+#[test]
+fn timeout_signed_callback_is_restart_scoped_before_control_delivery() {
+    let directory = TempDir::new().expect("temporary directory");
+    let timeout_signature = vec![0xF1; 96];
+    {
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let sign = adapter
+            .timeout_elapsed(adapter.current_tag())
+            .expect("persist Timeout intent");
+        let sign_tag = match sign.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected Timeout sign effects: {effects:?}"),
+        };
+        let retained = adapter.serviced_candidate_count_for_test();
+        let signed = adapter
+            .signature_completed(sign_tag, timeout_signature.clone())
+            .expect("complete Timeout signature before simulated transport loss");
+        assert!(signed.effects().iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        )));
+        assert_eq!(adapter.serviced_candidate_count_for_test(), retained);
+    }
+
+    let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("safety.wal"),
+        verified_genesis(context()),
+        Some(0),
+        reducer::Generation::new(2),
+        [0x11; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("recover durable Timeout intent");
+    let sign_tag = match startup.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(_),
+            },
+        ] => *tag,
+        effects => panic!("unexpected recovered Timeout frontier: {effects:?}"),
+    };
+    let signed = recovered
+        .signature_completed(sign_tag, timeout_signature.clone())
+        .expect("new generation accepts the replay-issued Timeout callback");
+    assert!(signed.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+            ..
+        })
+    )));
+    assert_eq!(
+        recovered
+            .signature_completed(sign_tag, timeout_signature)
+            .expect("same-episode duplicate is reducer-idempotent")
+            .disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+    );
+}
+
+#[test]
+fn locally_signed_timeout_quorum_leads_with_enter_view_and_subsumes_vote() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let tag = adapter.current_tag();
+    let round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: tag.view(),
+    };
+
+    for signer in [1, 2] {
+        let retained = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![signer as u8; 96],
+                }),
+            ))
+            .expect("retain a remote TimeoutVote before the local timeout");
+        assert_eq!(retained.disposition(), reducer::StepDisposition::Applied);
+        assert!(retained.effects().is_empty());
+    }
+
+    let timeout = adapter
+        .timeout_elapsed(tag)
+        .expect("persist the local timeout intent");
+    let sign_tag = match timeout.effects() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(_),
+            },
+        ] => *tag,
+        effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+    };
+    let entered = adapter
+        .signature_completed(sign_tag, vec![0xF2; 96])
+        .expect("the local signature completes the retained timeout quorum")
+        .into_effects();
+
+    assert!(
+        matches!(
+            entered.as_slice(),
+            [
+                AdapterEffect::EnterView {
+                    tag: entered_tag,
+                    protected_lock: None,
+                    ..
+                },
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+                    ..
+                }),
+            ] if entered_tag.view() == round.view + 1
+                && certificate.round == round
+                && certificate.groups.iter().any(|group| group.signers.contains(&0))
+        ),
+        "the advancing WAL continuation must lead and its durable TC must subsume the old-view vote: {entered:?}"
+    );
+}
+
+#[test]
+fn locally_signed_timeout_without_quorum_broadcasts_only_the_vote() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let tag = adapter.current_tag();
+    let round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: tag.view(),
+    };
+
+    let timeout = adapter
+        .timeout_elapsed(tag)
+        .expect("persist the local timeout intent");
+    let sign_tag = match timeout.effects() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(_),
+            },
+        ] => *tag,
+        effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+    };
+    let signed = adapter
+        .signature_completed(sign_tag, vec![0xF3; 96])
+        .expect("complete the non-quorum local TimeoutVote")
+        .into_effects();
+
+    assert!(
+        matches!(
+            signed.as_slice(),
+            [AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                ..
+            })] if vote.round == round && vote.signer == 0
+        ),
+        "a non-quorum local timeout must emit only its vote broadcast: {signed:?}"
+    );
+}
+
+#[test]
+fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
+    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    crate::sumeragi::status::clear_v2_status();
+    let directory = TempDir::new().expect("temporary directory");
+    {
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+        let proposal = proposal(
+            &adapter.wire_context,
+            adapter.wire_context.leader(0),
+            subject(10),
+        );
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+        let proposal_tag = adapter.current_tag();
+        let sign = adapter
+            .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
+            .expect("persist proposal intent");
+        assert!(matches!(
+            sign.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }]
+        ));
+    }
+
+    crate::sumeragi::status::clear_v2_status();
+    let context = context();
+    let leader = context.leader(0);
+    let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
+        directory.path().join("leader-safety.wal"),
+        verified_genesis(context),
+        Some(leader),
+        reducer::Generation::new(1),
+        [0x22; 32],
+        fingerprints(),
+        deferred_admission_ordinals(),
+    )
+    .expect("replay leader without publishing status");
+    assert!(matches!(
+        startup.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }]
+    ));
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "nonempty startup work must not publish the prepared successor"
+    );
+    let prepared = adapter
+        .successor_activation_status()
+        .expect("prepare reducer-owned activation snapshot");
+    assert_eq!(prepared.height, 1);
+    assert!(matches!(
+        prepared.liveness.last_progress,
+        Some(wire::SumeragiV2ProgressTransitionStatus {
+            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            ..
+        })
+    ));
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "snapshot construction must remain separate from publication"
+    );
+    crate::sumeragi::status::clear_v2_status();
+}
+
+#[test]
 fn replay_resigns_only_an_acknowledged_intent() {
     let directory = TempDir::new().expect("temporary directory");
     {
@@ -1152,7 +2679,7 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     assert!(first.effects().is_empty());
 
     let retransmit = adapter
-        .receive_verified(unsafe_proposal)
+        .receive_verified(unsafe_proposal.clone())
         .expect("coalesce the exact unsafe proposal retransmission");
     assert_eq!(
         retransmit.disposition(),
@@ -1161,18 +2688,20 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     assert!(retransmit.effects().is_empty());
 
     let conflict = adapter
-        .receive_verified(conflicting_proposal)
+        .receive_verified(conflicting_proposal.clone())
         .expect("report the conflicting proposal fingerprint");
     assert_eq!(conflict.disposition(), reducer::StepDisposition::Applied);
+    let wire::ConsensusMessageV2Payload::Proposal(first_proposal) = unsafe_proposal.payload else {
+        unreachable!("proposal fixture contains a proposal")
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(second_proposal) = conflicting_proposal.payload
+    else {
+        unreachable!("proposal fixture contains a proposal")
+    };
     assert_eq!(
         conflict.effects(),
         &[AdapterEffect::ReportEquivocation {
-            offender: adapter.wire_context.roster
-                [usize::try_from(proposer).expect("small proposer index")]
-            .validator
-            .clone(),
-            round: wire_round,
-            kind: reducer::EquivocationKind::Proposal,
+            evidence: AdapterEquivocationEvidence::proposal(first_proposal, second_proposal),
         }]
     );
 

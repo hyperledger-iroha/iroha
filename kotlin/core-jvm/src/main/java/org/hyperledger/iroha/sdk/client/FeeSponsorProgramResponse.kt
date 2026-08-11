@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 
 /** Consensus-visible lifecycle of one exact fee sponsor program. */
@@ -32,12 +33,14 @@ class FeeSponsorProgramActivation(
 /** Exact on-chain fee sponsor program returned by Torii. */
 class FeeSponsorProgramResponse(
     @JvmField val id: FeeSponsorProgramId,
+    @JvmField val payoutAccount: String,
     @JvmField val lifecycle: FeeSponsorProgramLifecycle,
     @JvmField val activeRevision: Long?,
     @JvmField val stagedRevision: Long?,
     @JvmField val scheduledActivation: FeeSponsorProgramActivation?,
 ) {
     init {
+        requireCanonicalI105Address(payoutAccount, "payoutAccount")
         if (activeRevision != null) require(activeRevision > 0) { "activeRevision must be positive" }
         if (stagedRevision != null) require(stagedRevision > 0) { "stagedRevision must be positive" }
     }
@@ -45,6 +48,7 @@ class FeeSponsorProgramResponse(
     override fun equals(other: Any?): Boolean =
         other is FeeSponsorProgramResponse &&
             id == other.id &&
+            payoutAccount == other.payoutAccount &&
             lifecycle == other.lifecycle &&
             activeRevision == other.activeRevision &&
             stagedRevision == other.stagedRevision &&
@@ -52,6 +56,7 @@ class FeeSponsorProgramResponse(
 
     override fun hashCode(): Int {
         var result = id.hashCode()
+        result = 31 * result + payoutAccount.hashCode()
         result = 31 * result + lifecycle.hashCode()
         result = 31 * result + (activeRevision?.hashCode() ?: 0)
         result = 31 * result + (stagedRevision?.hashCode() ?: 0)

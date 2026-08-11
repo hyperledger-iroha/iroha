@@ -3,7 +3,7 @@
 use core::fmt;
 
 use hex;
-use iroha_crypto::{Hash, HashOf, blake2::Blake2b512};
+use iroha_crypto::{Hash, blake2::Blake2b512};
 #[cfg(test)]
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
@@ -14,7 +14,6 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::BlockHeader,
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
@@ -24,7 +23,8 @@ use iroha_data_model::{
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
-            DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+            DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
         },
     },
     metadata::Metadata,
@@ -293,11 +293,6 @@ enum ValidationFeeAdmissionError {
         expected: String,
         found: String,
     },
-    MissingPolicyGenesis,
-    WrongPolicyGenesis {
-        expected_hash_hex: String,
-        found_hash_hex: String,
-    },
     PolicyExpired {
         expires_after_height: u64,
         current_height: u64,
@@ -476,19 +471,6 @@ impl fmt::Display for ValidationFeeAdmissionError {
             Self::WrongPolicyNetwork { expected, found } => write!(
                 f,
                 "validation-fee policy network mismatch: expected {expected}, found {found}"
-            ),
-            Self::MissingPolicyGenesis => {
-                write!(
-                    f,
-                    "validation-fee policy cannot be genesis-bound because no committed genesis hash is available"
-                )
-            }
-            Self::WrongPolicyGenesis {
-                expected_hash_hex,
-                found_hash_hex,
-            } => write!(
-                f,
-                "validation-fee policy genesis mismatch: expected {expected_hash_hex}, found {found_hash_hex}"
             ),
             Self::PolicyExpired {
                 expires_after_height,
@@ -1678,15 +1660,7 @@ fn active_policy(
             ValidationFeeAdmissionError::InvalidPolicyInvariant(reason),
         ));
     }
-    if policy.chain_id != state_transaction.chain_id {
-        return Err(admission_rejection(
-            ValidationFeeAdmissionError::WrongPolicyNetwork {
-                expected: state_transaction.chain_id.to_string(),
-                found: policy.chain_id.to_string(),
-            },
-        ));
-    }
-    validate_policy_genesis_hash(&policy, state_transaction.block_hashes())
+    validate_policy_network_id(&policy, &state_transaction.network_id)
         .map_err(admission_rejection)?;
     if let Some(expires_after_height) = policy.expires_after_height {
         if current_height >= expires_after_height {
@@ -2079,17 +2053,14 @@ fn verified_opaque_treasury_payout_binding(
     Ok(Some(binding.clone()))
 }
 
-fn validate_policy_genesis_hash(
+fn validate_policy_network_id(
     policy: &ValidationFeePolicyV1,
-    committed_block_hashes: &[HashOf<BlockHeader>],
+    expected_network_id: &iroha_data_model::NetworkId,
 ) -> Result<(), ValidationFeeAdmissionError> {
-    let Some(genesis_hash) = committed_block_hashes.first().map(|hash| *hash.as_ref()) else {
-        return Err(ValidationFeeAdmissionError::MissingPolicyGenesis);
-    };
-    if policy.genesis_hash != genesis_hash {
-        return Err(ValidationFeeAdmissionError::WrongPolicyGenesis {
-            expected_hash_hex: hex::encode(genesis_hash),
-            found_hash_hex: hex::encode(policy.genesis_hash),
+    if &policy.network_id != expected_network_id {
+        return Err(ValidationFeeAdmissionError::WrongPolicyNetwork {
+            expected: expected_network_id.to_string(),
+            found: policy.network_id.to_string(),
         });
     }
     Ok(())
@@ -3034,9 +3005,21 @@ fn native_fee_asset_movement_wire_id(
             {
                 return Some(SettleFxCorridor::WIRE_ID);
             }
+            SettlementInstructionBox::FundFxCorridorEscrow(isi)
+                if isi.destination_asset_definition_id == *fee_asset_definition_id =>
+            {
+                return Some(FundFxCorridorEscrow::WIRE_ID);
+            }
+            SettlementInstructionBox::RefundFxCorridorEscrow(isi)
+                if isi.destination_asset_definition_id == *fee_asset_definition_id =>
+            {
+                return Some(RefundFxCorridorEscrow::WIRE_ID);
+            }
             SettlementInstructionBox::Dvp(_)
             | SettlementInstructionBox::Pvp(_)
             | SettlementInstructionBox::SetFxCorridorPolicy(_)
+            | SettlementInstructionBox::FundFxCorridorEscrow(_)
+            | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => {}
         }
     }
@@ -3675,10 +3658,11 @@ fn format_entry_index(entry_index: Option<usize>) -> String {
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         asset::{AssetDefinitionId, AssetId},
+        block::BlockHeader,
         domain::DomainId,
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::{
@@ -3763,11 +3747,16 @@ mod tests {
         asset_definition("fee_token")
     }
 
+    fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7; 32])),
+        )
+    }
+
     fn policy(treasury: &AccountId) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            chain_id: "generic-testnet".into(),
-            genesis_hash: [7; 32],
+            network_id: validation_fee_test_network_id(),
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: fee_asset(),
@@ -3788,7 +3777,7 @@ mod tests {
 
     fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &validation_fee_test_network_id(),
             &account(9),
             42,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -4312,13 +4301,9 @@ mod tests {
             state_tx,
         )
         .expect("register signed contract manifest");
-        let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-            deployer,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("contract address");
+        let contract_address =
+            ContractAddress::derive(&state_tx.network_id, deployer, 0, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
         crate::smartcontracts::code::activate_instance(
             deployer,
             contract_address.clone(),
@@ -4471,7 +4456,7 @@ mod tests {
         asset_definition_id: &AssetDefinitionId,
     ) -> KagemushaRecursiveSpendTopUpRequestV4 {
         let payer = account(1);
-        let chain_id = ChainId::from("generic-testnet");
+        let network_id = NetworkId::from_genesis_hash(block_hash([0xA0; 32]));
         let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
             .expect("positive top-up amount");
         let operation_id = [0xA4; 32];
@@ -4489,7 +4474,7 @@ mod tests {
             asset: AssetId::new(asset_definition_id.clone(), payer.clone()),
             amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
+                network_id,
                 asset: asset_definition_id.clone(),
                 note_commitment: [0xA7; 32],
                 spend_nullifier: [0xA8; 32],
@@ -4519,7 +4504,7 @@ mod tests {
         asset_definition_id: &AssetDefinitionId,
     ) -> KagemushaRecursiveSpendRedeemRequestV4 {
         let recipient = account(1);
-        let chain_id = ChainId::from("generic-testnet");
+        let network_id = NetworkId::from_genesis_hash(block_hash([0xA0; 32]));
         let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
             .expect("positive redemption amount");
         let operation_id = [0xB1; 32];
@@ -4531,7 +4516,7 @@ mod tests {
             KagemushaRecursiveSpendBranchClaimV2::root(topup_anchor_ref.anchor_digest)
                 .expect("canonical root branch claim");
         let note = KagemushaSpendableNoteDescriptorV2 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset_definition_id.clone(),
             note_commitment: [0xB4; 32],
             spend_nullifier: [0xB5; 32],
@@ -4543,7 +4528,7 @@ mod tests {
             binding.manifest_sha256,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset_definition_id.clone(),
             asset_scale: u32::from(TEST_VALIDATION_FEE_ASSET_SCALE),
             final_root: [0xB6; 32],
@@ -4604,10 +4589,10 @@ mod tests {
             root: [0xB6; 32],
             public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
             asset_tag: [0xBC; 32],
-            chain_tag: [0xBD; 32],
+            network_tag: [0xBD; 32],
         };
         let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
-            chain_id,
+            network_id,
             asset: asset_definition_id.clone(),
             input_note: note,
             parent_branch_claims: vec![branch_claim],
@@ -4698,9 +4683,8 @@ mod tests {
         metadata: Metadata,
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4711,9 +4695,8 @@ mod tests {
 
     fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4731,9 +4714,8 @@ mod tests {
 
     fn ivm_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4748,9 +4730,8 @@ mod tests {
         metadata: Metadata,
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5240,26 +5221,24 @@ mod tests {
     }
 
     #[test]
-    fn active_policy_is_bound_to_committed_genesis_hash() {
+    fn active_policy_rejects_same_label_with_a_different_exact_network() {
         let treasury = account(3);
         let policy = policy(&treasury);
+        let first_display_label = ChainId::from("shared-display-label");
+        let second_display_label = ChainId::from("shared-display-label");
+        assert_eq!(first_display_label, second_display_label);
 
-        validate_policy_genesis_hash(&policy, &[block_hash(policy.genesis_hash)])
-            .expect("matching genesis hash should validate");
-
-        assert_eq!(
-            validate_policy_genesis_hash(&policy, &[]),
-            Err(ValidationFeeAdmissionError::MissingPolicyGenesis)
+        validate_policy_network_id(&policy, &validation_fee_test_network_id())
+            .expect("matching exact network id should validate");
+        let foreign_network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9; 32])),
         );
 
-        let wrong_genesis_hash = block_hash([8u8; 32]);
-        let wrong_genesis_hash_bytes = *wrong_genesis_hash.as_ref();
-
         assert_eq!(
-            validate_policy_genesis_hash(&policy, &[wrong_genesis_hash]),
-            Err(ValidationFeeAdmissionError::WrongPolicyGenesis {
-                expected_hash_hex: hex::encode(wrong_genesis_hash_bytes),
-                found_hash_hex: hex::encode(policy.genesis_hash),
+            validate_policy_network_id(&policy, &foreign_network_id),
+            Err(ValidationFeeAdmissionError::WrongPolicyNetwork {
+                expected: foreign_network_id.to_string(),
+                found: policy.network_id.to_string(),
             })
         );
     }
@@ -5302,11 +5281,12 @@ mod tests {
             b"future-policy-payout",
         ));
         let registry = policy_registry(std::slice::from_ref(&future));
-        let state = crate::state::State::new_with_chain_for_testing(
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
             crate::state::World::default(),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
         );
         let header = iroha_data_model::block::BlockHeader::new(
             std::num::NonZeroU64::new(9).expect("height"),
@@ -5334,11 +5314,12 @@ mod tests {
 
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
-        let state = crate::state::State::new_with_chain_for_testing(
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
             validation_fee_payout_world(&deployer),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
         );
         {
             let mut hashes = state.block_hashes.block();
@@ -6400,11 +6381,12 @@ mod tests {
             accounts,
             [fee_definition, xor_definition],
         );
-        let state = crate::state::State::new_with_chain_for_testing(
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
             world,
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
         );
         {
             let mut hashes = state.block_hashes.block();
@@ -6448,13 +6430,9 @@ mod tests {
             &mut state_tx,
         )
         .expect("register signed contract manifest");
-        let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-            &deployer,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("contract address");
+        let contract_address =
+            ContractAddress::derive(&state_tx.network_id, &deployer, 0, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
         crate::smartcontracts::code::activate_instance(
             &deployer,
             contract_address.clone(),
@@ -6970,11 +6948,12 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
-        let state = crate::state::State::new_with_chain_for_testing(
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
             validation_fee_payout_world(&deployer),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
         );
         {
             let mut hashes = state.block_hashes.block();

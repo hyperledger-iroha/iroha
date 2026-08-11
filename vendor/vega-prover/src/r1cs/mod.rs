@@ -295,30 +295,34 @@ mod tests_relaxed_sample {
 
     #[test]
     fn test_random_sample() {
-        test_random_sample_with::<P256HyraxEngine>();
+        crate::iroha_rng::with_deterministic_test_seed(0x30, || {
+            test_random_sample_with::<P256HyraxEngine>();
+        });
     }
 
     #[test]
     fn test_fold_multiple_rejects_mismatched_x() {
-        type E = P256HyraxEngine;
-        let s = tiny_r1cs::<E>(4);
-        let (ck, _) = s.commitment_key();
-        let one = <<E as Engine>::Scalar as Field>::ONE;
-        let r_w = PCS::<E>::blind(&ck, 1);
-        let comm = PCS::<E>::commit(&ck, &[one], &r_w, false).unwrap();
+        crate::iroha_rng::with_deterministic_test_seed(0x31, || {
+            type E = P256HyraxEngine;
+            let s = tiny_r1cs::<E>(4);
+            let (ck, _) = s.commitment_key();
+            let one = <<E as Engine>::Scalar as Field>::ONE;
+            let r_w = PCS::<E>::blind(&ck, 1);
+            let comm = PCS::<E>::commit(&ck, &[one], &r_w, false).unwrap();
 
-        let u_a = R1CSInstance::<E> {
-            comm_W: comm.clone(),
-            X: vec![one, one],
-        };
-        let u_b = R1CSInstance::<E> {
-            comm_W: comm,
-            X: vec![one, one, one],
-        };
+            let u_a = R1CSInstance::<E> {
+                comm_W: comm.clone(),
+                X: vec![one, one],
+            };
+            let u_b = R1CSInstance::<E> {
+                comm_W: comm,
+                X: vec![one, one, one],
+            };
 
-        // equal-length instances fold; mismatched public IO lengths are rejected
-        assert!(R1CSInstance::fold_multiple(&[one], &[u_a.clone(), u_a.clone()]).is_ok());
-        assert!(R1CSInstance::fold_multiple(&[one], &[u_a, u_b]).is_err());
+            // equal-length instances fold; mismatched public IO lengths are rejected
+            assert!(R1CSInstance::fold_multiple(&[one], &[u_a.clone(), u_a.clone()]).is_ok());
+            assert!(R1CSInstance::fold_multiple(&[one], &[u_a, u_b]).is_err());
+        });
     }
 }
 

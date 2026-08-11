@@ -22,6 +22,7 @@ const FIXTURE_ROOT = path.resolve(
 const ORDER_PAYLOAD = fs.readFileSync(path.join(FIXTURE_ROOT, "order_v1.to"));
 const ORDER_PAYLOAD_BASE64 = ORDER_PAYLOAD.toString("base64");
 const ORDER_ID = "ab".repeat(32);
+const MUSUBI_ARCHIVE_ID = "cd".repeat(32);
 const PROVIDER_ID = "10".repeat(32);
 const PROVIDER_OWNER =
   "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -93,8 +94,25 @@ test("SoraFS replication instruction builders emit canonical native field names"
       order_payload: ORDER_PAYLOAD_BASE64,
       issued_epoch: 20,
       deadline_epoch: 28,
+      musubi_archive: null,
     },
   });
+
+  const musubiIssue = buildIssueReplicationOrderInstruction({
+    orderId: ORDER_ID,
+    orderPayload: ORDER_PAYLOAD_BASE64,
+    issuedEpoch: 20,
+    deadlineEpoch: 28,
+    musubiArchiveId: MUSUBI_ARCHIVE_ID,
+  });
+  assert.equal(
+    musubiIssue.IssueReplicationOrder.musubi_archive,
+    MUSUBI_ARCHIVE_ID,
+  );
+  assert.deepEqual(
+    noritoDecodeInstruction(noritoEncodeInstruction(musubiIssue)),
+    musubiIssue,
+  );
 
   const complete = buildCompleteReplicationOrderInstruction(completionOptions());
   assert.deepEqual(complete, {
@@ -138,6 +156,29 @@ test("SoraFS replication instruction builders emit canonical native field names"
 });
 
 test("SoraFS replication builders reject identifiers, epochs, legacy completion, and unknown fields", () => {
+  assert.throws(
+    () =>
+      noritoEncodeInstruction({
+        IssueReplicationOrder: {
+          order_id: ORDER_ID,
+          order_payload: ORDER_PAYLOAD_BASE64,
+          issued_epoch: 20,
+          deadline_epoch: 28,
+        },
+      }),
+    /missing field musubi_archive/,
+  );
+  assert.throws(
+    () =>
+      buildIssueReplicationOrderInstruction({
+        orderId: ORDER_ID,
+        orderPayload: ORDER_PAYLOAD_BASE64,
+        issuedEpoch: 20,
+        deadlineEpoch: 28,
+        musubiArchiveId: "00".repeat(32),
+      }),
+    /zero identifier/,
+  );
   assert.throws(
     () =>
       buildCompleteReplicationOrderInstruction(completionOptions({

@@ -1,5 +1,3 @@
-// Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
     use iroha_data_model::query::{
@@ -174,14 +172,11 @@ fn checked_keypair_helpers_preserve_requested_algorithm() {
     );
 }
 
-fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-    let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-        .parse()
-        .expect("valid chain id");
+fn dummy_accepted_transaction(network_id: NetworkId) -> AcceptedTransaction<'static> {
     let keypair = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let authority = AccountId::new(keypair.public_key().clone());
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );

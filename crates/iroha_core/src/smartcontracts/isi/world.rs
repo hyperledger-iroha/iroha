@@ -44,7 +44,8 @@ pub mod isi {
         },
         asset_definition::{
             AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-            CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+            CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+            CanUnregisterAssetDefinition,
         },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         executor::CanUpgradeExecutor,
@@ -53,13 +54,12 @@ pub mod isi {
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
-        nexus::{
-            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
-        },
+        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         peer::CanManageLaneRelayEmergency,
-        sccp::{CanManageSccpGovernance, CanProposeSccpRouteGovernance},
+        sccp::CanProposeSccpRouteGovernance,
         smart_contract::CanRegisterSmartContractCode,
+        sorafs::{CanRegisterSorafsProviderOwner, CanUnregisterSorafsProviderOwner},
     };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
@@ -94,8 +94,8 @@ pub mod isi {
         governance::types::{
             AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceFinalizationEvidence, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
-            SccpRouteGovernanceProposal, ValidationFeePayoutLifecycleProposal,
-            ValidationFeePolicyProposal,
+            SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -429,9 +429,9 @@ pub mod isi {
         else {
             return Ok(());
         };
-        if &next.chain_id != &state_transaction.chain_id {
+        if next.network_id != state_transaction.network_id {
             return Err(invalid_smart_contract_parameter(
-                "finalized-reputation archive retention request targets another chain",
+                "finalized-reputation archive retention request targets another network",
             ));
         }
         if next.compact_through.height >= state_transaction.block_height() {
@@ -1596,13 +1596,17 @@ pub mod isi {
         profile: SoracloudFheStarkVerifierProfile,
         vk: &VerifyingKeyBox,
     ) -> Result<(), Error> {
-        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-            .map_err(|_| {
-                invalid_smart_contract_parameter(format!(
-                    "{} verifying key has invalid STARK payload",
-                    profile.label
-                ))
-            })?;
+        let payload = crate::zk::validate_stark_fri_verifying_key_v1(
+            vk.backend.as_str(),
+            profile.circuit_id,
+            vk.bytes.as_slice(),
+        )
+        .map_err(|_| {
+            invalid_smart_contract_parameter(format!(
+                "{} verifying key has invalid STARK payload",
+                profile.label
+            ))
+        })?;
         crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
             &payload,
             profile.circuit_id,
@@ -1974,12 +1978,12 @@ pub mod isi {
 
     fn derive_ballot_nullifier(
         domain_tag: &str,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         election_id: &str,
         commit: &[u8; 32],
     ) -> [u8; 32] {
         let mut input = Vec::with_capacity(
-            domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+            domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
         );
         // Length-prefix fields to avoid delimiter collisions in concatenated inputs.
         let push_len = |input: &mut Vec<u8>, len: usize| {
@@ -1988,8 +1992,8 @@ pub mod isi {
         };
         push_len(&mut input, domain_tag.len());
         input.extend_from_slice(domain_tag.as_bytes());
-        push_len(&mut input, chain_id.as_str().len());
-        input.extend_from_slice(chain_id.as_str().as_bytes());
+        push_len(&mut input, network_id.as_bytes().len());
+        input.extend_from_slice(network_id.as_bytes());
         push_len(&mut input, election_id.len());
         input.extend_from_slice(election_id.as_bytes());
         input.extend_from_slice(commit);
@@ -2133,11 +2137,11 @@ pub mod isi {
         }
         let mut input = Vec::with_capacity(
             b"iroha:gov:jit:entropy:fallback:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>(),
         );
         input.extend_from_slice(b"iroha:gov:jit:entropy:fallback:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&state_transaction._curr_block.height().get().to_le_bytes());
         let digest = Blake2b512::digest(input);
         let mut out = [0u8; 32];
@@ -2152,12 +2156,12 @@ pub mod isi {
         let entropy = latest_governance_entropy_seed(state_transaction);
         let mut input = Vec::with_capacity(
             b"iroha:gov:epoch-beacon:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>()
                 + entropy.len(),
         );
         input.extend_from_slice(b"iroha:gov:epoch-beacon:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&epoch.to_le_bytes());
         input.extend_from_slice(&entropy);
         let digest = Blake2b512::digest(input);
@@ -2174,13 +2178,13 @@ pub mod isi {
         let entropy = latest_governance_entropy_seed(state_transaction);
         let mut input = Vec::with_capacity(
             b"iroha:gov:proposal-beacon:v1|".len()
-                + state_transaction.chain_id.as_str().len()
+                + state_transaction.network_id.as_bytes().len()
                 + core::mem::size_of::<u64>()
                 + proposal_id.len()
                 + entropy.len(),
         );
         input.extend_from_slice(b"iroha:gov:proposal-beacon:v1|");
-        input.extend_from_slice(state_transaction.chain_id.as_str().as_bytes());
+        input.extend_from_slice(state_transaction.network_id.as_bytes());
         input.extend_from_slice(&created_height.to_le_bytes());
         input.extend_from_slice(&proposal_id);
         input.extend_from_slice(&entropy);
@@ -2239,7 +2243,7 @@ pub mod isi {
         // records the exact smaller roster (and therefore its exact quorum).
         let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
             &state_transaction.gov,
-            &state_transaction.chain_id,
+            &state_transaction.network_id,
             selection_epoch,
             &beacon,
             candidates
@@ -2878,101 +2882,6 @@ pub mod isi {
                         ),
                     ));
                 }
-                if record.backend == BackendTag::Stark {
-                    #[cfg(not(feature = "zk-stark"))]
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verifying key backend Stark is not enabled".into(),
-                            ),
-                        ));
-                    }
-
-                    #[cfg(feature = "zk-stark")]
-                    {
-                        use crate::zk_stark::{
-                            STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-                        };
-                        let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
-                            None
-                        } else if id_backend.contains("/sha256-") {
-                            Some(STARK_HASH_SHA256_V1)
-                        } else if id_backend.contains("/poseidon2-") {
-                            Some(STARK_HASH_POSEIDON2_V1)
-                        } else {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported stark/fri backend variant".into(),
-                                ),
-                            ));
-                        };
-                        let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-                            .map_err(|_| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "invalid STARK verifying key payload".into(),
-                                ),
-                            )
-                        })?;
-                        if payload.version != 1 {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported STARK verifying key payload version".into(),
-                                ),
-                            ));
-                        }
-                        if payload.hash_fn != STARK_HASH_SHA256_V1
-                            && payload.hash_fn != STARK_HASH_POSEIDON2_V1
-                        {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported STARK verifying key hash_fn".into(),
-                                ),
-                            ));
-                        }
-                        if let Some(expected_hash_fn) = expected_hash_fn {
-                            if payload.hash_fn != expected_hash_fn {
-                                return Err(InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "STARK verifying key hash_fn mismatch".into(),
-                                    ),
-                                ));
-                            }
-                        }
-                        if payload.circuit_id.trim().is_empty() {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key circuit_id must not be empty".into(),
-                                ),
-                            ));
-                        }
-                        let payload_circuit_id =
-                            normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
-                                .ok_or_else(|| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "invalid STARK verifying key circuit_id".into(),
-                                        ),
-                                    )
-                                })?;
-                        let record_circuit_id =
-                            normalize_stark_fri_circuit_id(id_backend, &record.circuit_id)
-                                .ok_or_else(|| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "invalid verifying key record circuit_id".into(),
-                                        ),
-                                    )
-                                })?;
-                        if payload_circuit_id != record_circuit_id {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key circuit_id does not match record".into(),
-                                ),
-                            ));
-                        }
-                    }
-                }
             }
             // Ensure entry not present
             if state_transaction.world.verifying_keys.get(&id).is_some() {
@@ -3020,6 +2929,13 @@ pub mod isi {
                     ),
                 ));
             }
+            crate::zk::validate_and_prepare_verifying_key_record_v1(&id, &record).map_err(
+                |err| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid canonical verifying-key record: {err}"
+                    ))
+                },
+            )?;
             validate_soracloud_fhe_stark_verifying_key_records(&id, &record)?;
             state_transaction
                 .world
@@ -3349,12 +3265,12 @@ pub mod isi {
     }
 
     fn compute_sccp_route_governance_proposal_id(
-        action: &bridge::SccpRouteGovernanceActionV1,
+        anchor: &bridge::SccpRouteGovernanceAnchorV1,
     ) -> Result<[u8; 32], Error> {
-        let canonical = norito::codec::Encode::encode(action);
-        let action_len: u32 = canonical.len().try_into().map_err(|_| {
+        let canonical = norito::codec::Encode::encode(anchor);
+        let anchor_len: u32 = canonical.len().try_into().map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "SCCP route governance action length exceeds 2^32 bytes".into(),
+                "SCCP route governance anchor length exceeds 2^32 bytes".into(),
             ))
         })?;
         let mut input = Vec::with_capacity(
@@ -3363,7 +3279,7 @@ pub mod isi {
                 + canonical.len(),
         );
         input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
-        input.extend_from_slice(&action_len.to_le_bytes());
+        input.extend_from_slice(&anchor_len.to_le_bytes());
         input.extend_from_slice(&canonical);
         let digest = Blake2b512::digest(&input);
         let mut out = [0u8; 32];
@@ -3389,6 +3305,40 @@ pub mod isi {
 
         Err(InstructionExecutionError::InvariantViolation(
             "not permitted: registered citizen or CanProposeSccpRouteGovernance required".into(),
+        ))
+    }
+
+    fn ensure_sorafs_provider_governance_proposer(
+        authority: &AccountId,
+        action: &iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required_permission: Permission = match action {
+            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Establish(_)
+            | iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Rebind(_) => {
+                CanRegisterSorafsProviderOwner.into()
+            }
+            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Remove(_) => {
+                CanUnregisterSorafsProviderOwner.into()
+            }
+        };
+        if has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            return Ok(());
+        }
+
+        let required = &state_transaction.gov.citizenship_bond_amount;
+        if state_transaction
+            .world
+            .citizens
+            .get(authority)
+            .is_some_and(|record| &record.amount >= required)
+        {
+            return Ok(());
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            "not permitted: a bonded citizen or legacy SoraFS provider-governance proposal permission is required"
+                .into(),
         ))
     }
 
@@ -3560,13 +3510,21 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             ensure_sccp_route_governance_proposer(authority, state_transaction)?;
-            self.action.validate_static().map_err(|error| {
+            if self.anchor.network_id != state_transaction.network_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route governance anchor belongs to a different exact NetworkId"
+                            .into(),
+                    ),
+                ));
+            }
+            self.anchor.action.validate_static().map_err(|error| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     error.to_string(),
                 ))
             })?;
 
-            let id = compute_sccp_route_governance_proposal_id(&self.action)?;
+            let id = compute_sccp_route_governance_proposal_id(&self.anchor)?;
             let rid = hex::encode(id);
             let desired_mode = match self.mode {
                 Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
@@ -3608,7 +3566,7 @@ pub mod isi {
             }
 
             let payload = SccpRouteGovernanceProposal {
-                action: Box::new(self.action.clone()),
+                anchor: Box::new(self.anchor.clone()),
             };
             let kind = ProposalKind::SccpRouteGovernance(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
@@ -3617,7 +3575,7 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.action != payload.action {
+                if existing_payload.anchor != payload.anchor {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -3698,6 +3656,143 @@ pub mod isi {
         }
     }
 
+    impl Execute for gov::ProposeSorafsProviderGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_sorafs_provider_governance_proposer(authority, &self.action, state_transaction)?;
+            self.action.validate().map_err(|error| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    error.to_string(),
+                ))
+            })?;
+
+            let payload = SorafsProviderGovernanceProposal {
+                action: Box::new(self.action.clone()),
+            };
+            let kind = ProposalKind::SorafsProviderGovernance(payload.clone());
+            let id = kind.fingerprint();
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                None | Some(iroha_data_model::isi::governance::VotingMode::Zk) => {
+                    crate::state::GovernanceReferendumMode::Zk
+                }
+            };
+
+            let h_now = state_transaction._curr_block.height().get();
+            let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(window) = self.window {
+                if window.upper < window.lower {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.upper must be >= window.lower".into(),
+                        ),
+                    ));
+                }
+                if window.lower < min_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.lower below minimum enactment delay".into(),
+                        ),
+                    ));
+                }
+                (window.lower, window.upper)
+            } else {
+                let span = state_transaction.gov.window_span.max(1);
+                (min_start, min_start.saturating_add(span.saturating_sub(1)))
+            };
+
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                let Some(existing_payload) = existing.as_sorafs_provider_governance() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                };
+                if existing_payload.action != payload.action {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                if let Some(referendum) = state_transaction.world.governance_referenda.get(&rid)
+                    && (referendum.h_start != start
+                        || referendum.h_end != end
+                        || referendum.mode != desired_mode)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "existing referendum parameters mismatch".into(),
+                    ));
+                }
+                return Ok(());
+            }
+
+            if let Some(referendum) = state_transaction.world.governance_referenda.get(&rid) {
+                if referendum.h_start != start
+                    || referendum.h_end != end
+                    || referendum.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum already exists with different parameters".into(),
+                    ));
+                }
+            } else {
+                state_transaction.world.governance_referenda.insert(
+                    rid.clone(),
+                    crate::state::GovernanceReferendumRecord {
+                        h_start: start,
+                        h_end: end,
+                        status: crate::state::GovernanceReferendumStatus::Proposed,
+                        mode: desired_mode,
+                    },
+                );
+            }
+
+            let referendum_snapshot = state_transaction
+                .world
+                .governance_referenda
+                .get(&rid)
+                .copied();
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                h_now,
+                referendum_snapshot.as_ref(),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, h_now, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
+            state_transaction.world.put_governance_proposal(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height: h_now,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
+                },
+            );
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
     fn validation_fee_policy_registry(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<ValidationFeePolicyRegistryV1>, Error> {
@@ -3745,26 +3840,10 @@ pub mod isi {
                 ),
             ));
         }
-        if policy.chain_id != state_transaction.chain_id {
+        if policy.network_id != state_transaction.network_id {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "validation-fee policy targets a different chain".into(),
-                ),
-            ));
-        }
-        let Some(genesis_hash) = state_transaction
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-        else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee policy cannot be genesis-bound before genesis is committed".into(),
-            ));
-        };
-        if policy.genesis_hash != genesis_hash {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "validation-fee policy genesis hash mismatch".into(),
+                    "validation-fee policy targets a different exact network".into(),
                 ),
             ));
         }
@@ -3858,6 +3937,7 @@ pub mod isi {
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
@@ -4935,7 +5015,7 @@ pub mod isi {
             }
             let nullifier = derive_ballot_nullifier(
                 &domain_tag,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 &self.election_id,
                 &commit_bytes,
             );
@@ -7239,10 +7319,21 @@ pub mod isi {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
                 ProposalKind::SccpRouteGovernance(payload) => {
-                    apply_sccp_route_governance_action(
+                    let _ = payload;
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP route governance requires EnactSccpRouteGovernance with the complete typed anchor"
+                            .into(),
+                    ));
+                }
+                ProposalKind::SorafsProviderGovernance(payload) => {
+                    if !super::sorafs::apply_governed_provider_owner_action(
                         payload.action.as_ref().clone(),
                         state_transaction,
-                    )?;
+                    )? {
+                        mark_proposal_superseded(state_transaction, pid);
+                        close_referendum_if_open(state_transaction, &pid_hex);
+                        return Ok(());
+                    }
                 }
                 ProposalKind::MusubiRegistryGovernance(action) => {
                     action.validate().map_err(|error| {
@@ -7302,6 +7393,82 @@ pub mod isi {
 
             close_referendum_if_open(state_transaction, &pid_hex);
 
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalEnacted(
+                    iroha_data_model::events::data::governance::GovernanceProposalEnacted {
+                        id: pid,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    impl Execute for gov::EnactSccpRouteGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let required: Permission = CanEnactGovernance.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: exact CanEnactGovernance required".into(),
+                ));
+            }
+            if self.anchor.network_id != state_transaction.network_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment anchor belongs to a different exact NetworkId".into(),
+                    ),
+                ));
+            }
+            let pid = self.referendum_id;
+            if compute_sccp_route_governance_proposal_id(&self.anchor)? != pid {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment referendum id does not derive from the supplied complete anchor"
+                            .into(),
+                    ),
+                ));
+            }
+            let pid_hex = hex::encode(pid);
+            let (proposal, already_terminal) = load_proposal(state_transaction, pid, &pid_hex)?;
+            let ProposalKind::SccpRouteGovernance(payload) = &proposal.kind else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "typed SCCP enactment cannot enact another proposal kind".into(),
+                    ),
+                ));
+            };
+            if payload.anchor.as_ref() != &self.anchor {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment anchor does not equal the stored complete proposal preimage"
+                            .into(),
+                    ),
+                ));
+            }
+            let generic_binding = gov::EnactReferendum {
+                referendum_id: pid,
+                preimage_hash: proposal.kind.fingerprint(),
+                at_window: self.at_window,
+            };
+            validate_referendum_enactment_binding(
+                &generic_binding,
+                &proposal,
+                state_transaction,
+                &pid_hex,
+            )?;
+            if already_terminal {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route governance enactment is one-shot and cannot be replayed".into(),
+                ));
+            }
+
+            apply_sccp_route_governance_action(self.anchor.action, state_transaction)?;
+            mark_proposal_enacted(state_transaction, pid);
+            close_referendum_if_open(state_transaction, &pid_hex);
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ProposalEnacted(
                     iroha_data_model::events::data::governance::GovernanceProposalEnacted {
@@ -7570,7 +7737,7 @@ pub mod isi {
                 ));
             }
             let derived_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                state_transaction.chain_id(),
+                state_transaction.network_id(),
                 authority,
                 current_nonce,
                 alias_dataspace_id,
@@ -7584,7 +7751,7 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         format!(
-                            "contract address does not match authority, nonce, chain, and alias dataspace; expected {derived_address}"
+                            "contract address does not match authority, nonce, network, and alias dataspace; expected {derived_address}"
                         )
                         .into(),
                     ),
@@ -8940,7 +9107,7 @@ pub mod isi {
                         .unwrap_or_else(|| {
                             derive_parliament_bodies(
                                 &state_transaction.gov,
-                                &state_transaction.chain_id,
+                                &state_transaction.network_id,
                                 fallback_epoch,
                                 &beacon,
                                 &council,
@@ -8970,7 +9137,7 @@ pub mod isi {
                     .unwrap_or_else(|| {
                         derive_parliament_bodies(
                             &state_transaction.gov,
-                            &state_transaction.chain_id,
+                            &state_transaction.network_id,
                             epoch,
                             &beacon,
                             &council,
@@ -9122,6 +9289,7 @@ pub mod isi {
             ],
             ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_)
             | ProposalKind::ValidationFeePolicy(_)
             | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
@@ -9333,7 +9501,7 @@ pub mod isi {
             let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction);
             let bodies = derive_parliament_bodies(
                 &state_transaction.gov,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 rec.epoch,
                 &beacon,
                 &rec,
@@ -10041,95 +10209,6 @@ pub mod isi {
                     ),
                 ));
             }
-            if new.backend == BackendTag::Stark {
-                #[cfg(not(feature = "zk-stark"))]
-                {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verifying key backend Stark is not enabled".into(),
-                        ),
-                    ));
-                }
-
-                #[cfg(feature = "zk-stark")]
-                {
-                    use crate::zk_stark::{
-                        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-                    };
-                    let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
-                        None
-                    } else if id_backend.contains("/sha256-") {
-                        Some(STARK_HASH_SHA256_V1)
-                    } else if id_backend.contains("/poseidon2-") {
-                        Some(STARK_HASH_POSEIDON2_V1)
-                    } else {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported stark/fri backend variant".into(),
-                            ),
-                        ));
-                    };
-                    let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-                        .map_err(|_| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "invalid STARK verifying key payload".into(),
-                                ),
-                            )
-                        })?;
-                    if payload.version != 1 {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported STARK verifying key payload version".into(),
-                            ),
-                        ));
-                    }
-                    if payload.hash_fn != STARK_HASH_SHA256_V1
-                        && payload.hash_fn != STARK_HASH_POSEIDON2_V1
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported STARK verifying key hash_fn".into(),
-                            ),
-                        ));
-                    }
-                    if let Some(expected_hash_fn) = expected_hash_fn {
-                        if payload.hash_fn != expected_hash_fn {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key hash_fn mismatch".into(),
-                                ),
-                            ));
-                        }
-                    }
-                    let payload_circuit_id =
-                        normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
-                            .ok_or_else(|| {
-                                InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "invalid STARK verifying key circuit_id".into(),
-                                    ),
-                                )
-                            })?;
-                    let record_circuit_id =
-                        normalize_stark_fri_circuit_id(id_backend, &new.circuit_id).ok_or_else(
-                            || {
-                                InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "invalid verifying key record circuit_id".into(),
-                                    ),
-                                )
-                            },
-                        )?;
-                    if payload_circuit_id != record_circuit_id {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "STARK verifying key circuit_id does not match record".into(),
-                            ),
-                        ));
-                    }
-                }
-            }
         }
         let new_key = (new.circuit_id.clone(), new.version);
         if let Some(existing) = state_transaction
@@ -10164,6 +10243,11 @@ pub mod isi {
                 ),
             ));
         }
+        crate::zk::validate_and_prepare_verifying_key_record_v1(id, new).map_err(|err| {
+            invalid_smart_contract_parameter(format!(
+                "invalid canonical verifying-key record: {err}"
+            ))
+        })?;
         validate_soracloud_fhe_stark_verifying_key_records(id, new)?;
         Ok(())
     }
@@ -11389,6 +11473,7 @@ pub mod isi {
         }
         let route = resolve_sccp_settlement_route(
             state_transaction.sccp_registry.as_ref(),
+            &state_transaction.network_id,
             governed_lane.lane_id,
             &transfer.route_id,
             &transfer.asset_id,
@@ -11450,24 +11535,20 @@ pub mod isi {
                 invalid_bridge_proof("SCCP inbound SORA recipient is not valid UTF-8")
             })?;
             let recipient = parse_sccp_taira_recipient_v1(recipient_literal)?;
-            if recipient == route.custody_account_id {
+            if recipient == route.escrow_account_id {
                 return Err(invalid_bridge_proof(
-                    "SCCP inbound recipient must differ from the custody account",
+                    "SCCP inbound recipient must differ from the route protocol escrow",
                 ));
             }
             state_transaction
                 .world
                 .asset_definition(&route.settlement_asset_definition_id)?;
-            state_transaction.world.account(&route.custody_account_id)?;
+            state_transaction.world.account(&route.escrow_account_id)?;
             let amount = sccp_payload_amount(transfer.amount, &route)?;
-            let source = AssetId::new(
-                route.settlement_asset_definition_id.clone(),
-                route.custody_account_id.clone(),
-            );
             let prepared =
                 crate::smartcontracts::isi::asset::isi::prepare_sccp_inbound_numeric_asset_release(
                     state_transaction,
-                    source,
+                    &route.route_key,
                     recipient,
                     amount,
                 )?;
@@ -12506,22 +12587,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_can_manage_sccp_governance(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let required: Permission = CanManageSccpGovernance.into();
-        if state_transaction._curr_block.is_genesis()
-            || has_exact_permission(&state_transaction.world, authority, &required)
-        {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanManageSccpGovernance".into(),
-            ))
-        }
-    }
-
     fn commit_sccp_registry_action(
         state_transaction: &mut StateTransaction<'_, '_>,
         payload: crate::state::SccpOnChainRegistryV1,
@@ -12575,6 +12640,17 @@ pub mod isi {
         route: &iroha_data_model::bridge::SccpGovernedRouteV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<bool, Error> {
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &route.key(),
+            &route.settlement.asset_definition_id,
+        );
+        if state_transaction.world.account(&escrow).is_ok() {
+            // Once the deterministic account exists, the route has admitted
+            // liquidity or a settlement attempt. Retain the immutable route
+            // forever so generic account/asset guards cannot lose its binding.
+            return Ok(true);
+        }
         let configuration_hash = route.route_configuration_hash().map_err(|error| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 error.to_string(),
@@ -12655,41 +12731,50 @@ pub mod isi {
         }
         state_transaction
             .world
-            .account(&route.settlement.custody_account_id)
+            .account(&route.settlement.custody_owner)
             .map_err(|error| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("SCCP custody account is not registered: {error}"),
+                    format!("SCCP route custody owner is not registered: {error}"),
                 ))
             })?;
-        let custody_asset = AssetId::new(
-            route.settlement.asset_definition_id.clone(),
-            route.settlement.custody_account_id.clone(),
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &route.key(),
+            &route.settlement.asset_definition_id,
         );
-        state_transaction
-            .world
-            .asset(&custody_asset)
-            .map_err(|error| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!(
-                        "SCCP custody asset account must exist before route registration: {error}"
-                    ),
-                ))
-            })?;
-        if crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
-            state_transaction,
-            &custody_asset,
-        )? || crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
-            state_transaction,
-            &custody_asset,
-        )? {
+        if state_transaction.world.account(&escrow).is_ok() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "SCCP custody asset cannot overlap offline or native escrow custody".to_owned(),
+                    "SCCP route registration requires its deterministic protocol escrow account to be absent"
+                        .to_owned(),
                 ),
             )
             .into());
         }
         Ok(())
+    }
+
+    fn ensure_sccp_route_escrow_account(
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<AccountId, Error> {
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            route_key,
+            asset_definition_id,
+        );
+        crate::smartcontracts::isi::domain::isi::ensure_controller_capabilities(
+            escrow.controller(),
+            &state_transaction.crypto.allowed_signing,
+            &state_transaction.crypto.allowed_curve_ids,
+        )?;
+        if state_transaction.world.account(&escrow).is_err() {
+            let account = Account::new(escrow.clone()).build(&escrow);
+            let (id, account) = iroha_data_model::IntoKeyValue::into_key_value(account);
+            state_transaction.world.accounts.insert(id, account);
+        }
+        Ok(escrow)
     }
 
     fn apply_sccp_route_governance_action(
@@ -13046,11 +13131,112 @@ pub mod isi {
     impl Execute for bridge::ApplySccpRouteGovernance {
         fn execute(
             self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let _ = self;
+            Err(InstructionExecutionError::InvariantViolation(
+                "direct SCCP route mutation is retired; only finalized threshold referendum enactment may apply an action"
+                    .into(),
+            ))
+        }
+    }
+
+    impl Execute for bridge::FundSccpRouteEscrow {
+        fn execute(
+            self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_can_manage_sccp_governance(authority, state_transaction)?;
-            apply_sccp_route_governance_action(self.action, state_transaction)
+            if self.amount.is_zero() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route escrow funding amount must be positive".into(),
+                    ),
+                ));
+            }
+            let route = state_transaction
+                .sccp_registry
+                .route(&self.route_key)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP route escrow funding references an ungoverned route revision"
+                                .into(),
+                        ),
+                    )
+                })?;
+            if route.settlement.asset_definition_id != self.asset_definition_id
+                || route.settlement.custody_owner != *authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow funding requires the exact governed asset and custody owner"
+                        .into(),
+                ));
+            }
+            ensure_sccp_route_escrow_account(
+                &self.route_key,
+                &self.asset_definition_id,
+                state_transaction,
+            )?;
+            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_funding(
+                state_transaction,
+                authority,
+                &self.route_key,
+                &self.asset_definition_id,
+                self.amount,
+            )
+        }
+    }
+
+    impl Execute for bridge::RefundSccpRouteEscrow {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if self.amount.is_zero() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route escrow refund amount must be positive".into(),
+                    ),
+                ));
+            }
+            let route = state_transaction
+                .sccp_registry
+                .route(&self.route_key)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP route escrow refund references an ungoverned route revision"
+                                .into(),
+                        ),
+                    )
+                })?;
+            if route.settlement.asset_definition_id != self.asset_definition_id
+                || route.settlement.custody_owner != *authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow refund requires the exact governed asset and custody owner"
+                        .into(),
+                ));
+            }
+            if !matches!(
+                route.activation,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged
+                    | iroha_data_model::bridge::SccpRouteActivationV1::Retired
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow may be refunded only while staged or retired".into(),
+                ));
+            }
+            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_refund(
+                state_transaction,
+                authority,
+                &self.route_key,
+                &self.asset_definition_id,
+                self.amount,
+            )
         }
     }
 
@@ -13132,13 +13318,14 @@ pub mod isi {
         destination: iroha_data_model::bridge::SccpDestinationDeploymentV1,
         sora_outbound_execution_policy: iroha_data_model::bridge::SccpSoraOutboundExecutionPolicyV1,
         settlement_asset_definition_id: AssetDefinitionId,
-        custody_account_id: AccountId,
+        escrow_account_id: AccountId,
         payload_amount_scale: u32,
         counterparty_account_codec: u8,
     }
 
     fn resolve_sccp_settlement_route(
         registry: &crate::state::ValidatedSccpRegistryV1,
+        network_id: &iroha_data_model::NetworkId,
         lane_id: iroha_data_model::bridge::SccpLaneIdV1,
         route_id: &[u8],
         asset_key: &[u8],
@@ -13187,15 +13374,21 @@ pub mod isi {
         let route_configuration_hash = route.route_configuration_hash().map_err(|error| {
             invalid_bridge_proof(format!("SCCP route configuration is invalid: {error}"))
         })?;
+        let route_key = route.key();
+        let escrow_account_id = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            network_id,
+            &route_key,
+            &route.settlement.asset_definition_id,
+        );
         Ok(ResolvedSccpSettlementRouteV1 {
-            route_key: route.key(),
+            route_key,
             route_id: route.route_id.clone(),
             asset_key: route.asset_key.clone(),
             route_configuration_hash,
             destination: route.destination,
             sora_outbound_execution_policy: route.sora_outbound_execution_policy.clone(),
             settlement_asset_definition_id: route.settlement.asset_definition_id.clone(),
-            custody_account_id: route.settlement.custody_account_id.clone(),
+            escrow_account_id,
             payload_amount_scale: route.settlement.payload_amount_scale,
             counterparty_account_codec: expected_codec,
         })
@@ -13236,6 +13429,7 @@ pub mod isi {
             })?;
         let settlement = resolve_sccp_settlement_route(
             state_transaction.sccp_registry.as_ref(),
+            &state_transaction.network_id,
             lane.lane_id,
             &transfer.route_id,
             &transfer.asset_id,
@@ -13369,28 +13563,26 @@ pub mod isi {
                 "SCCP outbound recipient codec does not match the exact external profile",
             ));
         }
-        if settlement.custody_account_id == *authority {
+        if settlement.escrow_account_id == *authority {
             return Err(invalid_bridge_proof(
-                "SCCP custody account must differ from the outbound sender",
+                "SCCP route protocol escrow must differ from the outbound sender",
             ));
         }
         state_transaction
             .world
             .asset_definition(&settlement.settlement_asset_definition_id)?;
-        state_transaction
-            .world
-            .account(&settlement.custody_account_id)?;
+        ensure_sccp_route_escrow_account(
+            &settlement.route_key,
+            &settlement.settlement_asset_definition_id,
+            state_transaction,
+        )?;
         let amount = sccp_payload_amount(transfer.amount, settlement)?;
-        let source = AssetId::new(
-            settlement.settlement_asset_definition_id.clone(),
-            authority.clone(),
-        );
         state_transaction.require_transfer_transcript_identity("SCCP message recording")?;
-        crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+        crate::smartcontracts::isi::asset::isi::execute_sccp_outbound_route_lock(
             state_transaction,
             authority,
-            source,
-            settlement.custody_account_id.clone(),
+            &settlement.route_key,
+            &settlement.settlement_asset_definition_id,
             amount,
         )
     }
@@ -13681,6 +13873,12 @@ pub mod isi {
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation("verifying key not found".into())
+            })?;
+        crate::zk::validate_and_prepare_verifying_key_record_v1(&attachment.vk_ref, &record)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid stored verifying-key record: {err}").into(),
+                )
             })?;
         let vk_box = record.key.clone().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation("verifying key bytes missing".into())
@@ -14054,8 +14252,6 @@ pub mod isi {
 
     #[derive(Clone)]
     struct PolicyMetadataContext {
-        allow_shield: bool,
-        allow_unshield: bool,
         vk_unshield: Option<iroha_data_model::proof::VerifyingKeyId>,
         vk_unshield_commitment: Option<[u8; 32]>,
         vk_shield: Option<iroha_data_model::proof::VerifyingKeyId>,
@@ -14067,16 +14263,12 @@ pub mod isi {
     ) -> PolicyMetadataContext {
         state.map_or(
             PolicyMetadataContext {
-                allow_shield: false,
-                allow_unshield: false,
                 vk_unshield: None,
                 vk_unshield_commitment: None,
                 vk_shield: None,
                 vk_shield_commitment: None,
             },
             |st| PolicyMetadataContext {
-                allow_shield: st.allow_shield,
-                allow_unshield: st.allow_unshield,
                 vk_unshield: st.vk_unshield.as_ref().map(|binding| binding.id.clone()),
                 vk_unshield_commitment: st.vk_unshield.as_ref().map(|binding| binding.commitment),
                 vk_shield: st.vk_shield.as_ref().map(|binding| binding.id.clone()),
@@ -14095,14 +14287,6 @@ pub mod isi {
         policy_map.insert(
             "mode".into(),
             norito::json::native::Value::from(format!("{:?}", policy.mode())),
-        );
-        policy_map.insert(
-            "allow_shield".into(),
-            norito::json::native::Value::from(context.allow_shield),
-        );
-        policy_map.insert(
-            "allow_unshield".into(),
-            norito::json::native::Value::from(context.allow_unshield),
         );
         let vk_to_value =
             |vk: Option<iroha_data_model::proof::VerifyingKeyId>| -> norito::json::native::Value {
@@ -14212,7 +14396,29 @@ pub mod isi {
         let mut aborted = false;
         let pending_transition = working_policy.pending_transition;
         if let Some(transition) = pending_transition {
-            if block_height >= transition.effective_height()
+            let transition_matches_active_mode =
+                transition.previous_mode() == working_policy.mode();
+            let transition_is_supported = matches!(
+                (working_policy.mode(), transition.new_mode()),
+                (
+                    ConfidentialPolicyMode::Convertible,
+                    ConfidentialPolicyMode::ShieldedOnly
+                ) | (
+                    ConfidentialPolicyMode::ShieldedOnly,
+                    ConfidentialPolicyMode::Convertible
+                )
+            );
+            if !transition_matches_active_mode || !transition_is_supported {
+                aborted = true;
+                working_policy.pending_transition = None;
+                iroha_logger::warn!(
+                    asset = %asset_def_id,
+                    current_mode = %working_policy.mode(),
+                    previous_mode = %transition.previous_mode(),
+                    new_mode = %transition.new_mode(),
+                    "discarding confidential policy transition outside the ABI V1 state machine"
+                );
+            } else if block_height >= transition.effective_height()
                 && transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
             {
                 let transparent_total = state_transaction
@@ -14222,7 +14428,6 @@ pub mod isi {
                 if transparent_total > Quantity::zero() {
                     aborted = true;
                     working_policy.pending_transition = None;
-                    working_policy.mode = transition.previous_mode();
                     iroha_logger::warn!(
                         asset = %asset_def_id,
                         total = %transparent_total,
@@ -14239,6 +14444,14 @@ pub mod isi {
         };
 
         let applied_policy = if did_change {
+            if let Some(transition) = pending_transition {
+                state_transaction
+                    .world
+                    .untrack_confidential_policy_transition(
+                        asset_def_id,
+                        transition.effective_height(),
+                    );
+            }
             {
                 let asset_definition = state_transaction
                     .world
@@ -14263,7 +14476,6 @@ pub mod isi {
     struct PolicyTransitionValidation {
         current_mode: ConfidentialPolicyMode,
         new_mode: ConfidentialPolicyMode,
-        commitments_empty: bool,
         block_height: u64,
         effective_height: u64,
         delay_blocks: u64,
@@ -14273,9 +14485,10 @@ pub mod isi {
 
     fn validate_policy_transition(args: &PolicyTransitionValidation) -> Result<(), Error> {
         ensure_mode_change(args)?;
+        ensure_transition_allowed(args)?;
         let lead_time = ensure_effective_height(args)?;
-        let window_for_shield = ensure_notice_window(args, lead_time)?;
-        ensure_transition_allowed(args, window_for_shield)
+        ensure_notice_window(args, lead_time)?;
+        Ok(())
     }
 
     fn ensure_mode_change(args: &PolicyTransitionValidation) -> Result<(), Error> {
@@ -14313,11 +14526,9 @@ pub mod isi {
     fn ensure_notice_window(
         args: &PolicyTransitionValidation,
         lead_time: u64,
-    ) -> Result<Option<u64>, Error> {
-        if matches!(
-            args.new_mode,
-            ConfidentialPolicyMode::ShieldedOnly | ConfidentialPolicyMode::TransparentOnly
-        ) && args.window_blocks > 0
+    ) -> Result<(), Error> {
+        if args.new_mode == ConfidentialPolicyMode::ShieldedOnly
+            && args.window_blocks > 0
             && lead_time < args.window_blocks
         {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -14356,7 +14567,7 @@ pub mod isi {
                     ),
                 ));
             }
-            Ok(Some(window))
+            Ok(())
         } else {
             if args.requested_window.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -14365,43 +14576,92 @@ pub mod isi {
                     ),
                 ));
             }
-            Ok(None)
+            Ok(())
         }
     }
 
-    fn ensure_transition_allowed(
-        args: &PolicyTransitionValidation,
-        window_for_shield: Option<u64>,
-    ) -> Result<(), Error> {
+    fn ensure_transition_allowed(args: &PolicyTransitionValidation) -> Result<(), Error> {
         match (args.current_mode, args.new_mode) {
-            (ConfidentialPolicyMode::TransparentOnly, ConfidentialPolicyMode::Convertible) => {
-                Ok(())
-            }
-            (ConfidentialPolicyMode::TransparentOnly, ConfidentialPolicyMode::ShieldedOnly) => {
-                let _ = window_for_shield;
-                Ok(())
+            (ConfidentialPolicyMode::TransparentOnly, _) => {
+                Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "a TransparentOnly asset must activate confidentiality by registering at least one canonical verifier role"
+                            .into(),
+                    ),
+                ))
             }
             (ConfidentialPolicyMode::Convertible, ConfidentialPolicyMode::ShieldedOnly)
             | (ConfidentialPolicyMode::ShieldedOnly, ConfidentialPolicyMode::Convertible) => Ok(()),
             (
                 ConfidentialPolicyMode::Convertible | ConfidentialPolicyMode::ShieldedOnly,
                 ConfidentialPolicyMode::TransparentOnly,
-            ) => {
-                if args.commitments_empty {
-                    Ok(())
-                } else {
-                    Err(InstructionExecutionError::InvariantViolation(
-                        "cannot transition to TransparentOnly while shielded commitments exist"
-                            .into(),
-                    ))
-                }
-            }
+            ) => Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "confidentiality is irreversible in ABI V1; a confidential asset cannot transition back to TransparentOnly"
+                        .into(),
+                ),
+            )),
             _ => Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported confidential policy transition".into(),
                 ),
             )),
         }
+    }
+
+    fn ensure_can_modify_confidential_policy(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_def_id: &AssetDefinitionId,
+    ) -> Result<(), Error> {
+        let asset_definition = state_transaction
+            .world
+            .asset_definition(asset_def_id)
+            .map_err(Error::from)?;
+        let asset_definition_owner = asset_definition.owned_by();
+        let required: Permission = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: asset_def_id.clone(),
+        }
+        .into();
+        if asset_definition_owner == authority
+            || has_exact_permission(&state_transaction.world, authority, &required)
+        {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: asset-definition owner or exact CanManageAssetDefinitionConfidentialPolicy grant required"
+                    .into(),
+            ))
+        }
+    }
+
+    fn ensure_committed_unshield_binding_is_preserved(
+        existing_state: Option<&crate::state::ZkAssetState>,
+        next_unshield: Option<&crate::state::ZkAssetVerifierBinding>,
+    ) -> Result<(), Error> {
+        let Some(existing_state) = existing_state.filter(|state| !state.commitments.is_empty())
+        else {
+            return Ok(());
+        };
+        let existing_unshield = existing_state.vk_unshield.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential commitments exist without a bound unshield verifier".into(),
+            )
+        })?;
+        let next_unshield = next_unshield.ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "vk_unshield cannot be cleared while confidential commitments exist".into(),
+            ))
+        })?;
+        if next_unshield.commitment != existing_unshield.commitment {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "vk_unshield commitment cannot change while confidential commitments exist"
+                        .into(),
+                ),
+            ));
+        }
+        Ok(())
     }
 
     impl Execute for zk::RegisterZkAsset {
@@ -14412,29 +14672,25 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
-            let asset_definition_owner = state_transaction
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
+            self.validate_verifier_roles().map_err(|message| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    message.into(),
+                ))
+            })?;
+            // Derive the canonical policy from the two verifier roles. Optional
+            // binding presence is the sole enablement signal in ABI V1.
+            let current_policy = *state_transaction
                 .world
                 .asset_definition(&asset_def_id)
                 .map_err(Error::from)?
-                .owned_by()
-                .clone();
-            let required: Permission = CanModifyAssetDefinitionMetadata {
-                asset_definition: asset_def_id.clone(),
-            }
-            .into();
-            if &asset_definition_owner != authority
-                && !has_exact_permission(&state_transaction.world, authority, &required)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: asset-definition owner or exact CanModifyAssetDefinitionMetadata grant required"
-                        .into(),
-                ));
-            }
-            // Derive canonical confidential policy for asset definition.
-            let policy_mode = if !*self.allow_shield() && !*self.allow_unshield() {
-                ConfidentialPolicyMode::TransparentOnly
-            } else {
-                ConfidentialPolicyMode::Convertible
+                .confidential_policy();
+            let has_confidential_role = self.vk_shield().is_some() || self.vk_unshield().is_some();
+            let policy_mode = match current_policy.mode() {
+                ConfidentialPolicyMode::TransparentOnly if has_confidential_role => {
+                    ConfidentialPolicyMode::Convertible
+                }
+                mode => mode,
             };
             let resolve_binding = |vk: &Option<iroha_data_model::proof::VerifyingKeyId>| -> Result<
                 Option<crate::state::ZkAssetVerifierBinding>,
@@ -14465,6 +14721,15 @@ pub mod isi {
 
             let vk_unshield_binding = resolve_binding(self.vk_unshield())?;
             let vk_shield_binding = resolve_binding(self.vk_shield())?;
+            let existing_state = state_transaction
+                .world
+                .zk_assets
+                .get(&asset_def_id)
+                .cloned();
+            ensure_committed_unshield_binding_is_preserved(
+                existing_state.as_ref(),
+                vk_unshield_binding.as_ref(),
+            )?;
             if let Some(binding) = vk_unshield_binding.as_ref() {
                 let record = state_transaction
                     .world
@@ -14565,11 +14830,6 @@ pub mod isi {
                 derived_tree_profile = Some(profile);
             }
             let derived_tree_profile = derived_tree_profile.unwrap_or_default();
-            let existing_state = state_transaction
-                .world
-                .zk_assets
-                .get(&asset_def_id)
-                .cloned();
             let already_registered = existing_state.is_some();
             let mut st = existing_state.unwrap_or_default();
             st.validate_tree_metadata().map_err(|err| {
@@ -14602,7 +14862,7 @@ pub mod isi {
                 vk_set_hash,
                 poseidon_params_id: state_transaction.zk.poseidon_params_id,
                 pedersen_params_id: state_transaction.zk.pedersen_params_id,
-                pending_transition: None,
+                pending_transition: current_policy.pending_transition,
             };
             {
                 let asset_definition = state_transaction
@@ -14612,8 +14872,6 @@ pub mod isi {
                 asset_definition.set_confidential_policy(policy_struct);
             }
             let metadata_context = PolicyMetadataContext {
-                allow_shield: *self.allow_shield(),
-                allow_unshield: *self.allow_unshield(),
                 vk_unshield: self.vk_unshield().clone(),
                 vk_unshield_commitment: vk_unshield_binding
                     .as_ref()
@@ -14628,9 +14886,6 @@ pub mod isi {
                 &metadata_context,
             )?;
             // Persist/Update internal ZK policy state
-            st.mode = *self.mode();
-            st.allow_shield = *self.allow_shield();
-            st.allow_unshield = *self.allow_unshield();
             st.vk_unshield = vk_unshield_binding;
             st.vk_shield = vk_shield_binding;
             state_transaction
@@ -14648,10 +14903,23 @@ pub mod isi {
     impl Execute for zk::ScheduleConfidentialPolicyTransition {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
+            let effective_height = *self.effective_height();
+            let scheduled_at_height = state_transaction
+                .world
+                .confidential_policy_transition_count(effective_height);
+            let maximum = state_transaction.zk.policy_transition_max_per_height;
+            if scheduled_at_height >= maximum.get() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "confidential policy transition limit reached at effective height {effective_height}: scheduled={scheduled_at_height} maximum={maximum}"
+                    )),
+                ));
+            }
             let mut policy = apply_policy_if_due(state_transaction, &asset_def_id)?;
             if policy.pending_transition().is_some() {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -14667,14 +14935,12 @@ pub mod isi {
                         "asset has no confidential state".into(),
                     )
                 })?;
-            let commitments_empty = st.commitments.is_empty();
             let context = metadata_context_from_state(Some(st));
             let validation = PolicyTransitionValidation {
                 current_mode: policy.mode(),
                 new_mode: *self.new_mode(),
-                commitments_empty,
                 block_height: state_transaction.block_height(),
-                effective_height: *self.effective_height(),
+                effective_height,
                 delay_blocks: state_transaction.zk.policy_transition_delay_blocks,
                 window_blocks: state_transaction.zk.policy_transition_window_blocks,
                 requested_window: *self.conversion_window(),
@@ -14682,7 +14948,7 @@ pub mod isi {
             validate_policy_transition(&validation)?;
             let transition = ConfidentialPolicyTransition {
                 new_mode: *self.new_mode(),
-                effective_height: *self.effective_height(),
+                effective_height,
                 previous_mode: policy.mode(),
                 transition_id: *self.transition_id(),
                 conversion_window: *self.conversion_window(),
@@ -14695,6 +14961,9 @@ pub mod isi {
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }
+            state_transaction
+                .world
+                .track_confidential_policy_transition(&asset_def_id, transition.effective_height());
             persist_policy_metadata(state_transaction, &asset_def_id, &policy, &context)?;
             Ok(())
         }
@@ -14703,10 +14972,11 @@ pub mod isi {
     impl Execute for zk::CancelConfidentialPolicyTransition {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
             let mut policy = apply_policy_if_due(state_transaction, &asset_def_id)?;
             let context =
                 metadata_context_from_state(state_transaction.world.zk_assets.get(&asset_def_id));
@@ -14722,6 +14992,9 @@ pub mod isi {
                     ),
                 ));
             }
+            state_transaction
+                .world
+                .untrack_confidential_policy_transition(&asset_def_id, pending.effective_height());
             policy.pending_transition = None;
             {
                 let asset_definition = state_transaction
@@ -15135,7 +15408,7 @@ pub mod isi {
             };
             let expected_nullifier = derive_ballot_nullifier(
                 &domain_tag,
-                &state_transaction.chain_id,
+                &state_transaction.network_id,
                 &id,
                 &commit_bytes,
             );
@@ -16719,8 +16992,8 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
-            state_transaction
-                .authenticate_finalized_lane_relay(&envelope)
+            let execution_commitment = state_transaction
+                .finalized_lane_relay_execution_commitment(&envelope)
                 .map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!(
@@ -16728,13 +17001,8 @@ pub mod isi {
                         )),
                     )
                 })?;
-            let qc = envelope.qc.as_ref().ok_or_else(|| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "lane relay finality authentication requires a QC".into(),
-                ))
-            })?;
-            let expected_old_root: [u8; 32] = qc.parent_state_root.into();
-            let expected_new_root: [u8; 32] = qc.post_state_root.into();
+            let expected_old_root: [u8; 32] = execution_commitment.parent_state_root.into();
+            let expected_new_root: [u8; 32] = execution_commitment.post_state_root.into();
             let expected_tx_set_hash: [u8; 32] = lane_finality_statement_hash.into();
             if verified_fastpq.old_root != expected_old_root
                 || verified_fastpq.new_root != expected_new_root
@@ -17233,41 +17501,17 @@ pub mod isi {
     fn ensure_fee_sponsor_withdrawal_authority(
         authority: &AccountId,
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
-        state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if ensure_fee_sponsor_program_owner(authority, program_id, state_transaction).is_ok() {
+        if authority == &program_id.sponsor {
             return Ok(());
         }
-        let allowed = state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|permissions| {
-                permissions.iter().any(|permission| {
-                    CanWithdrawFeeSponsorProgram::try_from(permission)
-                        .is_ok_and(|token| &token.program_id == program_id)
-                })
-            })
-            || state_transaction
-                .world
-                .account_roles_iter(authority)
-                .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-                .any(|role| {
-                    role.permissions.iter().any(|permission| {
-                        CanWithdrawFeeSponsorProgram::try_from(permission)
-                            .is_ok_and(|token| &token.program_id == program_id)
-                    })
-                });
-        if allowed {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "authority `{authority}` cannot withdraw from fee sponsor program `{program_id}`"
-                )
-                .into(),
-            ))
-        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "only sponsor `{}` may withdraw from fee sponsor program `{program_id}`; authority was `{authority}`",
+                program_id.sponsor
+            )
+            .into(),
+        ))
     }
 
     fn validate_fee_sponsor_revision(
@@ -17444,6 +17688,17 @@ pub mod isi {
                 return Err(invalid_fee_sponsor_program(format!(
                     "unknown fee sponsor account `{}`",
                     program.id.sponsor
+                )));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(&program.payout_account)
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "unknown fee sponsor payout account `{}`",
+                    program.payout_account
                 )));
             }
             if program.lifecycle != FeeSponsorProgramLifecycle::Staged
@@ -17965,7 +18220,7 @@ pub mod isi {
             use iroha_data_model::nexus::{FeeSponsorProgramLifecycle, FeeSponsorVaultKey};
 
             let program_id = self.program_id().clone();
-            ensure_fee_sponsor_withdrawal_authority(authority, &program_id, state_transaction)?;
+            ensure_fee_sponsor_withdrawal_authority(authority, &program_id)?;
             if self.amount().is_zero() {
                 return Err(invalid_fee_sponsor_program(
                     "fee sponsor vault withdrawal amount must be positive",
@@ -17976,6 +18231,7 @@ pub mod isi {
                 .fee_sponsor_programs
                 .get(&program_id)
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            let payout_account = program.payout_account.clone();
             if !matches!(
                 program.lifecycle,
                 FeeSponsorProgramLifecycle::Paused | FeeSponsorProgramLifecycle::Closing
@@ -17992,11 +18248,11 @@ pub mod isi {
             if state_transaction
                 .world
                 .accounts
-                .get(self.destination())
+                .get(&payout_account)
                 .is_none()
             {
                 return Err(invalid_fee_sponsor_program(
-                    "fee sponsor vault withdrawal destination is not registered",
+                    "registered fee sponsor payout account is no longer present",
                 ));
             }
             let definition = state_transaction
@@ -18048,7 +18304,7 @@ pub mod isi {
                 authority.clone(),
                 program_id.clone(),
                 source,
-                self.destination().clone(),
+                payout_account,
                 self.amount().clone(),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_vault_withdrawal(
@@ -18137,6 +18393,9 @@ pub mod isi {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanMintAssetWithDefinition::try_from(permission) {
@@ -19237,7 +19496,7 @@ pub mod isi {
                             if crate::state::is_retired_sccp_registry_parameter(&next) {
                                 return Err(InstructionExecutionError::InvalidParameter(
                                     InvalidParameterError::SmartContract(
-                                        "the reserved SCCP registry can only be changed by ApplySccpRouteGovernance"
+                                        "the reserved SCCP registry can only be changed by finalized typed SCCP referendum enactment"
                                             .to_owned(),
                                     ),
                                 ));
@@ -19516,6 +19775,37 @@ pub mod isi {
         const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
         const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
+
+        fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
+            #[cfg(feature = "zk-halo2-ipa")]
+            {
+                crate::zk::halo2_ipa_ivm_execution_vk_box()
+                    .expect("generate canonical IVM execution verifying key")
+            }
+            #[cfg(not(feature = "zk-halo2-ipa"))]
+            {
+                panic!("canonical Halo2 registry tests require zk-halo2-ipa")
+            }
+        }
+
+        fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                version,
+                TEST_HALO2_CIRCUIT_ID,
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32");
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("halo2_default".to_owned());
+            record
+        }
 
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
             Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
@@ -20523,13 +20813,26 @@ pub mod isi {
         }
 
         #[test]
-        fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
+        fn derive_ballot_nullifier_is_exact_network_bound_and_unambiguous() {
             let commit = [0x42; 32];
-            let chain_left: iroha_data_model::ChainId = "c".parse().expect("valid chain id");
-            let chain_right: iroha_data_model::ChainId = "b|c".parse().expect("valid chain id");
-            let first = derive_ballot_nullifier("a|b", &chain_left, "d", &commit);
-            let second = derive_ballot_nullifier("a", &chain_right, "d", &commit);
+            let first_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([1; iroha_crypto::Hash::LENGTH]),
+                ));
+            let second_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([2; iroha_crypto::Hash::LENGTH]),
+                ));
+            let first = derive_ballot_nullifier("a|b", &first_network, "d", &commit);
+            let second = derive_ballot_nullifier("a|b", &second_network, "d", &commit);
             assert_ne!(first, second);
+
+            let delimiter_variant = derive_ballot_nullifier("a", &first_network, "b|d", &commit);
+            assert_ne!(first, delimiter_variant);
         }
 
         #[test]
@@ -20693,13 +20996,10 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("governance-boundary-test"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("canonical contract address");
+            let network_id = *state_transaction.network_id();
+            let contract_address =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("canonical contract address");
             let permission: Permission =
                 iroha_executor_data_model::permission::governance::CanProposeContractDeployment {
                     contract_address: contract_address.clone(),
@@ -20769,13 +21069,9 @@ pub mod isi {
                 );
             }
 
-            let other_contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("governance-boundary-test"),
-                &ALICE_ID,
-                2,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("second canonical contract address");
+            let other_contract_address =
+                ContractAddress::derive(&network_id, &ALICE_ID, 2, DataSpaceId::UNIVERSAL)
+                    .expect("second canonical contract address");
             let wrong_target_permission: Permission = CanProposeContractDeployment {
                 contract_address: other_contract_address,
             }
@@ -20810,6 +21106,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
+            let network_id = *state_transaction.network_id();
             let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
             let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
                 name: "exact-runtime-target".to_owned(),
@@ -20830,13 +21127,9 @@ pub mod isi {
                 mode: Some(gov::VotingMode::Plain),
             };
 
-            let unrelated_contract = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("runtime-permission-regression"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("canonical contract address");
+            let unrelated_contract =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("canonical contract address");
             let legacy_permission: Permission = CanProposeContractDeployment {
                 contract_address: unrelated_contract,
             }
@@ -21470,6 +21763,140 @@ pub mod isi {
         }
 
         #[test]
+        fn confidential_policy_transition_rejects_return_to_transparent_mode() {
+            for current_mode in [
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ] {
+                let error = validate_policy_transition(&PolicyTransitionValidation {
+                    current_mode,
+                    new_mode: ConfidentialPolicyMode::TransparentOnly,
+                    block_height: 10,
+                    effective_height: 20,
+                    delay_blocks: 1,
+                    window_blocks: 1,
+                    requested_window: None,
+                })
+                .expect_err("confidential activation must be irreversible in ABI V1");
+                assert!(
+                    format!("{error:?}").contains("confidentiality is irreversible in ABI V1"),
+                    "unexpected policy downgrade rejection: {error:?}"
+                );
+            }
+
+            for new_mode in [
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ] {
+                let error = validate_policy_transition(&PolicyTransitionValidation {
+                    current_mode: ConfidentialPolicyMode::TransparentOnly,
+                    new_mode,
+                    block_height: 10,
+                    effective_height: 20,
+                    delay_blocks: 1,
+                    window_blocks: 1,
+                    requested_window: None,
+                })
+                .expect_err("transparent assets must activate through verifier registration");
+                assert!(
+                    format!("{error:?}").contains("registering at least one canonical verifier"),
+                    "unexpected transparent activation rejection: {error:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_zk_asset_rejects_shield_without_redemption_verifier() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let domain_id =
+                DomainId::try_new("redeemable", "universal").expect("valid test domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coin".parse().expect("valid asset name"),
+            );
+            Register::domain(Domain::new(domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register asset owner");
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Redeemable confidential coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register owner-controlled asset definition");
+
+            let error = zk::RegisterZkAsset::new(
+                asset_definition_id.clone(),
+                None,
+                Some(VerifyingKeyId::new("halo2/ipa", "shield")),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("shield-only registration must not admit unredeemable commitments");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("vk_shield requires vk_unshield"),
+            );
+            assert!(stx.world.zk_assets.get(&asset_definition_id).is_none());
+        }
+
+        #[test]
+        fn committed_asset_preserves_unshield_verifier_commitment() {
+            let original_commitment = [0x31; 32];
+            let original = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-original"),
+                commitment: original_commitment,
+            };
+            let renamed = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-renamed"),
+                commitment: original_commitment,
+            };
+            let changed = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-changed"),
+                commitment: [0x32; 32],
+            };
+            let mut state = crate::state::ZkAssetState::default();
+            state.commitments.push([0x41; 32]);
+            state.vk_unshield = Some(original);
+
+            ensure_committed_unshield_binding_is_preserved(Some(&state), Some(&renamed))
+                .expect("a new registry id may select the same unshield verifier commitment");
+
+            let cleared = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect_err("committed assets must retain an unshield verifier");
+            assert!(cleared.to_string().contains("cannot be cleared"));
+
+            let replaced =
+                ensure_committed_unshield_binding_is_preserved(Some(&state), Some(&changed))
+                    .expect_err("committed assets must retain the verifier commitment");
+            assert!(replaced.to_string().contains("commitment cannot change"));
+
+            state.commitments.clear();
+            ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect("an empty commitment tree does not strand funds");
+
+            state.commitments.push([0x42; 32]);
+            state.vk_unshield = None;
+            let corrupted = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect_err("persisted committed state without redemption must fail closed");
+            assert!(
+                corrupted
+                    .to_string()
+                    .contains("commitments exist without a bound unshield verifier")
+            );
+        }
+
+        #[test]
         fn register_zk_asset_requires_owner_or_exact_scoped_grant() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -21482,6 +21909,10 @@ pub mod isi {
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
                 "coin".parse().expect("valid asset name"),
+            );
+            let unrelated_asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "other".parse().expect("valid asset name"),
             );
 
             Register::domain(Domain::new(domain_id))
@@ -21500,22 +21931,23 @@ pub mod isi {
             ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register owner-controlled asset definition");
+            Register::asset_definition(AssetDefinition::numeric(
+                unrelated_asset_definition_id.clone(),
+                "Unrelated coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register unrelated owner-controlled asset definition");
 
-            let registration = zk::RegisterZkAsset::new(
-                asset_definition_id.clone(),
-                zk::ZkAssetMode::Hybrid,
-                true,
-                true,
-                None,
-                None,
-            );
+            let registration = zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None);
             let error = registration
                 .clone()
                 .execute(&BOB_ID, &mut stx)
                 .expect_err("unprivileged non-owner must not configure confidential policy");
             assert!(
                 smart_contract_instruction_error_message(error)
-                    .contains("exact CanModifyAssetDefinitionMetadata grant required")
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
             );
             assert!(stx.world.zk_assets.get(&asset_definition_id).is_none());
             assert_eq!(
@@ -21527,13 +21959,45 @@ pub mod isi {
                 ConfidentialPolicyMode::TransparentOnly
             );
 
-            let delegated: Permission = CanModifyAssetDefinitionMetadata {
+            let metadata_only: Permission = CanModifyAssetDefinitionMetadata {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(metadata_only, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact scoped metadata permission");
+            let error = registration
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("metadata permission must not configure confidential policy");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let wrong_scope: Permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: unrelated_asset_definition_id,
+            }
+            .into();
+            Grant::account_permission(wrong_scope, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant confidential-policy permission for unrelated definition");
+            let error = registration
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("a confidential-policy grant for another asset must fail closed");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let delegated: Permission = CanManageAssetDefinitionConfidentialPolicy {
                 asset_definition: asset_definition_id.clone(),
             }
             .into();
             Grant::account_permission(delegated, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
-                .expect("grant exact scoped asset-definition permission");
+                .expect("grant exact confidential-policy permission");
             registration
                 .execute(&BOB_ID, &mut stx)
                 .expect("exact scoped delegate may configure confidential policy");
@@ -21543,7 +22007,312 @@ pub mod isi {
                     .expect("asset definition remains")
                     .confidential_policy()
                     .mode(),
-                ConfidentialPolicyMode::Convertible
+                ConfidentialPolicyMode::TransparentOnly
+            );
+
+            let transition = ConfidentialPolicyTransition {
+                new_mode: ConfidentialPolicyMode::ShieldedOnly,
+                effective_height: stx.block_height().saturating_add(10),
+                previous_mode: ConfidentialPolicyMode::Convertible,
+                transition_id: Hash::new(b"registration-must-preserve-policy"),
+                conversion_window: Some(1),
+            };
+            let mut active_policy = *stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains")
+                .confidential_policy();
+            active_policy.mode = ConfidentialPolicyMode::Convertible;
+            active_policy.pending_transition = Some(transition);
+            stx.world
+                .asset_definition_mut(&asset_definition_id)
+                .expect("asset definition remains")
+                .set_confidential_policy(active_policy);
+
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may update verifier bindings");
+            let updated_definition = stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains");
+            let updated_policy = updated_definition.confidential_policy();
+            assert_eq!(updated_policy.mode(), ConfidentialPolicyMode::Convertible);
+            assert_eq!(updated_policy.pending_transition(), &Some(transition));
+        }
+
+        #[test]
+        fn confidential_policy_transition_requires_owner_or_exact_scoped_grant() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let domain_id = DomainId::try_new("policy", "universal").expect("valid test domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coin".parse().expect("valid asset name"),
+            );
+
+            Register::domain(Domain::new(domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            for account in [ALICE_ID.clone(), BOB_ID.clone()] {
+                Register::account(Account::new(account))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("register test account");
+            }
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Policy coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register owner-controlled asset definition");
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("owner configures confidential policy");
+            let mut policy = *stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains")
+                .confidential_policy();
+            policy.mode = ConfidentialPolicyMode::Convertible;
+            stx.world
+                .asset_definition_mut(&asset_definition_id)
+                .expect("asset definition remains")
+                .set_confidential_policy(policy);
+
+            let conversion_window = stx.zk.policy_transition_window_blocks.max(1);
+            let lead_time = stx
+                .zk
+                .policy_transition_delay_blocks
+                .max(conversion_window)
+                .saturating_add(1);
+            let effective_height = stx.block_height().saturating_add(lead_time);
+            let transition_id = Hash::new(b"owner-scoped-policy-transition");
+            let schedule = zk::ScheduleConfidentialPolicyTransition::new(
+                asset_definition_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                transition_id,
+                Some(conversion_window),
+            );
+            let error = schedule
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("unprivileged non-owner must not schedule a transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let metadata_only: Permission = CanModifyAssetDefinitionMetadata {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(metadata_only, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact scoped metadata permission");
+            let error = schedule
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("metadata permission must not schedule a policy transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            schedule
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("asset-definition owner may schedule a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_some(),
+                "scheduling must index the asset at its exact effective height"
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                1
+            );
+            let cancel = zk::CancelConfidentialPolicyTransition::new(
+                asset_definition_id.clone(),
+                transition_id,
+            );
+            let error = cancel
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("unprivileged non-owner must not cancel a transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+            cancel
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("asset-definition owner may cancel a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_none(),
+                "cancellation must remove the exact transition key"
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                0
+            );
+
+            let delegated: Permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(delegated, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact confidential-policy permission");
+            schedule
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may schedule a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_some(),
+                "delegated scheduling must update the same canonical index"
+            );
+            cancel
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may cancel a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_none(),
+                "delegated cancellation must leave no stale index entry"
+            );
+        }
+
+        #[test]
+        fn confidential_policy_transition_cap_rejects_before_mutation() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.zk.policy_transition_max_per_height =
+                NonZeroU32::new(1).expect("nonzero transition cap");
+            let domain_id =
+                DomainId::try_new("policy-cap", "universal").expect("valid test domain");
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register owner account");
+
+            let first_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "first".parse().expect("valid asset name"),
+            );
+            let second_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "second".parse().expect("valid asset name"),
+            );
+            for asset_id in [&first_id, &second_id] {
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset_id.clone(),
+                    "Policy cap coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register owner-controlled asset definition");
+                zk::RegisterZkAsset::new(asset_id.clone(), None, None)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("owner configures confidential policy");
+                let mut policy = *stx
+                    .world
+                    .asset_definition(asset_id)
+                    .expect("asset definition remains")
+                    .confidential_policy();
+                policy.mode = ConfidentialPolicyMode::Convertible;
+                stx.world
+                    .asset_definition_mut(asset_id)
+                    .expect("asset definition remains")
+                    .set_confidential_policy(policy);
+            }
+
+            let conversion_window = stx.zk.policy_transition_window_blocks.max(1);
+            let lead_time = stx
+                .zk
+                .policy_transition_delay_blocks
+                .max(conversion_window)
+                .saturating_add(1);
+            let effective_height = stx.block_height().saturating_add(lead_time);
+            zk::ScheduleConfidentialPolicyTransition::new(
+                first_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                Hash::new(b"policy-cap-first"),
+                Some(conversion_window),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("first transition fills the exact-height capacity");
+
+            let second_policy_before = *stx
+                .world
+                .asset_definition(&second_id)
+                .expect("second definition remains")
+                .confidential_policy();
+            let error = zk::ScheduleConfidentialPolicyTransition::new(
+                second_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                Hash::new(b"policy-cap-second"),
+                Some(conversion_window),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("second transition at the same height must exceed capacity");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("confidential policy transition limit reached")
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                1
+            );
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, first_id))
+                    .is_some()
+            );
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, second_id.clone()))
+                    .is_none()
+            );
+            assert_eq!(
+                stx.world
+                    .asset_definition(&second_id)
+                    .expect("second definition remains")
+                    .confidential_policy(),
+                &second_policy_before,
+                "cap rejection must precede authoritative policy mutation"
             );
         }
 
@@ -23269,7 +24038,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_custody_equal_to_sender_without_side_effects() {
+        fn route_owner_never_aliases_its_network_bound_protocol_escrow() {
             let state = State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
@@ -23286,25 +24055,98 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let mut registry = test_active_eth_registry();
-            registry.lanes[0].routes[0].settlement.custody_account_id = ALICE_ID.clone();
+            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
                 .expect("self-custody route is structurally valid but unsafe for transfer");
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            let (settlement_asset, _) = sccp_test_settlement_ids(&stx);
-            let sender_asset = AssetId::new(settlement_asset, ALICE_ID.clone());
-            let sender_before = sccp_asset_balance(&stx, &sender_asset);
-            let payload = sora_outbound_sccp_payload(72);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
+            let (_settlement_asset, escrow) = sccp_test_settlement_ids(&stx);
+            assert_ne!(escrow, *ALICE_ID);
+            assert!(crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(&stx, &escrow));
+            assert!(
+                crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(&stx, &ALICE_ID,)
+            );
+        }
 
-            let error = crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
-                &payload,
-            ))
+        #[test]
+        fn sccp_route_escrow_accepts_only_owner_funding_and_rejects_ordinary_drain() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let mut registry = test_active_eth_registry();
+            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("owner-bound SCCP route fixture");
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            let route = stx.sccp_registry.lanes()[0].routes[0].clone();
+            let route_key = route.key();
+            let definition = route.settlement.asset_definition_id.clone();
+            let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                &stx.network_id,
+                &route_key,
+                &definition,
+            );
+            let amount = Quantity::from(7_u64);
+
+            bridge::FundSccpRouteEscrow {
+                route_key: route_key.clone(),
+                asset_definition_id: definition.clone(),
+                amount: amount.clone(),
+            }
             .execute(&ALICE_ID, &mut stx)
-            .expect_err("custody must never alias the sender");
+            .expect("the exact route owner may fund only the derived escrow");
+            let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
 
-            assert!(format!("{error:?}").contains("custody account must differ"));
-            assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
-            assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
+            if stx.world.account(&BOB_ID).is_err() {
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("register non-owner fixture");
+            }
+            let non_owner_error = bridge::FundSccpRouteEscrow {
+                route_key: route_key.clone(),
+                asset_definition_id: definition.clone(),
+                amount: Quantity::from(1_u64),
+            }
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("a route manager or unrelated account cannot debit itself into custody");
+            assert!(
+                format!("{non_owner_error:?}").contains("exact governed asset and custody owner")
+            );
+
+            Grant::account_permission(
+                Permission::from(CanTransferAsset {
+                    asset: escrow_asset.clone(),
+                }),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant exact transfer permission for negative corridor test");
+            let drain_error = Transfer::asset_quantity(escrow_asset.clone(), 1_u64, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary transfer cannot drain SCCP route escrow");
+            assert!(format!("{drain_error:?}").contains("SCCP custody can only be debited"));
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+
+            let mint_error = Mint::asset_quantity(1_u64, escrow_asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary mint cannot credit SCCP route escrow");
+            assert!(
+                format!("{mint_error:?}")
+                    .contains("only be credited by a route-bound native SCCP instruction")
+            );
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
         }
 
         #[test]
@@ -23608,7 +24450,9 @@ seiyaku GovernanceLifecycle {
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
                 contract_address: ContractAddress::derive(
-                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                        .parse()
+                        .expect("canonical test network id"),
                     authority,
                     nonce,
                     DataSpaceId::UNIVERSAL,
@@ -24009,7 +24853,6 @@ seiyaku GovernanceLifecycle {
             };
             let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
                 block_header,
-                None,
                 None,
                 settlement_commitment,
                 0,
@@ -25756,29 +26599,30 @@ seiyaku GovernanceLifecycle {
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             if stx.sccp_registry.lanes().is_empty() {
                 stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
                     test_active_eth_registry(),
                 )
                 .expect("active ETH registry fixture");
             }
+            *stx.world.sccp_registry.get_mut() = stx.sccp_registry.to_wire();
             let route = stx.sccp_registry.lanes()[0]
                 .routes
                 .first()
                 .expect("active ETH route fixture");
             let settlement_asset_definition_id = route.settlement.asset_definition_id.clone();
-            let custody_account_id = route.settlement.custody_account_id.clone();
+            let custody_owner = route.settlement.custody_owner.clone();
+            let route_key = route.key();
             if stx.world.account(&ALICE_ID).is_err() {
                 Register::account(Account::new(ALICE_ID.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register SCCP sender fixture");
             }
-            if stx.world.account(&custody_account_id).is_err() {
-                Register::account(Account::new(custody_account_id.clone()))
+            if stx.world.account(&custody_owner).is_err() {
+                Register::account(Account::new(custody_owner))
                     .execute(&ALICE_ID, stx)
-                    .expect("register SCCP custody fixture");
+                    .expect("register SCCP route custody owner fixture");
             }
             if stx
                 .world
@@ -25794,9 +26638,11 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, stx)
                 .expect("register SCCP settlement asset fixture");
             }
+            ensure_sccp_route_escrow_account(&route_key, &settlement_asset_definition_id, stx)
+                .expect("register deterministic SCCP route escrow fixture");
             let sender_asset_id = AssetId::new(settlement_asset_definition_id, ALICE_ID.clone());
             if stx.world.asset(&sender_asset_id).is_err() {
-                Mint::asset_quantity(1_000_000_u64, sender_asset_id)
+                Mint::asset_quantity(1_000_000_u64, sender_asset_id.clone())
                     .execute(&ALICE_ID, stx)
                     .expect("fund SCCP sender fixture");
             }
@@ -25823,7 +26669,11 @@ seiyaku GovernanceLifecycle {
                 .first()
                 .expect("active SCCP route fixture");
             let asset = route.settlement.asset_definition_id.clone();
-            let custody = route.settlement.custody_account_id.clone();
+            let custody = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                &stx.network_id,
+                &route.key(),
+                &asset,
+            );
             (asset, custody)
         }
 
@@ -26070,7 +26920,10 @@ seiyaku GovernanceLifecycle {
                 gas_policy_commitment: Hash::new(b"SCCP retention lifecycle gas"),
             });
             let transaction = TransactionBuilder::new(
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+                provisional_finality
+                    .finality_artifact
+                    .height_context
+                    .network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -26161,8 +27014,7 @@ seiyaku GovernanceLifecycle {
         ) -> (AssetDefinitionId, AccountId) {
             *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let (asset, custody) = sccp_test_settlement_ids(stx);
             for account in [ALICE_ID.clone(), custody.clone()] {
@@ -27398,12 +28250,11 @@ seiyaku GovernanceLifecycle {
                 metadata: Metadata::default(),
                 balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
                 owning_domain: None,
-                confidential_policy: AssetConfidentialPolicy::transparent(),
             })
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             let escrow = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-                stx.chain_id(),
+                stx.network_id(),
                 &reward_def,
             );
             stx.settlement
@@ -27595,6 +28446,7 @@ seiyaku GovernanceLifecycle {
                             },
                         ),
                     },
+                    recorded_at_ms: 1,
                     evidence_hashes: Vec::new(),
                 }],
             );
@@ -27662,6 +28514,7 @@ seiyaku GovernanceLifecycle {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
+            let network_id = *state.network_id_ref();
 
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -27674,7 +28527,7 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let (account_id, _) = gen_account_in(&domain_id);
+            let (account_id, account_keypair) = gen_account_in(&domain_id);
             Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
@@ -27835,7 +28688,14 @@ seiyaku GovernanceLifecycle {
                             [0xE3; 32],
                         ),
                         alias: None,
-                        owner: Some(account_id.clone()),
+                        authorization: crate::da::signed_test_ingest_authorization(
+                            network_id,
+                            &account_keypair,
+                            LaneId::new(1),
+                            1,
+                            1,
+                            1,
+                        ),
                     },
                     location: iroha_data_model::da::commitment::DaCommitmentLocation {
                         block_height: 1,
@@ -28745,8 +29605,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             stx.world
                 .sccp_outbound_message_locator
@@ -29293,8 +30152,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let current = native.trust_anchor;
             let admitted_high_water = current
@@ -29409,8 +30267,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(lane.native_trust_anchors.len(), retained_cap);
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
                 .expect("exact retained-anchor cap must validate");
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let mut next_hash = [0_u8; 32];
             next_hash[0] = 0xED;
@@ -29529,8 +30386,7 @@ seiyaku GovernanceLifecycle {
                 ..previous
             };
             stx.sccp_registry = rotate_native_registry_for_test(registry.as_ref(), next);
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             seed_sccp_test_tx_call_hash(&mut stx, 0x90);
 
@@ -33032,6 +33888,258 @@ seiyaku GovernanceLifecycle {
             );
         }
 
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_accepts_and_stores_canonical_compiled_halo2_key() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "canonical-ivm-vk");
+            let vk_box = canonical_test_halo2_vk_box();
+            let record = test_halo2_vk_record(1, vk_box.clone());
+            let mut stx = state_block.transaction();
+            Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect("canonical compiled Halo2 key must register");
+
+            let stored = stx
+                .world
+                .verifying_keys
+                .get(&id)
+                .expect("validated key must be stored");
+            assert_eq!(
+                stored.key.as_ref().map(|key| key.bytes.as_slice()),
+                Some(vk_box.bytes.as_slice()),
+                "the registry must retain only the bytes that passed typed validation"
+            );
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_rejects_parseable_halo2_key_relabelled_as_ivm_execution() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "relabelled-demo-vk");
+            let vk_box = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
+                .expect("generate parseable relabelled demo key");
+            let record = test_halo2_vk_record(1, vk_box);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a parseable key for another constraint system must not register");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("canonical compiled circuit key"),
+                "unexpected relabelled-key rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn update_vk_rejects_parseable_halo2_key_relabelled_as_same_circuit() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "updated-relabelled-demo-vk");
+            let current = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
+            let mut stx = state_block.transaction();
+            Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record: current.clone(),
+                    }
+                    .into(),
+                )
+                .expect("canonical baseline key must register");
+            stx.apply();
+
+            let relabelled = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
+                .expect("generate parseable relabelled demo key");
+            let replacement = test_halo2_vk_record(2, relabelled);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::UpdateVerifyingKey {
+                        id: id.clone(),
+                        record: replacement,
+                    }
+                    .into(),
+                )
+                .expect_err("update must enforce the same compiled-circuit key identity");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("canonical compiled circuit key"),
+                "unexpected relabelled update rejection: {message}"
+            );
+            assert_eq!(stx.world.verifying_keys.get(&id), Some(&current));
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_rejects_noncanonical_fixed_halo2_parameter_degree() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "wrong-fixed-k-vk");
+            let mut vk_box = canonical_test_halo2_vk_box();
+            let ipa_offset = vk_box
+                .bytes
+                .windows(4)
+                .position(|window| window == b"IPAK")
+                .expect("canonical key carries IPAK");
+            vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
+                .copy_from_slice(&(crate::zk::IVM_EXECUTION_V1_IPA_K + 1).to_le_bytes());
+            let record = test_halo2_vk_record(1, vk_box);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a caller-selected Halo2 domain exponent must not register");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("fixed Halo2 IPA verifier-key metadata"),
+                "unexpected fixed-k rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn register_vk_rejects_tiny_stark_key_with_huge_declared_inner_length() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let backend = "stark/fri/sha256-goldilocks";
+            let circuit_id = format!("{backend}:bounded-registry-key");
+            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.clone(),
+                n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            let mut bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
+            let circuit_offset = bytes
+                .windows(circuit_id.len())
+                .position(|window| window == circuit_id.as_bytes())
+                .expect("encoded STARK circuit id");
+            bytes[circuit_offset - 1] = u8::MAX;
+            let vk_box = VerifyingKeyBox::new(backend.to_owned(), bytes);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                circuit_id,
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32");
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("stark_default".to_owned());
+
+            let id = VerifyingKeyId::new(backend, "huge-inner-length-vk");
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a forged inner length must fail before typed key storage");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("invalid STARK verifying key payload"),
+                "unexpected bounded STARK rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
         #[test]
         fn register_vk_requires_gas_schedule() {
             let kura = Kura::blank_kura_for_testing();
@@ -33065,7 +34173,7 @@ seiyaku GovernanceLifecycle {
                 [0x61; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             let instr: InstructionBox =
@@ -34882,9 +35990,10 @@ seiyaku GovernanceLifecycle {
             );
             let mut state_block = state.block(header);
             let mut stx = state_block.transaction();
+            let network_id = stx.network_id;
             let request = |sequence, predecessor, height, hash| {
                 ReputationFinalizedArchiveRetentionRequestV1::try_new(
-                    chain_id.clone(),
+                    network_id,
                     sequence,
                     predecessor,
                     ReputationFinalizedArchiveRetentionTargetV1::try_new(height, hash)
@@ -34900,6 +36009,25 @@ seiyaku GovernanceLifecycle {
             SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("exact request replay is idempotent");
+
+            let foreign_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"same-label-foreign-retention-genesis"),
+                ));
+            let foreign = ReputationFinalizedArchiveRetentionRequestV1::try_new(
+                foreign_network,
+                2,
+                Some(first.request_digest),
+                ReputationFinalizedArchiveRetentionTargetV1::try_new(2, [0x52; 32])
+                    .expect("valid foreign-network target shape"),
+            )
+            .expect("valid foreign-network request shape");
+            let error = SetParameter::new(Parameter::Custom(foreign.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("same-label foreign genesis must fail");
+            assert!(error.to_string().contains("targets another network"));
 
             let wrong_hash = request(2, Some(first.request_digest), 2, [0x53; 32]);
             let error = SetParameter::new(Parameter::Custom(wrong_hash.into_custom_parameter()))
@@ -35067,7 +36195,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![4, 5, 6]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut current = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -35078,7 +36206,8 @@ seiyaku GovernanceLifecycle {
                 [0x51; 32],
                 hash_vk(&vk_box),
             );
-            current.vk_len = 3;
+            current.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             current.status = ConfidentialStatus::Active;
             current.key = Some(vk_box);
             current.gas_schedule_id = Some("halo2_default".into());
@@ -35156,7 +36285,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -35167,7 +36296,7 @@ seiyaku GovernanceLifecycle {
                 [0x51; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -35394,7 +36523,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -35405,7 +36534,7 @@ seiyaku GovernanceLifecycle {
                 [0x53; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -35429,7 +36558,9 @@ seiyaku GovernanceLifecycle {
                 [0x54; 32],
                 hash_vk(&vk_box),
             );
-            new_rec.vk_len = 4;
+            new_rec.vk_len = u32::try_from(vk_box.bytes.len())
+                .expect("canonical key length fits u32")
+                .saturating_add(1);
             new_rec.status = ConfidentialStatus::Active;
             new_rec.key = Some(vk_box);
             new_rec.gas_schedule_id = Some("halo2_default".into());
@@ -35473,10 +36604,10 @@ seiyaku GovernanceLifecycle {
             let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.into(),
-                n_log2: 4,
-                blowup_log2: 2,
+                n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: 2,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             };
@@ -35572,7 +36703,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 circuit.to_string(),
@@ -35583,7 +36714,7 @@ seiyaku GovernanceLifecycle {
                 [0x62; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -35662,7 +36793,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
@@ -35674,7 +36805,7 @@ seiyaku GovernanceLifecycle {
                 [0x63; 32],
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -35955,7 +37086,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![6, 6, 6]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -35969,7 +37100,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36044,7 +37175,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9, 9]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -36058,7 +37189,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36135,7 +37266,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 1]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3, 4];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -36149,7 +37280,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36258,7 +37389,7 @@ seiyaku GovernanceLifecycle {
                     "halo2/ipa",
                     format!("vk_invalid_metadata_{suffix}").as_str(),
                 );
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 1, 4]);
+                let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
                 let expected_public_inputs = vec![1, 2, 3];
                 let public_inputs_schema_hash: [u8; 32] =
@@ -36554,7 +37685,7 @@ seiyaku GovernanceLifecycle {
             // Register verifying key
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 8, 8]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -36565,7 +37696,7 @@ seiyaku GovernanceLifecycle {
                 [0x64; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36845,7 +37976,9 @@ seiyaku GovernanceLifecycle {
                 .expect("authorized manifest registration");
 
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -37059,35 +38192,30 @@ seiyaku GovernanceLifecycle {
             .expect("register verified manifest");
             stx.apply();
             let mut stx = block.transaction();
+            let network_id = *stx.network_id();
 
             let alias: ContractAlias = "payments::universal".parse().expect("contract alias");
-            let address_at_nonce_0 = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("nonce zero address");
-            let address_at_nonce_1 = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-                &ALICE_ID,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("nonce one address");
+            let address_at_nonce_0 =
+                ContractAddress::derive(&network_id, &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+                    .expect("nonce zero address");
+            let address_at_nonce_1 =
+                ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                    .expect("nonce one address");
             let subject_at_nonce_0 = address_at_nonce_0.subject_id();
             assert!(
                 stx.world.account(&subject_at_nonce_0).is_err(),
                 "the deployment fixture must begin without a subject account",
             );
 
-            let foreign_chain_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("foreign-contract-deployment-chain"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("foreign-chain address");
+            let foreign_network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"foreign-contract-deployment-genesis"),
+                ));
+            let foreign_chain_address =
+                ContractAddress::derive(&foreign_network_id, &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+                    .expect("foreign-chain address");
             let error = scode::CommitContractDeployment {
                 expected_deploy_nonce: 0,
                 contract_address: foreign_chain_address.clone(),
@@ -37132,7 +38260,9 @@ seiyaku GovernanceLifecycle {
             );
 
             let wrong_dataspace_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::new(7),
@@ -37343,7 +38473,9 @@ seiyaku GovernanceLifecycle {
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let contract_address = ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &ALICE_ID,
                 1,
                 DataSpaceId::UNIVERSAL,

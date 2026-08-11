@@ -210,13 +210,13 @@ impl ExactOutputRolloverClaim {
                 let manifest_hash = HashOf::new(manifest);
                 if messages.len() != manifest.chunk_hashes.len() {
                     return Err(
-                        "payload-chunk rollover claim changed the exact chunk count".to_owned(),
+                        "payload-chunk rollover claim changed the exact chunk count".to_owned()
                     );
                 }
                 for (expected_index, message) in messages.iter().enumerate() {
                     let NetworkMessage::SumeragiBlock(envelope) = message else {
                         return Err(
-                            "payload-chunk rollover claim covers a non-Sumeragi message".to_owned(),
+                            "payload-chunk rollover claim covers a non-Sumeragi message".to_owned()
                         );
                     };
                     let BlockMessage::V2(message) = envelope.as_message() else {
@@ -228,7 +228,7 @@ impl ExactOutputRolloverClaim {
                     let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload
                     else {
                         return Err(
-                            "payload-chunk rollover claim covers another v2 payload".to_owned(),
+                            "payload-chunk rollover claim covers another v2 payload".to_owned()
                         );
                     };
                     if chunk.manifest_hash != manifest_hash

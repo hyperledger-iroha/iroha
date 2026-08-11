@@ -106,7 +106,7 @@ generated `README.md` into the output directory.
 - Guided peer/bootstrap flow for configuring a node against an existing profile
 - Supports interactive and fully flag-driven non-interactive use
 - Writes `config.toml`, `genesis.json`, and a generated guide with the exact
-  `irohad` launch command
+  `iroha3d` launch command
 
 `kagami localnet`
 - Bare-metal local network generator
@@ -139,7 +139,7 @@ generated `README.md` into the output directory.
   files are absent from Compose YAML and environment variables; the latter are
   mounted as separate Compose secrets.
 - Byte-exact public policy assets are interned by digest as base64 Compose
-  configs and decoded into `/config/runtime` before `irohad` starts. Prepared
+  configs and decoded into `/config/runtime` before `iroha3d` starts. Prepared
   Compose accepts fresh state only, uses named validator storage volumes, never
   migrates live state, resolves relative source-state paths and omitted
   defaults against the prepared bundle directory for freshness checks, and
@@ -212,6 +212,15 @@ target/debug/kagami genesis sign \
   --out-file genesis.signed.nrt \
   --expected-hash-out genesis.expected_hash
 ```
+
+The last option also publishes `genesis.identity.toml`. Treat that paired
+artifact as the deployment trust-root bundle: it carries the same exact signed
+header hash as both client `network_id` and validator
+`genesis.expected_hash`. Do not render those values independently. The
+one-line `genesis.expected_hash` file remains for validator launchers that
+consume it directly. Production templates select that exact file through
+validator `genesis.expected_hash_file` and client `network_id_file` rather than
+carrying replaceable inline placeholders.
 
 For seedless `kagami docker`, place that body and hash beside the canonical
 `genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects

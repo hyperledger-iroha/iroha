@@ -1,8 +1,9 @@
-//! Handle-rooted filesystem operations for durable Governance DAG state.
+//! Handle-rooted filesystem operations for durable local node state.
 //!
 //! Production mutations are resolved component-by-component below a retained
-//! directory handle. Linux and macOS use the `*at` family. Windows uses
-//! `NtCreateFile` for root-directory-relative opens and
+//! directory handle. The primitives back Governance DAG stores and the inert
+//! Musubi provider-attestation journal store. Linux and macOS use the `*at`
+//! family. Windows uses `NtCreateFile` for root-directory-relative opens and
 //! `SetFileInformationByHandle` for rename/disposition. Other targets fail
 //! closed because they are not V1 native release targets.
 
@@ -16,6 +17,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -40,6 +42,7 @@ const TWO_SLOT_STORE_NAME_MAX_BYTES_V1: usize = 128;
 const TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
+const TWO_SLOT_INITIALIZATION_WAIT_MAX_V1: Duration = Duration::from_secs(5 * 60);
 const TWO_SLOT_NAMES_V1: [&str; 2] = ["slot-0.v1", "slot-1.v1"];
 const TWO_SLOT_COMMIT_MARKER_V1: [u8; 16] = *b"iroha-slot-v1-ok";
 const TWO_SLOT_ZERO_DIGEST: [u8; 32] = [0; 32];

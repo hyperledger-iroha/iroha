@@ -377,7 +377,7 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 
 - Sora profile localnets use NPoS for the global merge ledger and disallow staged cutovers; run permissioned Iroha3 localnets without `--sora-profile`.
 - Bare-metal (Iroha3 NPoS): `kagami localnet --peers 4 --out-dir ./npos-local --consensus-mode npos --seed demo` writes genesis/configs/start scripts with BLS keys/PoPs and a stable NPoS fingerprint; start with `./npos-local/start.sh`.
-- Sora Nexus localnet: `kagami localnet --sora-profile nexus --peers 4 --out-dir ./sora-nexus-local` generates a 4-node NPoS localnet and starts `irohad --sora` for Nexus dataspaces.
+- Sora Nexus localnet: `kagami localnet --sora-profile nexus --peers 4 --out-dir ./sora-nexus-local` generates a 4-node NPoS localnet and starts `iroha3d --sora` for Nexus dataspaces.
 - Sora dataspace localnet: `kagami localnet --sora-profile dataspace --peers 4 --out-dir ./sora-ds-local` keeps Sora multi-lane defaults under NPoS; use `--consensus-mode permissioned` only without `--sora-profile`.
 - Bare-metal (Iroha2 staged cutover): `kagami localnet --build-line iroha2 --peers 4 --out-dir ./npos-local --consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5 --seed demo` stages a permissioned→NPoS cutover at height 5 and keeps the advertised fingerprint on the permissioned mode until activation.
 - Localnet defaults to a fast 1s pipeline (block/commit split), shortens transaction gossip cadence (`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`, target reshuffle cadence = 100ms), raises `sumeragi.advanced.rbc.chunk_max_bytes` to 256 KiB, lifts queue capacity to 262,144, sets `nexus.fusion.exit_teu = 1,000,000` and `sumeragi.block.proposal_queue_scan_multiplier = 4` to bound proposal assembly, relaxes Torii tx rate limiting (`torii.tx_rate_per_authority_per_sec = 1,000,000`, `torii.tx_burst_per_authority = 2,000,000`, `torii.api_high_load_tx_threshold = 262,144`), keeps Kura on its crash-safe batched fsync policy (`kura.fsync_mode = "batched"`), clamps the pacing governor to 1.0x so effective block/commit timing stays aligned with the pipeline, and bumps redundant-send fanout when DA is enabled; for NPoS localnets it seeds XOR stake, activates validators in genesis, and rewrites `SumeragiParameters` timing fields (`block_time_ms`, `commit_time_ms`) to match the selected pipeline. Override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
@@ -884,8 +884,9 @@ windows:
 2. **Reveal window** (`vrf_reveal_deadline_offset` blocks) — validators disclose
    the reveal (`VrfReveal`). The adapter verifies it against the prior commit and
    records the 32-byte reveal. The reveal deadline must be strictly before the
-   epoch boundary, leaving at least one finalized block in which the complete
-   entropy record is immutable pre-state.
+   epoch boundary. Authenticated late reveals remain admissible only through the
+   block immediately preceding the boundary, leaving the complete participation
+   record as immutable pre-state when the boundary candidate is assembled.
 
 The commit/reveal ingestion path is synchronous and deterministic:
 
@@ -907,9 +908,20 @@ When the epoch boundary is reached (block height multiple of
    finalized state and mixes its canonically ordered on-time reveals into the
    immediate next-epoch seed `S_e`.
 2. Freezes that seed in the old-roster-authenticated boundary height context.
-3. Computes penalties (`committed_no_reveal`, `no_participation`) and persists
-   the finalized `VrfEpochRecord` in the boundary block.
+3. Computes the exact `committed_no_reveal` and `no_participation` partitions
+   solely from committed pre-state and persists the finalized `VrfEpochRecord`
+   in the boundary block. New boundary-height observations are rejected, so the
+   proposer cannot rewrite the partition from process-local messages.
 4. Updates `epoch_report::VrfPenaltiesReport`, status counters, and telemetry.
+
+The next block verifies the boundary block's canonical Kura finality artifact
+and revalidates the complete epoch record against its frozen NPoS height
+context. A validator in `committed_no_reveal` has both an independently signed
+commitment and a quorum-certified missing reveal, so consensus derives a
+`VrfJail` action for that validator and a single applied marker. The jail remains
+through the successor epoch so the validator is ineligible at the next election.
+`no_participation` remains operational evidence only: network absence without a
+signed commitment is not attributable and cannot authorize a jail.
 
 The refreshed seed flows back into deterministic collector selection through
 `deterministic_collectors`. Public `/v1/sumeragi/telemetry` reports only
@@ -996,7 +1008,7 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
   either via `/v1/sumeragi/status` or the Norito payload—to confirm validator alignment
   and identify which peer diverged. Hashes are derived from `(chain_id, height, view,
   epoch, ordered_peer_ids)` using Blake2b-256.
-- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) to clear penalties. The adapter verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
+- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) and before the epoch-boundary block to clear a pending non-reveal. The adapter verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set before it is sealed. Boundary-height and post-boundary submissions are rejected. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
 
 #### VRF alert thresholds
 - Page when `increase(sumeragi_vrf_no_participation_total[epoch_window]) > 0`. Any increment means at least one validator missed both commit and reveal windows for the tracked epoch. Use a window length matching `vrf_commit_deadline_offset + vrf_reveal_deadline_offset` (for the defaults, `epoch_window = 140m` on a one‑second block cadence).

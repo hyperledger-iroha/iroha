@@ -102,6 +102,15 @@ def _fail(message: str) -> NoReturn:
     raise PrivacyReleaseExtractionError(message)
 
 
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        admission._require_independent_native_evidence_authority()
+    except admission.TairaRolloutAdmissionError as exc:
+        raise PrivacyReleaseExtractionError(str(exc)) from exc
+
+
 def _sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         _fail(f"{label} must be one lowercase SHA-256 digest")
@@ -182,6 +191,8 @@ def authenticate_linux_release(
     staging_parent: Path,
 ) -> tuple[StableFile, dict[str, object]]:
     """Verify the signed authority and exact-12 evidence without extracting inputs."""
+
+    _require_independent_native_evidence_authority()
 
     try:
         inventory = scan_inventory_paths(authority_dir)
@@ -441,6 +452,9 @@ def extract_privacy_release(
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    # Refuse before archive/verifier/output path inspection.
+    _require_independent_native_evidence_authority()
+
     archive = _canonical_path(args.archive, "Linux rollout archive")
     if not archive.name.endswith(".tar.gz"):
         _fail("Linux rollout archive must use the .tar.gz suffix")

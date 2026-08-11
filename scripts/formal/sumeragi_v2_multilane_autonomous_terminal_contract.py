@@ -314,7 +314,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "fn",
         "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending",
         (
-            "canonical_carrier_source_outcome_set_locked(entry, true)",
+            "canonical_carrier_source_outcome_set_locked(pending_canonical_bytes, entry, true)",
             "queue_authorizations.len() != expected_count",
             "AutonomousLifecycleCanonicalCarrierSourceOutcomePublication",
         ),
@@ -326,7 +326,11 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         (
             "read_lane_block_application_receipt_without_sidecar_repair",
             "entry_by_hash(merge_entry_hash)",
-            "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)",
+            ".canonical_carrier_source_outcome_set_locked(\n"
+            "                pending_canonical_bytes,\n"
+            "                &canonical_entry,\n"
+            "                true,\n"
+            "            )?",
             "queue_authorizations.len() != expected_count",
             "group == reservation_group",
         ),
@@ -351,7 +355,11 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "autonomous_lane_attempt_inventory_counts_locked(&entry, 1)",
             "if outcome.is_complete()",
             "queue_finalization_authorization",
-            "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)",
+            "canonical_carrier_source_outcome_set_locked(\n"
+            "                pending_canonical_bytes,\n"
+            "                &canonical_entry,\n"
+            "                false,\n"
+            "            )?",
             "pending_queue_authorizations",
             "complete_reservation_groups",
         ),
@@ -488,7 +496,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             ".entry(publication.entry_hash())",
             "let mut carrier_heights = BTreeMap::new();",
             "let mut source_authorized_carriers = Vec::with_capacity(carrier_publications.len());",
-            "authenticate_committed_canonical_carrier(state, kura, &entry, chain_hash)?",
+            "authenticate_committed_canonical_carrier(state, kura, &entry, network_id)?",
             ".insert(authenticated.carrier_height, entry_hash)",
             "publication.consume_for_v2_apply(&entry)",
             "let mut carrier_groups = Vec::with_capacity(authenticated.groups.len());",
@@ -619,7 +627,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "fn",
         "pending_terminal_recovery_observations",
         (
-            "recovery.chain_id_hash() != chain_id_hash",
+            "recovery.network_id() != network_id",
             "let route_identities = recovery.route_identities();",
             "recovery.pending_reservation_groups()",
             "pending_groups.len() != recovery.pending_outcome_count()",
@@ -649,7 +657,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
             "active_lifecycle_routes(state, context)",
             "pending_autonomous_lifecycle_terminal_outcome_inventory",
-            "pending_terminal_recovery_observations(&recovery, chain_id_hash, &active_routes)?",
+            "pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?",
             "pending_terminal_group_has_exact_queue_owner(&initial_snapshot, observation)?",
             "let deferred = !owned_group_hashes.is_empty();",
             "pending_groups: pending_groups.clone()",
@@ -925,7 +933,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs",
+        "crates/iroha_core/src/kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs",
         "fn",
         "lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered",
         (
@@ -1254,7 +1262,7 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
             ".reconstruct_autonomous_lifecycle_canonical_carrier_source_outcomes_for_group(",
             "carrier_publications",
             "for (entry_hash, publication) in carrier_publications",
-            "authenticate_committed_canonical_carrier(state, kura, &entry, chain_hash)",
+            "authenticate_committed_canonical_carrier(state, kura, &entry, network_id)",
             ".insert(authenticated.carrier_height, entry_hash)",
             "publication.consume_for_v2_apply(&entry)",
             "for (group, (source_group, source_authorization)) in",
@@ -1352,10 +1360,10 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
             "let initial_snapshot = queue",
             "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
             "let active_routes = active_lifecycle_routes(state, context)",
-            "let chain_id_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());",
+            "let network_id = context.network_id;",
             "let recoveries = kura",
             ".pending_autonomous_lifecycle_terminal_outcome_inventory()",
-            "pending_terminal_recovery_observations(&recovery, chain_id_hash, &active_routes)?",
+            "pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?",
             "let mut owned_group_hashes = BTreeSet::new();",
             "pending_terminal_group_has_exact_queue_owner(&initial_snapshot, observation)?",
             "let deferred = !owned_group_hashes.is_empty();",

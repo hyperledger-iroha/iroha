@@ -126,7 +126,7 @@ public sealed record SccpGovernedRouteV1(
     SccpSourceEmitterV1 SourceEmitter,
     SccpDestinationDeploymentV1 Destination,
     string AssetDefinitionId,
-    string CustodyAccountId,
+    string CustodyOwner,
     uint PayloadAmountScale,
     byte[] RouteConfigurationHash);
 
@@ -982,7 +982,7 @@ internal static class SccpExactParser
 
         var settlement = Object(item, "settlement");
         SccpJson.ExactFields(settlement,
-            ["asset_definition_id", "custody_account_id", "payload_amount_scale"],
+            ["asset_definition_id", "custody_owner", "payload_amount_scale"],
             $"{label}.settlement");
         var assetDefinition = SccpJson.Text(settlement, "asset_definition_id");
         if (assetDefinition != "6TEAJqbb8oEPmLncoNiMRbLEK6tw")
@@ -990,7 +990,7 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label} must settle canonical Taira XOR.");
         }
 
-        var custody = SccpJson.Text(settlement, "custody_account_id");
+        var custody = SccpJson.Text(settlement, "custody_owner");
         AccountAddress custodyAddress;
         try
         {
@@ -998,12 +998,12 @@ internal static class SccpExactParser
         }
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
-            throw new ArgumentException($"{label}.custody_account_id must be canonical.", error);
+            throw new ArgumentException($"{label}.custody_owner must be canonical.", error);
         }
 
         if (custodyAddress.ToI105() != custody)
         {
-            throw new ArgumentException($"{label}.custody_account_id must be canonical.");
+            throw new ArgumentException($"{label}.custody_owner must be canonical.");
         }
 
         var scale = SccpJson.UInt32(settlement, "payload_amount_scale", 9, 9);

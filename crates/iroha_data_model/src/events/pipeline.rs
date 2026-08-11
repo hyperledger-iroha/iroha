@@ -536,7 +536,9 @@ mod tests {
                 42,
                 43,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                Hash::new(b"chain"),
+                crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                    b"chain",
+                ))),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

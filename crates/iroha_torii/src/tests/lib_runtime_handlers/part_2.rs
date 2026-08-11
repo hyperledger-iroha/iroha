@@ -20,9 +20,9 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
         Algorithm::Ed25519,
         "derive second entrypoint API-token fixture key",
     );
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         AccountId::new(first_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -32,7 +32,7 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     )])
     .sign(first_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         AccountId::new(second_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -85,9 +85,9 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         "derive entrypoint queue-before-rate-limit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -97,7 +97,7 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
     )])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -159,7 +159,7 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -358,7 +358,7 @@ async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -412,16 +412,16 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
         "derive post-transaction batch submit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "batch-submit-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -467,11 +467,11 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         "derive post-transaction batch token fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
         .map(|index| {
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                network_id,
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -519,7 +519,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
     }
 
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
         .map(|index| {
             let keypair = checked_torii_test_keypair_from_seed_byte(
@@ -529,7 +529,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
             );
             let authority = AccountId::new(keypair.public_key().clone());
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                network_id,
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -579,9 +579,9 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
         "derive invalid precheck batch fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -591,7 +591,7 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     )])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -659,7 +659,7 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &fee_sink);
 
     let tx = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -776,16 +776,16 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
         "derive high-load threshold fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "early-shed-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -830,16 +830,16 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
         "derive queue-age saturation fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "age-shed-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -900,16 +900,16 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
         "derive queue capacity fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "queue-full-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -962,16 +962,16 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
         "derive in-flight queue age fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1212,9 +1212,11 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
     );
-    let signed = iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test())
-        .with_authority(authority)
-        .sign(&key_pair);
+    let signed = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
+        authority,
+    )
+    .sign(&key_pair);
 
     let response = super::handler_signed_query(
         State(app),
@@ -1463,15 +1465,17 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
     let mut app = mk_app_state_for_tests();
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindDomainById(
             iroha_data_model::query::domain::prelude::FindDomainById::new(
                 iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
                     .expect("domain id"),
             ),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(
@@ -1499,14 +1503,16 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaqu
         "asset-definition".parse().expect("asset definition name"),
     );
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
             iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
                 asset_definition_id,
             ),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(
@@ -1530,12 +1536,14 @@ async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
         "banking".parse().expect("alias label"),
         restricted_dataspace,
     );
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
             iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(

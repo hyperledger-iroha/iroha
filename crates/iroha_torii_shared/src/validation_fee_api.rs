@@ -2,7 +2,7 @@
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
@@ -121,10 +121,8 @@ pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     pub schema: String,
     /// Projection layout version.
     pub version: u16,
-    /// Canonical chain identifier supplied by the caller and proven by every policy.
-    pub chain_id: String,
-    /// Lowercase deployment-bound genesis hash proven by every policy.
-    pub genesis_hash: String,
+    /// Canonical exact genesis-derived network identity proven by finality and every policy.
+    pub network_id: String,
     /// Lowercase hash of policy version one.
     pub policy_chain_genesis_hash: String,
     /// Lowercase hash of the complete immutable registry history.
@@ -539,13 +537,9 @@ impl ValidationFeeCurrentPolicyProofV1 {
         clippy::too_many_lines,
         reason = "the ordered V1 proof checks preserve fail-closed validation and stable error precedence"
     )]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the public V1 verifier owns one ChainId across finality verification and registry binding"
-    )]
     pub fn verify_against(
         &self,
-        chain_id: ChainId,
+        network_id: NetworkId,
         trusted_checkpoint_height: u64,
         trusted_checkpoint_context_id: [u8; 32],
     ) -> Result<HeightContextId, String> {
@@ -562,6 +556,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
             "trusted validation-fee checkpoint context id",
             &trusted_checkpoint_context_id,
         )?;
+        require_canonical_iroha_hash("validation-fee network id", network_id.as_bytes())?;
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
         require_canonical_iroha_hash("evaluated block hash", &evaluated_block_hash)?;
@@ -595,7 +590,13 @@ impl ValidationFeeCurrentPolicyProofV1 {
                 "validation-fee finality chain does not begin at the caller's checkpoint".into(),
             );
         }
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id.clone(), trusted_context);
+        // The exact caller-pinned context authenticates its complete HeightContext. It must still
+        // agree with the independently configured NetworkId before any finality proof is accepted.
+        let trusted_network_id = first.finality_artifact.height_context.network_id;
+        if trusted_network_id != network_id {
+            return Err("validation-fee finality chain targets a different network".into());
+        }
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, trusted_context);
         for proof in &self.finality_chain {
             verifier
                 .verify(proof)
@@ -641,9 +642,9 @@ impl ValidationFeeCurrentPolicyProofV1 {
                 if registry
                     .registered_policies
                     .iter()
-                    .any(|entry| entry.policy.chain_id != chain_id)
+                    .any(|entry| entry.policy.network_id != network_id)
                 {
-                    return Err("validation-fee registry targets a different chain".into());
+                    return Err("validation-fee registry targets a different network".into());
                 }
                 if registry
                     .snapshot_hash()
@@ -693,27 +694,18 @@ impl ValidationFeeCurrentPolicyProofV1 {
     /// # Errors
     ///
     /// Returns an error for any proof failure, absent registry, deployment
-    /// genesis mismatch, or policy-chain genesis mismatch.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the public V1 verifier owns one ChainId across finality verification and immutable deployment binding"
-    )]
+    /// network mismatch, or policy-chain genesis mismatch.
     pub fn verify_with_immutable_binding(
         &self,
-        chain_id: ChainId,
-        bound_genesis_hash: [u8; 32],
+        network_id: NetworkId,
         policy_chain_genesis_hash: [u8; 32],
         trusted_checkpoint_height: u64,
         trusted_checkpoint_context_id: [u8; 32],
     ) -> Result<ValidationFeeVerifiedPolicyProjectionV1, String> {
         self.verify_against(
-            chain_id.clone(),
+            network_id,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
-        )?;
-        require_canonical_iroha_hash(
-            "validation-fee immutable binding genesis hash",
-            &bound_genesis_hash,
         )?;
         require_canonical_iroha_hash(
             "validation-fee immutable binding policy-chain genesis hash",
@@ -733,13 +725,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
                 "enabled validation-fee policy lacks its mandatory Parliament-enacted payout lifecycle"
                     .into(),
             );
-        }
-        if registry
-            .registered_policies
-            .iter()
-            .any(|entry| entry.policy.genesis_hash != bound_genesis_hash)
-        {
-            return Err("validation-fee registry targets a different genesis".into());
         }
         let head = registry
             .head()
@@ -762,8 +747,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
         Ok(ValidationFeeVerifiedPolicyProjectionV1 {
             schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
             version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-            chain_id: chain_id.to_string(),
-            genesis_hash: hex::encode(bound_genesis_hash),
+            network_id: network_id.to_string(),
             policy_chain_genesis_hash: hex::encode(policy_chain_genesis_hash),
             registry_hash: hex::encode(registry_hash),
             head_policy_version: head.policy.policy_version,

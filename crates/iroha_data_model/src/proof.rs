@@ -25,6 +25,12 @@ const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
 /// Maximum canonical encoded size of a [`ProofBox`] nested in a proof attachment.
 pub const PROOF_BOX_MAX_ENCODED_BYTES_V1: usize = 64 * 1024 * 1024;
 const MAX_LEN_PREFIXED_FIELD_BYTES: usize = PROOF_BOX_MAX_ENCODED_BYTES_V1;
+/// Maximum opaque payload bytes accepted in a first-release [`VerifyingKeyBox`].
+pub const VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1: usize = 8 * 1024 * 1024;
+// A `Vec<u8>` value carries an advertised sequence length inside the enclosing
+// struct-field frame. Leave bounded room for either fixed or compact Norito
+// length headers while still rejecting attacker-sized fields before decoding.
+const VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1: usize = VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 + 16;
 /// Maximum byte length for portable verifier-key registry id fields.
 pub const VERIFYING_KEY_ID_MAX_FIELD_BYTES: usize = 256;
 
@@ -250,7 +256,11 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
             return Err(ncore::Error::LengthMismatch);
         }
         let vk_bytes_slice =
-            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
+            take_len_prefixed_slice(bytes, &mut offset, VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1)?;
+        let (declared_vk_len, _) = ncore::inspect_seq_len_slice(vk_bytes_slice)?;
+        if declared_vk_len > VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 {
+            return Err(ncore::Error::LengthMismatch);
+        }
         let (vk_bytes, used) =
             <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(vk_bytes_slice)?;
         if used != vk_bytes_slice.len() {
@@ -4574,6 +4584,42 @@ mod tests {
         encoded.extend_from_slice(&backend_bytes);
         ncore::write_len_header_to_vec(&mut encoded, (MAX_LEN_PREFIXED_FIELD_BYTES as u64) + 1);
         let result = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
+        assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn verifying_key_box_decode_rejects_oversized_outer_field_before_decode() {
+        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let backend_bytes = norito::to_bytes(&backend).expect("encode backend");
+        let mut encoded = Vec::new();
+        ncore::write_len_header_to_vec(&mut encoded, backend_bytes.len() as u64);
+        encoded.extend_from_slice(&backend_bytes);
+        ncore::write_len_header_to_vec(
+            &mut encoded,
+            (VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1 as u64) + 1,
+        );
+        let result = <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
+        assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn verifying_key_box_decode_rejects_oversized_declared_vector_before_allocation() {
+        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let backend_bytes = norito::to_bytes(&backend).expect("encode backend");
+        let mut vk_field = Vec::new();
+        ncore::write_seq_len(
+            &mut vk_field,
+            (VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 as u64) + 1,
+        )
+        .expect("encode declared verifier-key length");
+
+        let mut encoded = Vec::new();
+        ncore::write_len_header_to_vec(&mut encoded, backend_bytes.len() as u64);
+        encoded.extend_from_slice(&backend_bytes);
+        ncore::write_len_header_to_vec(&mut encoded, vk_field.len() as u64);
+        encoded.extend_from_slice(&vk_field);
+
+        let result = <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
 }

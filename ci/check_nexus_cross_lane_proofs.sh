@@ -65,7 +65,7 @@ require_external_release_artifact_root "$REPO_ROOT"
 require_disjoint_release_roots "$REPO_ROOT"
 release_gate_boundary "nexus-cross-lane-pr:entry" || exit $?
 
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export NORITO_SKIP_BINDINGS_SYNC=1

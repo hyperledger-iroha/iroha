@@ -35,9 +35,17 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .expect("Failed building the Runtime")
 });
 
-fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
+fn benchmark_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label),
+        ),
+    )
+}
+
+fn build_test_transaction(network_id: NetworkId) -> TransactionBuilder {
     TransactionBuilder::new(
-        chain_id,
+        network_id,
         STARTER_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -73,9 +81,9 @@ fn build_test_and_transient_state() -> State {
     ));
 
     {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = *state.network_id_ref();
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             account_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -90,7 +98,7 @@ fn build_test_and_transient_state() -> State {
         let unverified_block = BlockBuilder::new(vec![
             AcceptedTransaction::accept(
                 transaction,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
@@ -147,15 +155,15 @@ fn accept_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let state = build_test_and_transient_state();
+    let network_id = *state.network_id_ref();
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
 
-    let transaction = build_test_transaction(chain_id.clone()).sign(STARTER_KEYPAIR.private_key());
+    let transaction = build_test_transaction(network_id).sign(STARTER_KEYPAIR.private_key());
     let crypto_cfg = state.crypto();
     let mut success_count = 0;
     let mut failures_count = 0;
@@ -163,7 +171,7 @@ fn accept_transaction(criterion: &mut Criterion) {
         b.iter(|| {
             match AcceptedTransaction::accept(
                 transaction.clone(),
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
@@ -180,9 +188,9 @@ fn sign_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = benchmark_network_id(b"validation-sign-transaction");
 
-    let transaction = build_test_transaction(chain_id);
+    let transaction = build_test_transaction(network_id);
     let (_, private_key) = KeyPair::random().into_parts();
     let mut count = 0;
     let _ = criterion.bench_function("sign", |b| {
@@ -202,12 +210,12 @@ fn validate_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let state = build_test_and_transient_state();
+    let network_id = *state.network_id_ref();
 
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
     let transaction = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -222,7 +230,7 @@ fn validate_transaction(criterion: &mut Criterion) {
     let unverified_block = BlockBuilder::new(vec![
         AcceptedTransaction::accept(
             transaction,
-            &chain_id,
+            &network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
@@ -234,8 +242,8 @@ fn validate_transaction(criterion: &mut Criterion) {
     .unpack(|_| {});
     let signed_block = Arc::new(SignedBlock::from(unverified_block.clone()));
     let transaction = AcceptedTransaction::accept(
-        build_test_transaction(chain_id.clone()).sign(STARTER_KEYPAIR.private_key()),
-        &chain_id,
+        build_test_transaction(network_id).sign(STARTER_KEYPAIR.private_key()),
+        &network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -292,7 +300,6 @@ fn sign_blocks(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     // Ensure Tokio reactor is available for LiveQueryStore background task
     let _guard = RUNTIME.enter();
@@ -305,6 +312,7 @@ fn sign_blocks(criterion: &mut Criterion) {
         <_>::default(),
     )
     .expect("benchmark State startup must validate");
+    let network_id = *state.network_id_ref();
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -313,8 +321,8 @@ fn sign_blocks(criterion: &mut Criterion) {
 
     let crypto_cfg = state.crypto();
     let transaction = AcceptedTransaction::accept(
-        build_test_transaction(chain_id.clone()).sign(STARTER_KEYPAIR.private_key()),
-        &chain_id,
+        build_test_transaction(network_id).sign(STARTER_KEYPAIR.private_key()),
+        &network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),

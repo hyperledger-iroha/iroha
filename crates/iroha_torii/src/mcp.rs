@@ -17,30 +17,34 @@ use std::{
     fmt::Write as _,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::LazyLock,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, header},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
-use dashmap::DashMap;
 use http_body_util::BodyExt as _;
 use iroha_torii_shared::route_catalog::{
-    self, ApiSurface, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
-    RouteCatalog, RouteDescriptor,
+    self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
+    HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
 };
 use norito::json::{self, Map, Value};
-use rand::{
-    rand_core::{TryCryptoRng, TryRngCore as _},
-    rngs::OsRng,
-};
 use tower::ServiceExt as _;
 
 use crate::{SharedAppState, limits, openapi};
+
+mod connect_session_tools;
+mod governance_ballot_tools;
+
+use connect_session_tools::build_connect_session_create_body;
+use governance_ballot_tools::{
+    governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
+    iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
+};
 
 const JSONRPC_VERSION: &str = "2.0";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -55,7 +59,6 @@ const MCP_RATE_LIMITED: i64 = -32029;
 const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
 const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
-const MCP_JOB_NOT_FOUND: &str = "job_not_found";
 const MCP_STRICT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-strict-body";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
 
@@ -79,14 +82,6 @@ const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
     "Rejected",
     "Expired",
 ];
-
-#[derive(Debug, Clone)]
-struct AsyncJobRecord {
-    state: Value,
-    updated_at: Instant,
-}
-
-static MCP_ASYNC_JOBS: LazyLock<DashMap<String, AsyncJobRecord>> = LazyLock::new(DashMap::new);
 
 /// OpenAPI-derived tool metadata used for MCP dispatch.
 #[derive(Debug, Clone)]
@@ -889,6 +884,9 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.node.query_projection_checkpoint_plan"
             | "iroha.node.query_projection_shard_catalog"
             | "iroha.queries.submit"
+            | "iroha.gov.ballots.zk_v1"
+            | "iroha.gov.ballots.zk_v1.ballot_proof"
+            | "iroha.gov.ballots.plain"
     ) || name.ends_with(".get")
         || name.ends_with(".list")
         || name.ends_with(".query")
@@ -1008,8 +1006,6 @@ pub(crate) async fn handle_jsonrpc_request(
         "ping" => jsonrpc_result_response(id, Value::Object(Map::new())),
         "tools/list" => handle_tools_list(id, &app, &params),
         "tools/call_batch" => handle_tools_call_batch(id, app, inbound_headers, &params).await,
-        "tools/call_async" => handle_tools_call_async(id, app, inbound_headers, &params).await,
-        "tools/jobs/get" => handle_tools_jobs_get(id, &app.mcp, &params),
         "tools/call" => handle_tools_call(id, app, inbound_headers, &params).await,
         _ => jsonrpc_error_response(
             id,
@@ -1760,195 +1756,6 @@ async fn handle_tools_call_batch(
     jsonrpc_result_response(id, norito::json!({ "results": results }))
 }
 
-async fn handle_tools_call_async(
-    id: Option<Value>,
-    app: SharedAppState,
-    inbound_headers: &HeaderMap,
-    params: &Map,
-) -> Value {
-    let mut rng = OsRng;
-    handle_tools_call_async_with_rng(id, app, inbound_headers, params, &mut rng).await
-}
-
-async fn handle_tools_call_async_with_rng<R: TryCryptoRng + ?Sized>(
-    id: Option<Value>,
-    app: SharedAppState,
-    inbound_headers: &HeaderMap,
-    params: &Map,
-    rng: &mut R,
-) -> Value {
-    let Some(name) = params.get("name").and_then(Value::as_str) else {
-        return jsonrpc_error_response(
-            id,
-            JSONRPC_INVALID_PARAMS,
-            "tools/call_async params.name must be a string",
-            None,
-        );
-    };
-    let arguments = params
-        .get("arguments")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let job_id = match generate_mcp_job_id_with_rng(rng) {
-        Ok(job_id) => job_id,
-        Err(err) => {
-            return jsonrpc_error_response(
-                id,
-                JSONRPC_INTERNAL_ERROR,
-                "failed to generate MCP async job id",
-                Some(norito::json!({
-                    "error_code": "random_bytes",
-                    "operation": "generating MCP async job id",
-                    "source": err,
-                })),
-            );
-        }
-    };
-    upsert_async_job_state(
-        &app.mcp,
-        job_id.clone(),
-        norito::json!({ "status": "pending" }),
-    );
-
-    let mut call_params = Map::new();
-    call_params.insert("name".into(), Value::String(name.to_owned()));
-    call_params.insert("arguments".into(), Value::Object(arguments));
-    let headers = inbound_headers.clone();
-    let app_cloned = app.clone();
-    let job_id_cloned = job_id.clone();
-    tokio::spawn(async move {
-        let response = handle_tools_call(None, app_cloned.clone(), &headers, &call_params).await;
-        let job_state = if let Some(result) = response.get("result") {
-            let result_value = result.clone();
-            norito::json!({
-                "status": "completed",
-                "result": result_value
-            })
-        } else if let Some(error) = response.get("error") {
-            let error_value = error.clone();
-            norito::json!({
-                "status": "failed",
-                "error": error_value
-            })
-        } else {
-            norito::json!({
-                "status": "failed",
-                "error": {
-                    "code": JSONRPC_INTERNAL_ERROR,
-                    "message": "asynchronous call produced malformed response",
-                    "data": { "error_code": "internal_error" }
-                }
-            })
-        };
-        upsert_async_job_state(&app_cloned.mcp, job_id_cloned, job_state);
-    });
-
-    jsonrpc_result_response(
-        id,
-        norito::json!({
-            "job_id": job_id,
-            "status": "pending"
-        }),
-    )
-}
-
-fn handle_tools_jobs_get(
-    id: Option<Value>,
-    mcp_cfg: &iroha_config::parameters::actual::ToriiMcp,
-    params: &Map,
-) -> Value {
-    let Some(job_id) = params
-        .get("job_id")
-        .or_else(|| params.get("jobId"))
-        .and_then(Value::as_str)
-    else {
-        return jsonrpc_error_response(
-            id,
-            JSONRPC_INVALID_PARAMS,
-            "tools/jobs/get params.job_id must be a string",
-            None,
-        );
-    };
-
-    prune_async_jobs(mcp_cfg, Instant::now());
-
-    let Some(state) = MCP_ASYNC_JOBS.get(job_id) else {
-        return jsonrpc_error_response(
-            id,
-            JSONRPC_INVALID_PARAMS,
-            "job not found",
-            Some(norito::json!({
-                "error_code": MCP_JOB_NOT_FOUND,
-                "job_id": job_id
-            })),
-        );
-    };
-    let state_value = state.state.clone();
-
-    jsonrpc_result_response(
-        id,
-        norito::json!({
-            "job_id": job_id,
-            "state": state_value
-        }),
-    )
-}
-
-fn upsert_async_job_state(
-    mcp_cfg: &iroha_config::parameters::actual::ToriiMcp,
-    job_id: String,
-    state: Value,
-) {
-    let now = Instant::now();
-    MCP_ASYNC_JOBS.insert(
-        job_id,
-        AsyncJobRecord {
-            state,
-            updated_at: now,
-        },
-    );
-    prune_async_jobs(mcp_cfg, now);
-}
-
-fn prune_async_jobs(mcp_cfg: &iroha_config::parameters::actual::ToriiMcp, now: Instant) {
-    let ttl = Duration::from_secs(mcp_cfg.async_job_ttl_secs.max(1));
-    MCP_ASYNC_JOBS.retain(|_, entry| now.saturating_duration_since(entry.updated_at) <= ttl);
-
-    let max_entries = mcp_cfg.async_job_max_entries.max(1);
-    let current_len = MCP_ASYNC_JOBS.len();
-    if current_len <= max_entries {
-        return;
-    }
-
-    let mut by_age = MCP_ASYNC_JOBS
-        .iter()
-        .map(|entry| (entry.key().clone(), entry.value().updated_at))
-        .collect::<Vec<_>>();
-    by_age.sort_by_key(|(_, updated_at)| *updated_at);
-
-    let remove_count = current_len.saturating_sub(max_entries);
-    for (job_id, _) in by_age.into_iter().take(remove_count) {
-        MCP_ASYNC_JOBS.remove(&job_id);
-    }
-}
-
-fn generate_mcp_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<String, String> {
-    let mut bytes = [0_u8; 20];
-    rng.try_fill_bytes(&mut bytes)
-        .map_err(|err| format!("MCP async job id RNG failed: {err}"))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
-}
-
-#[inline]
-fn mcp_tool_response(result: Result<Value, String>) -> Value {
-    match result {
-        Ok(structured) => mcp_tool_success(structured),
-        Err(message) => mcp_tool_error(message),
-    }
-}
-
 fn mcp_tool_success(structured: Value) -> Value {
     let status = structured.get("status").and_then(Value::as_u64);
     let is_http_error = status.is_some_and(|code| code >= 400);
@@ -2580,6 +2387,64 @@ fn catalog_descriptor_for_method_path(
         .find(|route| route.method() == method && route.path() == path)
 }
 
+fn catalog_descriptor_for_dispatch(
+    groups: &[CatalogProjectionGroup],
+    method: &Method,
+    path_and_query: &str,
+) -> Result<&'static RouteDescriptor, String> {
+    let method = catalog_method(method)
+        .ok_or_else(|| format!("MCP dispatch method is not catalogable: {method}"))?;
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    let routes = groups.iter().flat_map(|group| group.routes);
+    if let Some(exact) = routes
+        .clone()
+        .find(|route| route.method() == method && route.path() == path)
+    {
+        return Ok(exact);
+    }
+
+    let mut matches = routes
+        .filter(|route| route.method() == method && route_template_matches(route.path(), path));
+    let method_name = method.as_str();
+    let first = matches
+        .next()
+        .ok_or_else(|| format!("MCP dispatch target is not cataloged: {method_name} {path}"))?;
+    if let Some(second) = matches.next() {
+        return Err(format!(
+            "MCP dispatch target is ambiguous between `{}` and `{}`: {method_name} {path}",
+            first.path(),
+            second.path()
+        ));
+    }
+    Ok(first)
+}
+
+fn route_template_matches(template: &str, path: &str) -> bool {
+    let mut template_segments = template.trim_start_matches('/').split('/');
+    let mut path_segments = path.trim_start_matches('/').split('/');
+    loop {
+        match (template_segments.next(), path_segments.next()) {
+            (None, None) => return true,
+            (Some(segment), Some(path_segment))
+                if segment.starts_with("{*") && segment.ends_with('}') =>
+            {
+                return !path_segment.is_empty();
+            }
+            (Some(template_segment), Some(path_segment))
+                if template_segment.starts_with('{') && template_segment.ends_with('}') =>
+            {
+                if path_segment.is_empty() {
+                    return false;
+                }
+            }
+            (Some(template_segment), Some(path_segment)) if template_segment == path_segment => {}
+            _ => return false,
+        }
+    }
+}
+
 fn canonical_tool_method_key(method: &Method) -> Option<&'static str> {
     match *method {
         Method::GET => Some("get"),
@@ -2731,55 +2596,6 @@ async fn dispatch_connect_session_create(
     .await
 }
 
-fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
-    let mut rng = OsRng;
-    build_connect_session_create_body_with_rng(arguments, &mut rng)
-}
-
-fn build_connect_session_create_body_with_rng<R: TryCryptoRng + ?Sized>(
-    arguments: &Map,
-    rng: &mut R,
-) -> Result<Value, String> {
-    let node = arguments
-        .get("node")
-        .or_else(|| arguments.get("node_url"))
-        .and_then(Value::as_str);
-
-    let mut body = arguments
-        .get("body")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Map::new()));
-
-    if let Value::Object(payload) = &mut body {
-        if !payload.contains_key("sid") {
-            let sid = arguments
-                .get("sid")
-                .or_else(|| arguments.get("session_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .map(Ok)
-                .unwrap_or_else(|| generate_connect_session_sid_b64url_with_rng(rng))?;
-            payload.insert("sid".into(), Value::String(sid));
-        }
-        if !payload.contains_key("node") {
-            if let Some(node) = node {
-                payload.insert("node".into(), Value::String(node.to_owned()));
-            }
-        }
-    }
-
-    Ok(body)
-}
-
-fn generate_connect_session_sid_b64url_with_rng<R: TryCryptoRng + ?Sized>(
-    rng: &mut R,
-) -> Result<String, String> {
-    let mut sid = [0_u8; 32];
-    rng.try_fill_bytes(&mut sid)
-        .map_err(|err| format!("Connect session sid RNG failed: {err}"))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid))
-}
-
 async fn dispatch_connect_session_create_and_ticket(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2807,8 +2623,6 @@ async fn dispatch_connect_session_create_and_ticket(
         let sid = create_body
             .get("sid")
             .and_then(Value::as_str)
-            .or_else(|| arguments.get("sid").and_then(Value::as_str))
-            .or_else(|| arguments.get("session_id").and_then(Value::as_str))
             .ok_or_else(|| "connect session create response is missing `body.sid`".to_owned())?
             .to_owned();
         let token_key = if role == "app" {
@@ -2836,7 +2650,6 @@ async fn dispatch_connect_session_create_and_ticket(
     ticket_arguments.insert("token".into(), Value::String(token.clone()));
     if let Some(node_url) = arguments
         .get("ticket_node_url")
-        .or_else(|| arguments.get("node_url"))
         .or_else(|| arguments.get("node"))
         .and_then(Value::as_str)
         .or(create_node.as_deref())
@@ -7452,6 +7265,7 @@ enum ExtraHeaderPolicy {
     Default,
     ConnectManagement,
     CanonicalAccountAuthentication,
+    OperatorAuthentication,
 }
 
 impl ExtraHeaderPolicy {
@@ -7460,8 +7274,27 @@ impl ExtraHeaderPolicy {
             Self::Default => false,
             Self::ConnectManagement => lowered == "authorization",
             Self::CanonicalAccountAuthentication => is_canonical_account_auth_header(lowered),
+            Self::OperatorAuthentication => is_operator_auth_header(lowered),
         }
     }
+}
+
+fn target_extra_header_policy(
+    method: &Method,
+    path_and_query: &str,
+) -> Result<ExtraHeaderPolicy, String> {
+    let descriptor =
+        catalog_descriptor_for_dispatch(CATALOG_PROJECTION_GROUPS, method, path_and_query)?;
+    Ok(match descriptor.authentication() {
+        AuthenticationPolicy::CanonicalAccountSignature => {
+            ExtraHeaderPolicy::CanonicalAccountAuthentication
+        }
+        AuthenticationPolicy::OperatorSignature => ExtraHeaderPolicy::OperatorAuthentication,
+        AuthenticationPolicy::NestedRouteAuthentication => {
+            return Err("recursive MCP route dispatch is forbidden".to_owned());
+        }
+        _ => ExtraHeaderPolicy::Default,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7476,6 +7309,11 @@ async fn dispatch_route_with_extra_header_policy(
     accept: Option<String>,
     extra_header_policy: ExtraHeaderPolicy,
 ) -> Result<Value, String> {
+    let extra_header_policy = if extra_header_policy == ExtraHeaderPolicy::Default {
+        target_extra_header_policy(&method, path_and_query)?
+    } else {
+        extra_header_policy
+    };
     let dispatched_remote_ip = dispatched_remote_ip(inbound_headers);
     let dispatched_connect_addr = dispatched_connect_addr(dispatched_remote_ip);
     let mut request = Request::builder()
@@ -7657,26 +7495,19 @@ fn value_to_string(value: &Value) -> Option<String> {
 }
 
 fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
-    for header_name in [
+    for name in [
         header::AUTHORIZATION,
-        HeaderName::from_static(HEADER_X_IROHA_ACCOUNT),
-        HeaderName::from_static(HEADER_X_IROHA_SIGNATURE),
+        HeaderName::from_static(HEADER_X_API_TOKEN),
     ] {
-        if let Some(value) = inbound.get(&header_name) {
-            out.insert(header_name, value.clone());
+        let mut supplied = inbound.get_all(&name).iter();
+        if let Some(value) = supplied.next() {
+            if supplied.next().is_some() {
+                return Err(format!("multiple {name} headers are not allowed"));
+            }
+            let mut value = value.clone();
+            value.set_sensitive(true);
+            out.insert(name, value);
         }
-    }
-    let api_token_header = HeaderName::from_static(HEADER_X_API_TOKEN);
-    let mut api_tokens = inbound.get_all(&api_token_header).iter();
-    if let Some(value) = api_tokens.next() {
-        if api_tokens.next().is_some() {
-            return Err(format!(
-                "multiple {HEADER_X_API_TOKEN} headers are not allowed"
-            ));
-        }
-        let mut value = value.clone();
-        value.set_sensitive(true);
-        out.insert(api_token_header, value);
     }
     Ok(())
 }
@@ -7731,27 +7562,47 @@ fn apply_extra_headers_with_policy(
     value: Option<&Value>,
     policy: ExtraHeaderPolicy,
 ) -> Result<(), String> {
-    if policy == ExtraHeaderPolicy::CanonicalAccountAuthentication {
-        remove_canonical_account_auth_headers(out);
+    match policy {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+            remove_canonical_account_auth_headers(out)
+        }
+        ExtraHeaderPolicy::OperatorAuthentication => remove_operator_auth_headers(out),
+        ExtraHeaderPolicy::Default | ExtraHeaderPolicy::ConnectManagement => {}
     }
     let headers_obj = match value {
         Some(Value::Object(headers_obj)) => headers_obj,
-        Some(_) if policy == ExtraHeaderPolicy::CanonicalAccountAuthentication => {
-            return Err("canonical account authentication headers must be an object".to_owned());
+        Some(_)
+            if matches!(
+                policy,
+                ExtraHeaderPolicy::CanonicalAccountAuthentication
+                    | ExtraHeaderPolicy::OperatorAuthentication
+            ) =>
+        {
+            return Err("target authentication headers must be an object".to_owned());
         }
-        None if policy == ExtraHeaderPolicy::CanonicalAccountAuthentication => {
-            return Err("canonical account authentication headers are required".to_owned());
+        None if matches!(
+            policy,
+            ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OperatorAuthentication
+        ) =>
+        {
+            return Err("target authentication headers are required".to_owned());
         }
         _ => return Ok(()),
     };
 
+    validate_target_authentication_headers(headers_obj, policy)?;
+
     for (raw_name, raw_value) in headers_obj {
         let lowered = raw_name.to_ascii_lowercase();
-        if policy == ExtraHeaderPolicy::CanonicalAccountAuthentication
-            && !is_canonical_account_auth_header(&lowered)
+        if matches!(
+            policy,
+            ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OperatorAuthentication
+        ) && !policy.allows_reserved_extra_header(&lowered)
         {
             return Err(format!(
-                "unexpected `{raw_name}` in canonical account authentication header map"
+                "unexpected `{raw_name}` in target authentication header map"
             ));
         }
         if is_reserved_extra_header(&lowered) && !policy.allows_reserved_extra_header(&lowered) {
@@ -7764,10 +7615,66 @@ fn apply_extra_headers_with_policy(
             .ok_or_else(|| format!("invalid header value for `{raw_name}`"))?;
         let mut header_value = HeaderValue::from_str(&header_value)
             .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?;
-        if policy == ExtraHeaderPolicy::CanonicalAccountAuthentication {
+        if matches!(
+            policy,
+            ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OperatorAuthentication
+        ) {
             header_value.set_sensitive(true);
         }
         out.insert(header_name, header_value);
+    }
+    Ok(())
+}
+
+fn validate_target_authentication_headers(
+    headers: &Map,
+    policy: ExtraHeaderPolicy,
+) -> Result<(), String> {
+    let mut names = BTreeSet::new();
+    for name in headers.keys() {
+        let lowered = name.to_ascii_lowercase();
+        if !names.insert(lowered) {
+            return Err(format!(
+                "duplicate case-insensitive target authentication header `{name}`"
+            ));
+        }
+    }
+
+    match policy {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+            let has = |name: &str| names.contains(name);
+            let signature_tuple = has(HEADER_X_IROHA_ACCOUNT)
+                && has(HEADER_X_IROHA_SIGNATURE)
+                && has(HEADER_X_IROHA_TIMESTAMP_MS)
+                && has(HEADER_X_IROHA_NONCE)
+                && !has(HEADER_X_IROHA_WITNESS);
+            let witness = has(HEADER_X_IROHA_WITNESS)
+                && !has(HEADER_X_IROHA_SIGNATURE)
+                && !has(HEADER_X_IROHA_TIMESTAMP_MS)
+                && !has(HEADER_X_IROHA_NONCE);
+            if !(signature_tuple || witness) {
+                return Err(
+                    "canonical target authentication requires the complete account/signature/timestamp/nonce tuple or an exclusive witness"
+                        .to_owned(),
+                );
+            }
+        }
+        ExtraHeaderPolicy::OperatorAuthentication => {
+            for required in [
+                HEADER_X_IROHA_OPERATOR_PUBLIC_KEY,
+                HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS,
+                HEADER_X_IROHA_OPERATOR_NONCE,
+                HEADER_X_IROHA_OPERATOR_SIGNATURE,
+            ] {
+                if !names.contains(required) {
+                    return Err(format!(
+                        "operator target authentication requires `{required}`"
+                    ));
+                }
+            }
+        }
+        ExtraHeaderPolicy::Default | ExtraHeaderPolicy::ConnectManagement => {}
     }
     Ok(())
 }
@@ -7783,6 +7690,21 @@ fn is_canonical_account_auth_header(lowered: &str) -> bool {
     )
 }
 
+const HEADER_X_IROHA_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
+const HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
+const HEADER_X_IROHA_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
+const HEADER_X_IROHA_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+fn is_operator_auth_header(lowered: &str) -> bool {
+    matches!(
+        lowered,
+        HEADER_X_IROHA_OPERATOR_PUBLIC_KEY
+            | HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS
+            | HEADER_X_IROHA_OPERATOR_NONCE
+            | HEADER_X_IROHA_OPERATOR_SIGNATURE
+    )
+}
+
 fn remove_canonical_account_auth_headers(headers: &mut HeaderMap) {
     for name in [
         HEADER_X_IROHA_ACCOUNT,
@@ -7793,6 +7715,27 @@ fn remove_canonical_account_auth_headers(headers: &mut HeaderMap) {
     ] {
         headers.remove(HeaderName::from_static(name));
     }
+}
+
+fn remove_operator_auth_headers(headers: &mut HeaderMap) {
+    for name in [
+        HEADER_X_IROHA_OPERATOR_PUBLIC_KEY,
+        HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS,
+        HEADER_X_IROHA_OPERATOR_NONCE,
+        HEADER_X_IROHA_OPERATOR_SIGNATURE,
+    ] {
+        headers.remove(HeaderName::from_static(name));
+    }
+}
+
+/// Prevent intermediaries from retaining target-derived MCP responses.
+pub(crate) fn private_no_store_response(response: impl IntoResponse) -> Response {
+    let mut response = response.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
 }
 
 fn is_reserved_extra_header(lowered: &str) -> bool {
@@ -7807,6 +7750,10 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
             | HEADER_X_IROHA_TIMESTAMP_MS
             | HEADER_X_IROHA_NONCE
             | HEADER_X_IROHA_WITNESS
+            | HEADER_X_IROHA_OPERATOR_PUBLIC_KEY
+            | HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS
+            | HEADER_X_IROHA_OPERATOR_NONCE
+            | HEADER_X_IROHA_OPERATOR_SIGNATURE
     ) || lowered == HEADER_X_API_TOKEN
         || lowered == HEADER_X_IROHA_ACCOUNT
         || lowered == HEADER_X_IROHA_SIGNATURE
@@ -8051,27 +7998,27 @@ fn connect_session_create_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["network_id", "app_pk", "nonce"],
             "properties": {
-                "sid": {
+                "network_id": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                    "description": "Canonical checksummed genesis-derived NetworkId."
                 },
-                "session_id": {
+                "app_pk": {
                     "type": "string",
-                    "description": "Alias for `sid` convenience shortcut."
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "Canonical unpadded base64url X25519 application public key (32 bytes)."
+                },
+                "nonce": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{22}$",
+                    "description": "Canonical unpadded base64url fresh session nonce (16 bytes)."
                 },
                 "node": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.node`."
-                },
-                "node_url": {
-                    "type": "string",
-                    "description": "Alias for `node` convenience shortcut."
-                },
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
+                    "minLength": 1,
+                    "description": "Optional exact node hint included in both Connect deep links."
                 },
                 "headers": {
                     "type": "object",
@@ -8093,37 +8040,37 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["role"],
+            "required": ["role", "network_id", "app_pk", "nonce"],
             "properties": {
                 "role": {
                     "type": "string",
                     "enum": ["app", "wallet"],
                     "description": "Role used to select `token_app` or `token_wallet` for ticket generation."
                 },
-                "sid": {
+                "network_id": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                    "description": "Canonical checksummed genesis-derived NetworkId."
                 },
-                "session_id": {
+                "app_pk": {
                     "type": "string",
-                    "description": "Alias for `sid` convenience shortcut."
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "Canonical unpadded base64url X25519 application public key (32 bytes)."
+                },
+                "nonce": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{22}$",
+                    "description": "Canonical unpadded base64url fresh session nonce (16 bytes)."
                 },
                 "node": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.node`."
-                },
-                "node_url": {
-                    "type": "string",
-                    "description": "Alias for `node`; also used as ticket URL base when `ticket_node_url` is omitted."
+                    "minLength": 1,
+                    "description": "Optional exact node hint included in both Connect deep links and used as the ticket URL base when `ticket_node_url` is omitted."
                 },
                 "ticket_node_url": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Optional node URL override used only for ticket generation."
-                },
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
                 },
                 "headers": {
                     "type": "object",
@@ -10024,16 +9971,6 @@ fn iroha_proofs_retention_tool() -> ToolSpec {
     }
 }
 
-fn governance_selector_v1_schema(description: &str) -> Value {
-    norito::json!({
-        "type": "string",
-        "minLength": 1,
-        "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
-        "pattern": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN),
-        "description": description
-    })
-}
-
 fn governance_proposal_id_v1_schema(description: &str) -> Value {
     norito::json!({
         "type": "string",
@@ -10335,44 +10272,6 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     };
     add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "tally_id"]);
     tool
-}
-
-fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.ballots.zk_v1",
-        "Submit a governance ZK v1 ballot (`/v1/gov/ballots/zk-v1`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk-v1",
-        &[(
-            "election_id",
-            governance_selector_v1_schema("Canonical first-release governance election selector."),
-        )],
-    )
-}
-
-fn iroha_gov_ballots_zk_v1_ballot_proof_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.ballots.zk_v1.ballot_proof",
-        "Submit a governance ZK ballot proof bundle (`/v1/gov/ballots/zk-v1/ballot-proof`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk-v1/ballot-proof",
-        &[(
-            "election_id",
-            governance_selector_v1_schema("Canonical first-release governance election selector."),
-        )],
-    )
-}
-
-fn iroha_gov_ballots_plain_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.ballots.plain",
-        "Submit a governance plain ballot (`/v1/gov/ballots/plain`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/plain",
-        &[(
-            "referendum_id",
-            governance_selector_v1_schema(
-                "Canonical first-release governance referendum selector.",
-            ),
-        )],
-    )
 }
 
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {

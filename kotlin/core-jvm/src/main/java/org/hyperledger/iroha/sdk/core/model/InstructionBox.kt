@@ -3,11 +3,15 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import org.hyperledger.iroha.sdk.core.model.instructions.InstructionKind
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 private const val ARG_WIRE_NAME = "wire_name"
 private const val ARG_PAYLOAD_BASE64 = "payload_base64"
+private const val PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 = "iroha.privacy.submit_proof.v1"
 
 /**
  * Typed representation of an instruction scheduled for execution within a transaction.
@@ -17,7 +21,11 @@ private const val ARG_PAYLOAD_BASE64 = "payload_base64"
  * Transaction encoding requires wire-framed instruction payloads so Norito parity is preserved
  * whenever raw instruction bytes are available.
  */
-class InstructionBox private constructor(val payload: InstructionPayload) {
+class InstructionBox private constructor(
+    val payload: InstructionPayload,
+    private val privacyAdmission: PrivacyExact12CapabilityTupleAdmissionV1? = null,
+    private val privacyProtocolId: PrivacyProtocolIdV1? = null,
+) {
 
     /** Instruction display name (matches `InstructionType` tag). */
     val name: String
@@ -46,6 +54,29 @@ class InstructionBox private constructor(val payload: InstructionPayload) {
         return result
     }
 
+    /**
+     * Fail closed at the transaction encoder for the retained Exact12 submission instruction.
+     *
+     * Decoded or generic wire payloads deliberately carry no admission. Callers must rebuild a
+     * retained submission through [fromPrivacyExact12WirePayload] using fresh committed Torii
+     * state before it can be encoded for submission.
+     */
+    fun requirePrivacyExact12ConstructionAdmission() {
+        val wire = payload as? WirePayload ?: return
+        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1) return
+        val admission = requireNotNull(privacyAdmission) {
+            "Exact12 submit-proof construction requires committed native admission"
+        }
+        val protocolId = requireNotNull(privacyProtocolId) {
+            "Exact12 submit-proof construction is missing its protocol binding"
+        }
+        PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+            admission,
+            protocolId,
+            wire.payloadBytes,
+        )
+    }
+
     companion object {
         @JvmStatic
         fun of(payload: InstructionPayload): InstructionBox = InstructionBox(payload)
@@ -58,6 +89,27 @@ class InstructionBox private constructor(val payload: InstructionPayload) {
         @JvmStatic
         fun fromWirePayload(wireName: String, payloadBytes: ByteArray): InstructionBox =
             InstructionBox(WireInstructionPayload(wireName, payloadBytes))
+
+        /**
+         * Build a retained Exact12 submit-proof instruction after native committed-policy checks.
+         */
+        @JvmStatic
+        fun fromPrivacyExact12WirePayload(
+            admission: PrivacyExact12CapabilityTupleAdmissionV1,
+            protocolId: PrivacyProtocolIdV1,
+            payloadBytes: ByteArray,
+        ): InstructionBox {
+            PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+                admission,
+                protocolId,
+                payloadBytes,
+            )
+            return InstructionBox(
+                WireInstructionPayload(PRIVACY_SUBMIT_PROOF_WIRE_ID_V1, payloadBytes),
+                admission,
+                protocolId,
+            )
+        }
 
         /**
          * Builds an `InstructionBox` from Norito decoded components.

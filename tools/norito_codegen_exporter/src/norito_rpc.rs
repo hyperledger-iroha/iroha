@@ -15,7 +15,6 @@ use std::{
     io::{Read, Write},
     num::NonZeroU32,
     path::{Component, Path, PathBuf},
-    str::FromStr,
     time::Duration,
 };
 
@@ -25,9 +24,13 @@ use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
-    isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
+    asset::{AssetBalancePolicy, AssetDefinition},
+    isi::{
+        Instruction, InstructionBox, Register, decode_instruction_from_pair,
+        frame_instruction_payload,
+    },
     metadata::Metadata,
     name::Name,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
@@ -49,6 +52,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
+const ALIAS_SETUP_FIXTURE_V1: &str = "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json";
 const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
 const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manifest.json";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
@@ -101,6 +105,7 @@ fn workspace_root() -> PathBuf {
 struct NoritoRpcVerificationReport {
     generated_at: String,
     fixture_count: usize,
+    alias_setup_fixture: ManifestDigestReport,
     canonical_manifest: ManifestDigestReport,
     schema_manifest: ManifestDigestReport,
     sdk_manifests: Vec<SdkManifestReport>,
@@ -127,6 +132,28 @@ pub enum JsonOutput {
     Stdout,
     /// Write the report to the provided file, creating parent directories.
     File(PathBuf),
+}
+
+/// Canonical JSON bytes for the independently typed V1 alias-setup fixture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AliasSetupFixtureBytes {
+    bytes: Vec<u8>,
+}
+
+impl AliasSetupFixtureBytes {
+    /// Validate canonical publication framing and retired identity-key absence.
+    ///
+    /// # Errors
+    /// Returns an error unless `bytes` is a newline-terminated, closed V1 alias-setup JSON object
+    /// carrying one parseable exact `network_id` and no retired chain/genesis identity aliases.
+    pub fn try_new(bytes: Vec<u8>) -> Result<Self> {
+        validate_alias_setup_fixture_bytes(&bytes)?;
+        Ok(Self { bytes })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// Root receiving the complete canonical and SDK fixture publication.
@@ -227,6 +254,101 @@ fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
+    let Some(body) = bytes.strip_suffix(b"\n") else {
+        bail!("alias-setup fixture JSON must end with exactly one newline");
+    };
+    if body.last() != Some(&b'}') || bytes.contains(&b'\r') {
+        bail!("alias-setup fixture JSON must use canonical LF-only object framing");
+    }
+    let value: Value = json::from_slice(bytes).context("invalid alias-setup fixture JSON")?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("alias-setup fixture root must be an object"))?;
+    require_exact_fields(
+        root,
+        &[
+            "schema_version",
+            "account_alias_cases",
+            "resolved_name_json_vectors",
+            "quote_guard_json_vector",
+            "permission_scope_json_vector",
+            "account_onboarding_receipt_vector",
+            "plan_hash_vectors",
+            "instruction_frame_vectors",
+            "report_json_vector",
+        ],
+        "alias-setup fixture root",
+    )?;
+    if root.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        bail!("alias-setup fixture schema_version must be exactly 1");
+    }
+    reject_alias_setup_secret_and_retired_keys(&value, "alias-setup fixture")?;
+
+    let onboarding = root
+        .get("account_onboarding_receipt_vector")
+        .and_then(Value::as_object)
+        .and_then(|vector| vector.get("receipt_json"))
+        .and_then(Value::as_object)
+        .and_then(|receipt| receipt.get("body"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("alias-setup fixture is missing the typed onboarding receipt body"))?;
+    let network_literal = onboarding
+        .get("network_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("alias-setup fixture onboarding body requires network_id"))?;
+    let network_id = parse_network_id(network_literal)
+        .context("alias-setup fixture onboarding network_id is not canonical")?;
+    if network_id.to_string() != network_literal {
+        bail!("alias-setup fixture onboarding network_id must use its canonical literal");
+    }
+    Ok(())
+}
+
+fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> Result<()> {
+    const FORBIDDEN_KEYS: &[&str] = &[
+        "chain",
+        "chainId",
+        "chain_id",
+        "genesis",
+        "genesisHash",
+        "genesis_hash",
+        "privateKey",
+        "private_key",
+    ];
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if FORBIDDEN_KEYS.contains(&key.as_str()) {
+                    bail!("{context} contains forbidden field `{key}`");
+                }
+                reject_alias_setup_secret_and_retired_keys(child, context)?;
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                reject_alias_setup_secret_and_retired_keys(child, context)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn write_alias_setup_fixture(
+    publication_root: &Path,
+    fixture: &AliasSetupFixtureBytes,
+) -> Result<()> {
+    let path = publication_root.join(ALIAS_SETUP_FIXTURE_V1);
+    ensure_safe_owned_path(publication_root, &path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("alias-setup fixture output has no parent"))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    fs::write(&path, fixture.as_slice())
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
@@ -374,8 +496,11 @@ fn parse_schema_hash_hex(input: &str) -> Result<[u8; 16]> {
 }
 
 /// Verify canonical fixture bytes, schema hashes, and SDK manifest parity.
-pub fn run_verify(json_out: Option<JsonOutput>) -> Result<()> {
-    let report = build_verification_report()?;
+pub fn run_verify(
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+    json_out: Option<JsonOutput>,
+) -> Result<()> {
+    let report = build_verification_report(alias_setup_fixture)?;
 
     println!(
         "norito-rpc fixtures verified ({} entries)",
@@ -406,11 +531,17 @@ fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
     Ok(())
 }
 
-fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
+fn build_verification_report(
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+) -> Result<NoritoRpcVerificationReport> {
     let resolved = FixtureOptions::new(None).resolve_paths()?;
     let root = resolved.output_root.clone();
     let rendered = tempdir().context("failed to create private fixture verification tree")?;
-    let expected = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let expected = render_fixture_publication(
+        &resolved.fixtures_json,
+        alias_setup_fixture,
+        rendered.path(),
+    )?;
     compare_owned_publication(
         rendered.path(),
         &root,
@@ -481,6 +612,7 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 
     let canonical_manifest = manifest_digest(&canonical_path, &root)?;
     let schema_manifest = manifest_digest(&schema_manifest_path, &root)?;
+    let alias_setup_fixture = manifest_digest(&root.join(ALIAS_SETUP_FIXTURE_V1), &root)?;
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("timestamp formatting must succeed");
@@ -488,6 +620,7 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
     Ok(NoritoRpcVerificationReport {
         generated_at: timestamp,
         fixture_count: canonical.fixtures.len(),
+        alias_setup_fixture,
         canonical_manifest,
         schema_manifest,
         sdk_manifests,
@@ -495,10 +628,17 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 }
 
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
-pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
+pub fn generate_fixtures(
+    options: FixtureOptions,
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+) -> Result<()> {
     let resolved = options.resolve_paths()?;
     let rendered = tempdir().context("failed to create private fixture publication tree")?;
-    let generated = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let generated = render_fixture_publication(
+        &resolved.fixtures_json,
+        alias_setup_fixture,
+        rendered.path(),
+    )?;
     let owned_paths = owned_publication_paths(&generated.fixtures)?;
     let removals = preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
     publish_owned_publication(
@@ -520,11 +660,16 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     Ok(())
 }
 
-fn render_fixture_publication(fixtures_json: &Path, publication_root: &Path) -> Result<Manifest> {
+fn render_fixture_publication(
+    fixtures_json: &Path,
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+    publication_root: &Path,
+) -> Result<Manifest> {
     let canonical_dir = publication_root.join(CANONICAL_FIXTURE_DIRECTORY);
     fs::create_dir_all(&canonical_dir)
         .with_context(|| format!("failed to create {}", canonical_dir.display()))?;
     generate_fixture_artifacts(fixtures_json, &canonical_dir)?;
+    write_alias_setup_fixture(publication_root, alias_setup_fixture)?;
 
     let manifest_path = canonical_dir.join(MANIFEST_BASENAME);
     let manifest = Manifest::load(&manifest_path).with_context(|| {
@@ -610,7 +755,7 @@ struct RawPayloadFixture {
     name: String,
     payload: RawPayload,
     payload_json: Value,
-    chain_hint: String,
+    network_id_hint: String,
     authority_hint: String,
     creation_time_ms_hint: u64,
     ttl_ms_hint: u64,
@@ -619,7 +764,7 @@ struct RawPayloadFixture {
 
 #[derive(Clone)]
 struct RawPayload {
-    chain: String,
+    network_id: String,
     authority: String,
     creation_time_ms: u64,
     executable: RawExecutable,
@@ -661,6 +806,37 @@ struct RawInstruction {
     payload_base64: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum InstructionSourceSlot {
+    Instructions(usize),
+    Batch(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticInstructionSource {
+    fixture_name: &'static str,
+    slot: InstructionSourceSlot,
+    wire_name: &'static str,
+}
+
+const SEMANTIC_INSTRUCTION_SOURCES: &[SemanticInstructionSource] = &[
+    SemanticInstructionSource {
+        fixture_name: "mixed_executable_batch",
+        slot: InstructionSourceSlot::Batch(0),
+        wire_name: "iroha.register",
+    },
+    SemanticInstructionSource {
+        fixture_name: "mixed_executable_batch",
+        slot: InstructionSourceSlot::Batch(2),
+        wire_name: "iroha.register",
+    },
+    SemanticInstructionSource {
+        fixture_name: "register_asset_definition",
+        slot: InstructionSourceSlot::Instructions(0),
+        wire_name: "iroha.register",
+    },
+];
+
 struct Fixture {
     name: String,
     payload_bytes: Vec<u8>,
@@ -669,7 +845,7 @@ struct Fixture {
 }
 
 struct PayloadSummary {
-    chain: String,
+    network_id: String,
     authority: String,
     creation_time_ms: u64,
     ttl_ms: u64,
@@ -687,12 +863,12 @@ struct WireInstructionPayload {
 
 impl RawPayloadFixture {
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
-        if self.chain_hint != self.payload.chain {
+        if self.network_id_hint != self.payload.network_id {
             bail!(
-                "fixture '{}' chain mismatch: expected {}, got {}",
+                "fixture '{}' network_id mismatch: expected {}, got {}",
                 self.name,
-                self.chain_hint,
-                self.payload.chain
+                self.network_id_hint,
+                self.payload.network_id
             );
         }
         if self.authority_hint != self.payload.authority {
@@ -729,10 +905,12 @@ impl RawPayloadFixture {
             );
         }
 
-        let builder = self
-            .payload
-            .to_builder()
-            .with_context(|| format!("failed to build Norito RPC fixture '{}'", self.name))?;
+        let builder = self.payload.to_builder(&self.name).map_err(|err| {
+            eyre!(
+                "failed to build Norito RPC fixture '{}': {err:#}",
+                self.name
+            )
+        })?;
         let signed = builder.try_sign(keypair.private_key()).map_err(|err| {
             eyre!(
                 "failed to sign Norito RPC transaction fixture '{}': {err}",
@@ -773,7 +951,10 @@ impl RawPayloadFixture {
             payload_bytes,
             signed_bytes,
             summary: PayloadSummary {
-                chain: self.payload.chain.clone(),
+                network_id: payload_value
+                    .network_id()
+                    .expect("ordinary fixture transaction has an exact network identity")
+                    .to_string(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: actual_ttl_ms,
@@ -788,13 +969,12 @@ impl RawPayloadFixture {
 }
 
 impl RawPayload {
-    fn to_builder(&self) -> Result<TransactionBuilder> {
-        let chain_id = ChainId::from_str(&self.chain)
-            .with_context(|| format!("invalid canonical chain id '{}'", self.chain))?;
+    fn to_builder(&self, fixture_name: &str) -> Result<TransactionBuilder> {
+        let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
 
-        let mut builder = TransactionBuilder::new(chain_id, authority, self.fee_payment.clone());
+        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
@@ -808,6 +988,7 @@ impl RawPayload {
         }
         builder = builder.with_metadata(metadata);
 
+        validate_semantic_instruction_shape(fixture_name, &self.executable)?;
         builder = match &self.executable {
             RawExecutable::Ivm(bytes) => {
                 builder.with_executable(Executable::Ivm(IvmBytecode::from_compiled(bytes.clone())))
@@ -815,7 +996,14 @@ impl RawPayload {
             RawExecutable::Instructions(raws) => {
                 let instructions = raws
                     .iter()
-                    .map(build_instruction)
+                    .enumerate()
+                    .map(|(index, raw)| {
+                        build_fixture_instruction(
+                            fixture_name,
+                            InstructionSourceSlot::Instructions(index),
+                            raw,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 builder.with_instructions(instructions)
             }
@@ -825,10 +1013,14 @@ impl RawPayload {
             RawExecutable::Batch(raws) => {
                 let items = raws
                     .iter()
-                    .map(|raw| match raw {
-                        RawBatchItem::Instruction(raw) => {
-                            build_instruction(raw).map(ExecutableBatchItem::Instruction)
-                        }
+                    .enumerate()
+                    .map(|(index, raw)| match raw {
+                        RawBatchItem::Instruction(raw) => build_fixture_instruction(
+                            fixture_name,
+                            InstructionSourceSlot::Batch(index),
+                            raw,
+                        )
+                        .map(ExecutableBatchItem::Instruction),
                         RawBatchItem::ContractCall(invocation) => {
                             Ok(ExecutableBatchItem::ContractCall(invocation.clone()))
                         }
@@ -850,7 +1042,7 @@ impl Fixture {
         FixtureEntry {
             name: self.name.clone(),
             authority: self.summary.authority.clone(),
-            chain: self.summary.chain.clone(),
+            network_id: self.summary.network_id.clone(),
             creation_time_ms: self.summary.creation_time_ms,
             encoded_file: format!("{}.norito", self.name),
             encoded_len: self.payload_bytes.len() as u64,
@@ -890,7 +1082,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let name = expect_string(obj, "name")?.to_owned();
     const FIELDS: &[&str] = &[
         "name",
-        "chain",
+        "network_id",
         "authority",
         "creation_time_ms",
         "time_to_live_ms",
@@ -918,7 +1110,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let payload = parse_payload(payload_value)
         .with_context(|| format!("invalid payload for fixture '{name}'"))?;
 
-    let chain_hint = expect_string(obj, "chain")?.to_owned();
+    let network_id_hint = expect_string(obj, "network_id")?.to_owned();
     let authority_hint = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms_hint = expect_u64(obj, "creation_time_ms")?;
     let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
@@ -930,7 +1122,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         name,
         payload,
         payload_json,
-        chain_hint,
+        network_id_hint,
         authority_hint,
         creation_time_ms_hint,
         ttl_ms_hint,
@@ -945,7 +1137,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     require_exact_fields(
         obj,
         &[
-            "chain",
+            "network_id",
             "authority",
             "creation_time_ms",
             "executable",
@@ -956,7 +1148,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         ],
         "payload",
     )?;
-    let chain = expect_string(obj, "chain")?.to_owned();
+    let network_id = expect_string(obj, "network_id")?.to_owned();
     let authority = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms = expect_u64(obj, "creation_time_ms")?;
     let executable_value = obj
@@ -986,7 +1178,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     )?;
 
     Ok(RawPayload {
-        chain,
+        network_id,
         authority,
         creation_time_ms,
         executable,
@@ -1122,6 +1314,99 @@ fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
     Ok(entries)
 }
 
+fn observed_instruction_sources(executable: &RawExecutable) -> Vec<(InstructionSourceSlot, &str)> {
+    match executable {
+        RawExecutable::Instructions(raws) => raws
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                (
+                    InstructionSourceSlot::Instructions(index),
+                    raw.wire_name.as_str(),
+                )
+            })
+            .collect(),
+        RawExecutable::Batch(items) => items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item {
+                RawBatchItem::Instruction(raw) => {
+                    Some((InstructionSourceSlot::Batch(index), raw.wire_name.as_str()))
+                }
+                RawBatchItem::ContractCall(_) => None,
+            })
+            .collect(),
+        RawExecutable::Ivm(_) | RawExecutable::ContractCall(_) => Vec::new(),
+    }
+}
+
+fn validate_semantic_instruction_shape(
+    fixture_name: &str,
+    executable: &RawExecutable,
+) -> Result<()> {
+    let observed = observed_instruction_sources(executable);
+    validate_semantic_instruction_observations(fixture_name, &observed)
+}
+
+fn validate_semantic_instruction_observations(
+    fixture_name: &str,
+    observed: &[(InstructionSourceSlot, &str)],
+) -> Result<()> {
+    let expected = SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .filter(|source| source.fixture_name == fixture_name)
+        .map(|source| (source.slot, source.wire_name))
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return Ok(());
+    }
+    if observed != expected.as_slice() {
+        bail!(
+            "fixture '{fixture_name}' semantic instruction shape mismatch: expected {expected:?}, got {observed:?}"
+        );
+    }
+    Ok(())
+}
+
+fn semantic_register_asset_definition() -> Result<Register<AssetDefinition>> {
+    let id = "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
+        .parse()
+        .context("invalid code-owned register_asset_definition id")?;
+    Ok(Register::asset_definition(AssetDefinition::numeric(
+        id,
+        "Rose Token",
+        AssetBalancePolicy::Global,
+        None,
+    )))
+}
+
+fn build_fixture_instruction(
+    fixture_name: &str,
+    slot: InstructionSourceSlot,
+    raw: &RawInstruction,
+) -> Result<InstructionBox> {
+    let source = SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .find(|source| source.fixture_name == fixture_name && source.slot == slot);
+    if let Some(source) = source {
+        if raw.wire_name != source.wire_name {
+            bail!(
+                "fixture '{fixture_name}' semantic instruction at {slot:?} requires wire '{}', got '{}'",
+                source.wire_name,
+                raw.wire_name
+            );
+        }
+        return Ok(semantic_register_asset_definition()?.into());
+    }
+    if SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .any(|source| source.fixture_name == fixture_name)
+    {
+        bail!("fixture '{fixture_name}' has an unowned semantic instruction at {slot:?}");
+    }
+    build_instruction(raw)
+}
+
 fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
     let payload_bytes = BASE64
         .decode(raw.payload_base64.as_bytes())
@@ -1144,6 +1429,18 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
         bail!("account id '{value}' must use its exact canonical I105 encoding");
     }
     Ok(account)
+}
+
+fn parse_network_id(value: &str) -> Result<NetworkId> {
+    let encoded = Value::String(value.to_owned());
+    let network_id = json::from_value::<NetworkId>(encoded.clone())
+        .with_context(|| format!("invalid canonical network id '{value}'"))?;
+    let canonical = json::to_value(&network_id)
+        .context("failed to render the canonical network id JSON literal")?;
+    if canonical != encoded {
+        bail!("network id '{value}' must use its exact canonical hash encoding");
+    }
+    Ok(network_id)
 }
 
 fn optional_u32_value(value: Option<u32>) -> Value {
@@ -1172,8 +1469,8 @@ fn build_payload_fixtures_json(
         let mut entry = Map::new();
         entry.insert("name".to_owned(), Value::String(fixture.name.clone()));
         entry.insert(
-            "chain".to_owned(),
-            Value::String(fixture.summary.chain.clone()),
+            "network_id".to_owned(),
+            Value::String(fixture.summary.network_id.clone()),
         );
         entry.insert(
             "authority".to_owned(),
@@ -1467,6 +1764,7 @@ fn sync_sdk_fixture_mirrors(
 fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
     let canonical_dir = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
     let mut paths = vec![
+        PathBuf::from(ALIAS_SETUP_FIXTURE_V1),
         canonical_dir.join(PAYLOADS_BASENAME),
         canonical_dir.join(MANIFEST_BASENAME),
         canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME),
@@ -2457,7 +2755,7 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
     const ENTRY_FIELDS: &[&str] = &[
         "name",
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "encoded_file",
         "encoded_len",
@@ -2487,7 +2785,7 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
 struct FixtureEntry {
     name: String,
     authority: String,
-    chain: String,
+    network_id: String,
     creation_time_ms: u64,
     encoded_file: String,
     encoded_len: u64,
@@ -2557,6 +2855,14 @@ impl FixtureEntry {
                 self.name
             );
         }
+        let expected_network_id = parse_network_id(&self.network_id)
+            .with_context(|| format!("fixture '{}' has invalid network_id", self.name))?;
+        let actual_network_id = signed.network_id().copied().ok_or_else(|| {
+            eyre!(
+                "fixture '{}' signed payload uses the genesis-only transaction domain",
+                self.name
+            )
+        })?;
 
         let actual_creation_time_ms =
             u64::try_from(signed.creation_time().as_millis()).map_err(|_| {
@@ -2577,9 +2883,8 @@ impl FixtureEntry {
             })?;
         let actual_nonce = signed.nonce().map(NonZeroU32::get);
         let actual_authority = signed.authority().to_string();
-        let actual_chain = signed.chain().to_string();
-        if actual_authority != self.authority
-            || actual_chain != self.chain
+        if actual_network_id != expected_network_id
+            || actual_authority != self.authority
             || actual_creation_time_ms != self.creation_time_ms
             || actual_ttl_ms != Some(self.time_to_live_ms)
             || actual_nonce != self.nonce
@@ -2735,9 +3040,117 @@ fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<
 mod tests {
     use std::fs;
 
+    use iroha_data_model::asset::Mintable;
+    use iroha_primitives::numeric::NumericSpec;
     use norito::core::DecodeFromSlice;
 
     use super::*;
+
+    const TEST_NETWORK_ID: &str =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+
+    fn checked_in_alias_setup_fixture() -> AliasSetupFixtureBytes {
+        let path = workspace_root().join(ALIAS_SETUP_FIXTURE_V1);
+        AliasSetupFixtureBytes::try_new(fs::read(&path).expect("read alias-setup fixture"))
+            .expect("validate alias-setup fixture")
+    }
+
+    #[test]
+    fn register_asset_definition_fixture_source_is_current_and_semantic() {
+        let register = semantic_register_asset_definition().expect("semantic register source");
+        assert_eq!(
+            register.object.id.to_string(),
+            "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
+        );
+        assert_eq!(register.object.name, "Rose Token");
+        assert_eq!(register.object.spec, NumericSpec::default());
+        assert_eq!(register.object.mintable, Mintable::Infinitely);
+        assert_eq!(
+            register.object.balance_scope_policy,
+            AssetBalancePolicy::Global
+        );
+        assert!(register.object.owning_domain.is_none());
+
+        let value = json::to_value(&register.object).expect("serialize semantic source");
+        let object = value.as_object().expect("NewAssetDefinition JSON object");
+        assert_eq!(object.get("owning_domain"), Some(&Value::Null));
+        assert!(!object.contains_key("confidential_policy"));
+    }
+
+    #[test]
+    fn register_asset_definition_semantic_owner_table_is_exact() {
+        assert_eq!(
+            SEMANTIC_INSTRUCTION_SOURCES,
+            &[
+                SemanticInstructionSource {
+                    fixture_name: "mixed_executable_batch",
+                    slot: InstructionSourceSlot::Batch(0),
+                    wire_name: "iroha.register",
+                },
+                SemanticInstructionSource {
+                    fixture_name: "mixed_executable_batch",
+                    slot: InstructionSourceSlot::Batch(2),
+                    wire_name: "iroha.register",
+                },
+                SemanticInstructionSource {
+                    fixture_name: "register_asset_definition",
+                    slot: InstructionSourceSlot::Instructions(0),
+                    wire_name: "iroha.register",
+                },
+            ]
+        );
+        for fixture_name in [
+            "register_peer_with_pop_demo",
+            "register_role_demo",
+            "register_nft_demo",
+            "register_time_trigger_demo",
+            "unknown_fixture",
+        ] {
+            validate_semantic_instruction_observations(fixture_name, &[])
+                .expect("non-owned fixtures retain strict framed decoding");
+        }
+    }
+
+    #[test]
+    fn register_asset_definition_semantic_source_rejects_wrong_wire_or_ordinal() {
+        let exact = [(InstructionSourceSlot::Instructions(0), "iroha.register")];
+        validate_semantic_instruction_observations("register_asset_definition", &exact)
+            .expect("exact source identity");
+
+        for malformed in [
+            Vec::new(),
+            vec![(InstructionSourceSlot::Instructions(0), "iroha.transfer")],
+            vec![(InstructionSourceSlot::Instructions(1), "iroha.register")],
+            vec![
+                (InstructionSourceSlot::Instructions(0), "iroha.register"),
+                (InstructionSourceSlot::Instructions(1), "iroha.register"),
+            ],
+        ] {
+            validate_semantic_instruction_observations("register_asset_definition", &malformed)
+                .expect_err("semantic source shape must fail closed");
+        }
+
+        let shifted_batch = [
+            (InstructionSourceSlot::Batch(0), "iroha.register"),
+            (InstructionSourceSlot::Batch(1), "iroha.register"),
+        ];
+        validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
+            .expect_err("mixed-batch semantic instruction slots are exact");
+    }
+
+    #[test]
+    fn generated_register_asset_definition_roundtrips_current_register_box() {
+        let instruction: InstructionBox = semantic_register_asset_definition()
+            .expect("semantic register source")
+            .into();
+        let type_name = Instruction::id(&*instruction).to_owned();
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = frame_instruction_payload(&type_name, &payload).expect("frame instruction");
+        let decoded =
+            decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
+        assert_eq!(Instruction::id(&*decoded), type_name);
+        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
 
     fn sample_manifest() -> Manifest {
         Manifest {
@@ -2749,7 +3162,7 @@ mod tests {
         FixtureEntry {
             name: name.to_string(),
             authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".into(),
-            chain: "00000001".into(),
+            network_id: TEST_NETWORK_ID.into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),
             encoded_len: 1,
@@ -2789,6 +3202,19 @@ mod tests {
         let error = validate_manifest_shape(&missing_nonce)
             .expect_err("manifest nonce must be present even when null");
         assert!(error.to_string().contains("missing required field 'nonce'"));
+
+        let mut legacy_chain = canonical.clone();
+        legacy_chain
+            .as_object_mut()
+            .and_then(|root| root.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first manifest entry")
+            .insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let error = validate_manifest_shape(&legacy_chain)
+            .expect_err("the legacy manifest chain field must fail closed");
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut unknown_entry = canonical;
         unknown_entry
@@ -2885,7 +3311,7 @@ mod tests {
     fn signed_hash_uses_compact_external_entrypoint_domain() {
         let keypair = signing_keypair().expect("fixture signing key");
         let signed = TransactionBuilder::new(
-            ChainId::from("fixture-hash-domain"),
+            parse_network_id(TEST_NETWORK_ID).expect("fixture network id"),
             AccountId::new(keypair.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3390,7 +3816,7 @@ mod tests {
         let raw = RawPayloadFixture {
             name: "checked-signing".to_string(),
             payload: RawPayload {
-                chain: "00000001".to_string(),
+                network_id: TEST_NETWORK_ID.to_string(),
                 authority: account_id.to_string(),
                 creation_time_ms: 1_735_000_000_000,
                 executable: RawExecutable::Instructions(Vec::new()),
@@ -3400,7 +3826,7 @@ mod tests {
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
-            chain_hint: "00000001".to_owned(),
+            network_id_hint: TEST_NETWORK_ID.to_owned(),
             authority_hint: account_id.to_string(),
             creation_time_ms_hint: 1_735_000_000_000,
             ttl_ms_hint: 60_000,
@@ -3420,9 +3846,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_payload_rejects_invalid_chain_id() {
+    fn raw_payload_rejects_invalid_network_id() {
         let payload = RawPayload {
-            chain: String::new(),
+            network_id: String::new(),
             authority: String::new(),
             creation_time_ms: 0,
             executable: RawExecutable::Instructions(Vec::new()),
@@ -3433,13 +3859,35 @@ mod tests {
         };
 
         let error = payload
-            .to_builder()
+            .to_builder("invalid-network-id")
             .err()
-            .expect("an empty chain id must be rejected");
+            .expect("an empty network id must be rejected");
         assert!(
-            error.to_string().contains("invalid canonical chain id ''"),
-            "unexpected chain id error: {error}"
+            error
+                .to_string()
+                .contains("invalid canonical network id ''"),
+            "unexpected network id error: {error}"
         );
+    }
+
+    #[test]
+    fn network_id_parser_requires_exact_canonical_hash_encoding() {
+        let parsed = parse_network_id(TEST_NETWORK_ID).expect("canonical network id");
+        assert_eq!(
+            json::to_value(&parsed).expect("render canonical network id"),
+            Value::String(TEST_NETWORK_ID.to_owned())
+        );
+
+        for rejected in [
+            TEST_NETWORK_ID.to_ascii_lowercase(),
+            TEST_NETWORK_ID[5..69].to_owned(),
+            TEST_NETWORK_ID.replace("#A2F0", "#0000"),
+        ] {
+            assert!(
+                parse_network_id(&rejected).is_err(),
+                "non-canonical network id '{rejected}' must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -3504,11 +3952,22 @@ mod tests {
         assert!(error.to_string().contains("unknown field 'legacy_hint'"));
 
         let mut missing_top_level = entry.clone();
-        missing_top_level.remove("chain");
+        missing_top_level.remove("network_id");
         let Err(error) = parse_payload_fixture(&Value::Object(missing_top_level)) else {
             panic!("missing top-level identity fields must fail closed");
         };
-        assert!(error.to_string().contains("missing required field 'chain'"));
+        assert!(
+            error
+                .to_string()
+                .contains("missing required field 'network_id'")
+        );
+
+        let mut legacy_top_level = entry.clone();
+        legacy_top_level.insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let Err(error) = parse_payload_fixture(&Value::Object(legacy_top_level)) else {
+            panic!("the legacy top-level chain field must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut unknown_payload = entry
             .get("payload")
@@ -3524,6 +3983,17 @@ mod tests {
                 .to_string()
                 .contains("unknown field 'legacy_metadata'")
         );
+
+        let mut legacy_payload = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        legacy_payload.insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let Err(error) = parse_payload(&Value::Object(legacy_payload)) else {
+            panic!("the legacy payload chain field must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut missing_payload = entry
             .get("payload")
@@ -3809,7 +4279,8 @@ mod tests {
 
     #[test]
     fn verification_report_lists_expected_sdks() {
-        let report = build_verification_report().expect("report");
+        let alias_setup_fixture = checked_in_alias_setup_fixture();
+        let report = build_verification_report(&alias_setup_fixture).expect("report");
         assert!(report.fixture_count > 0);
         let mut labels: Vec<&str> = report
             .sdk_manifests

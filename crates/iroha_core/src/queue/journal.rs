@@ -236,7 +236,7 @@ pub struct QueuePlanJournalRecordV4 {
     pub admission_context: QueuePlanAdmissionContextV2,
     /// Canonical ingress enqueue timestamp in milliseconds.
     pub enqueue_timestamp_ms: u64,
-    /// Global chain/request identity for a globally certified admission.
+    /// Global exact-network/request identity for a globally certified admission.
     ///
     /// Ordinary internal queue ownership has no global identity. QueuePlanSynced ownership must
     /// carry this field and reproduce it exactly after restart.
@@ -2637,7 +2637,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                         "queue plan journal global-admission identity version is unsupported",
                     ));
                 }
-                if identity.chain_id_digest == Hash::prehashed([0; Hash::LENGTH])
+                if identity.network_id_digest == Hash::prehashed([0; Hash::LENGTH])
                     || identity.request_id == Hash::prehashed([0; Hash::LENGTH])
                 {
                     return Err(invalid_data(
@@ -4221,12 +4221,14 @@ mod tests {
         label: &str,
         instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> QueuePlanJournalRecordV4 {
-        let chain_id = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("chain id");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(label.as_bytes()),
+        ));
         let (account_id, keypair) = gen_account_in(label);
         let tx = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4303,12 +4305,17 @@ mod tests {
         label: &str,
     ) -> (QueuePlanJournalRecordV4, QueuePlanAdmissionBindingV2) {
         let mut record = record(label);
-        let chain_id_digest = Hash::new_from_chunks(&[b"journal-test-chain", label.as_bytes()]);
+        let network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new_from_chunks(&[b"journal-test-genesis", label.as_bytes()]),
+            ));
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&network_id);
         record.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
             version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-            chain_id_digest,
-            request_id: crate::torii_proxy::queue_plan_synced_request_id_from_chain_digest(
-                chain_id_digest,
+            network_id_digest,
+            request_id: crate::torii_proxy::queue_plan_synced_request_id_from_network_digest(
+                network_id_digest,
                 record.entrypoint_hash.clone(),
             ),
         });
@@ -5776,7 +5783,7 @@ mod tests {
         replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
         replacement.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
             version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-            chain_id_digest: original_binding.chain_id_digest,
+            network_id_digest: original_binding.network_id_digest,
             request_id: original_binding.request_id,
         });
         let replacement_binding = admission_binding_for_record(&replacement);

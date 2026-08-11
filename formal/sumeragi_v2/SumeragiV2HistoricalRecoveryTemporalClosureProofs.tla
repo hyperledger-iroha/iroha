@@ -885,8 +885,7 @@ IndexedHistoricalCommitResponseIdentity(
   /\ response =
        IndexedAsync(initialContext)!
          CommitCertificateResponseItem(request, qc)
-  /\ response.source =
-       IndexedAsync(initialContext)!AsyncUntrustedSource
+  /\ response.source = request.envelope.recipient
   /\ response.envelope.recipient = node
   /\ response.envelope.request = request
 
@@ -923,6 +922,8 @@ IndexedHistoricalCertificateCommandLineage(
   \/ \E response:
        /\ response \in IndexedScheduler(initialContext, 35)
        /\ response.kind = "CommitCertificateResponse"
+       /\ response.source =
+            response.envelope.request.envelope.recipient
        /\ response.envelope.recipient = node
        /\ response.envelope.qc = qc
        /\ IndexedAsync(initialContext)!

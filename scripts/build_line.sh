@@ -10,7 +10,7 @@ usage() {
   cat <<'EOF'
 Usage: build_line.sh [-h|--help]
 
-Build `irohad`, `sorafs_governance_dag`, the Unix-only
+Build the canonical `iroha3d` daemon, `sorafs_governance_dag`, the Unix-only
 `sorafs_external_software_signer`, and `iroha`. Set BUILD_PROFILE to select a
 Cargo profile. Windows software-signer packaging is explicitly unsupported.
 EOF
@@ -34,9 +34,9 @@ case "${1-}" in
     ;;
 esac
 
-echo "Building canonical binaries (iroha, irohad, sorafs_governance_dag, external signer)..."
+echo "Building canonical binaries (iroha, iroha3d, sorafs_governance_dag, external signer)..."
 cargo build "${profile_flag[@]}" -p irohad --no-default-features \
-  --features daemon --bin irohad --bin sorafs_governance_dag \
+  --features daemon --bin iroha3d --bin sorafs_governance_dag \
   --bin sorafs_external_software_signer
 cargo build "${profile_flag[@]}" -p iroha_cli --no-default-features \
   --features cli --bin iroha

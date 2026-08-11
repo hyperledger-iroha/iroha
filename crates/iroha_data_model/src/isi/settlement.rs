@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -13,12 +13,15 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 pub use self::model::SettlementId;
 use super::*;
 use crate::{
-    Name,
+    Name, NetworkId,
     block::BlockHeader,
     metadata::Metadata,
     nexus::DataSpaceId,
+    oracle::{FeedConfigVersion, FeedEvent, FeedId, FeedSlot, ObservationValue},
     prelude::{AccountId, AssetDefinitionId},
 };
+
+const FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:fx-corridor:escrow-account:v1";
 
 #[model]
 mod model {
@@ -128,29 +131,50 @@ pub struct SettlementLeg {
     pub metadata: Metadata,
 }
 
-/// Selects the account that supplies source currency for an FX settlement.
+/// Immutable identity of one first-release FX corridor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
-pub enum FxCorridorSource {
-    /// Debit one governed account for every settlement using the policy.
-    FixedAccount(AccountId),
-    /// Debit the signed transaction authority that requested the settlement.
-    TransactionAuthority,
+pub struct FxCorridorId {
+    /// Stable governed corridor name.
+    pub policy_id: Name,
+    /// Private dataspace holding the source currency.
+    pub source_dataspace: DataSpaceId,
+    /// Source-currency asset definition.
+    pub source_asset_definition_id: AssetDefinitionId,
+    /// Private dataspace holding the destination reserve.
+    pub destination_dataspace: DataSpaceId,
+    /// Destination-currency asset definition.
+    pub destination_asset_definition_id: AssetDefinitionId,
 }
 
-impl FxCorridorSource {
-    /// Resolve the account that supplies source currency for this settlement.
-    #[must_use]
-    pub fn resolve(&self, transaction_authority: &AccountId) -> AccountId {
-        match self {
-            Self::FixedAccount(account) => account.clone(),
-            Self::TransactionAuthority => transaction_authority.clone(),
-        }
-    }
+/// Exact retained oracle event selected by a signed FX settlement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub struct FxCorridorOracleEvidence {
+    /// Governed feed that produced the rate.
+    pub feed_id: FeedId,
+    /// Exact current feed configuration version.
+    pub feed_config_version: FeedConfigVersion,
+    /// Exact aggregated feed slot.
+    pub slot: FeedSlot,
+    /// Exact upstream request commitment.
+    pub request_hash: Hash,
+    /// Typed hash of the complete retained feed event.
+    pub event_hash: HashOf<FeedEvent>,
+}
+
+/// Deterministic fixed-window usage retained for one FX corridor.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub struct FxCorridorUsage {
+    /// Consensus-time-aligned start of the current velocity window.
+    pub window_start_ms: u64,
+    /// Successful settlements committed in the current window.
+    pub settlements: u64,
+    /// Total source currency collected in the current window.
+    pub source_amount: Quantity,
+    /// Total destination currency released in the current window.
+    pub destination_amount: Quantity,
 }
 
 /// Immutable routing and pricing policy for one native FX corridor.
@@ -161,26 +185,34 @@ pub struct FxCorridorPolicy {
     pub policy_id: Name,
     /// Monotonic policy revision used to bind signed settlement intent.
     pub revision: u64,
+    /// Immutable account that funds the isolated destination reserve and receives source funds.
+    pub owner: AccountId,
     /// Dataspace holding the source currency balance.
     pub source_dataspace: DataSpaceId,
-    /// Governs which account funds the source-currency leg.
-    pub source: FxCorridorSource,
     /// Source-currency asset definition.
     pub source_asset_definition_id: AssetDefinitionId,
-    /// Fixed sink receiving the source currency.
-    pub source_sink: AccountId,
     /// Dataspace holding the destination reserve.
     pub destination_dataspace: DataSpaceId,
-    /// Fixed reserve funding destination-currency payouts.
-    pub destination_reserve: AccountId,
     /// Destination-currency asset definition.
     pub destination_asset_definition_id: AssetDefinitionId,
     /// Exact destination FI alias domains accepted for recipients.
     pub allowed_destination_alias_domains: BTreeSet<crate::domain::DomainId>,
-    /// Exact destination/source rate numerator.
-    pub rate_numerator: u64,
-    /// Exact destination/source rate denominator.
-    pub rate_denominator: u64,
+    /// Exact governed oracle feed whose latest event supplies the rate.
+    pub oracle_feed_id: FeedId,
+    /// Maximum consensus-time age accepted for the retained oracle event.
+    pub max_oracle_age_ms: u64,
+    /// Maximum source amount admitted by one settlement.
+    pub max_source_amount_per_settlement: Quantity,
+    /// Maximum destination exposure admitted by one settlement.
+    pub max_destination_amount_per_settlement: Quantity,
+    /// Deterministic consensus-time velocity window length.
+    pub velocity_window_ms: u64,
+    /// Maximum successful settlements admitted in one velocity window.
+    pub max_settlements_per_window: u64,
+    /// Maximum aggregate source amount admitted in one velocity window.
+    pub max_source_amount_per_window: Quantity,
+    /// Maximum aggregate destination amount admitted in one velocity window.
+    pub max_destination_amount_per_window: Quantity,
     /// Whether new settlements may use this policy.
     pub enabled: bool,
 }
@@ -200,21 +232,63 @@ impl FxCorridorPolicy {
         if self.source_dataspace == self.destination_dataspace {
             return Some("FX corridor dataspaces must be distinct");
         }
-        if matches!(&self.source, FxCorridorSource::FixedAccount(account) if account == &self.source_sink)
-        {
-            return Some("FX corridor fixed source account and sink must be distinct");
-        }
         if self.source_asset_definition_id == self.destination_asset_definition_id {
             return Some("FX corridor assets must be distinct");
-        }
-        if self.rate_numerator == 0 || self.rate_denominator == 0 {
-            return Some("FX corridor rate terms must be non-zero");
         }
         if self.allowed_destination_alias_domains.is_empty() {
             return Some("FX corridor destination alias domains must not be empty");
         }
+        if self.max_oracle_age_ms == 0 {
+            return Some("FX corridor oracle maximum age must be non-zero");
+        }
+        if self.max_source_amount_per_settlement.is_zero()
+            || self.max_destination_amount_per_settlement.is_zero()
+            || self.max_source_amount_per_window.is_zero()
+            || self.max_destination_amount_per_window.is_zero()
+        {
+            return Some("FX corridor exposure and velocity amount limits must be non-zero");
+        }
+        if self.max_source_amount_per_settlement > self.max_source_amount_per_window
+            || self.max_destination_amount_per_settlement > self.max_destination_amount_per_window
+        {
+            return Some("FX corridor per-settlement exposure cannot exceed its window limit");
+        }
+        if self.velocity_window_ms == 0 || self.max_settlements_per_window == 0 {
+            return Some("FX corridor velocity window and settlement limit must be non-zero");
+        }
         None
     }
+
+    /// Return the immutable corridor identity used for protocol escrow derivation.
+    #[must_use]
+    pub fn corridor_id(&self) -> FxCorridorId {
+        FxCorridorId {
+            policy_id: self.policy_id.clone(),
+            source_dataspace: self.source_dataspace,
+            source_asset_definition_id: self.source_asset_definition_id.clone(),
+            destination_dataspace: self.destination_dataspace,
+            destination_asset_definition_id: self.destination_asset_definition_id.clone(),
+        }
+    }
+}
+
+/// Derive the non-signable reserve account for one exact FX corridor and asset.
+#[must_use]
+pub fn fx_corridor_escrow_account_id_v1(
+    network_id: &NetworkId,
+    corridor_id: &FxCorridorId,
+    asset_definition_id: &AssetDefinitionId,
+) -> AccountId {
+    let corridor_id = corridor_id.encode();
+    let asset_definition_id = asset_definition_id.encode();
+    AccountId::new(derive_non_signing_ed25519_public_key(
+        FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1,
+        &[
+            network_id.as_bytes(),
+            corridor_id.as_slice(),
+            asset_definition_id.as_slice(),
+        ],
+    ))
 }
 
 /// Complete governed set of native FX corridor policies.
@@ -223,6 +297,8 @@ impl FxCorridorPolicy {
 pub struct FxCorridorPolicyRegistry {
     /// Policies keyed by their stable identifier.
     pub policies: BTreeMap<Name, FxCorridorPolicy>,
+    /// Bounded O(1)-per-corridor exposure and velocity counters.
+    pub usage: BTreeMap<Name, FxCorridorUsage>,
 }
 
 impl FxCorridorPolicyRegistry {
@@ -246,6 +322,12 @@ impl FxCorridorPolicyRegistry {
     /// Insert or replace a policy under its embedded identifier.
     pub fn upsert(&mut self, policy: FxCorridorPolicy) {
         self.policies.insert(policy.policy_id.clone(), policy);
+    }
+
+    /// Return retained usage for `policy_id`.
+    #[must_use]
+    pub fn usage(&self, policy_id: &Name) -> Option<&FxCorridorUsage> {
+        self.usage.get(policy_id)
     }
 
     /// Convert the registry into the custom parameter accepted by `SetParameter`.
@@ -286,6 +368,36 @@ isi! {
 
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    /// Fund the isolated destination reserve of one exact FX corridor.
+    pub struct FundFxCorridorEscrow {
+        /// Stable corridor policy identifier.
+        pub policy_id: Name,
+        /// Exact active policy revision approved by the owner.
+        pub expected_policy_revision: u64,
+        /// Exact destination asset bound by the signed funding instruction.
+        pub destination_asset_definition_id: AssetDefinitionId,
+        /// Positive destination-currency quantity to deposit.
+        pub amount: Quantity,
+    }
+}
+
+isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    /// Refund an inactive FX corridor reserve to its immutable owner.
+    pub struct RefundFxCorridorEscrow {
+        /// Stable corridor policy identifier.
+        pub policy_id: Name,
+        /// Exact inactive policy revision approved by the owner.
+        pub expected_policy_revision: u64,
+        /// Exact destination asset bound by the signed refund instruction.
+        pub destination_asset_definition_id: AssetDefinitionId,
+        /// Positive destination-currency quantity to refund.
+        pub amount: Quantity,
+    }
+}
+
+isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Atomically settle one policy-backed cross-dataspace FX conversion.
     pub struct SettleFxCorridor {
         /// Stable corridor policy identifier.
@@ -300,14 +412,28 @@ isi! {
         pub settlement_id: SettlementId,
         /// Recipient of the policy-derived destination currency.
         pub recipient: AccountId,
-        /// Source-currency quantity collected from the fixed policy account.
+        /// Source-currency quantity collected from the signing account.
         pub source_amount: Quantity,
+        /// Exact destination quantity approved by the signer.
+        pub expected_destination_amount: Quantity,
+        /// Exact retained oracle event approved by the signer.
+        pub oracle_evidence: FxCorridorOracleEvidence,
     }
 }
 
 impl SetFxCorridorPolicy {
     /// Stable wire identifier used by tooling that reports the concrete operation.
     pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.policy.set";
+}
+
+impl FundFxCorridorEscrow {
+    /// Stable wire identifier used by tooling that reports the concrete operation.
+    pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.escrow.fund";
+}
+
+impl RefundFxCorridorEscrow {
+    /// Stable wire identifier used by tooling that reports the concrete operation.
+    pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.escrow.refund";
 }
 
 impl SettleFxCorridor {
@@ -318,6 +444,26 @@ impl SettleFxCorridor {
 impl core::fmt::Display for SetFxCorridorPolicy {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "SET FX CORRIDOR POLICY `{}`", self.policy.policy_id)
+    }
+}
+
+impl core::fmt::Display for FundFxCorridorEscrow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "FUND FX CORRIDOR ESCROW `{}` REVISION {}",
+            self.policy_id, self.expected_policy_revision
+        )
+    }
+}
+
+impl core::fmt::Display for RefundFxCorridorEscrow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "REFUND FX CORRIDOR ESCROW `{}` REVISION {}",
+            self.policy_id, self.expected_policy_revision
+        )
     }
 }
 
@@ -571,16 +717,18 @@ pub struct FxCorridorSettlementDetails {
     pub source_dataspace: DataSpaceId,
     /// Destination private dataspace.
     pub destination_dataspace: DataSpaceId,
-    /// Exact destination/source rate numerator.
-    pub rate_numerator: u64,
-    /// Exact destination/source rate denominator.
-    pub rate_denominator: u64,
+    /// Immutable corridor owner that received the source currency.
+    pub owner: AccountId,
+    /// Exact retained oracle event selected by the signed instruction.
+    pub oracle_evidence: FxCorridorOracleEvidence,
+    /// Consensus-time timestamp attached to the retained oracle event.
+    pub oracle_recorded_at_ms: u64,
+    /// Exact positive fixed-point destination/source rate from the oracle event.
+    pub oracle_rate: ObservationValue,
     /// Account that supplied source currency.
     pub source_account: AccountId,
-    /// Account that received source currency.
-    pub source_sink: AccountId,
-    /// Account that supplied destination currency.
-    pub destination_reserve: AccountId,
+    /// Non-signable corridor escrow that supplied destination currency.
+    pub destination_escrow: AccountId,
     /// Account that received destination currency.
     pub recipient: AccountId,
     /// Source asset definition bound by the signed instruction.
@@ -634,6 +782,8 @@ pub struct SettlementReceipt {
 impl crate::seal::Instruction for DvpIsi {}
 impl crate::seal::Instruction for PvpIsi {}
 impl crate::seal::Instruction for SetFxCorridorPolicy {}
+impl crate::seal::Instruction for FundFxCorridorEscrow {}
+impl crate::seal::Instruction for RefundFxCorridorEscrow {}
 impl crate::seal::Instruction for SettleFxCorridor {}
 
 isi_box! {
@@ -645,13 +795,17 @@ isi_box! {
         Pvp(PvpIsi),
         /// Register or replace a native FX corridor policy.
         SetFxCorridorPolicy(SetFxCorridorPolicy),
+        /// Fund one exact corridor's isolated destination reserve.
+        FundFxCorridorEscrow(FundFxCorridorEscrow),
+        /// Refund one inactive corridor reserve to its immutable owner.
+        RefundFxCorridorEscrow(RefundFxCorridorEscrow),
         /// Execute one policy-backed native FX settlement.
         SettleFxCorridor(SettleFxCorridor),
     }
 }
 
 impl_into_box! {
-    DvpIsi | PvpIsi | SetFxCorridorPolicy | SettleFxCorridor => SettlementInstructionBox
+    DvpIsi | PvpIsi | SetFxCorridorPolicy | FundFxCorridorEscrow | RefundFxCorridorEscrow | SettleFxCorridor => SettlementInstructionBox
 }
 
 impl crate::seal::Instruction for SettlementInstructionBox {}
@@ -711,6 +865,20 @@ impl_settlement_decode_from_slice!(SetFxCorridorPolicy {
     policy: FxCorridorPolicy,
 });
 
+impl_settlement_decode_from_slice!(FundFxCorridorEscrow {
+    policy_id: Name,
+    expected_policy_revision: u64,
+    destination_asset_definition_id: AssetDefinitionId,
+    amount: Quantity,
+});
+
+impl_settlement_decode_from_slice!(RefundFxCorridorEscrow {
+    policy_id: Name,
+    expected_policy_revision: u64,
+    destination_asset_definition_id: AssetDefinitionId,
+    amount: Quantity,
+});
+
 impl_settlement_decode_from_slice!(SettleFxCorridor {
     policy_id: Name,
     expected_policy_revision: u64,
@@ -719,6 +887,8 @@ impl_settlement_decode_from_slice!(SettleFxCorridor {
     settlement_id: SettlementId,
     recipient: AccountId,
     source_amount: Quantity,
+    expected_destination_amount: Quantity,
+    oracle_evidence: FxCorridorOracleEvidence,
 });
 
 impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
@@ -747,7 +917,17 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),
-            3 => Self::SettleFxCorridor(super::decode_aos_slice_field::<SettleFxCorridor>(
+            3 => Self::FundFxCorridorEscrow(super::decode_aos_slice_field::<FundFxCorridorEscrow>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            4 => Self::RefundFxCorridorEscrow(super::decode_aos_slice_field::<
+                RefundFxCorridorEscrow,
+            >(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            5 => Self::SettleFxCorridor(super::decode_aos_slice_field::<SettleFxCorridor>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),
@@ -782,6 +962,8 @@ mod tests {
         settlement_id: SettlementId,
         recipient: AccountId,
         source_amount: Numeric,
+        expected_destination_amount: Quantity,
+        oracle_evidence: FxCorridorOracleEvidence,
     }
 
     #[derive(Encode)]
@@ -799,11 +981,12 @@ mod tests {
         policy_revision: u64,
         source_dataspace: DataSpaceId,
         destination_dataspace: DataSpaceId,
-        rate_numerator: u64,
-        rate_denominator: u64,
+        owner: AccountId,
+        oracle_evidence: FxCorridorOracleEvidence,
+        oracle_recorded_at_ms: u64,
+        oracle_rate: ObservationValue,
         source_account: AccountId,
-        source_sink: AccountId,
-        destination_reserve: AccountId,
+        destination_escrow: AccountId,
         recipient: AccountId,
         source_asset_definition_id: AssetDefinitionId,
         destination_asset_definition_id: AssetDefinitionId,
@@ -883,20 +1066,48 @@ mod tests {
         FxCorridorPolicy {
             policy_id: "cbuae_aed_sbp_pkr".parse().expect("policy id"),
             revision: 1,
+            owner: account(ALICE_SIGNATORY, "cbuae"),
             source_dataspace: DataSpaceId::new(10),
-            source: FxCorridorSource::FixedAccount(account(ALICE_SIGNATORY, "cbuae")),
             source_asset_definition_id: asset("cbuae", "aed"),
-            source_sink: account(BOB_SIGNATORY, "cbuae"),
             destination_dataspace: DataSpaceId::new(12),
-            destination_reserve: account(ALICE_SIGNATORY, "sbp"),
             destination_asset_definition_id: asset("sbp", "pkr"),
             allowed_destination_alias_domains: BTreeSet::from([
                 DomainId::try_new("hbl", "sbp").expect("HBL domain"),
                 DomainId::try_new("ubl", "sbp").expect("UBL domain"),
             ]),
-            rate_numerator: 76,
-            rate_denominator: 1,
+            oracle_feed_id: "aed_pkr".parse().expect("feed id"),
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: Quantity::from(1_000_u32),
+            max_destination_amount_per_settlement: Quantity::from(100_000_u32),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: Quantity::from(10_000_u32),
+            max_destination_amount_per_window: Quantity::from(1_000_000_u32),
             enabled: true,
+        }
+    }
+
+    fn fx_oracle_event() -> FeedEvent {
+        FeedEvent {
+            feed_id: "aed_pkr".parse().expect("feed id"),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 42,
+            request_hash: Hash::new(b"aed-pkr-request"),
+            outcome: crate::oracle::FeedEventOutcome::Success(crate::oracle::FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
+        }
+    }
+
+    fn fx_oracle_evidence() -> FxCorridorOracleEvidence {
+        let event = fx_oracle_event();
+        FxCorridorOracleEvidence {
+            feed_id: event.feed_id.clone(),
+            feed_config_version: event.feed_config_version,
+            slot: event.slot,
+            request_hash: event.request_hash,
+            event_hash: HashOf::new(&event),
         }
     }
 
@@ -910,6 +1121,28 @@ mod tests {
             settlement_id: "fx_settlement_1".parse().expect("settlement id"),
             recipient: account(BOB_SIGNATORY, "sbp"),
             source_amount: Quantity::from(10_u32),
+            expected_destination_amount: Quantity::from(760_u32),
+            oracle_evidence: fx_oracle_evidence(),
+        }
+    }
+
+    fn fx_funding_instruction() -> FundFxCorridorEscrow {
+        let policy = fx_policy();
+        FundFxCorridorEscrow {
+            policy_id: policy.policy_id,
+            expected_policy_revision: policy.revision,
+            destination_asset_definition_id: policy.destination_asset_definition_id,
+            amount: Quantity::from(10_000_u32),
+        }
+    }
+
+    fn fx_refund_instruction() -> RefundFxCorridorEscrow {
+        let policy = fx_policy();
+        RefundFxCorridorEscrow {
+            policy_id: policy.policy_id,
+            expected_policy_revision: policy.revision,
+            destination_asset_definition_id: policy.destination_asset_definition_id,
+            amount: Quantity::from(250_u32),
         }
     }
 
@@ -1036,6 +1269,8 @@ mod tests {
         assert_slice_roundtrip(SetFxCorridorPolicy {
             policy: fx_policy(),
         });
+        assert_slice_roundtrip(fx_funding_instruction());
+        assert_slice_roundtrip(fx_refund_instruction());
         assert_slice_roundtrip(fx_settlement_instruction());
         assert_slice_roundtrip(SettlementInstructionBox::Dvp(dvp_instruction()));
         assert_slice_roundtrip(SettlementInstructionBox::Pvp(pvp_instruction()));
@@ -1044,9 +1279,52 @@ mod tests {
                 policy: fx_policy(),
             },
         ));
+        assert_slice_roundtrip(SettlementInstructionBox::FundFxCorridorEscrow(
+            fx_funding_instruction(),
+        ));
+        assert_slice_roundtrip(SettlementInstructionBox::RefundFxCorridorEscrow(
+            fx_refund_instruction(),
+        ));
         assert_slice_roundtrip(SettlementInstructionBox::SettleFxCorridor(
             fx_settlement_instruction(),
         ));
+    }
+
+    #[test]
+    fn fx_protocol_escrow_binds_exact_network_corridor_and_asset() {
+        let policy = fx_policy();
+        let first_network = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"fx-network-one")),
+        );
+        let second_network = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"fx-network-two")),
+        );
+        let first = fx_corridor_escrow_account_id_v1(
+            &first_network,
+            &policy.corridor_id(),
+            &policy.destination_asset_definition_id,
+        );
+        let other_network = fx_corridor_escrow_account_id_v1(
+            &second_network,
+            &policy.corridor_id(),
+            &policy.destination_asset_definition_id,
+        );
+        let other_asset = fx_corridor_escrow_account_id_v1(
+            &first_network,
+            &policy.corridor_id(),
+            &policy.source_asset_definition_id,
+        );
+        let mut other_corridor = policy.corridor_id();
+        other_corridor.policy_id = "other_corridor".parse().expect("corridor id");
+        let other_corridor = fx_corridor_escrow_account_id_v1(
+            &first_network,
+            &other_corridor,
+            &policy.destination_asset_definition_id,
+        );
+
+        assert_ne!(first, other_network);
+        assert_ne!(first, other_asset);
+        assert_ne!(first, other_corridor);
     }
 
     #[cfg(feature = "json")]
@@ -1068,7 +1346,8 @@ mod tests {
             policy: fx_policy(),
         };
         let encoded = norito::json::to_json(&policy).expect("serialize FX policy instruction");
-        assert!(encoded.contains("\"source\":{\"kind\":\"fixed_account\",\"value\":"));
+        assert!(encoded.contains("\"owner\":"));
+        assert!(encoded.contains("\"oracle_feed_id\":\"aed_pkr\""));
         assert!(
             encoded.contains("\"allowed_destination_alias_domains\":[\"hbl.sbp\",\"ubl.sbp\"]")
         );
@@ -1076,14 +1355,9 @@ mod tests {
             norito::json::from_str(&encoded).expect("deserialize FX policy instruction");
         assert_eq!(decoded, policy);
 
-        let mut authority_policy = fx_policy();
-        authority_policy.source = FxCorridorSource::TransactionAuthority;
-        let encoded = norito::json::to_json(&SetFxCorridorPolicy {
-            policy: authority_policy,
-        })
-        .expect("serialize authority-funded FX policy instruction");
-        assert!(encoded.contains("\"source\":{\"kind\":\"transaction_authority\",\"value\":null}"));
-        assert!(!encoded.contains("\"source_account\""));
+        assert!(!encoded.contains("source_sink"));
+        assert!(!encoded.contains("destination_reserve"));
+        assert!(!encoded.contains("rate_numerator"));
 
         let settlement = fx_settlement_instruction();
         let encoded =
@@ -1101,11 +1375,12 @@ mod tests {
             policy_revision: policy.revision,
             source_dataspace: policy.source_dataspace,
             destination_dataspace: policy.destination_dataspace,
-            rate_numerator: policy.rate_numerator,
-            rate_denominator: policy.rate_denominator,
-            source_account: policy.source.resolve(&account(ALICE_SIGNATORY, "cbuae")),
-            source_sink: policy.source_sink,
-            destination_reserve: policy.destination_reserve,
+            owner: policy.owner.clone(),
+            oracle_evidence: fx_oracle_evidence(),
+            oracle_recorded_at_ms: 1_700_000_000_000,
+            oracle_rate: ObservationValue::new(76, 0),
+            source_account: account(ALICE_SIGNATORY, "cbuae"),
+            destination_escrow: policy.owner,
             recipient: account(BOB_SIGNATORY, "sbp"),
             source_asset_definition_id: policy.source_asset_definition_id,
             destination_asset_definition_id: policy.destination_asset_definition_id,
@@ -1203,6 +1478,8 @@ mod tests {
             settlement_id: "negative_fx_settlement".parse().expect("settlement id"),
             recipient: recipient.clone(),
             source_amount: Numeric::new(-1_i32, 0),
+            expected_destination_amount: Quantity::from(760_u32),
+            oracle_evidence: fx_oracle_evidence(),
         };
         assert!(
             SettleFxCorridor::decode_from_slice(&forged_instruction.encode()).is_err(),
@@ -1214,11 +1491,12 @@ mod tests {
             policy_revision: policy.revision,
             source_dataspace: policy.source_dataspace,
             destination_dataspace: policy.destination_dataspace,
-            rate_numerator: policy.rate_numerator,
-            rate_denominator: policy.rate_denominator,
-            source_account: policy.source.resolve(&account(ALICE_SIGNATORY, "cbuae")),
-            source_sink: policy.source_sink,
-            destination_reserve: policy.destination_reserve,
+            owner: policy.owner.clone(),
+            oracle_evidence: fx_oracle_evidence(),
+            oracle_recorded_at_ms: 1_700_000_000_000,
+            oracle_rate: ObservationValue::new(76, 0),
+            source_account: policy.owner.clone(),
+            destination_escrow: policy.owner,
             recipient,
             source_asset_definition_id: policy.source_asset_definition_id,
             destination_asset_definition_id: policy.destination_asset_definition_id,
@@ -1246,6 +1524,8 @@ mod tests {
             SettlementInstructionBox::SetFxCorridorPolicy(SetFxCorridorPolicy {
                 policy: fx_policy(),
             }),
+            SettlementInstructionBox::FundFxCorridorEscrow(fx_funding_instruction()),
+            SettlementInstructionBox::RefundFxCorridorEscrow(fx_refund_instruction()),
             SettlementInstructionBox::SettleFxCorridor(fx_settlement_instruction()),
         ] {
             assert_registry_decodes(&registry, SettlementInstructionBox::WIRE_ID, value);
@@ -1254,10 +1534,14 @@ mod tests {
             std::any::type_name::<DvpIsi>(),
             std::any::type_name::<PvpIsi>(),
             std::any::type_name::<SetFxCorridorPolicy>(),
+            std::any::type_name::<FundFxCorridorEscrow>(),
+            std::any::type_name::<RefundFxCorridorEscrow>(),
             std::any::type_name::<SettleFxCorridor>(),
             DvpIsi::WIRE_ID,
             PvpIsi::WIRE_ID,
             SetFxCorridorPolicy::WIRE_ID,
+            FundFxCorridorEscrow::WIRE_ID,
+            RefundFxCorridorEscrow::WIRE_ID,
             SettleFxCorridor::WIRE_ID,
         ] {
             assert!(!registry.contains(name), "{name} must remain boxed-only");

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
 from iroha_python import GovernanceLockCustody
 from iroha_python.address import AccountAddress
-from iroha_python.client import GovernanceLockRecord, ToriiClient
+from iroha_python.client import (
+    GovernanceLockRecord,
+    LocalSigningContext,
+    ToriiCanonicalRequestAuth,
+    ToriiClient,
+)
+from iroha_python.crypto import NetworkId
 from iroha_python.sorafs import SorafsAliasPolicy
 
 from .helpers import RecordingSession, StubResponse
@@ -19,6 +25,15 @@ def _canonical_owner_literal(domain: str = "wonderland") -> str:
 
 
 CANONICAL_AUTHORITY = _canonical_owner_literal()
+GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
+FOREIGN_GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
+GOVERNANCE_AUTH = ToriiCanonicalRequestAuth(
+    network_id=GOVERNANCE_NETWORK_ID.literal,
+    account_id=CANONICAL_AUTHORITY,
+    signer=lambda _message: bytes([0x44]) * 64,
+    timestamp_ms=4_102_444_801_000,
+    nonce="python-governance-ballot-test",
+)
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 GOVERNANCE_PRIVATE_KEY_ALIASES = (
     "private_key",
@@ -91,7 +106,7 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "/v1/gov/ballots/plain",
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "referendum_id": "referendum-1",
                 "owner": CANONICAL_AUTHORITY,
                 "amount": CANONICAL_LARGE_FRACTION,
@@ -104,7 +119,7 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "/v1/gov/parliament/ballots",
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "proposal_id": "33" * 32,
                 "body": "policy-jury",
                 "decision": "approve",
@@ -115,7 +130,7 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "/v1/gov/ballots/zk-v1",
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
@@ -126,7 +141,7 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "/v1/gov/ballots/zk-v1/ballot-proof",
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "ballot": {
                     "backend": "halo2/ipa",
@@ -154,8 +169,26 @@ def _governance_client(session: RecordingSession) -> ToriiClient:
     return ToriiClient(
         "http://node.test",
         session=session,
+        local_signing_context=LocalSigningContext(GOVERNANCE_NETWORK_ID),
         sorafs_alias_policy=TEST_SORAFS_ALIAS_POLICY,
     )
+
+
+_GOVERNANCE_BALLOT_METHODS = frozenset(
+    {
+        "governance_submit_plain_ballot",
+        "governance_submit_parliament_ballot",
+        "governance_submit_zk_ballot_v1",
+        "governance_submit_zk_ballot_proof_v1",
+    }
+)
+
+
+def _invoke_governance(client: ToriiClient, method_name: str, payload: Mapping[str, Any]) -> Any:
+    method = getattr(client, method_name)
+    if method_name in _GOVERNANCE_BALLOT_METHODS:
+        return method(payload, canonical_auth=GOVERNANCE_AUTH)
+    return method(payload)
 
 
 def test_governance_legacy_zk_ballot_surface_is_absent() -> None:
@@ -164,15 +197,80 @@ def test_governance_legacy_zk_ballot_surface_is_absent() -> None:
     assert hasattr(ToriiClient, "governance_submit_zk_ballot_proof_v1")
 
 
+def test_governance_ballot_rejects_foreign_network_and_retired_identity_before_dispatch() -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = _governance_client(session)
+    payload = _governance_mutation_payloads()[1][2]
+
+    with pytest.raises(ValueError, match="local_signing_context"):
+        client.governance_submit_plain_ballot(
+            {**payload, "network_id": FOREIGN_GOVERNANCE_NETWORK_ID},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
+    for retired in ("chain_id", "chainId", "genesis_hash", "genesisHash"):
+        with pytest.raises(ValueError, match="is retired"):
+            client.governance_submit_plain_ballot(
+                {**payload, retired: "legacy"},
+                canonical_auth=GOVERNANCE_AUTH,
+            )
+    assert session.calls == []
+
+
+def test_governance_ballot_binds_canonical_principal_before_dispatch() -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = _governance_client(session)
+    other = AccountAddress.from_account(
+        domain="other",
+        public_key=bytes([0x33] * 32),
+    ).to_i105(0x02F1)
+    mismatched_auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID.literal,
+        account_id=other,
+        signer=lambda _message: bytes([0x55]) * 64,
+    )
+    with pytest.raises(ValueError, match="must equal payload authority"):
+        client.governance_submit_plain_ballot(
+            _governance_mutation_payloads()[1][2],
+            canonical_auth=mismatched_auth,
+        )
+    assert session.calls == []
+
+
+def test_governance_ballot_307_is_one_shot_even_when_post_retries_are_configured() -> None:
+    session = RecordingSession(StubResponse(status_code=307, payload={"redirect": True}))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=LocalSigningContext(GOVERNANCE_NETWORK_ID),
+        retry_on_methods=["POST"],
+        max_retries=4,
+        sorafs_alias_policy=TEST_SORAFS_ALIAS_POLICY,
+    )
+    with pytest.raises(RuntimeError, match="unexpected status 307"):
+        client.governance_submit_plain_ballot(
+            _governance_mutation_payloads()[1][2],
+            canonical_auth=GOVERNANCE_AUTH,
+        )
+    assert len(session.calls) == 1
+
+
 def test_governance_get_identifiers_are_canonical_unreserved_path_segments() -> None:
     session = RecordingSession(StubResponse(status_code=404))
     client = _governance_client(session)
     proposal_id = "ab" * 32
 
-    assert client.get_governance_proposal(proposal_id) is None
-    assert client.get_governance_referendum("ref.one~1") is None
-    assert client.get_governance_tally("ref_two-2") is None
-    assert client.get_governance_locks("Ref3") is None
+    assert client.get_governance_proposal(
+        proposal_id, canonical_auth=GOVERNANCE_AUTH
+    ) is None
+    assert client.get_governance_referendum(
+        "ref.one~1", canonical_auth=GOVERNANCE_AUTH
+    ) is None
+    assert client.get_governance_tally(
+        "ref_two-2", canonical_auth=GOVERNANCE_AUTH
+    ) is None
+    assert client.get_governance_locks(
+        "Ref3", canonical_auth=GOVERNANCE_AUTH
+    ) is None
 
     assert [call["url"] for call in session.calls] == [
         f"http://node.test/v1/gov/proposals/{proposal_id}",
@@ -226,7 +324,7 @@ def test_governance_draft_identifiers_share_canonical_selector_grammar(
     selector_field = "referendum_id" if payload_index in (1, 5) else "election_id"
 
     with pytest.raises(ValueError, match="RFC 3986"):
-        getattr(client, method_name)({**payload, selector_field: selector})
+        _invoke_governance(client, method_name, {**payload, selector_field: selector})
 
     assert session.calls == []
 
@@ -246,7 +344,7 @@ def test_governance_mutations_reject_all_private_key_aliases_before_dispatch(
     client = _governance_client(session)
 
     with pytest.raises(ValueError, match="does not accept private-key fields"):
-        getattr(client, method_name)({**payload, secret_field: "must-not-cross-torii"})
+        _invoke_governance(client, method_name, {**payload, secret_field: "must-not-cross-torii"})
 
     assert session.calls == []
 
@@ -267,7 +365,7 @@ def test_governance_mutations_reject_all_nested_private_key_aliases_before_dispa
     nested = {"items": [{secret_field: "must-not-cross-torii"}]}
 
     with pytest.raises(ValueError, match="does not accept private-key fields"):
-        getattr(client, method_name)({**payload, "nested": nested})
+        _invoke_governance(client, method_name, {**payload, "nested": nested})
 
     assert session.calls == []
 
@@ -285,7 +383,7 @@ def test_governance_mutations_reject_unknown_fields_before_dispatch(
     client = _governance_client(session)
 
     with pytest.raises(ValueError, match="unknown field `future_signing_policy`"):
-        getattr(client, method_name)({**payload, "future_signing_policy": None})
+        _invoke_governance(client, method_name, {**payload, "future_signing_policy": None})
 
     assert session.calls == []
 
@@ -300,7 +398,10 @@ def test_governance_ballot_proof_rejects_nested_private_key_aliases_before_dispa
     ballot = {**payload["ballot"], secret_field: "must-not-cross-torii"}
 
     with pytest.raises(ValueError, match="does not accept private-key fields"):
-        client.governance_submit_zk_ballot_proof_v1({**payload, "ballot": ballot})
+        client.governance_submit_zk_ballot_proof_v1(
+            {**payload, "ballot": ballot},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
     assert session.calls == []
 
@@ -312,7 +413,10 @@ def test_governance_ballot_proof_rejects_unknown_nested_field_before_dispatch() 
     ballot = {**payload["ballot"], "future_proof_format": None}
 
     with pytest.raises(ValueError, match="unknown field `future_proof_format`"):
-        client.governance_submit_zk_ballot_proof_v1({**payload, "ballot": ballot})
+        client.governance_submit_zk_ballot_proof_v1(
+            {**payload, "ballot": ballot},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
     assert session.calls == []
 
@@ -339,7 +443,10 @@ def test_governance_ballot_proof_requires_typed_nonempty_proof_fields(
     payload = _governance_mutation_payloads()[4][2]
 
     with pytest.raises((TypeError, ValueError)):
-        client.governance_submit_zk_ballot_proof_v1({**payload, "ballot": ballot})
+        client.governance_submit_zk_ballot_proof_v1(
+            {**payload, "ballot": ballot},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
     assert session.calls == []
 
@@ -368,7 +475,7 @@ def test_governance_zk_v1_requires_exact_backend_tokens_before_dispatch(
         }
 
     with pytest.raises((TypeError, ValueError), match="backend"):
-        getattr(client, method_name)(payload)
+        _invoke_governance(client, method_name, payload)
 
     assert session.calls == []
 
@@ -395,7 +502,7 @@ def test_governance_zk_routes_validate_context_and_envelope_before_dispatch(
     base = _governance_mutation_payloads()[index][2]
 
     with pytest.raises((TypeError, ValueError)):
-        getattr(client, method_name)({**base, **payload})
+        _invoke_governance(client, method_name, {**base, **payload})
 
     assert session.calls == []
 
@@ -427,18 +534,22 @@ def test_governance_finalize_and_enact_require_closed_exact_inputs_before_dispat
         )
     with pytest.raises(ValueError, match="unknown field `window`"):
         client.governance_enact_proposal(
-            {"proposal_id": "55" * 32, "window": {"lower": 1, "upper": 2}}
+            {"proposal_id": "55" * 32, "window": {"lower": 1, "upper": 2}},
+            canonical_auth=GOVERNANCE_AUTH,
         )
     with pytest.raises(ValueError, match="does not accept private-key fields"):
         client.governance_enact_proposal(
             {
                 "proposal_id": "55" * 32,
                 "metadata": {"privateKey": "must-not-cross-torii"},
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
     for proposal_id in ("0x" + "55" * 32, "AA" * 32, " " + "55" * 32):
         with pytest.raises(ValueError, match="exactly 64 lowercase"):
-            client.governance_enact_proposal({"proposal_id": proposal_id})
+            client.governance_enact_proposal(
+                {"proposal_id": proposal_id}, canonical_auth=GOVERNANCE_AUTH
+            )
 
     assert session.calls == []
 
@@ -468,12 +579,17 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = _governance_client(session)
 
-    getattr(client, method_name)(payload)
+    _invoke_governance(client, method_name, payload)
 
     assert len(session.calls) == 1
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"] == f"http://node.test{path}"
     expected = dict(payload)
+    if method_name in _GOVERNANCE_BALLOT_METHODS:
+        expected["network_id"] = GOVERNANCE_NETWORK_ID.literal
+        assert "chain_id" not in expected
+        assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_AUTHORITY
+        assert "X-Iroha-Signature" in session.calls[0]["headers"]
     if method_name == "governance_submit_plain_ballot":
         expected["duration_blocks"] = str(payload["duration_blocks"])
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == expected
@@ -485,7 +601,9 @@ def test_governance_deploy_rejects_retired_limits_and_unknown_nested_objects() -
     payload = _governance_mutation_payloads()[0][2]
 
     with pytest.raises(ValueError, match="unknown field `limits`"):
-        client.governance_deploy_contract_proposal({**payload, "limits": {"fuel": 100}})
+        client.governance_deploy_contract_proposal(
+            {**payload, "limits": {"fuel": 100}}, canonical_auth=GOVERNANCE_AUTH
+        )
     with pytest.raises(ValueError, match="unknown field `algorithm`"):
         client.governance_deploy_contract_proposal(
             {
@@ -494,11 +612,13 @@ def test_governance_deploy_rejects_retired_limits_and_unknown_nested_objects() -
                     **payload["manifest_provenance"],
                     "algorithm": "ed25519",
                 },
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
     with pytest.raises(ValueError, match="unknown field `clock`"):
         client.governance_deploy_contract_proposal(
-            {**payload, "window": {"lower": 10, "upper": 20, "clock": "block"}}
+            {**payload, "window": {"lower": 10, "upper": 20, "clock": "block"}},
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
     assert session.calls == []
@@ -509,7 +629,9 @@ def test_governance_deploy_preserves_exact_manifest_provenance_wire_object() -> 
     client = _governance_client(session)
     payload = _governance_mutation_payloads()[0][2]
 
-    client.governance_deploy_contract_proposal(payload)
+    client.governance_deploy_contract_proposal(
+        payload, canonical_auth=GOVERNANCE_AUTH
+    )
 
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert encoded["manifest_provenance"] == payload["manifest_provenance"]
@@ -537,7 +659,8 @@ def test_governance_deploy_rejects_incomplete_or_non_string_provenance(
 
     with pytest.raises((TypeError, ValueError)):
         client.governance_deploy_contract_proposal(
-            {**payload, "manifest_provenance": manifest_provenance}
+            {**payload, "manifest_provenance": manifest_provenance},
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
     assert session.calls == []
@@ -578,7 +701,9 @@ def test_governance_deploy_rejects_invalid_required_contract_before_dispatch(
     payload = {**_governance_mutation_payloads()[0][2], **mutation}
 
     with pytest.raises((TypeError, ValueError)):
-        client.governance_deploy_contract_proposal(payload)
+        client.governance_deploy_contract_proposal(
+            payload, canonical_auth=GOVERNANCE_AUTH
+        )
 
     assert session.calls == []
 
@@ -591,12 +716,19 @@ def test_governance_deploy_requires_one_target_and_emits_canonical_mode() -> Non
     without_target = dict(base)
     without_target.pop("contract_alias")
     with pytest.raises(ValueError, match="exactly one"):
-        client.governance_deploy_contract_proposal(without_target)
+        client.governance_deploy_contract_proposal(
+            without_target, canonical_auth=GOVERNANCE_AUTH
+        )
     with pytest.raises(ValueError, match="exactly one"):
-        client.governance_deploy_contract_proposal({**base, "contract_address": "contract-address"})
+        client.governance_deploy_contract_proposal(
+            {**base, "contract_address": "contract-address"},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
     assert session.calls == []
 
-    client.governance_deploy_contract_proposal({**base, "mode": "Plain"})
+    client.governance_deploy_contract_proposal(
+        {**base, "mode": "Plain"}, canonical_auth=GOVERNANCE_AUTH
+    )
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert encoded["mode"] == "Plain"
 
@@ -607,7 +739,10 @@ def test_governance_parliament_requires_canonical_policy_jury_body() -> None:
     payload = _governance_mutation_payloads()[2][2]
 
     with pytest.raises(ValueError, match="canonical Parliament body"):
-        client.governance_submit_parliament_ballot({**payload, "body": "PolicyJury"})
+        client.governance_submit_parliament_ballot(
+            {**payload, "body": "PolicyJury"},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
     assert session.calls == []
 
@@ -623,7 +758,10 @@ def test_governance_parliament_requires_canonical_lowercase_decision(
     payload = _governance_mutation_payloads()[2][2]
 
     with pytest.raises(ValueError, match="must be approve, reject, or abstain"):
-        client.governance_submit_parliament_ballot({**payload, "decision": decision})
+        client.governance_submit_parliament_ballot(
+            {**payload, "decision": decision},
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
     assert session.calls == []
 
@@ -702,7 +840,7 @@ def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
     client = _governance_client(session)
     payload = {
         "authority": CANONICAL_AUTHORITY,
-        "chain_id": "chain",
+        "network_id": GOVERNANCE_NETWORK_ID,
         "referendum_id": "ref-1",
         "owner": CANONICAL_AUTHORITY,
         "amount": CANONICAL_LARGE_FRACTION,
@@ -710,7 +848,7 @@ def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
         "direction": "Aye",
     }
 
-    client.governance_submit_plain_ballot(payload)
+    client.governance_submit_plain_ballot(payload, canonical_auth=GOVERNANCE_AUTH)
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert encoded["amount"] == CANONICAL_LARGE_FRACTION
     assert encoded["duration_blocks"] == "5"
@@ -729,7 +867,10 @@ def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
         overflowing,
     ]:
         with pytest.raises((TypeError, ValueError)):
-            client.governance_submit_plain_ballot({**payload, "amount": invalid})
+            client.governance_submit_plain_ballot(
+                {**payload, "amount": invalid},
+                canonical_auth=GOVERNANCE_AUTH,
+            )
 
 
 def test_governance_submit_plain_ballot_dispatches_zero_as_canonical_decimal() -> None:
@@ -739,13 +880,14 @@ def test_governance_submit_plain_ballot_dispatches_zero_as_canonical_decimal() -
     client.governance_submit_plain_ballot(
         {
             "authority": CANONICAL_AUTHORITY,
-            "chain_id": "chain",
+            "network_id": GOVERNANCE_NETWORK_ID,
             "referendum_id": "ref-zero",
             "owner": CANONICAL_AUTHORITY,
             "amount": "1",
             "duration_blocks": 0,
             "direction": "Abstain",
-        }
+        },
+        canonical_auth=GOVERNANCE_AUTH,
     )
 
     assert len(session.calls) == 1
@@ -780,7 +922,7 @@ def test_governance_ballot_directions_reject_noncanonical_values_before_dispatch
         session = RecordingSession(StubResponse(payload={"ok": True}))
         client = _governance_client(session)
         with pytest.raises((TypeError, ValueError), match="Aye, Nay, or Abstain"):
-            getattr(client, method_name)(payload)
+            _invoke_governance(client, method_name, payload)
         assert session.calls == []
 
 
@@ -798,20 +940,21 @@ def test_governance_zk_v1_lock_hints_reject_noncanonical_quantity(
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
                 "owner": CANONICAL_AUTHORITY,
                 "amount": amount,
                 "duration_blocks": 5,
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
     with pytest.raises((TypeError, ValueError)):
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "ballot": {
                     "backend": "halo2/ipa",
@@ -820,7 +963,8 @@ def test_governance_zk_v1_lock_hints_reject_noncanonical_quantity(
                     "amount": amount,
                     "duration_blocks": 5,
                 },
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
 
@@ -832,12 +976,13 @@ def test_governance_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
                 "owner": _canonical_owner_literal(),
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
 
@@ -849,14 +994,15 @@ def test_governance_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
                 "owner": _noncanonical_owner_literal(),
                 "amount": "100",
                 "duration_blocks": 5,
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
 
@@ -868,14 +1014,15 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_incomplete_lock_hints() ->
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "ballot": {
                     "backend": "halo2/ipa",
                     "envelope_bytes": "AAE=",
                     "owner": _canonical_owner_literal(),
                 },
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
 
@@ -887,7 +1034,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "ballot": {
                     "backend": "halo2/ipa",
@@ -896,7 +1043,8 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
                     "amount": "100",
                     "duration_blocks": 5,
                 },
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
 
@@ -907,7 +1055,7 @@ def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
     client.governance_submit_zk_ballot_proof_v1(
         {
             "authority": CANONICAL_AUTHORITY,
-            "chain_id": "chain",
+            "network_id": GOVERNANCE_NETWORK_ID,
             "election_id": "election-1",
             "ballot": {
                 "backend": "halo2/ipa",
@@ -918,7 +1066,8 @@ def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
                 "amount": CANONICAL_LARGE_FRACTION,
                 "duration_blocks": 5,
             },
-        }
+        },
+        canonical_auth=GOVERNANCE_AUTH,
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -955,7 +1104,7 @@ def test_governance_zk_v1_durations_emit_full_u64_json_integers(
         base = _governance_mutation_payloads()[4][2]
         payload = {**base, "ballot": {**base["ballot"], **lock_hints}}
 
-    getattr(client, method_name)(payload)
+    _invoke_governance(client, method_name, payload)
 
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
     wire = encoded if method_name == "governance_submit_zk_ballot_v1" else encoded["ballot"]
@@ -993,7 +1142,7 @@ def test_governance_zk_v1_durations_reject_non_u64_values_before_dispatch(
         payload = {**base, "ballot": {**base["ballot"], **lock_hints}}
 
     with pytest.raises((TypeError, ValueError)):
-        getattr(client, method_name)(payload)
+        _invoke_governance(client, method_name, payload)
 
     assert session.calls == []
 
@@ -1005,13 +1154,14 @@ def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
     client.governance_submit_zk_ballot_v1(
         {
             "authority": CANONICAL_AUTHORITY,
-            "chain_id": "chain",
+            "network_id": GOVERNANCE_NETWORK_ID,
             "election_id": "election-1",
             "backend": "halo2/ipa",
             "envelope_b64": "AAAA",
             "root_hint": f"0x{'Aa' * 32}",
             "nullifier": f"blake2b32:{'BB' * 32}",
-        }
+        },
+        canonical_auth=GOVERNANCE_AUTH,
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -1040,12 +1190,13 @@ def test_governance_submit_zk_ballot_v1_rejects_invalid_hex_hints(
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
-                "chain_id": "chain",
+                "network_id": GOVERNANCE_NETWORK_ID,
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
                 "root_hint": root_hint,
-            }
+            },
+            canonical_auth=GOVERNANCE_AUTH,
         )
 
     assert session.calls == []

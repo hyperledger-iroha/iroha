@@ -274,7 +274,7 @@ fn replay_permission_cache_blocks(
         topology,
         1,
         1,
-        ConsensusMode::Permissioned,
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )?;
     install_permission_cache_replay_parameters(state);
     if block_count > 1 {
@@ -284,7 +284,7 @@ fn replay_permission_cache_blocks(
             topology,
             2,
             block_count,
-            ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
         )?;
     }
     Ok(())
@@ -438,7 +438,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         let valid_genesis = crate::block::ValidBlock::validate_with_events(
             genesis_block.0.clone(),
             &topology,
-            &chain_id,
             &genesis_id,
             &time_source,
             &mut state_block,
@@ -507,7 +506,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     }
 
     let grant_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -661,7 +660,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
         );
     }
     let revoke_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -790,7 +789,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
         .add_permission(permission_execute.clone());
 
     let register_role_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -897,7 +896,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     }
 
     let revoke_role_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

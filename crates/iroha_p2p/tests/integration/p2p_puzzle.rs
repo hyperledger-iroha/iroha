@@ -17,10 +17,7 @@ use iroha_config_base::WithOrigin;
 use iroha_crypto::soranet::handshake::{
     DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
-use iroha_data_model::{
-    ChainId,
-    prelude::{Peer, PeerId},
-};
+use iroha_data_model::prelude::{Peer, PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     NetworkHandle,
@@ -237,7 +234,7 @@ async fn matching_required_puzzle_parameters_connect() {
         return;
     }
 
-    let chain = ChainId::from("puzzle_match");
+    let chain = super::test_network_id("puzzle_match");
     let key_pairs = std::array::from_fn::<_, 4, _>(|_| super::random_node_key_pair());
     let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
     // Exercise the real Argon2 admission path with a small but valid memory
@@ -301,7 +298,7 @@ async fn matching_required_puzzle_parameters_connect() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn puzzle_mismatch_rejects_handshake() {
-    let chain = ChainId::from("puzzle_mismatch");
+    let chain = super::test_network_id("puzzle_mismatch");
     if super::skip_if_no_tcp_bind() {
         return;
     }

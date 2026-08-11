@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
@@ -10,7 +11,8 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class AssetQuantityInstructionTests
 {
-    private const string ChainId = "00000042";
+    private const string NetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private static NetworkId FixtureNetworkId => NetworkId.Parse(NetworkIdLiteral);
     private const string AccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     private static FeePaymentIntent EmptyAuthorityFeePayment =>
@@ -52,7 +54,7 @@ public sealed class AssetQuantityInstructionTests
     [MemberData(nameof(InvalidQuantitySpellings))]
     public void EveryAssetInstructionBoundaryRejectsInvalidQuantityText(string quantity)
     {
-        var builder = new TransactionBuilder(ChainId, AccountId, EmptyAuthorityFeePayment);
+        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, EmptyAuthorityFeePayment);
 
         foreach (var construct in StringConstructionAttempts(builder, quantity))
         {
@@ -77,7 +79,7 @@ public sealed class AssetQuantityInstructionTests
     public void AssetInstructionBoundariesAcceptCanonicalNonNegativeQuantities(string text)
     {
         var quantity = NumericV1.QuantityValue.ParseCanonical(text);
-        var builder = new TransactionBuilder(ChainId, AccountId, EmptyAuthorityFeePayment)
+        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, EmptyAuthorityFeePayment)
             .TransferAsset(AssetDefinitionId, quantity, AccountId)
             .MintAsset(AssetDefinitionId, quantity, AccountId)
             .BurnAsset(AssetDefinitionId, quantity, AccountId);
@@ -182,15 +184,19 @@ public sealed class AssetQuantityInstructionTests
 
     private static void AssertQuantityPayload(byte[] payload, int expectedMantissaBytes, int expectedScale)
     {
-        var mantissaFieldBytes = BinaryPrimitives.ReadUInt64LittleEndian(payload);
-        Assert.Equal((ulong)(sizeof(uint) + expectedMantissaBytes), mantissaFieldBytes);
-        Assert.Equal((uint)expectedMantissaBytes, BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(sizeof(ulong))));
+        var reader = new CanonicalNoritoReader(
+            payload,
+            "quantity test payload",
+            nameof(payload));
+        var mantissaField = reader.ReadField("mantissa");
+        Assert.Equal(sizeof(uint) + expectedMantissaBytes, mantissaField.Length);
+        Assert.Equal((uint)expectedMantissaBytes, BinaryPrimitives.ReadUInt32LittleEndian(mantissaField));
 
-        var scaleFieldOffset = sizeof(ulong) + checked((int)mantissaFieldBytes);
-        Assert.Equal((ulong)sizeof(uint), BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(scaleFieldOffset)));
+        var scaleField = reader.ReadField("scale");
+        Assert.Equal(sizeof(uint), scaleField.Length);
         Assert.Equal(
             (uint)expectedScale,
-            BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(scaleFieldOffset + sizeof(ulong))));
-        Assert.Equal(scaleFieldOffset + sizeof(ulong) + sizeof(uint), payload.Length);
+            BinaryPrimitives.ReadUInt32LittleEndian(scaleField));
+        reader.RequireEnd();
     }
 }

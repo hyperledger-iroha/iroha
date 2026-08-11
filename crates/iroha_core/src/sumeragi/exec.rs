@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
@@ -12,7 +12,7 @@ use iroha_data_model::{
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, compute_settlement_hash},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
@@ -542,6 +542,96 @@ impl NativeAmxApplicationManifestV1 {
     }
 }
 
+/// Canonical, bounded lane-finality manifest for one result-bearing block.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneFinalityManifestV1 {
+    statements: Vec<LaneFinalityStatement>,
+    tree: MerkleTree<LaneFinalityStatement>,
+}
+
+impl LaneFinalityManifestV1 {
+    /// Build the canonical empty lane-finality manifest.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn empty() -> Self {
+        Self {
+            statements: Vec::new(),
+            tree: MerkleTree::default(),
+        }
+    }
+
+    /// Derive the exact manifest from the immutable execution result.
+    pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
+        if !block.has_results() {
+            return Err("lane-finality manifest requires a result-bearing block".to_owned());
+        }
+        let statements = block.lane_finality_statements().to_vec();
+        if statements.len()
+            > usize::try_from(wire::MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK)
+                .expect("lane-finality bound fits usize")
+        {
+            return Err("lane-finality manifest exceeds the active-lane bound".to_owned());
+        }
+        let mut previous_coordinate = None;
+        for statement in &statements {
+            if statement.version != 1
+                || statement.block_header_hash != block.hash()
+                || statement.da_commitment_hash != block.header().da_commitments_hash()
+                || statement
+                    .lane_block_descriptor_hash
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+                || statement.manifest_root.iter().all(|byte| *byte == 0)
+                || statement.settlement_commitment.lane_id != statement.lane_id
+                || statement.settlement_commitment.lane_incarnation != statement.lane_incarnation
+                || statement.settlement_commitment.dataspace_id != statement.dataspace_id
+                || statement.settlement_commitment.block_height != statement.block_height
+                || compute_settlement_hash(&statement.settlement_commitment)
+                    .map_err(|error| format!("lane settlement cannot be hashed: {error}"))?
+                    != statement.settlement_hash
+            {
+                return Err("lane-finality statement is not canonical for its block".to_owned());
+            }
+            let coordinate = (
+                statement.lane_id,
+                statement.dataspace_id,
+                statement.lane_incarnation,
+                statement.block_height,
+            );
+            if previous_coordinate.is_some_and(|previous| previous >= coordinate) {
+                return Err(
+                    "lane-finality statements are not strictly coordinate-sorted".to_owned(),
+                );
+            }
+            previous_coordinate = Some(coordinate);
+        }
+        let tree = statements
+            .iter()
+            .map(HashOf::new)
+            .collect::<MerkleTree<_>>();
+        Ok(Self { statements, tree })
+    }
+
+    /// Authenticated root and exact non-zero statement count.
+    #[must_use]
+    pub(crate) fn commitment(&self) -> Option<MerkleTreeCommitment<LaneFinalityStatement>> {
+        self.tree.commitment()
+    }
+
+    /// Canonically ordered statements.
+    #[must_use]
+    pub(crate) fn statements(&self) -> &[LaneFinalityStatement] {
+        &self.statements
+    }
+
+    /// Inclusion proof for one canonical statement.
+    #[must_use]
+    pub(crate) fn proof(&self, index: u32) -> Option<MerkleProof<LaneFinalityStatement>> {
+        self.tree.get_proof(index)
+    }
+}
+
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
     try_post_state_from_witness(w).unwrap_or_else(|error| {
@@ -567,6 +657,7 @@ pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str
 pub(crate) fn execution_commitment_from_validated_block(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
+    lane_finality_manifest: &LaneFinalityManifestV1,
     validated_block: &SignedBlock,
 ) -> Result<wire::ExecutionCommitment, &'static str> {
     let executed_block_wire = validated_block
@@ -587,6 +678,7 @@ pub(crate) fn execution_commitment_from_validated_block(
     execution_commitment_from_projection(
         witness,
         native_amx_manifest,
+        lane_finality_manifest,
         merge_carrier,
         executed_block_wire_len,
         executed_block_wire_hash,
@@ -598,9 +690,11 @@ pub(crate) fn execution_commitment_from_witness_for_tests(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
 ) -> Result<wire::ExecutionCommitment, &'static str> {
+    let lane_finality_manifest = LaneFinalityManifestV1::empty();
     execution_commitment_from_projection(
         witness,
         native_amx_manifest,
+        &lane_finality_manifest,
         None,
         native_amx_manifest.executed_block_wire_len(),
         native_amx_manifest.executed_block_wire_hash(),
@@ -610,6 +704,7 @@ pub(crate) fn execution_commitment_from_witness_for_tests(
 fn execution_commitment_from_projection(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
+    lane_finality_manifest: &LaneFinalityManifestV1,
     merge_carrier: Option<wire::MergeCarrierCommitmentV1>,
     executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
@@ -617,39 +712,37 @@ fn execution_commitment_from_projection(
     let (reads, writes) = witness_pairs(witness);
     let parent_state_root = parent_state_from_witness(witness);
     match build_kagemusha_topup_block_commitment(&writes)? {
-        Some(kagemusha) => {
-            wire::ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
-                parent_state_root,
-                kagemusha.post_state_root,
-                kagemusha.ordinary_writes_root,
-                Some(kagemusha.topup_anchor_root),
-                u32::try_from(kagemusha.leaves.len())
-                    .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?,
-                wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-                native_amx_manifest.root(),
-                native_amx_manifest.count(),
-                merge_carrier,
-                executed_block_wire_len,
-                executed_block_wire_hash,
-            )
-            .map_err(|_| "Kagemusha V2 execution commitment is not canonical")
-        }
-        None => {
-            wire::ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
-                parent_state_root,
-                compute_consensus_post_state_root(&reads, &writes)?,
-                compute_post_state_root(&[], &writes),
-                None,
-                0,
-                wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-                native_amx_manifest.root(),
-                native_amx_manifest.count(),
-                merge_carrier,
-                executed_block_wire_len,
-                executed_block_wire_hash,
-            )
-            .map_err(|_| "Sumeragi V2 execution commitment is not canonical")
-        }
+        Some(kagemusha) => wire::ExecutionCommitment::new_with_manifests(
+            parent_state_root,
+            kagemusha.post_state_root,
+            kagemusha.ordinary_writes_root,
+            Some(kagemusha.topup_anchor_root),
+            u32::try_from(kagemusha.leaves.len())
+                .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?,
+            wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_manifest.root(),
+            native_amx_manifest.count(),
+            lane_finality_manifest.commitment(),
+            merge_carrier,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        )
+        .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
+        None => wire::ExecutionCommitment::new_with_manifests(
+            parent_state_root,
+            compute_consensus_post_state_root(&reads, &writes)?,
+            compute_post_state_root(&[], &writes),
+            None,
+            0,
+            wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_manifest.root(),
+            native_amx_manifest.count(),
+            lane_finality_manifest.commitment(),
+            merge_carrier,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        )
+        .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
     }
 }
 
@@ -681,7 +774,6 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{
             BlockHeader, BlockSignature,
@@ -834,7 +926,7 @@ mod tests {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         phase: NativeAmxPhase,
         coordinator: &ManifestParticipantFixture,
-        chain_id_hash: Hash,
+        network_id: iroha_data_model::NetworkId,
         plan_digest: Hash,
     ) -> NativeAmxAttestationBodyV2 {
         let descriptor = &participant.proposal.descriptor;
@@ -847,7 +939,7 @@ mod tests {
                 view: 6,
             },
             epoch: 3,
-            chain_id_hash,
+            network_id,
             source_id,
             tx_entrypoint_hash: entrypoint_hash,
             plan_digest,
@@ -907,7 +999,7 @@ mod tests {
         source_id: [u8; Hash::LENGTH],
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         coordinator: &ManifestParticipantFixture,
-        chain_id_hash: Hash,
+        network_id: iroha_data_model::NetworkId,
         plan_digest: Hash,
         validator_key: &KeyPair,
         validator: &PeerId,
@@ -918,7 +1010,7 @@ mod tests {
             entrypoint_hash,
             NativeAmxPhase::Prepare,
             coordinator,
-            chain_id_hash,
+            network_id,
             plan_digest,
         );
         let mut commit = prepare;
@@ -943,13 +1035,13 @@ mod tests {
         second: &ManifestParticipantFixture,
         validator_key: &KeyPair,
         validator: &PeerId,
-        chain_id_hash: Hash,
+        network_id: iroha_data_model::NetworkId,
         plan_digest: Hash,
     ) -> NativeAmxReceipt {
         NativeAmxReceipt {
             version: 2,
             source_id,
-            chain_id_hash,
+            network_id,
             plan_digest,
             lane_id: coordinator.proposal.descriptor.lane_id,
             dataspace_id: coordinator.proposal.descriptor.dataspace_id,
@@ -966,7 +1058,7 @@ mod tests {
                     source_id,
                     entrypoint_hash,
                     coordinator,
-                    chain_id_hash,
+                    network_id,
                     plan_digest,
                     validator_key,
                     validator,
@@ -976,7 +1068,7 @@ mod tests {
                     source_id,
                     entrypoint_hash,
                     coordinator,
-                    chain_id_hash,
+                    network_id,
                     plan_digest,
                     validator_key,
                     validator,
@@ -986,7 +1078,7 @@ mod tests {
                     source_id,
                     entrypoint_hash,
                     coordinator,
-                    chain_id_hash,
+                    network_id,
                     plan_digest,
                     validator_key,
                     validator,
@@ -1001,7 +1093,7 @@ mod tests {
             fixture_key(0x31, Algorithm::Ed25519),
             fixture_key(0x32, Algorithm::Ed25519),
         ];
-        let chain_id = ChainId::from("native-manifest-exec-test");
+        let network_id = crate::sumeragi::synthetic_network_id("native-manifest-exec-test");
         let transaction_time =
             TimeSource::new_fixed(Duration::from_millis(MANIFEST_APPLICATION_HEIGHT));
         let transactions = transaction_keys
@@ -1009,7 +1101,7 @@ mod tests {
             .map(|key| {
                 let authority = AccountId::new(key.public_key().clone());
                 TransactionBuilder::new_with_time_source(
-                    chain_id.clone(),
+                    network_id,
                     authority,
                     &transaction_time,
                     FeePaymentIntent::authority(Vec::new(), None),
@@ -1055,7 +1147,7 @@ mod tests {
             &entrypoints,
             &source_ids,
         );
-        let chain_id_hash = Hash::new(chain_id.as_str().as_bytes());
+        let network_id = *network_id;
         let coordinator_route = RoutingDecision::new(
             coordinator.proposal.descriptor.lane_id,
             coordinator.proposal.descriptor.dataspace_id,
@@ -1096,7 +1188,7 @@ mod tests {
                     &second,
                     &validator_key,
                     &validator,
-                    chain_id_hash,
+                    network_id,
                     plan_digest,
                 );
                 assert!(
@@ -1105,7 +1197,7 @@ mod tests {
                         &routing_plan,
                         &source_id,
                         Hash::from(entrypoint_hash),
-                        chain_id_hash,
+                        network_id,
                         &coordinator.proposal,
                     ),
                     "manifest fixture must carry a canonical grouped Native AMX receipt"

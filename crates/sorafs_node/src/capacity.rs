@@ -1660,6 +1660,7 @@ mod tests {
             manifest_digest: ManifestDigest::new(order.manifest_digest),
             manifest_root_cid: ManifestRootCid::try_from_slice(&order.manifest_cid)
                 .expect("canonical manifest root CID"),
+            musubi_archive: None,
             issued_by: AccountId::new(
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()

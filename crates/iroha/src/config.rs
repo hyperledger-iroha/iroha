@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::{
     crypto::KeyPair,
-    data_model::{ChainId, prelude::*},
+    data_model::{ChainId, NetworkId, prelude::*},
 };
 
 mod user;
@@ -39,6 +39,11 @@ type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
 
 /// Default time-to-live for transactions submitted via the client API.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
+/// Mandatory lifetime of one signed query request.
+///
+/// Query requests are one-shot and are never automatically re-signed on retry. The node rejects
+/// requests whose lifetime exceeds its configured replay-retention window.
+pub const DEFAULT_QUERY_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Default timeout for waiting on transaction status updates.
 pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Default timeout for Torii HTTP requests issued by the client.
@@ -158,6 +163,8 @@ impl JsonDeserialize for BasicAuth {
 pub struct Config {
     /// Unique chain identifier the client connects to.
     pub chain: ChainId,
+    /// Exact genesis-lineage identity the client signs into query requests.
+    pub network_id: NetworkId,
     /// Account ID used for signing and submitting transactions.
     pub account: AccountId,
     /// I105 chain discriminant used when parsing and rendering account literals.
@@ -387,6 +394,7 @@ mod tests {
     fn config_sample() -> toml::Table {
         toml::toml! {
             chain = "00000000-0000-0000-0000-000000000000"
+            network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             torii_url = "http://127.0.0.1:8080/"
 
             [basic_auth]
@@ -411,6 +419,63 @@ mod tests {
             .with_toml_source(TomlSource::inline(config_sample()))
             .read_and_complete::<user::Root>()
             .unwrap();
+    }
+
+    #[test]
+    fn account_private_key_file_populates_signer() {
+        let mut table = config_sample();
+        let account = table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table");
+        let private_key = account
+            .remove("private_key")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect("inline client private key");
+        let mut key_file = tempfile::NamedTempFile::new().expect("client private-key file");
+        writeln!(key_file, "{private_key}").expect("write client private-key file");
+        key_file.flush().expect("flush client private-key file");
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String(key_file.path().to_string_lossy().into_owned()),
+        );
+
+        let config = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .expect("file-backed client config should complete")
+            .parse()
+            .expect("file-backed client config should parse");
+
+        assert_eq!(
+            ExposedPrivateKey(config.key_pair.private_key().clone()).to_string(),
+            private_key
+        );
+    }
+
+    #[test]
+    fn account_private_key_sources_are_mutually_exclusive() {
+        let mut table = config_sample();
+        let account = table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table");
+        let key_file = tempfile::NamedTempFile::new().expect("client private-key file");
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String(key_file.path().to_string_lossy().into_owned()),
+        );
+
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .expect("duplicate private sources remain structurally readable")
+            .parse()
+            .expect_err("duplicate client private sources must fail");
+        assert_contains!(
+            format!("{error:#?}"),
+            "account.private_key and account.private_key_file are mutually exclusive"
+        );
     }
 
     #[test]

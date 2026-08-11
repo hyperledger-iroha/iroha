@@ -375,12 +375,12 @@ def require_policy_cargo_proxy(value: Path) -> str:
     expected = resolve_path_identity(
         DEFAULT_CARGO_PROXY,
         identity_errors,
-        label="Android codegen Cargo policy proxy",
+        label="source-bound Cargo policy proxy",
     )
     resolved = resolve_path_identity(
         candidate,
         identity_errors,
-        label="Android codegen Cargo executable",
+        label="configured Cargo policy proxy",
     )
     if expected is None or resolved is None:
         raise ValueError("Android codegen Cargo policy proxy is unavailable")
@@ -434,7 +434,6 @@ def build_fixture_example(
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "manifest_payload_base64": manifest_payload_base64,
-        "submitted_epoch": fixture_meta["now_unix_secs"],
         "alias": None,
         "successor_of": None,
     }

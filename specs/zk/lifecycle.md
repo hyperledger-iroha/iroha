@@ -42,7 +42,7 @@ configuration:
 
 - `iroha_cli app zk vk register --json path/to/register.json`
 - `iroha_cli app zk vk update --json path/to/update.json`
-- `iroha_cli app zk vk get --backend halo2/ipa --name vk_transfer`
+- `iroha_cli app zk vk get --backend halo2/ipa --name ivm-execution-v1`
 
 The CLI JSON files contain public VK record data only and reject embedded authorities, private keys,
 and unknown fields. Embedded VK record bytes remain base64-encoded, while commitments are lowercase

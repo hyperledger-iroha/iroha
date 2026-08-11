@@ -13,12 +13,13 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 internal data class TransactionPayloadFixture(
     val name: String,
-    val chain: String,
+    val networkId: String,
     val authority: String,
     val creationTimeMs: Long,
     val timeToLiveMs: Long,
@@ -34,7 +35,7 @@ internal data class TransactionPayloadFixture(
 
 internal data class TransactionManifestFixture(
     val name: String,
-    val chain: String,
+    val networkId: String,
     val authority: String,
     val creationTimeMs: Long,
     val timeToLiveMs: Long,
@@ -52,7 +53,7 @@ internal object AndroidFixtureSupport {
     private const val CANONICAL_FIXTURE_ROOT = "fixtures/norito_rpc"
     private val PAYLOAD_FIXTURE_FIELDS = setOf(
         "name",
-        "chain",
+        "network_id",
         "authority",
         "creation_time_ms",
         "time_to_live_ms",
@@ -64,7 +65,7 @@ internal object AndroidFixtureSupport {
         "signed_hash",
     )
     private val PAYLOAD_FIELDS = setOf(
-        "chain",
+        "network_id",
         "authority",
         "creation_time_ms",
         "executable",
@@ -75,7 +76,7 @@ internal object AndroidFixtureSupport {
     )
     private val MANIFEST_FIXTURE_FIELDS = setOf(
         "name",
-        "chain",
+        "network_id",
         "authority",
         "creation_time_ms",
         "time_to_live_ms",
@@ -103,7 +104,7 @@ internal object AndroidFixtureSupport {
     fun payloadFixtureFromValue(value: Any?): TransactionPayloadFixture {
         val map = asMap(value, "payload fixture")
         val name = requiredString(map["name"], "payload fixture.name")
-        val chain = requiredString(map["chain"], "$name.chain")
+        val networkId = requiredNetworkId(map["network_id"], "$name.network_id")
         val authority = requiredString(map["authority"], "$name.authority")
         val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
         val timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms")
@@ -122,8 +123,10 @@ internal object AndroidFixtureSupport {
         }
         requireExactFields(map, PAYLOAD_FIXTURE_FIELDS, "payload fixture $name")
         requireExactFields(payload, PAYLOAD_FIELDS, "$name.payload")
-        require(requiredString(payload["chain"], "$name.payload.chain") == chain) {
-            "$name: top-level and payload chain values must match"
+        require(
+            requiredNetworkId(payload["network_id"], "$name.payload.network_id") == networkId,
+        ) {
+            "$name: top-level and payload network_id values must match"
         }
         require(requiredString(payload["authority"], "$name.payload.authority") == authority) {
             "$name: top-level and payload authority values must match"
@@ -139,7 +142,7 @@ internal object AndroidFixtureSupport {
         }
         return TransactionPayloadFixture(
             name = name,
-            chain = chain,
+            networkId = networkId,
             authority = authority,
             creationTimeMs = creationTimeMs,
             timeToLiveMs = timeToLiveMs,
@@ -167,7 +170,7 @@ internal object AndroidFixtureSupport {
     internal fun manifestFixtureFromValue(value: Any?): TransactionManifestFixture {
         val map = asMap(value, "manifest.fixture")
         val name = requiredString(map["name"], "manifest.fixture.name")
-        val chain = requiredString(map["chain"], "$name.chain")
+        val networkId = requiredNetworkId(map["network_id"], "$name.network_id")
         val authority = requiredString(map["authority"], "$name.authority")
         val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
         val timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms")
@@ -188,7 +191,7 @@ internal object AndroidFixtureSupport {
         }
         return TransactionManifestFixture(
             name = name,
-            chain = chain,
+            networkId = networkId,
             authority = authority,
             creationTimeMs = creationTimeMs,
             timeToLiveMs = timeToLiveMs,
@@ -374,7 +377,9 @@ internal object AndroidFixtureSupport {
         }
 
         return TransactionPayload(
-            chainId = requiredString(payload["chain"], "$name.payload.chain"),
+            networkId = NetworkId.parse(
+                requiredNetworkId(payload["network_id"], "$name.payload.network_id"),
+            ),
             authority = requiredString(payload["authority"], "$name.payload.authority"),
             creationTimeMs = requiredLong(payload["creation_time_ms"], "$name.payload.creation_time_ms"),
             executable = executable,
@@ -453,10 +458,28 @@ internal object AndroidFixtureSupport {
         return string
     }
 
+    private fun requiredNetworkId(value: Any?, field: String): String {
+        val networkId = requiredString(value, field)
+        val canonical = try {
+            HashLiteral.canonicalize(HashLiteral.decode(networkId))
+        } catch (ex: IllegalArgumentException) {
+            throw IllegalArgumentException("$field must be a canonical network hash identity", ex)
+        }
+        require(canonical == networkId) {
+            "$field must use its exact canonical hash encoding"
+        }
+        try {
+            NetworkId.parse(networkId)
+        } catch (ex: IllegalArgumentException) {
+            throw IllegalArgumentException("$field must be a canonical network hash identity", ex)
+        }
+        return networkId
+    }
+
     private fun jsonValue(value: Any?): JsonValue = when (value) {
-        null -> JsonValue.raw("null")
+        null -> JsonValue.nullValue()
         is String -> JsonValue.string(value)
-        is Number -> JsonValue.raw(value.toString())
+        is Number -> JsonValue.parse(value.toString())
         is Boolean -> JsonValue.bool(value)
         else -> error("Unsupported metadata JSON value type: ${value::class}")
     }

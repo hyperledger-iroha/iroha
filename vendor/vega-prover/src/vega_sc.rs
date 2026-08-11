@@ -649,19 +649,21 @@ mod tests {
 
     #[test]
     fn test_snark() {
-        let _ = tracing_subscriber::fmt()
-            .with_target(false)
-            .with_ansi(true) // no bold colour codes
-            .with_env_filter(EnvFilter::from_default_env())
-            .try_init();
+        crate::iroha_rng::with_deterministic_test_seed(0x50, || {
+            let _ = tracing_subscriber::fmt()
+                .with_target(false)
+                .with_ansi(true) // no bold colour codes
+                .with_env_filter(EnvFilter::from_default_env())
+                .try_init();
 
-        type E = crate::provider::PallasHyraxEngine;
-        type S = VegaSNARK<E>;
-        test_snark_with::<E, S>();
+            type E = crate::provider::PallasHyraxEngine;
+            type S = VegaSNARK<E>;
+            test_snark_with::<E, S>();
 
-        type E2 = crate::provider::T256HyraxEngine;
-        type S2 = VegaSNARK<E2>;
-        test_snark_with::<E2, S2>();
+            type E2 = crate::provider::T256HyraxEngine;
+            type S2 = VegaSNARK<E2>;
+            test_snark_with::<E2, S2>();
+        });
     }
 
     fn test_snark_with<E: Engine, S: R1CSSNARKTrait<E>>() {
@@ -686,47 +688,51 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_overlong_public_io() {
-        type E = crate::provider::PallasHyraxEngine;
-        let circuit = CubicCircuit::default();
+        crate::iroha_rng::with_deterministic_test_seed(0x51, || {
+            type E = crate::provider::PallasHyraxEngine;
+            let circuit = CubicCircuit::default();
 
-        let (pk, vk) = VegaSNARK::<E>::setup(circuit.clone()).unwrap();
-        let prep_snark = VegaSNARK::<E>::prep_prove(&pk, circuit.clone(), false).unwrap();
-        let (mut snark, _prep_snark) =
-            VegaSNARK::<E>::prove(&pk, circuit, prep_snark, false).unwrap();
+            let (pk, vk) = VegaSNARK::<E>::setup(circuit.clone()).unwrap();
+            let prep_snark = VegaSNARK::<E>::prep_prove(&pk, circuit.clone(), false).unwrap();
+            let (mut snark, _prep_snark) =
+                VegaSNARK::<E>::prove(&pk, circuit, prep_snark, false).unwrap();
 
-        // a well-formed instance passes validation
-        let mut transcript = <E as Engine>::TE::new(b"test");
-        assert!(snark.U.validate(&vk.S, &mut transcript).is_ok());
+            // a well-formed instance passes validation
+            let mut transcript = <E as Engine>::TE::new(b"test");
+            assert!(snark.U.validate(&vk.S, &mut transcript).is_ok());
 
-        // a `public_values` length that does not match `num_public` is rejected
-        snark
-            .U
-            .public_values
-            .push(<E as Engine>::Scalar::from(42u64));
-        let mut transcript = <E as Engine>::TE::new(b"test");
-        assert!(snark.U.validate(&vk.S, &mut transcript).is_err());
+            // a `public_values` length that does not match `num_public` is rejected
+            snark
+                .U
+                .public_values
+                .push(<E as Engine>::Scalar::from(42u64));
+            let mut transcript = <E as Engine>::TE::new(b"test");
+            assert!(snark.U.validate(&vk.S, &mut transcript).is_err());
+        });
     }
 
     #[test]
     fn test_validate_rejects_commitment_for_empty_segment() {
-        type E = crate::provider::PallasHyraxEngine;
-        let circuit = CubicCircuit::default();
+        crate::iroha_rng::with_deterministic_test_seed(0x52, || {
+            type E = crate::provider::PallasHyraxEngine;
+            let circuit = CubicCircuit::default();
 
-        let (pk, vk) = VegaSNARK::<E>::setup(circuit.clone()).unwrap();
-        let prep_snark = VegaSNARK::<E>::prep_prove(&pk, circuit.clone(), false).unwrap();
-        let (mut snark, _prep_snark) =
-            VegaSNARK::<E>::prove(&pk, circuit, prep_snark, false).unwrap();
+            let (pk, vk) = VegaSNARK::<E>::setup(circuit.clone()).unwrap();
+            let prep_snark = VegaSNARK::<E>::prep_prove(&pk, circuit.clone(), false).unwrap();
+            let (mut snark, _prep_snark) =
+                VegaSNARK::<E>::prove(&pk, circuit, prep_snark, false).unwrap();
 
-        // this circuit has no shared segment
-        assert_eq!(vk.S.num_shared, 0);
+            // this circuit has no shared segment
+            assert_eq!(vk.S.num_shared, 0);
 
-        // a well-formed instance passes validation
-        let mut transcript = <E as Engine>::TE::new(b"test");
-        assert!(snark.U.validate(&vk.S, &mut transcript).is_ok());
+            // a well-formed instance passes validation
+            let mut transcript = <E as Engine>::TE::new(b"test");
+            assert!(snark.U.validate(&vk.S, &mut transcript).is_ok());
 
-        // a commitment supplied for the empty shared segment is rejected
-        snark.U.comm_W_shared = Some(snark.U.comm_W_rest.clone());
-        let mut transcript = <E as Engine>::TE::new(b"test");
-        assert!(snark.U.validate(&vk.S, &mut transcript).is_err());
+            // a commitment supplied for the empty shared segment is rejected
+            snark.U.comm_W_shared = Some(snark.U.comm_W_rest.clone());
+            let mut transcript = <E as Engine>::TE::new(b"test");
+            assert!(snark.U.validate(&vk.S, &mut transcript).is_err());
+        });
     }
 }

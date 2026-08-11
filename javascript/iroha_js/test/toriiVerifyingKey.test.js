@@ -11,14 +11,20 @@ import {
   ToriiClient as DistToriiClient,
 } from "../dist/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
-import { normalizeAccountId } from "../src/index.js";
+import { NetworkId } from "../src/networkId.js";
+import { normalizeAccountId } from "../src/normalizers.js";
+import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { buildBrowserVerifyingKeyTransactionPayload } from "../src/transactionCodec.js";
 
 const BASE_URL = "https://localhost:8080";
-const VK_SIGNING_CHAIN_ID = "vk-test";
+const VK_SIGNING_NETWORK_ID_LITERAL =
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+const VK_SIGNING_NETWORK_ID = NetworkId.parse(
+  VK_SIGNING_NETWORK_ID_LITERAL,
+);
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  VK_SIGNING_CHAIN_ID,
+  VK_SIGNING_NETWORK_ID,
 );
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
@@ -170,14 +176,14 @@ function verifyingKeyTransactionPayload(
   request,
   operation,
   {
-    chainId = VK_SIGNING_CHAIN_ID,
+    networkId = VK_SIGNING_NETWORK_ID,
     authority = request.authority,
     recordOverrides = {},
   } = {},
 ) {
   return buildBrowserVerifyingKeyTransactionPayload(
     {
-      chainId,
+      networkId,
       authority,
       instructions: [
         verifyingKeyInstructionForRequest(
@@ -950,7 +956,7 @@ test("verifying key mutation helpers enforce the unsigned-draft response contrac
   );
 });
 
-test("verifying key drafts are bound to chain, authority, operation, count, and full record", async () => {
+test("verifying key drafts are bound to NetworkId, authority, operation, count, and full record", async () => {
   const request = normalizedVerifyingKeyRequest();
   const canonical = verifyingKeyTransactionPayload(request, "register");
   const cases = [
@@ -965,11 +971,13 @@ test("verifying key drafts are bound to chain, authority, operation, count, and 
       /must contain exactly one instruction/,
     ],
     [
-      "wrong chain",
+      "wrong network",
       verifyingKeyTransactionPayload(request, "register", {
-        chainId: "other-chain",
+        networkId: NetworkId.fromBytes(
+          Uint8Array.from({ length: 32 }, () => 0xff),
+        ),
       }),
-      /changed the configured chain ID/,
+      /changed the configured NetworkId/,
     ],
     [
       "wrong authority",
@@ -1009,7 +1017,7 @@ test("verifying key drafts are bound to chain, authority, operation, count, and 
   }
 });
 
-test("verifying key local-signing APIs fail closed without immutable chain context", async () => {
+test("verifying key local-signing APIs fail closed without immutable NetworkId context", async () => {
   let fetchCount = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -1027,40 +1035,67 @@ test("verifying key local-signing APIs fail closed without immutable chain conte
   );
   assert.equal(fetchCount, 0);
 
-  assert.throws(
-    () =>
-      new ToriiClient(BASE_URL, {
-        chainId: VK_SIGNING_CHAIN_ID,
-        fetchImpl: async () => {
-          fetchCount += 1;
-          return createVerifyingKeyDraftResponse();
-        },
-      }),
-    /options\.chainId is not supported; use a LocalSigningContext/,
-  );
+  for (const field of ["chain", "chainId", "chain_id", "networkId"]) {
+    assert.throws(
+      () =>
+        new ToriiClient(BASE_URL, {
+          [field]: field === "networkId" ? VK_SIGNING_NETWORK_ID : "vk-test",
+          fetchImpl: async () => {
+            fetchCount += 1;
+            return createVerifyingKeyDraftResponse();
+          },
+        }),
+      new RegExp(
+        `options\\.${field} is not supported; use a LocalSigningContext`,
+        "u",
+      ),
+    );
+  }
   assert.equal(fetchCount, 0);
 });
 
 test("verifying key LocalSigningContext is canonical and immutable", () => {
-  const context = new LocalSigningContext("vk-test");
-  assert.equal(context.chainId, "vk-test");
+  const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID);
+  assert.equal(context.networkId, VK_SIGNING_NETWORK_ID);
   assert.equal(Object.isFrozen(context), true);
   assert.throws(
     () => {
-      context.chainId = "other-chain";
+      context.networkId = NetworkId.fromBytes(
+        Uint8Array.from({ length: 32 }, () => 0xfd),
+      );
     },
     TypeError,
   );
-  assert.throws(
-    () => new LocalSigningContext(" vk-test"),
-    /must not contain surrounding whitespace/,
-  );
+  for (const invalid of ["vk-test", VK_SIGNING_NETWORK_ID.toBytes(), {}]) {
+    assert.throws(() => new LocalSigningContext(invalid), /must be a NetworkId/);
+  }
   assert.throws(
     () =>
       new ToriiClient(BASE_URL, {
-        localSigningContext: { chainId: "vk-test" },
+        localSigningContext: { networkId: VK_SIGNING_NETWORK_ID },
       }),
     /must be a LocalSigningContext/,
+  );
+});
+
+test("verifying-key payload builder rejects retired ChainId input", () => {
+  const request = normalizedVerifyingKeyRequest();
+  assert.throws(
+    () =>
+      buildBrowserVerifyingKeyTransactionPayload(
+        {
+          chainId: "vk-test",
+          authority: request.authority,
+          instructions: [
+            verifyingKeyInstructionForRequest(request, "register"),
+          ],
+          creationTimeMs: 42,
+          ttlMs: 60_000,
+          feePayment: { payer: "authority", chargeLimits: [] },
+        },
+        "register",
+      ),
+    /instruction transaction input\.chainId is not supported/,
   );
 });
 
@@ -1479,14 +1514,16 @@ test("verifying key endpoints reject unsupported option fields", async () => {
 
 test("source and package clients load the canonical verifying-key decoder lazily", async () => {
   const request = normalizedVerifyingKeyRequest();
-  for (const [Client, SigningContext] of [
-    [ToriiClient, LocalSigningContext],
-    [DistToriiClient, DistLocalSigningContext],
+  for (const [Client, SigningContext, NetworkIdentity] of [
+    [ToriiClient, LocalSigningContext, NetworkId],
+    [DistToriiClient, DistLocalSigningContext, DistNetworkId],
   ]) {
     const client = new Client(BASE_URL, {
       fetchImpl: async () =>
         createVerifyingKeyDraftResponse({}, { request }),
-      localSigningContext: new SigningContext(VK_SIGNING_CHAIN_ID),
+      localSigningContext: new SigningContext(
+        NetworkIdentity.parse(VK_SIGNING_NETWORK_ID_LITERAL),
+      ),
     });
     assert.deepEqual(
       await client.registerVerifyingKey(sampleVerifyingKeyRegisterPayload()),

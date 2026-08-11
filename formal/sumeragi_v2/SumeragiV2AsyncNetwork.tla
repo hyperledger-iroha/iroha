@@ -1997,7 +1997,9 @@ AsyncItemTyped(item) ==
        [] item.kind = "CertifiedResponse" ->
             AsyncCertifiedResponseEnvelopeTyped(item.envelope)
        [] item.kind = "CommitCertificateResponse" ->
-            AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
+            /\ AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
+            /\ item.source =
+                 item.envelope.request.envelope.recipient
        [] OTHER ->
             /\ item.kind \in {"Chunk", "NormalJunk", "ProgressJunk", "Noise"}
             /\ AsyncBodyEnvelopeTyped(item.envelope)
@@ -2926,21 +2928,34 @@ AsyncTimeoutRecoveryEpisode(
      AsyncTimeoutRecoveryVoteOwnerUniverse(timeoutOwnerOrigin),
    admittedTimeoutVoteOwners |-> admittedTimeoutVoteOwners]
 
+\* Package the eight constructor inputs into one parameter record.  The
+\* resulting one-binder image is extensionally the same as the direct
+\* eight-binder constructor image, while remaining eliminable by TLAPS.
+AsyncTimeoutRecoveryEpisodeParameterSet ==
+  [node: ValidatorIds,
+   timeoutOwnerOrigin: AsyncCandidateCausalOriginSet,
+   generation: Generations,
+   timeoutOwnerOrdinal: Nat \ {0},
+   physicalCut: Nat \ {0},
+   preFrozenRetransmitOrdinal: Nat,
+   preFrozenRetransmitPhysicalCut: Nat,
+   admittedTimeoutVoteOwners:
+     SUBSET AsyncTimeoutRecoveryVoteOwnerSet]
+
+AsyncTimeoutRecoveryEpisodeFromParameters(parameters) ==
+  AsyncTimeoutRecoveryEpisode(
+    parameters.node,
+    parameters.timeoutOwnerOrigin,
+    parameters.generation,
+    parameters.timeoutOwnerOrdinal,
+    parameters.physicalCut,
+    parameters.preFrozenRetransmitOrdinal,
+    parameters.preFrozenRetransmitPhysicalCut,
+    parameters.admittedTimeoutVoteOwners)
+
 AsyncTimeoutRecoveryEpisodeSet ==
-  {AsyncTimeoutRecoveryEpisode(
-     node, timeoutOwnerOrigin, episodeGeneration,
-     timeoutOwnerOrdinal, physicalCut,
-     preFrozenRetransmitOrdinal, preFrozenRetransmitPhysicalCut,
-     admittedTimeoutVoteOwners):
-     node \in ValidatorIds,
-     timeoutOwnerOrigin \in AsyncCandidateCausalOriginSet,
-     episodeGeneration \in Generations,
-     timeoutOwnerOrdinal \in Nat \ {0},
-     physicalCut \in Nat \ {0},
-     preFrozenRetransmitOrdinal \in Nat,
-     preFrozenRetransmitPhysicalCut \in Nat,
-     admittedTimeoutVoteOwners \in
-       SUBSET AsyncTimeoutRecoveryVoteOwnerSet}
+  {AsyncTimeoutRecoveryEpisodeFromParameters(parameters):
+     parameters \in AsyncTimeoutRecoveryEpisodeParameterSet}
 
 AsyncTimeoutRecoveryEpisodesIn(state) ==
   state.timeoutRecoveryEpisodes
@@ -12239,6 +12254,7 @@ MatchingCommitCertificateRequests(response) ==
 CommitCertificateResponseAuthorized(item) ==
   /\ item.kind = "CommitCertificateResponse"
   /\ item.source \in AsyncIngressSources
+  /\ item.source = item.envelope.request.envelope.recipient
   /\ item.envelope.request \in asyncActiveRequests
   /\ CommitCertificateRequestAuthorized(item.envelope.request)
   /\ item.envelope.qc \in commitQCs
@@ -12383,6 +12399,8 @@ AsyncCommitImportDirectEvidence(candidate, qc) ==
 AsyncCommitImportResponseEvidence(candidate, qc) ==
   /\ candidate.evidence \in asyncSentItems
   /\ candidate.evidence.kind = "CommitCertificateResponse"
+  /\ candidate.evidence.source =
+       candidate.evidence.envelope.request.envelope.recipient
   /\ candidate.evidence.envelope.recipient = candidate.node
   /\ candidate.evidence.envelope.qc = qc
   /\ CommitCertificateRequestAuthorized(

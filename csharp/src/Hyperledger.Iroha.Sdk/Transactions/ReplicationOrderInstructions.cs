@@ -17,7 +17,8 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
         string orderId,
         ReadOnlySpan<byte> orderPayload,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         OrderId = ReplicationOrderInstructionValidation.RequireIdentifier(
             orderId,
@@ -36,20 +37,27 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
             nameof(orderPayload));
         IssuedEpoch = issuedEpoch;
         DeadlineEpoch = deadlineEpoch;
+        MusubiArchiveId = musubiArchiveId is null
+            ? null
+            : ReplicationOrderInstructionValidation.RequireIdentifier(
+                musubiArchiveId,
+                nameof(musubiArchiveId));
     }
 
     public IssueReplicationOrderInstruction(
         string orderId,
         string orderPayloadBase64,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
         : this(
             orderId,
             ReplicationOrderInstructionValidation.DecodeCanonicalBase64(
                 orderPayloadBase64,
                 nameof(orderPayloadBase64)),
             issuedEpoch,
-            deadlineEpoch)
+            deadlineEpoch,
+            musubiArchiveId)
     {
     }
 
@@ -64,6 +72,9 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
 
     public ulong DeadlineEpoch { get; }
 
+    /// <summary>Optional immutable Musubi archive purpose bound to this order.</summary>
+    public string? MusubiArchiveId { get; }
+
     internal override string WireId => TypeName;
 
     internal override string TypeName =>
@@ -71,16 +82,19 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var payloadVector = new OfflineNoritoWriter();
+        var payloadVector = new CanonicalNoritoWriter();
         payloadVector.WriteUInt64LittleEndian((ulong)orderPayload.Length);
         payloadVector.WriteBytes(orderPayload);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(payloadVector.ToArray());
         writer.WriteField(context.EncodeUInt64(IssuedEpoch));
         writer.WriteField(context.EncodeUInt64(DeadlineEpoch));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeOptionalIdentifierNewtype(
+                MusubiArchiveId));
         return writer.ToArray();
     }
 }
@@ -139,7 +153,7 @@ public sealed record class ProviderIngestCompletionSignerPolicyV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(Convert.FromHexString(PolicyId));
         writer.WriteField(context.EncodeUInt64(Revision));
         writer.WriteField(
@@ -172,7 +186,7 @@ public sealed record class ProviderIngestCompletionAuthorityV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeAccountId(ProviderOwner));
         writer.WriteField(SignerPolicy.EncodePayload(context));
         return writer.ToArray();
@@ -200,7 +214,7 @@ public sealed record class ProviderIngestFinalizedAnchorV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeUInt64(Height));
         writer.WriteField(Convert.FromHexString(BlockHash));
         return writer.ToArray();
@@ -256,7 +270,7 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(
@@ -293,7 +307,7 @@ public sealed record class ExpireReplicationOrderInstruction : TransactionInstru
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(context.EncodeUInt64(ExpirationEpoch));
@@ -361,14 +375,14 @@ internal static class ReplicationOrderInstructionValidation
 
     internal static byte[] EncodeIdentifierNewtype(string value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(Convert.FromHexString(value));
         return writer.ToArray();
     }
 
     internal static byte[] EncodeOptionalFixedByteArray(string? value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (value is null)
         {
             writer.WriteByte(0);
@@ -376,12 +390,26 @@ internal static class ReplicationOrderInstructionValidation
         }
 
         writer.WriteByte(1);
-        var array = new OfflineNoritoWriter();
+        var array = new CanonicalNoritoWriter();
         foreach (var item in Convert.FromHexString(value))
         {
             array.WriteField(new[] { item });
         }
         writer.WriteField(array.ToArray());
+        return writer.ToArray();
+    }
+
+    internal static byte[] EncodeOptionalIdentifierNewtype(string? value)
+    {
+        var writer = new CanonicalNoritoWriter();
+        if (value is null)
+        {
+            writer.WriteByte(0);
+            return writer.ToArray();
+        }
+
+        writer.WriteByte(1);
+        writer.WriteField(EncodeIdentifierNewtype(value));
         return writer.ToArray();
     }
 

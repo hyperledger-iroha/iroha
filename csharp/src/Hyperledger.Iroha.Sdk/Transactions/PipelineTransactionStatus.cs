@@ -14,8 +14,6 @@ public sealed record class PipelineTransactionStatus
 
     public string ResolvedFrom { get; init; } = string.Empty;
 
-    public string? RejectionContentBase64 { get; init; }
-
     public bool IsTerminal =>
         State is PipelineTransactionState.Applied
             or PipelineTransactionState.Committed

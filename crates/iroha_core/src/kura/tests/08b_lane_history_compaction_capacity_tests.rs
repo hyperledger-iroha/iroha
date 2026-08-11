@@ -179,8 +179,7 @@ fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
     let temp_data_path = data_path.with_extension("norito.tmp");
     let temp_index_path = index_path.with_extension("index.tmp");
     std::fs::write(&temp_data_path, &stable_data).expect("stage crash-temp lane artifact data");
-    std::fs::write(&temp_index_path, &stable_index)
-        .expect("stage crash-temp lane artifact index");
+    std::fs::write(&temp_index_path, &stable_index).expect("stage crash-temp lane artifact index");
     let staged_temp_bytes = u64::try_from(stable_data.len())
         .expect("lane artifact data length fits u64")
         .checked_add(
@@ -196,15 +195,15 @@ fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive Kura before tight-cap compaction recovery")
         .max_disk_usage_bytes = 1;
-    let outcome = compact_fixture_lane_histories(
-        &fixture.kura,
-        &fixture.lane_entry,
-        &fixture.frontier,
-    )
-    .expect("valid crash temp must recover before optional capacity refusal");
+    let outcome =
+        compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier)
+            .expect("valid crash temp must recover before optional capacity refusal");
     assert_eq!(outcome, LaneHistoryCompactionOutcome::CapacityBlocked);
     assert!(!temp_data_path.exists(), "recovery must promote temp data");
-    assert!(!temp_index_path.exists(), "recovery must promote temp index");
+    assert!(
+        !temp_index_path.exists(),
+        "recovery must promote temp index"
+    );
     assert_eq!(
         std::fs::read(&data_path).expect("read recovered lane artifact data"),
         stable_data,
@@ -283,12 +282,9 @@ fn lane_history_compaction_rejects_data_only_temp_before_capacity_refusal() {
         .expect("exclusive Kura before malformed tight-cap recovery")
         .max_disk_usage_bytes = 1;
 
-    let error = compact_fixture_lane_histories(
-        &fixture.kura,
-        &fixture.lane_entry,
-        &fixture.frontier,
-    )
-    .expect_err("data-only crash residue must fail before CapacityBlocked");
+    let error =
+        compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier)
+            .expect_err("data-only crash residue must fail before CapacityBlocked");
     assert_terminal_frontier_recovery_error(error, &data_path);
     assert!(temp_data_path.is_file(), "malformed evidence is retained");
     assert!(!temp_index_path.exists());
@@ -328,12 +324,9 @@ fn lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal() 
         .expect("exclusive Kura before corrupt tight-cap recovery")
         .max_disk_usage_bytes = 1;
 
-    let error = compact_fixture_lane_histories(
-        &fixture.kura,
-        &fixture.lane_entry,
-        &fixture.frontier,
-    )
-    .expect_err("corrupt temp index must fail before CapacityBlocked");
+    let error =
+        compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier)
+            .expect_err("corrupt temp index must fail before CapacityBlocked");
     assert_terminal_frontier_recovery_error(error, &data_path);
     assert!(temp_data_path.is_file(), "corrupt temp data is retained");
     assert!(temp_index_path.is_file(), "corrupt temp index is retained");

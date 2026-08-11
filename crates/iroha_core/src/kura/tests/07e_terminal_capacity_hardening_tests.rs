@@ -6,7 +6,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let lane = lane_config.primary();
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload_template) =
+    let (network_id, epoch, payload_template) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"kura-autonomous-bootstrap-height-context"),
@@ -14,7 +14,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let local_peer = PeerId::new(signer.public_key().clone());
     let (reservation_owner_hash, proposal_identity_hash) =
         autonomous_lane_reservation_identity_hashes_for_proposal(
-            chain_id_hash,
+            network_id,
             height_context_id,
             epoch,
             &payload_template.origin_proposal,
@@ -27,7 +27,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         reservation.proposal_identity_hash = proposal_identity_hash;
     }
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         payload_template.origin_proposal.clone(),
         payload_template.entrypoints.clone(),
@@ -144,7 +144,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind bootstrap local peer");
     let generation_one = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim bootstrap signing generation");
     let bootstrap_preimage = kura
         .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
@@ -235,7 +235,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert_eq!(authority.executable_payload(), &payload);
     assert_eq!(authority.binding(), &binding);
     assert!(
-        kura.current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+        kura.current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
             .is_none(),
         "bootstrap durability must precede every payload mutation",
     );
@@ -418,7 +418,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let generation_one_bytes =
         fs::read(&process_generation_path).expect("read generation-one record");
     let generation_two_record =
-        AutonomousLifecycleProcessGenerationRecordV1::new(chain_id_hash, local_peer.clone(), 2)
+        AutonomousLifecycleProcessGenerationRecordV1::new(network_id, local_peer.clone(), 2)
             .expect("construct generation-two replay record");
     let generation_two_bytes = generation_two_record
         .encode_framed()
@@ -517,7 +517,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind bootstrap local peer");
     let generation_two = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim bootstrap-only recovery generation");
     let mut inventory = kura
         .autonomous_lifecycle_bootstrap_recovery_inventory(
@@ -543,7 +543,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .is_err(),
         "recovery must never advance without fresh exact Queue and height authentication",
     );
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact payload after signed bootstrap");
     drop(kura);
 
@@ -552,7 +552,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind payload-durable local peer");
     let generation_three = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim payload-durable recovery generation");
     let authority = kura
         .autonomous_lifecycle_bootstrap_recovery_inventory(
@@ -588,7 +588,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind Prepared-durable local peer");
     let generation_four = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim Prepared-durable recovery generation");
     let authority = kura
         .autonomous_lifecycle_bootstrap_recovery_inventory(
@@ -624,7 +624,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind Live-durable local peer");
     let generation_five = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim Live-durable recovery generation");
     let authority = kura
         .autonomous_lifecycle_bootstrap_recovery_inventory(
@@ -761,8 +761,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     // target crash-stage fixtures gain payload, READY, or certified-session
     // durability before their signed bootstrap reaches that boundary.
     let terminal_source_temp_dir = TempDir::new().expect("terminal source temp dir");
-    let terminal_source_config =
-        kura_config_for_dir(&terminal_source_temp_dir, BLOCKS_IN_MEMORY);
+    let terminal_source_config = kura_config_for_dir(&terminal_source_temp_dir, BLOCKS_IN_MEMORY);
     let (terminal_source_kura, _) =
         test_kura_with_default_lane_markers(&terminal_source_config, &lane_config);
     install_autonomous_lane_marker_for_kura(&terminal_source_kura, &lane_config, &payload);
@@ -788,7 +787,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .bind_local_peer_id(local_peer.clone())
             .expect("bind terminal-bootstrap local peer");
         let terminal_generation = terminal_kura
-            .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+            .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
             .expect("claim terminal-bootstrap generation");
         install_autonomous_lane_marker_for_kura(&terminal_kura, &lane_config, &payload);
         let terminal_bootstrap_preimage = terminal_kura
@@ -821,7 +820,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         if receipt_stage != AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly {
             assert_eq!(
                 terminal_kura
-                    .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                    .persist_lane_executable_payload(&payload, network_id, epoch)
                     .expect("persist terminal-bootstrap payload"),
                 LaneBlockAuxiliaryPersistenceOutcome::Persisted,
             );
@@ -867,10 +866,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .store_block(Arc::clone(&terminal_parent))
             .expect("store receipt-terminal carrier parent");
         terminal_kura
-            .store_block_with_merge_entry(
-                Arc::clone(&terminal_carrier),
-                &terminal_merge_entry,
-            )
+            .store_block_with_merge_entry(Arc::clone(&terminal_carrier), &terminal_merge_entry)
             .expect("store receipt-terminal canonical merge carrier");
         let _ = persist_v2_finality_chain_through(
             &terminal_kura,
@@ -984,7 +980,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .bind_local_peer_id(local_peer.clone())
             .expect("rebind restarted terminal-bootstrap local peer");
         let restarted_terminal_generation = restarted_terminal_kura
-            .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+            .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
             .expect("claim restarted terminal-bootstrap generation");
         let restarted_bootstraps = restarted_terminal_kura
             .autonomous_lifecycle_bootstrap_recovery_inventory(
@@ -1039,10 +1035,7 @@ fn assert_exact_canonical_terminal_publication(
             group,
         );
         assert!(
-            source_outcome_hash
-                .as_ref()
-                .iter()
-                .any(|byte| *byte != 0),
+            source_outcome_hash.as_ref().iter().any(|byte| *byte != 0),
             "capacity publication must bind a non-zero durable source-outcome hash",
         );
     }
@@ -1073,13 +1066,13 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
             )
         })
         .collect::<Vec<_>>();
-    let chain_id_hash = payloads[0].chain_id_hash;
+    let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("canonical terminal capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal capacity peer");
     let generation = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim canonical terminal capacity generation");
 
     let mut executions = Vec::new();
@@ -1503,16 +1496,16 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         Hash::new(b"release-terminal-capacity-context"),
     ));
     let payload = canonical_terminal_payload_for_test(&lane, height_context_id, &signer, 0x51);
-    let chain_id_hash = payload.chain_id_hash;
+    let network_id = payload.network_id;
     let epoch = payload.epoch;
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("release capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind release capacity peer");
     let generation = kura
-        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim release capacity generation");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist release capacity payload");
     let (_, group) = install_live_lifecycle_cursor_for_terminal_test(
         &kura,
@@ -1522,12 +1515,12 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         &signer,
     );
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
-    kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist release capacity retirement");
     let barrier = retirement
         .queue_release_barrier()
         .expect("derive release capacity barrier");
-    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("durably release exact Queue claims");
 
     let physical = kura
@@ -1563,7 +1556,7 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     assert!(
         kura.persist_autonomous_lifecycle_release_terminal_outcome_pending(
             &retirement,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .is_err(),
@@ -1583,7 +1576,7 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let source_authorization = kura
         .persist_autonomous_lifecycle_release_terminal_outcome_pending(
             &retirement,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("release Pending fits its original exact reservation");
@@ -1619,14 +1612,13 @@ pub(crate) fn persist_merge_application_receipt_for_autonomous_payload_for_test(
         .durable_autonomous_lane_merge_source(
             payload.origin_proposal.descriptor.lane_id,
             payload.origin_proposal.descriptor.lane_block_height,
-            payload.chain_id_hash,
+            payload.network_id,
             payload.epoch,
         )
         .expect("read fully authenticated autonomous merge source");
     let execution =
         canonical_terminal_merge_execution_from_durable_source_for_test(payload, source);
-    let (parent, carrier, merge_entry) =
-        canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
     let carrier_height = carrier.header().height().get();
     let carrier_hash = carrier.hash();
     kura.store_block(parent)
@@ -1687,10 +1679,10 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         reservation_owner_hash: Hash::new(b"merge-terminal-reservation-owner"),
         proposal_identity_hash: proposal.proposal_hash,
     };
-    let chain_id_hash = Hash::new(b"merge-terminal-autonomous-chain");
+    let network_id = test_network_id(b"merge-terminal-autonomous-chain");
     let epoch = 0;
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal.clone(),
         vec![entrypoint],
@@ -1710,13 +1702,13 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     .expect("install merge-terminal lane marker");
     let execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &producer);
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&proposal, network_id, epoch)
         .expect("recover autonomous merge execution input");
     let retained_payload = kura
         .read_autonomous_lane_block_artifact(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("read retained autonomous payload before terminal receipt");
@@ -1727,8 +1719,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         )
         .expect("read retained execution input before terminal receipt");
 
-    let (parent, carrier, merge_entry) =
-        canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
     let carrier_height = carrier.header().height().get();
     let carrier_hash = carrier.hash();
     kura.store_block(parent)
@@ -1758,7 +1749,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         kura.read_autonomous_lane_block_artifact(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         Some(retained_payload.clone()),
@@ -1774,11 +1765,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     );
     let terminal_files_before_retries = snapshot_regular_files_recursively(temp_dir.path());
     let terminal_new_view = next_durable_lane_view_certificate_for_kura(
-        &proposal,
-        &payload,
-        &producer,
-        chain_id_hash,
-        epoch,
+        &proposal, &payload, &producer, network_id, epoch,
     );
     let mut forged_terminal_new_view = terminal_new_view.clone();
     forged_terminal_new_view.certificate.body.target_view = forged_terminal_new_view
@@ -1791,27 +1778,28 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
             forged_terminal_new_view,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .is_err(),
         "terminal state must not turn an invalid NewView certificate into a duplicate",
     );
-    assert!(matches!(
-        kura.persist_lane_new_view_certificate(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-            terminal_new_view,
-            chain_id_hash,
-            epoch,
+    assert!(
+        matches!(
+            kura.persist_lane_new_view_certificate(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                terminal_new_view,
+                network_id,
+                epoch,
+            ),
+            Ok(LaneBlockNewViewPersistenceOutcome::AlreadyTerminal)
         ),
-        Ok(LaneBlockNewViewPersistenceOutcome::AlreadyTerminal)
-    ),
         "a terminal receipt must prevent later NewView evidence from mutating the retained attempt",
     );
     assert!(
         matches!(
-            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch),
+            kura.persist_lane_executable_payload(&payload, network_id, epoch),
             Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal)
         ),
         "a merge receipt serialized before payload persistence must be terminal"
@@ -1827,7 +1815,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         kura.read_autonomous_lane_block_artifact(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
         ),
         Some(retained_payload),

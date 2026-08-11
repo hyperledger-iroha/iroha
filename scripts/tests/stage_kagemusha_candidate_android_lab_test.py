@@ -149,7 +149,7 @@ class Fixture:
             "generation_memory_enforcement_profile": (
                 stage.GENERATION_MEMORY_ENFORCEMENT_PROFILE
             ),
-            "bridge_abi_version": 21,
+            "bridge_abi_version": 22,
             "artifact_count": 8,
             "artifacts": artifacts,
             "topup_finality_roster_file_name": stage.ROSTER_NAME,

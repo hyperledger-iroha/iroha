@@ -14,7 +14,6 @@ export function hashLiteral(hex) {
   }
   return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
 }
-
 function browserSumeragiHash(byte) {
   const bytes = Buffer.alloc(32, byte & 0xff);
   bytes[31] |= 1;
@@ -198,4 +197,3 @@ export function browserSumeragiDiagnosticsFixture() {
     autonomous_lane_executions: [],
   };
 }
-

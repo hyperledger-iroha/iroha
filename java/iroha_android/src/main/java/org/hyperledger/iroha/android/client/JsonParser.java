@@ -246,13 +246,20 @@ public final class JsonParser {
     final String token = input.substring(start, index);
     try {
       if (!hasFraction && !hasExponent) {
+        if ("-0".equals(token)) {
+          return Double.valueOf(-0.0d);
+        }
         try {
           return Long.parseLong(token);
         } catch (NumberFormatException ex) {
           return new BigInteger(token);
         }
       }
-      return new BigDecimal(token);
+      final BigDecimal decimal = new BigDecimal(token);
+      if (token.charAt(0) == '-' && decimal.signum() == 0) {
+        return Double.valueOf(-0.0d);
+      }
+      return decimal;
     } catch (NumberFormatException ex) {
       throw new IllegalStateException("Invalid number: " + token, ex);
     }

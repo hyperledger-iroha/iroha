@@ -19,7 +19,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use futures::{SinkExt, future::join_all};
-use iroha_crypto::HashOf;
+use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     Identifiable,
     block::{
@@ -43,8 +43,8 @@ use iroha_data_model::{
     isi::{SetKeyValue, SetParameter},
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
     parameter::Parameter,
-    prelude::ChainId,
-    query::{QueryOutput, SignedQuery},
+    prelude::{AccountId, NetworkId},
+    query::{QueryOutput, QueryRequest, SignedQuery},
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::json::Json;
@@ -55,6 +55,7 @@ use iroha_torii_shared::{
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
+use rand::{TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, StatusCode,
     header::{HeaderMap, HeaderName, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
@@ -133,6 +134,9 @@ pub enum ToriiError {
     /// Norito decoding failed.
     #[error("norito decode error: {0}")]
     Decode(String),
+    /// Signed-query context could not be constructed safely.
+    #[error("signed query context error: {0}")]
+    SignedQueryContext(String),
     /// Timed out while waiting for Torii to produce a response.
     #[error("timeout while waiting for Torii: {context}")]
     Timeout { context: String },
@@ -165,6 +169,8 @@ pub enum ToriiErrorKind {
     InvalidWebSocketRequest,
     /// Norito payload decoding failed.
     Decode,
+    /// Signed-query network, time, nonce, or signing context was unavailable.
+    SignedQueryContext,
     /// Operation exceeded the configured timeout.
     Timeout,
     /// Smoke transaction was rejected or expired.
@@ -287,6 +293,11 @@ impl ToriiError {
             Self::Decode(err) => ToriiErrorInfo::with_detail(
                 ToriiErrorKind::Decode,
                 "Failed to decode Norito payload from Torii",
+                err.clone(),
+            ),
+            Self::SignedQueryContext(err) => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::SignedQueryContext,
+                "Failed to construct a replay-safe signed query",
                 err.clone(),
             ),
             Self::Timeout { context } => ToriiErrorInfo::with_detail(
@@ -623,7 +634,7 @@ pub struct ReadinessSmokePlan {
 
 #[derive(Debug, Clone)]
 struct ReadinessSmokeFactory {
-    chain_id: String,
+    network_id: NetworkId,
     signer: SigningAuthority,
     attempts: usize,
     nonce_offset: usize,
@@ -638,7 +649,7 @@ impl ReadinessSmokeFactory {
         (0..self.attempts)
             .map(|attempt| {
                 build_readiness_smoke_transaction_at(
-                    &self.chain_id,
+                    self.network_id,
                     &self.signer,
                     attempt + self.nonce_offset,
                     creation_time,
@@ -662,27 +673,27 @@ impl ReadinessSmokePlan {
         }
     }
 
-    /// Build a plan that updates metadata on the bundled genesis domain.
+    /// Build an exact-network plan that updates metadata on the signing account.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
     pub fn for_signer_with_attempts(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         attempts: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
-        Self::for_signer_with_attempts_and_offset(chain_id, signer, attempts, 0)
+        Self::for_signer_with_attempts_and_offset(network_id, signer, attempts, 0)
     }
 
-    /// Build a plan with unique nonces derived from the provided offset.
+    /// Build an exact-network plan with unique nonces derived from the provided offset.
     pub fn for_signer_with_attempts_and_offset(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         attempts: usize,
         nonce_offset: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
         let attempts = attempts.max(1);
         let factory = ReadinessSmokeFactory {
-            chain_id: chain_id.to_owned(),
+            network_id,
             signer: signer.clone(),
             attempts,
             nonce_offset,
@@ -694,12 +705,12 @@ impl ReadinessSmokePlan {
         })
     }
 
-    /// Build a single-attempt plan using the bundled development signer.
+    /// Build a single-attempt exact-network plan using the provided signer.
     pub fn for_signer(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
     ) -> Result<Self, ReadinessSmokeBuildError> {
-        Self::for_signer_with_attempts(chain_id, signer, 1)
+        Self::for_signer_with_attempts(network_id, signer, 1)
     }
 
     /// Iterator over the hashes of the configured smoke transactions.
@@ -747,9 +758,6 @@ impl ReadinessSmokePlan {
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
-    /// The configured chain identifier is not canonical.
-    #[error("invalid readiness smoke chain id `{0}`")]
-    InvalidChainId(String),
     /// Failed to construct the smoke domain identifier.
     #[error("invalid readiness smoke domain `{0}`")]
     InvalidDomain(String),
@@ -926,7 +934,7 @@ impl ReadinessSmokeAttemptCursor {
 }
 
 fn build_lane_lifecycle_transaction(
-    chain_id: &str,
+    network_id: NetworkId,
     signer: &SigningAuthority,
     status: &LaneLifecycleStatusV1,
     plan: LaneLifecyclePlan,
@@ -948,11 +956,8 @@ fn build_lane_lifecycle_transaction(
     let custom = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
         .map_err(|err| ToriiError::Decode(format!("invalid lane incarnation binding: {err}")))?
         .into_custom_parameter();
-    let chain_id = chain_id
-        .parse::<ChainId>()
-        .map_err(|error| ToriiError::Decode(format!("invalid canonical chain id: {error}")))?;
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        network_id,
         signer.account_id().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -966,15 +971,12 @@ fn build_lane_lifecycle_transaction(
 }
 
 fn build_readiness_smoke_transaction_at(
-    chain_id: &str,
+    network_id: NetworkId,
     signer: &SigningAuthority,
     attempt: usize,
     creation_time: Duration,
     ttl: Duration,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
-    let chain_id = chain_id
-        .parse::<ChainId>()
-        .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
     let now_ms = creation_time.as_millis();
     let key = "mochi_smoke"
         .parse()
@@ -983,7 +985,7 @@ fn build_readiness_smoke_transaction_at(
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
     let authority = signer.account_id().clone();
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1013,6 +1015,7 @@ impl Default for ReadinessOptions {
 pub struct ToriiClientBuilder {
     http_base: Url,
     ws_base: Url,
+    network_id: Option<NetworkId>,
     default_headers: HeaderMap,
     timeout: Option<Duration>,
 }
@@ -1024,6 +1027,7 @@ impl ToriiClientBuilder {
         Ok(Self {
             http_base,
             ws_base,
+            network_id: None,
             default_headers: HeaderMap::new(),
             timeout: None,
         })
@@ -1072,9 +1076,17 @@ impl ToriiClientBuilder {
         self
     }
 
+    /// Bind all signed queries produced by this client to one exact genesis lineage.
+    pub fn with_network_id(mut self, network_id: NetworkId) -> Self {
+        self.network_id = Some(network_id);
+        self
+    }
+
     /// Consume the builder and construct a [`ToriiClient`].
     pub fn build(self) -> ToriiResult<ToriiClient> {
-        let mut client_builder = Client::builder();
+        // Signed query bodies are one-shot. A redirect could replay the same
+        // nonce after the original endpoint already admitted the request.
+        let mut client_builder = Client::builder().redirect(reqwest::redirect::Policy::none());
         if let Some(timeout) = self.timeout {
             client_builder = client_builder.timeout(timeout);
         }
@@ -1086,6 +1098,7 @@ impl ToriiClientBuilder {
         Ok(ToriiClient {
             http_base: self.http_base,
             ws_base: self.ws_base,
+            network_id: self.network_id,
             http,
             status_state: Arc::new(Mutex::new(StatusState::default())),
             default_headers: self.default_headers,
@@ -2969,9 +2982,17 @@ where
 pub struct ToriiClient {
     http_base: Url,
     ws_base: Url,
+    network_id: Option<NetworkId>,
     http: Client,
     status_state: Arc<Mutex<StatusState>>,
     default_headers: HeaderMap,
+}
+
+#[cfg(test)]
+pub(crate) fn test_network_id() -> NetworkId {
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        .parse()
+        .expect("test network id")
 }
 
 fn canonical_event_filters() -> Vec<EventFilterBox> {
@@ -2993,6 +3014,11 @@ impl ToriiClient {
         Self::builder(base_url)?.build()
     }
 
+    /// Construct a client whose signed-query context is bound to one exact genesis lineage.
+    pub fn new_for_network(base_url: impl AsRef<str>, network_id: NetworkId) -> ToriiResult<Self> {
+        Self::builder(base_url)?.with_network_id(network_id).build()
+    }
+
     /// Start constructing a [`ToriiClient`] with custom options.
     pub fn builder(base_url: impl AsRef<str>) -> ToriiResult<ToriiClientBuilder> {
         ToriiClientBuilder::new(base_url)
@@ -3001,6 +3027,60 @@ impl ToriiClient {
     /// HTTP base URL used for REST calls (e.g., `http://127.0.0.1:8080`).
     pub fn base_url(&self) -> &str {
         self.http_base.as_str()
+    }
+
+    /// Return the immutable genesis lineage configured for signed queries.
+    pub fn network_id(&self) -> Option<NetworkId> {
+        self.network_id
+    }
+
+    fn require_network_id(&self) -> ToriiResult<NetworkId> {
+        self.network_id.ok_or_else(|| {
+            ToriiError::SignedQueryContext(
+                "client has no exact genesis network_id configured for signed requests".to_owned(),
+            )
+        })
+    }
+
+    /// Build and sign a fresh one-shot query request for this client's network.
+    pub fn sign_query(
+        &self,
+        request: QueryRequest,
+        authority: AccountId,
+        key_pair: &KeyPair,
+    ) -> ToriiResult<SignedQuery> {
+        const QUERY_TTL_MS: u64 = 100_000;
+
+        let network_id = self.require_network_id()?;
+        let creation_time_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| ToriiError::SignedQueryContext(error.to_string()))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                ToriiError::SignedQueryContext("Unix timestamp does not fit u64".to_owned())
+            })?;
+        let mut nonce = [0_u8; 32];
+        for _ in 0..16 {
+            OsRng.try_fill_bytes(&mut nonce).map_err(|error| {
+                ToriiError::SignedQueryContext(format!("OS nonce generation failed: {error}"))
+            })?;
+            if nonce != [0_u8; 32] {
+                return request
+                    .with_authority(
+                        network_id,
+                        authority,
+                        creation_time_ms,
+                        NonZeroU64::new(QUERY_TTL_MS).expect("signed-query TTL is nonzero"),
+                        nonce,
+                    )
+                    .try_sign(key_pair)
+                    .map_err(|error| ToriiError::SignedQueryContext(error.to_string()));
+            }
+        }
+        Err(ToriiError::SignedQueryContext(
+            "OS RNG repeatedly returned an all-zero query nonce".to_owned(),
+        ))
     }
 
     /// URL of the canonical `/v1/pipeline/transactions` endpoint.
@@ -3727,15 +3807,23 @@ impl ToriiClient {
 
     /// Submit and wait for a consensus-replayed Nexus lane lifecycle transaction.
     ///
+    /// The transaction is bound to the exact network configured on this client.
+    ///
     /// The status commitment is fetched once. A stale catalog or missing
     /// `CanSetParameters` permission is surfaced as a transaction rejection and
     /// is never silently retried against a different topology.
     pub async fn apply_lane_lifecycle(
         &self,
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         plan: LaneLifecyclePlan,
     ) -> ToriiResult<SmokeCommitSnapshot> {
+        let configured_network_id = self.require_network_id()?;
+        if network_id != configured_network_id {
+            return Err(ToriiError::SignedQueryContext(format!(
+                "lane lifecycle network id `{network_id}` does not match the configured client network id `{configured_network_id}`"
+            )));
+        }
         let status = self.fetch_lane_lifecycle_status().await?;
         if !status.nexus_enabled {
             return Err(ToriiError::Decode(
@@ -3749,7 +3837,7 @@ impl ToriiClient {
             .apply_lifecycle(&plan)
             .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle plan: {err}")))?;
         let previous_incarnation_root = status.incarnation_root;
-        let transaction = build_lane_lifecycle_transaction(chain_id, signer, &status, plan)?;
+        let transaction = build_lane_lifecycle_transaction(network_id, signer, &status, plan)?;
         let options = SmokeCommitOptions::default();
         let committed = self
             .submit_and_wait_for_commit(&transaction, options)

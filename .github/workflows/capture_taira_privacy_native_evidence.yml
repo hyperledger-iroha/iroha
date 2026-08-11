@@ -1314,7 +1314,7 @@ jobs:
           printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
 
           printf '%s\n' \
-            'CARGO_BUILD_JOBS=1 cargo build --locked --release -p irohad --bin irohad --features embedded-soracloud-runtime,zk-stark' \
+            'CARGO_BUILD_JOBS=1 cargo build --locked --release -p irohad --bin iroha3d --features embedded-soracloud-runtime,zk-stark' \
             >"$TAIRA_EVIDENCE_ROOT/provenance/final-irohad-build-command.txt"
           CARGO_TARGET_DIR="$final_target" \
             CARGO_BUILD_JOBS=1 \
@@ -1322,7 +1322,7 @@ jobs:
               --locked \
               --release \
               -p irohad \
-              --bin irohad \
+              --bin iroha3d \
               --features "$validator_features" \
             2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/final-irohad-build.log"
           printf '%s\n' \
@@ -1341,7 +1341,7 @@ jobs:
             2>&1 | tee "$TAIRA_EVIDENCE_ROOT/provenance/final-runner-build.log"
 
           final_runner="$final_target/release/taira_privacy_release_runner"
-          final_irohad="$final_target/release/irohad"
+          final_irohad="$final_target/release/iroha3d"
           for binary in "$final_runner" "$final_irohad"; do
             if [[ ! -x "$binary" || -L "$binary" ]] \
               || [[ "$(stat -c '%h' "$binary")" != "1" ]]; then
@@ -1455,7 +1455,7 @@ jobs:
           install -m 0555 "$TAIRA_FINAL_RUNNER" \
             "$TAIRA_EVIDENCE_ROOT/bin/taira_privacy_release_runner"
           install -m 0555 "$TAIRA_FINAL_IROHAD" \
-            "$TAIRA_EVIDENCE_ROOT/bin/irohad"
+            "$TAIRA_EVIDENCE_ROOT/bin/iroha3d"
           install -m 0444 Cargo.lock \
             "$TAIRA_EVIDENCE_ROOT/provenance/Cargo.lock"
           install -m 0444 fixtures/privacy/exact12_v1.tsv \
@@ -1482,7 +1482,7 @@ jobs:
             --x509-resource-norito "$native_dir/zk-x509-resource-v1.norito"
             --x509-resource-json "$native_dir/zk-x509-resource-v1.json"
             --cargo-lock "$TAIRA_EVIDENCE_ROOT/provenance/Cargo.lock"
-            --validator-binary "$TAIRA_EVIDENCE_ROOT/bin/irohad"
+            --validator-binary "$TAIRA_EVIDENCE_ROOT/bin/iroha3d"
           )
           "$TAIRA_EVIDENCE_ROOT/bin/taira_privacy_release_runner" verify \
             "${bundled_common_args[@]}" \
@@ -1725,7 +1725,7 @@ jobs:
               "runner_sha256": digest(
                   root / "bin/taira_privacy_release_runner"
               ),
-              "irohad_sha256": digest(root / "bin/irohad"),
+              "irohad_sha256": digest(root / "bin/iroha3d"),
               "generate_passed": True,
               "verify_passed": True,
               "bundled_verify_passed": True,

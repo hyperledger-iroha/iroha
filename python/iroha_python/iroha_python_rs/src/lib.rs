@@ -3,8 +3,10 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 
+mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
+mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
@@ -32,45 +34,21 @@ use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
 use iroha_core::{
-    privacy_engines::{
-        bootle_lantern::{
-            prove_bound_presentation_v1, relation::BootleLanternPresentationWitnessV1,
-            ring::ApplicationPolynomialV1,
-        },
-        jindo::{
-            JindoPrivacyActionTransactionContextV1, JindoPrivacyActionWitnessV1,
-            build_signed_privacy_action_v1,
-        },
-        p256::{CompressedPointV1, SecretScalarV1, TranscriptBindingV1},
-        vega::{
-            VegaMdlConsensusBindingV1, VegaMdlWitnessV1, derive_device_authentication_digest_v1,
-            prove_mdl_figure9_v1,
-        },
-        verange::{
-            VeRangeBitLengthV1, VeRangeParametersV1, VeRangeType1BatchStatementV1, commit,
-            prove_batch,
-        },
-        zk_ams::{
-            ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_RING_SIZES_V1,
-            ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1, prove_zk_ams_batch_admission_v1,
-            sign_zk_ams_provision_statement_v1, zk_ams_generator_digest_v1, zk_ams_key_image_v1,
-            zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
-        },
-    },
+    privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
         CompiledPrivacyProfileV1, compiled_privacy_profile_catalog_v1, compiled_privacy_profile_v1,
         validate_local_privacy_compiled_profile_catalog_archive_v1,
     },
 };
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
-    PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
+    Signature, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
-    kex::{KeyExchangeScheme, X25519Sha256},
     mldsa65_parse_signature,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
+    NetworkId,
     account::{
         Account,
         address::{AccountAddress, AccountAddressError},
@@ -79,17 +57,10 @@ use iroha_data_model::{
         AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
         AssetTransferLimit,
         alias::AssetDefinitionAlias,
-        definition::{AssetBalancePolicy, AssetConfidentialPolicy, validate_asset_name},
+        definition::{AssetBalancePolicy, validate_asset_name},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
-    block::{
-        BlockHeader, SignedBlock,
-        consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
-        decode_framed_signed_block,
-    },
-    consensus::{
-        CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
-    },
+    block::{BlockHeader, SignedBlock, consensus::LaneBlockCommitment, decode_framed_signed_block},
     domain::prelude::{Domain, DomainId},
     escrow::{
         AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
@@ -112,7 +83,6 @@ use iroha_data_model::{
             AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
             ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
         },
-        privacy::SubmitPrivacyProofV1,
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -120,9 +90,10 @@ use iroha_data_model::{
         },
         smart_contract_code::CommitContractDeployment,
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
-        zk::{RegisterZkAsset, VerifyProof, ZkAssetMode},
+        zk::{RegisterZkAsset, VerifyProof},
     },
     metadata::Metadata,
+    musubi::ArchiveId,
     name::Name,
     nexus::{
         DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
@@ -131,32 +102,19 @@ use iroha_data_model::{
     },
     nft::NftId,
     parameter::Parameter,
-    peer::PeerId,
     permission::Permission,
-    prelude::{AccountId, ChainId},
+    prelude::AccountId,
     privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
-        IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
-        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1, PrivacyChallengeV1,
-        PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
-        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
-        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVeRangeBitLengthV1,
-        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
-        PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509ExtendedKeyUsageV1,
-        PrivacyZkAcePolicyRecordV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
-        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
-        PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-        PrivacyZkAmsSubjectCommitmentV1, VeRangeTransparentRangeStatementV1,
-        VegaExistingCredentialStatementV1, ZK_AMS_PHC_VERSION_V1,
-        zk_ams_issuer_policy_record_digest_v1, zk_ams_registry_record_digest_v1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PrivacyChallengeV1, PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
+        PrivacyVegaIssuerRecordDigestV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
+        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
+        PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
     },
     proof::{
         ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
@@ -209,7 +167,6 @@ use iroha_torii_shared::{
     connect_sdk,
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-use iroha_zkp_halo2::vega::{VegaMdlProverConfigV1, ZkAmsMaskedProverConfigV1};
 use norito::{codec, codec::DecodeAll, decode_from_bytes, json, json::JsonSerialize};
 use pyo3::{
     Bound, FromPyObject, create_exception,
@@ -218,7 +175,8 @@ use pyo3::{
     types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
-use rand_core_06::OsRng as OsRng06;
+use rand_core_06::{OsRng as OsRng06, RngCore as _};
+use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
     fetch_plan::chunk_fetch_plan_from_json,
@@ -275,11 +233,7 @@ use sorafs_orchestrator::{
 };
 use tokio::runtime::Runtime;
 use url::{Host, Url};
-use x25519_dalek::StaticSecret;
-use zk_ace_prover::{
-    ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
-    build_signed_zk_ace_privacy_transfer_v1,
-};
+use zeroize::Zeroizing;
 
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
 const ERR_EXPECTED_ED25519: &str = "expected Ed25519 key material";
@@ -505,11 +459,6 @@ fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
     private_bytes.fill(0);
     Ok((private, public))
-}
-
-fn parse_chain_id(value: &str) -> PyResult<ChainId> {
-    ChainId::from_str(value)
-        .map_err(|err| PyValueError::new_err(format!("invalid chain id: {err}")))
 }
 
 fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
@@ -1025,15 +974,6 @@ fn dict_get_alias<'py>(
     Ok(None)
 }
 
-fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
-    match value.unwrap_or("Hybrid").trim() {
-        "Hybrid" | "hybrid" => Ok(ZkAssetMode::Hybrid),
-        other => Err(PyValueError::new_err(format!(
-            "invalid ZK asset mode `{other}`"
-        ))),
-    }
-}
-
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     value.trim().parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
@@ -1052,6 +992,25 @@ fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     }
     value.parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
+    })
+}
+
+fn parse_canonical_public_balance_scope_py(
+    value: &str,
+    context: &str,
+) -> PyResult<AssetBalanceScope> {
+    crate::privacy_native_actions::parse_canonical_public_balance_scope_v1(value).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{context} must be exactly `global` or `dataspace:<canonical positive u64>`"
+        ))
+    })
+}
+
+fn canonical_public_balance_scope_py(scope: AssetBalanceScope) -> PyResult<String> {
+    crate::privacy_native_actions::canonical_public_balance_scope_v1(scope).ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "authenticated privacy statement contains the reserved universal dataspace scope",
+        )
     })
 }
 
@@ -1527,10 +1486,11 @@ fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV
             })?
             .extract::<Vec<u8>>()?;
             let app_pk = fixed_array::<32>(&pk_bytes, "app_public_key")?;
-            let chain_id = dict_require(payload, "chain_id", || {
-                PyValueError::new_err("open.chain_id is required")
+            let network_id = *dict_require(payload, "network_id", || {
+                PyValueError::new_err("open.network_id is required")
             })?
-            .extract::<String>()?;
+            .extract::<PyRef<'_, PyNetworkId>>()?
+            .as_inner();
             let metadata = {
                 let value = payload.get_item("metadata")?;
                 parse_app_metadata(value)?
@@ -1542,7 +1502,7 @@ fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV
             Ok(ConnectControlV1::Open {
                 app_pk,
                 app_meta: metadata,
-                constraints: Constraints { chain_id },
+                constraints: Constraints { network_id },
                 permissions,
             })
         }
@@ -1956,7 +1916,15 @@ fn encode_frame_kind(py: Python<'_>, kind: &FrameKind) -> PyResult<Py<PyDict>> {
                     mapping.set_item("control_type", "Open")?;
                     let fields = PyDict::new(py);
                     fields.set_item("app_public_key", PyBytes::new(py, app_pk))?;
-                    fields.set_item("chain_id", &constraints.chain_id)?;
+                    fields.set_item(
+                        "network_id",
+                        Py::new(
+                            py,
+                            PyNetworkId {
+                                inner: constraints.network_id,
+                            },
+                        )?,
+                    )?;
                     fields.set_item("metadata", encode_app_meta_dict(py, app_meta))?;
                     fields.set_item("permissions", encode_permissions_dict(py, permissions))?;
                     mapping.set_item("fields", fields)?;
@@ -5745,7 +5713,7 @@ fn confidential_unshield_proof_v3_py_dict(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     tree_commitments,
@@ -5759,7 +5727,7 @@ fn confidential_unshield_proof_v3_py_dict(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     tree_commitments: &Bound<'_, PyAny>,
@@ -5770,7 +5738,6 @@ fn build_confidential_transfer_proof_v2_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -5792,7 +5759,7 @@ fn build_confidential_transfer_proof_v2_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &tree_commitments,
@@ -5808,7 +5775,7 @@ fn build_confidential_transfer_proof_v2_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2_with_paths", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     input_paths,
@@ -5822,7 +5789,7 @@ fn build_confidential_transfer_proof_v2_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_with_paths_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     input_paths: &Bound<'_, PyAny>,
@@ -5833,7 +5800,6 @@ fn build_confidential_transfer_proof_v2_with_paths_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -5855,7 +5821,7 @@ fn build_confidential_transfer_proof_v2_with_paths_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2_with_paths(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &input_paths,
@@ -5984,7 +5950,7 @@ fn derive_confidential_note_v2_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     tree_commitments,
@@ -5999,7 +5965,7 @@ fn derive_confidential_note_v2_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     tree_commitments: &Bound<'_, PyAny>,
@@ -6011,7 +5977,6 @@ fn build_confidential_unshield_proof_v3_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -6034,7 +5999,7 @@ fn build_confidential_unshield_proof_v3_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &tree_commitments,
@@ -6051,7 +6016,7 @@ fn build_confidential_unshield_proof_v3_py(
 
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3_with_paths", signature = (
-    chain_id,
+    network_id,
     asset_definition_id,
     spend_key,
     input_paths,
@@ -6066,7 +6031,7 @@ fn build_confidential_unshield_proof_v3_py(
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_with_paths_py(
     py: Python<'_>,
-    chain_id: &str,
+    network_id: &PyNetworkId,
     asset_definition_id: &str,
     spend_key: &Bound<'_, PyAny>,
     input_paths: &Bound<'_, PyAny>,
@@ -6078,7 +6043,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     vk_circuit_id: &str,
     vk_bytes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         PyValueError::new_err(format!(
             "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -6101,7 +6065,7 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
     let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
     let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3_with_paths(
-        &chain_id,
+        network_id.as_inner(),
         &asset_definition_id.to_string(),
         &spend_key,
         &input_paths,
@@ -6114,79 +6078,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     )
     .map_err(PyValueError::new_err)?;
     confidential_unshield_proof_v3_py_dict(py, proof)
-}
-
-#[pyfunction]
-#[pyo3(name = "generate_connect_keypair")]
-/// Generate an X25519 keypair for Connect.
-fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let scheme = X25519Sha256::new();
-    let (public, secret) = scheme.try_keypair(KeyGenOption::Random).map_err(|err| {
-        PyRuntimeError::new_err(format!("failed to generate X25519 keypair: {err}"))
-    })?;
-    let public_bytes = Py::from(PyBytes::new(py, public.as_bytes()));
-    let private_bytes = Py::from(PyBytes::new(py, secret.to_bytes().as_ref()));
-    Ok((private_bytes, public_bytes))
-}
-
-#[pyfunction]
-#[pyo3(name = "connect_public_key_from_private")]
-/// Derive the public key corresponding to an X25519 private key.
-fn connect_public_key_from_private_py(py: Python<'_>, private_key: &[u8]) -> PyResult<Py<PyBytes>> {
-    let secret_bytes = fixed_array::<32>(private_key, "private_key")?;
-    let scheme = X25519Sha256::new();
-    let static_secret = StaticSecret::from(secret_bytes);
-    let (public, _) = scheme.keypair(KeyGenOption::FromPrivateKey(static_secret));
-    Ok(Py::from(PyBytes::new(py, public.as_bytes())))
-}
-
-#[pyfunction]
-#[pyo3(name = "derive_connect_direction_keys")]
-/// Derive per-direction ChaCha20-Poly1305 keys from X25519 session material.
-fn derive_connect_direction_keys_py(
-    py: Python<'_>,
-    local_private_key: &[u8],
-    peer_public_key: &[u8],
-    sid: &[u8],
-) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let local_sk = fixed_array::<32>(local_private_key, "local_private_key")?;
-    let peer_pk = fixed_array::<32>(peer_public_key, "peer_public_key")?;
-    let sid_arr = fixed_array::<32>(sid, "sid")?;
-    let (k_app, k_wallet) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid_arr)
-        .map_err(|err| PyValueError::new_err(format!("x25519 derive keys failed: {err}")))?;
-    let app_bytes = Py::from(PyBytes::new(py, &k_app));
-    let wallet_bytes = Py::from(PyBytes::new(py, &k_wallet));
-    Ok((app_bytes, wallet_bytes))
-}
-
-#[pyfunction]
-#[pyo3(name = "build_connect_approve_preimage")]
-/// Build the canonical approval preimage for wallet signatures.
-fn build_connect_approve_preimage_py(
-    py: Python<'_>,
-    sid: &[u8],
-    app_public_key: &[u8],
-    wallet_public_key: &[u8],
-    account_id: &str,
-    permissions: Option<&Bound<'_, PyAny>>,
-    proof: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Py<PyBytes>> {
-    let sid_arr = fixed_array::<32>(sid, "sid")?;
-    let app_pk = fixed_array::<32>(app_public_key, "app_public_key")?;
-    let wallet_pk = fixed_array::<32>(wallet_public_key, "wallet_public_key")?;
-
-    let permissions_parsed = parse_permissions(permissions.cloned(), "permissions")?;
-    let proof_parsed = parse_sign_in_proof(proof.cloned())?;
-
-    let preimage = connect_sdk::build_approve_preimage(
-        &sid_arr,
-        &app_pk,
-        &wallet_pk,
-        account_id,
-        permissions_parsed.as_ref(),
-        proof_parsed.as_ref(),
-    );
-    Ok(Py::from(PyBytes::new(py, &preimage)))
 }
 
 #[pyfunction]
@@ -6251,6 +6142,33 @@ mod tests {
         });
     }
 
+    fn python_test_network_id() -> PyNetworkId {
+        PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
+    }
+
+    #[test]
+    fn python_network_id_rejects_bare_labels_unmarked_hashes_and_noncanonical_literals() {
+        ensure_python();
+        assert!(PyNetworkId::parse("test-chain").is_err());
+        assert!(PyNetworkId::from_exact_bytes(&[0xA4; Hash::LENGTH]).is_err());
+        assert!(PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH - 1]).is_err());
+
+        let network_id = python_test_network_id();
+        let literal = network_id.literal().expect("canonical NetworkId literal");
+        assert_eq!(
+            literal,
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        );
+        assert_eq!(
+            PyNetworkId::parse(&literal)
+                .expect("canonical literal")
+                .inner,
+            network_id.inner
+        );
+        assert!(PyNetworkId::parse(&literal.to_ascii_lowercase()).is_err());
+        assert!(PyNetworkId::parse(&network_id.inner.to_string()).is_err());
+    }
+
     #[test]
     fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
         ensure_python();
@@ -6266,25 +6184,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn zk_asset_mode_accepts_only_hybrid() {
-        ensure_python();
-        assert_eq!(
-            parse_zk_asset_mode(None).expect("default mode"),
-            ZkAssetMode::Hybrid
-        );
-        assert_eq!(
-            parse_zk_asset_mode(Some("hybrid")).expect("lowercase hybrid alias"),
-            ZkAssetMode::Hybrid
-        );
-        for retired in ["ZkNative", "zk_native", "zk-native", "native"] {
-            assert!(
-                parse_zk_asset_mode(Some(retired)).is_err(),
-                "retired mode alias {retired:?} must be rejected"
-            );
-        }
     }
 
     fn py_err_message(err: pyo3::PyErr) -> String {
@@ -6344,8 +6243,8 @@ mod tests {
     include!("tests/python_crypto_boundary_tests.rs");
 
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_one() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 21);
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 22);
     }
 
     #[test]
@@ -6359,15 +6258,62 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
 
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
         let envelope = builder.sign(signing.as_bytes()).expect("transaction signs");
 
         let attachments = envelope
             .attachments_json()
             .expect("attachments decode succeeds");
         assert!(attachments.is_none());
+        assert_eq!(envelope.network_id, python_test_network_id().inner);
+
+        let wrong_network = PyNetworkId::from_exact_bytes(&[0xA7; Hash::LENGTH])
+            .expect("marked wrong-network identity");
+        assert!(
+            signed_transaction_envelope_from_versioned_v1_py(
+                &envelope.signed_transaction_versioned,
+                &wrong_network,
+            )
+            .is_err(),
+            "a valid signature from another NetworkId must reject",
+        );
+
+        let envelope_json = envelope.to_json().expect("envelope JSON");
+        Python::attach(|py| {
+            let envelope_type = py.get_type::<SignedTransactionEnvelope>();
+            let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
+                .expect("exact envelope JSON roundtrip");
+            assert_eq!(restored.network_id, envelope.network_id);
+
+            for retired_key in [
+                "chain",
+                "chainId",
+                "chain_id",
+                "canonicalGenesisHash",
+                "canonical_genesis_hash",
+                "genesisHash",
+                "genesis_hash",
+            ] {
+                let retired =
+                    envelope_json.replacen("\"network_id\"", &format!("\"{retired_key}\""), 1);
+                assert!(
+                    SignedTransactionEnvelope::from_json(&envelope_type, &retired).is_err(),
+                    "retired {retired_key} envelope metadata must reject",
+                );
+            }
+
+            let unsupported =
+                envelope_json.replacen("\"authority\"", "\"unsupported\":true,\"authority\"", 1);
+            assert!(
+                SignedTransactionEnvelope::from_json(&envelope_type, &unsupported).is_err(),
+                "unknown envelope metadata must reject",
+            );
+        });
 
         let recomputed =
             canonical_signed_transaction_hash_v1(&envelope.signed_transaction_versioned)
@@ -6394,9 +6340,12 @@ mod tests {
         let authority = AccountId::new(PublicKey::from(private_key.clone()))
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
         let attachment = |byte| {
             ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -6465,9 +6414,12 @@ mod tests {
         let authority = AccountId::new(PublicKey::from(private_key))
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
         let attachment = |proof_bytes| {
             ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -6547,7 +6499,7 @@ mod tests {
     }
 
     #[test]
-    fn transaction_builder_rejects_padded_chain_id_and_authority() {
+    fn transaction_builder_rejects_invalid_network_and_authority() {
         ensure_python();
         let signing = SigningKey::from_bytes(&[0x12u8; 32]);
         let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
@@ -6555,21 +6507,9 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
 
-        for chain_id in [" test-chain", "test-chain "] {
-            let err =
-                match TransactionBuilder::new(chain_id, &authority, authority_fee_payment_json()) {
-                    Ok(_) => panic!("padded chain_id must reject before parsing"),
-                    Err(err) => err,
-                };
-            assert_eq!(
-                err.to_string(),
-                "ValueError: chain_id must not contain surrounding whitespace"
-            );
-        }
-
         for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
             let err = match TransactionBuilder::new(
-                "test-chain",
+                &python_test_network_id(),
                 &padded_authority,
                 authority_fee_payment_json(),
             ) {
@@ -8608,8 +8548,8 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
         let intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":100}}"#;
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, intent).expect("builder constructs");
+        let mut builder = TransactionBuilder::new(&python_test_network_id(), &authority, intent)
+            .expect("builder constructs");
         builder.set_creation_time_ms(42).expect("creation time");
         let draft = builder.payload_json().expect("payload JSON");
 
@@ -8619,7 +8559,8 @@ mod tests {
         assert_eq!(envelope.authority, authority);
 
         let mut substituted =
-            TransactionBuilder::new("test-chain", &authority, intent).expect("builder constructs");
+            TransactionBuilder::new(&python_test_network_id(), &authority, intent)
+                .expect("builder constructs");
         substituted.set_creation_time_ms(42).expect("creation time");
         let draft = substituted.payload_json().expect("payload JSON");
         let changed_gas = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":101}}"#;
@@ -8642,9 +8583,12 @@ mod tests {
         let authority = AccountId::new(public_key)
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
 
         let error = builder
             .set_fee_payment_json(
@@ -8672,7 +8616,7 @@ mod tests {
         ensure_python();
         let authority = canonical_i105_from_seed(0x41);
         let mut builder = TransactionBuilder::new(
-            "test-chain",
+            &python_test_network_id(),
             &authority,
             r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#,
         )
@@ -8726,9 +8670,12 @@ mod tests {
     fn transaction_builder_keeps_legacy_instruction_encoding_unless_batch_is_selected() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x42);
-        let mut legacy =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("legacy builder constructs");
+        let mut legacy = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("legacy builder constructs");
         legacy
             .add_instruction(&batch_test_instruction("legacy"))
             .expect("instruction");
@@ -8740,9 +8687,12 @@ mod tests {
             &0_u32.to_le_bytes()
         );
 
-        let mut explicit =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("batch builder constructs");
+        let mut explicit = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("batch builder constructs");
         explicit.use_executable_batch().expect("select batch");
         explicit
             .add_instruction(&batch_test_instruction("explicit"))
@@ -8763,9 +8713,12 @@ mod tests {
         let authority = canonical_i105_from_seed(0x43);
         let code_hash = Hash::new(b"python-invalid-batch-code").to_string();
 
-        let mut empty =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut empty = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
         empty.use_executable_batch().expect("select batch");
         assert!(
             empty
@@ -8775,9 +8728,12 @@ mod tests {
                 .contains("requires at least one item")
         );
 
-        let mut without_gas =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
+        let mut without_gas = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
         without_gas
             .add_contract_call(BATCH_TEST_CONTRACT_ADDRESS, &code_hash, "run", None)
             .expect("call input is valid");
@@ -8791,7 +8747,8 @@ mod tests {
 
         let gas_intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#;
         let mut invalid =
-            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+            TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
+                .expect("builder");
         assert!(
             invalid
                 .add_contract_call("bad", &code_hash, "run", None)
@@ -8819,16 +8776,16 @@ mod tests {
                 .is_err()
         );
 
-        let mut ivm =
-            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+        let mut ivm = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
+            .expect("builder");
         ivm.set_bytecode_hex("00").expect("bytecode");
         assert!(
             ivm.add_instruction(&batch_test_instruction("mixed"))
                 .is_err()
         );
 
-        let mut items =
-            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+        let mut items = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
+            .expect("builder");
         items
             .add_instruction(&batch_test_instruction("mixed"))
             .expect("instruction");
@@ -9462,23 +9419,6 @@ fn parse_mintable(mode: Option<&str>) -> PyResult<Mintable> {
     }
 }
 
-fn parse_confidential_policy(mode: Option<&str>) -> PyResult<Option<AssetConfidentialPolicy>> {
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let policy = match mode {
-        "TransparentOnly" => AssetConfidentialPolicy::transparent(),
-        "ShieldedOnly" => AssetConfidentialPolicy::shielded_only(),
-        "Convertible" => AssetConfidentialPolicy::convertible(),
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "invalid confidential policy `{other}`; expected TransparentOnly/ShieldedOnly/Convertible"
-            )));
-        }
-    };
-    Ok(Some(policy))
-}
-
 fn parse_balance_scope_policy(mode: &str) -> PyResult<AssetBalancePolicy> {
     let policy = match mode {
         "Global" => AssetBalancePolicy::Global,
@@ -9501,6 +9441,111 @@ fn asset_definition_id_to_py(
     id: &AssetDefinitionId,
 ) -> PyResult<Py<PyAssetDefinitionId>> {
     Py::new(py, PyAssetDefinitionId { inner: id.clone() })
+}
+
+#[pyclass(
+    from_py_object,
+    frozen,
+    name = "NetworkId",
+    module = "iroha_python._crypto"
+)]
+#[derive(Clone, Copy)]
+pub(crate) struct PyNetworkId {
+    inner: NetworkId,
+}
+
+impl PyNetworkId {
+    pub(crate) const fn as_inner(&self) -> &NetworkId {
+        &self.inner
+    }
+
+    fn from_exact_bytes(value: &[u8]) -> PyResult<Self> {
+        let bytes = fixed_array::<{ Hash::LENGTH }>(value, "NetworkId")?;
+        if bytes[Hash::LENGTH - 1] & 1 == 0 {
+            return Err(PyValueError::new_err(
+                "NetworkId must carry the canonical Iroha hash marker bit",
+            ));
+        }
+        Ok(Self {
+            inner: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed(bytes),
+            )),
+        })
+    }
+}
+
+fn canonical_network_id_literal(network_id: &NetworkId) -> PyResult<String> {
+    let value = norito::json::to_value(network_id)
+        .map_err(|err| PyRuntimeError::new_err(format!("failed to serialize NetworkId: {err}")))?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| PyRuntimeError::new_err("NetworkId JSON must be a string literal"))
+}
+
+#[pymethods]
+impl PyNetworkId {
+    /// Parse one exact canonical checksummed genesis-header hash literal.
+    #[staticmethod]
+    fn parse(value: &str) -> PyResult<Self> {
+        let inner = norito::json::from_value::<NetworkId>(norito::json::Value::String(
+            value.to_owned(),
+        ))
+        .map_err(|_| {
+            PyValueError::new_err(
+                "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
+            )
+        })?;
+        if canonical_network_id_literal(&inner)? != value {
+            return Err(PyValueError::new_err(
+                "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
+            ));
+        }
+        Ok(Self { inner })
+    }
+
+    /// Construct one exact NetworkId from marked genesis-header hash bytes.
+    #[staticmethod]
+    fn from_bytes(value: &[u8]) -> PyResult<Self> {
+        Self::from_exact_bytes(value)
+    }
+
+    /// Return the canonical checksummed hash literal.
+    #[getter]
+    fn literal(&self) -> PyResult<String> {
+        canonical_network_id_literal(&self.inner)
+    }
+
+    /// Return a defensive copy of the exact genesis-header hash bytes.
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.as_bytes())
+    }
+
+    fn __str__(&self) -> PyResult<String> {
+        self.literal()
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("NetworkId('{}')", self.literal()?))
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut prefix = [0_u8; 8];
+        prefix.copy_from_slice(&self.inner.as_bytes()[..8]);
+        u64::from_le_bytes(prefix)
+    }
+
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
 }
 
 #[pyclass(from_py_object, name = "DomainId", module = "iroha_python._crypto")]
@@ -9736,12 +9781,14 @@ impl Instruction {
 
     /// Construct one canonical native SoraFS replication-order issue.
     #[classmethod]
+    #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None))]
     fn issue_replication_order(
         _cls: &Bound<'_, PyType>,
         order_id: &str,
         order_payload_base64: &str,
         issued_epoch: u64,
         deadline_epoch: u64,
+        musubi_archive: Option<&str>,
     ) -> PyResult<Self> {
         let order_id = parse_nonzero_lower_hex_32(order_id, "order_id")?;
         if deadline_epoch <= issued_epoch {
@@ -9793,15 +9840,21 @@ impl Instruction {
                 "order_payload must use the canonical ReplicationOrderV1 encoding",
             ));
         }
-        Ok(Self::new(
-            IssueReplicationOrder::new(
-                ReplicationOrderId::new(order_id),
-                order_payload,
-                issued_epoch,
-                deadline_epoch,
-            )
-            .into(),
-        ))
+        let instruction = IssueReplicationOrder::new(
+            ReplicationOrderId::new(order_id),
+            order_payload,
+            issued_epoch,
+            deadline_epoch,
+        );
+        let instruction = if let Some(archive_id) = musubi_archive {
+            instruction.for_musubi_archive(ArchiveId::new(parse_nonzero_lower_hex_32(
+                archive_id,
+                "musubi_archive",
+            )?))
+        } else {
+            instruction
+        };
+        Ok(Self::new(instruction.into()))
     }
 
     /// Construct one exact six-field SoraFS provider completion.
@@ -9962,22 +10015,32 @@ impl Instruction {
 
     /// Create a new fail-closed fee sponsor program.
     #[classmethod]
-    #[pyo3(signature = (sponsor, program_name = "default"))]
+    #[pyo3(signature = (sponsor, payout_account, program_name = "default"))]
     fn create_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         sponsor: &str,
+        payout_account: &str,
         program_name: &str,
     ) -> PyResult<Self> {
         let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
         ensure_ed25519_account(&sponsor)?;
+        let payout_account = parse_account_id(payout_account).map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor payout account `{payout_account}`: {err}"
+            ))
+        })?;
+        ensure_ed25519_account(&payout_account)?;
         let program_name: Name = program_name.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor program `{program_name}`: {err}"
             ))
         })?;
-        let program = FeeSponsorProgram::new(FeeSponsorProgramId::new(sponsor, program_name));
+        let program = FeeSponsorProgram::new(
+            FeeSponsorProgramId::new(sponsor, program_name),
+            payout_account,
+        );
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::CreateFeeSponsorProgram { program }.into(),
         ))
@@ -10133,7 +10196,6 @@ impl Instruction {
         program_id: &str,
         asset_definition_id: &str,
         amount: &str,
-        destination: &str,
     ) -> PyResult<Self> {
         let amount = parse_asset_quantity(amount, "fee sponsor withdrawal amount")?;
         if amount.is_zero() {
@@ -10146,14 +10208,11 @@ impl Instruction {
                 "invalid fee sponsor asset definition `{asset_definition_id}`: {err}"
             ))
         })?;
-        let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
                 asset_definition_id,
                 amount,
-                destination,
             }
             .into(),
         ))
@@ -10192,7 +10251,7 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, confidential_policy=None, metadata=None))]
+    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition<'py>(
         _cls: &Bound<'py, PyType>,
@@ -10205,7 +10264,6 @@ impl Instruction {
         alias: Option<&str>,
         scale: Option<u32>,
         mintable: Option<&str>,
-        confidential_policy: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
@@ -10265,22 +10323,15 @@ impl Instruction {
             Mintable::Not => new_asset.with_mintable(Mintable::Not),
         };
 
-        if let Some(policy) = parse_confidential_policy(confidential_policy)? {
-            new_asset = new_asset.confidential_policy(policy);
-        }
-
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
         Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, *, mode=None, allow_shield=true, allow_unshield=true, vk_unshield=None, vk_shield=None))]
+    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None, vk_shield=None))]
     fn register_zk_asset<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
-        mode: Option<&str>,
-        allow_shield: bool,
-        allow_unshield: bool,
         vk_unshield: Option<&Bound<'py, PyAny>>,
         vk_shield: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -10289,14 +10340,12 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let instruction = RegisterZkAsset::new(
-            asset,
-            parse_zk_asset_mode(mode)?,
-            allow_shield,
-            allow_unshield,
-            parse_verifying_key_id_py(vk_unshield, "vk_unshield")?,
-            parse_verifying_key_id_py(vk_shield, "vk_shield")?,
-        );
+        let vk_unshield = parse_verifying_key_id_py(vk_unshield, "vk_unshield")?;
+        let vk_shield = parse_verifying_key_id_py(vk_shield, "vk_shield")?;
+        let instruction = RegisterZkAsset::new(asset, vk_unshield, vk_shield);
+        instruction
+            .validate_verifier_roles()
+            .map_err(PyValueError::new_err)?;
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -11300,240 +11349,6 @@ impl Instruction {
     }
 }
 
-/// Thin wrapper around [`TransactionBuilder`] with JSON instruction support.
-struct ZeroizingJindoWitnessBytes(Vec<Vec<Vec<u8>>>);
-
-impl ZeroizingJindoWitnessBytes {
-    fn erase(&mut self) {
-        for polynomial in &mut self.0 {
-            for coefficient in polynomial {
-                coefficient.fill(0);
-            }
-        }
-    }
-}
-
-impl Drop for ZeroizingJindoWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingVeRangeWitnessBytes {
-    values: Vec<u64>,
-    blindings: Vec<Vec<u8>>,
-}
-
-impl ZeroizingVeRangeWitnessBytes {
-    fn erase(&mut self) {
-        self.values.fill(0);
-        for blinding in &mut self.blindings {
-            blinding.fill(0);
-        }
-    }
-}
-
-impl Drop for ZeroizingVeRangeWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingVegaWitnessBytes {
-    issuer_authentication_sig_structure: Vec<u8>,
-    mobile_security_object_payload: Vec<u8>,
-    birth_date_issuer_signed_item: Vec<u8>,
-    issuer_signature: Vec<u8>,
-    device_signature: Vec<u8>,
-}
-
-impl ZeroizingVegaWitnessBytes {
-    fn erase(&mut self) {
-        self.issuer_authentication_sig_structure.fill(0);
-        self.mobile_security_object_payload.fill(0);
-        self.birth_date_issuer_signed_item.fill(0);
-        self.issuer_signature.fill(0);
-        self.device_signature.fill(0);
-    }
-}
-
-impl Drop for ZeroizingVegaWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingZkAmsBatchWitnessBytes {
-    subject_commitments: Vec<Vec<u8>>,
-    credential_nonces: Vec<Vec<u8>>,
-    seed_secrets: Vec<Vec<u8>>,
-    issuer_signatures: Vec<Vec<u8>>,
-}
-
-impl ZeroizingZkAmsBatchWitnessBytes {
-    fn erase(&mut self) {
-        for bytes in self
-            .subject_commitments
-            .iter_mut()
-            .chain(&mut self.credential_nonces)
-            .chain(&mut self.seed_secrets)
-            .chain(&mut self.issuer_signatures)
-        {
-            bytes.fill(0);
-        }
-    }
-}
-
-impl Drop for ZeroizingZkAmsBatchWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingZkAmsBatchNativeMaterial {
-    credentials: Vec<PrivacyZkAmsPersonhoodCredentialV1>,
-    issuer_signatures: Vec<[u8; 64]>,
-    seed_secrets: Vec<ZkAmsSeedSecretV1>,
-}
-
-impl ZeroizingZkAmsBatchNativeMaterial {
-    fn erase(&mut self) {
-        for credential in &mut self.credentials {
-            *credential = PrivacyZkAmsPersonhoodCredentialV1 {
-                version: 0,
-                issuer_id: PrivacyIssuerIdV1::new([0; 32]),
-                policy_id: PrivacyPolicyIdV1::new([0; 32]),
-                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new([0; 32]),
-                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new([0; 32]),
-                credential_nonce: PrivacyZkAmsCredentialNonceV1::new([0; 32]),
-            };
-        }
-        self.issuer_signatures.fill([0; 64]);
-        self.seed_secrets.clear();
-    }
-}
-
-impl Drop for ZeroizingZkAmsBatchNativeMaterial {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingZkAmsProvisionWitnessBytes(Vec<u8>);
-
-impl ZeroizingZkAmsProvisionWitnessBytes {
-    fn erase(&mut self) {
-        self.0.fill(0);
-    }
-}
-
-impl Drop for ZeroizingZkAmsProvisionWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingBootleLanternWitnessBytes {
-    secret_polynomials: Vec<Vec<u16>>,
-    attributes: Vec<Vec<u8>>,
-}
-
-impl ZeroizingBootleLanternWitnessBytes {
-    fn erase(&mut self) {
-        for polynomial in &mut self.secret_polynomials {
-            polynomial.fill(0);
-        }
-        for attribute in &mut self.attributes {
-            attribute.fill(0);
-        }
-    }
-}
-
-impl Drop for ZeroizingBootleLanternWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-struct ZeroizingZkAceWitnessBytes {
-    identity_root: Vec<u8>,
-    identity_blinding: Vec<u8>,
-    replay_secret: Vec<u8>,
-}
-
-impl ZeroizingZkAceWitnessBytes {
-    fn erase(&mut self) {
-        self.identity_root.fill(0);
-        self.identity_blinding.fill(0);
-        self.replay_secret.fill(0);
-    }
-}
-
-impl Drop for ZeroizingZkAceWitnessBytes {
-    fn drop(&mut self) {
-        self.erase();
-    }
-}
-
-const BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1: usize = 64 * 1024;
-const BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1: usize = 40;
-const BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1: usize = 64;
-const ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1: usize = 64 * 1024;
-
-fn python_bootle_lantern_policy_v1(
-    canonical_policy_archive: &[u8],
-) -> PyResult<BootleLanternIssuerPolicyV1> {
-    if canonical_policy_archive.is_empty()
-        || canonical_policy_archive.len() > BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1
-    {
-        return Err(PyValueError::new_err(format!(
-            "canonical_policy_archive must contain between 1 and {BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1} bytes"
-        )));
-    }
-    let policy =
-        norito::decode_canonical::<BootleLanternIssuerPolicyV1>(canonical_policy_archive)
-            .map_err(|_| {
-                PyValueError::new_err(
-                    "canonical_policy_archive is not the exact canonical Bootle/Lantern issuer-policy wire",
-                )
-            })?;
-    policy.validate().map_err(|error| {
-        PyValueError::new_err(format!(
-            "canonical_policy_archive contains an invalid Bootle/Lantern issuer policy: {error}"
-        ))
-    })?;
-    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
-        return Err(PyValueError::new_err(
-            "canonical_policy_archive selects a revoked Bootle/Lantern issuer policy",
-        ));
-    }
-    Ok(policy)
-}
-
-fn python_zk_ace_policy_v1(
-    canonical_policy_archive: &[u8],
-) -> PyResult<PrivacyZkAcePolicyRecordV1> {
-    if canonical_policy_archive.is_empty()
-        || canonical_policy_archive.len() > ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1
-    {
-        return Err(PyValueError::new_err(format!(
-            "canonical_policy_archive must contain between 1 and {ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1} bytes"
-        )));
-    }
-    let policy = norito::decode_canonical::<PrivacyZkAcePolicyRecordV1>(canonical_policy_archive)
-        .map_err(|_| {
-        PyValueError::new_err(
-            "canonical_policy_archive is not the exact canonical ZK-ACE policy-record wire",
-        )
-    })?;
-    policy.validate().map_err(|error| {
-        PyValueError::new_err(format!(
-            "canonical_policy_archive contains an invalid ZK-ACE policy record: {error}"
-        ))
-    })?;
-    Ok(policy)
-}
-
 fn python_zk_x509_statement_archive_v1(
     canonical_statement_archive: &[u8],
 ) -> PyResult<IrohaZkX509StarkP256StatementV1> {
@@ -11551,211 +11366,15 @@ fn python_zk_x509_statement_archive_v1(
         })
 }
 
-fn python_bootle_lantern_polynomials_v1<const N: usize>(
-    rows: &mut [Vec<u16>],
-    label: &str,
-) -> PyResult<[ApplicationPolynomialV1; N]> {
-    if rows.len() != N {
-        return Err(PyValueError::new_err(format!(
-            "{label} must contain exactly {N} polynomials"
-        )));
-    }
-    let mut output = [ApplicationPolynomialV1::ZERO; N];
-    for (index, row) in rows.iter_mut().enumerate() {
-        if row.len() != BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1 {
-            return Err(PyValueError::new_err(format!(
-                "{label}[{index}] must contain exactly {BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1} coefficients"
-            )));
-        }
-        let coefficients: [u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1] = row
-            .as_slice()
-            .try_into()
-            .expect("length checked immediately above");
-        row.fill(0);
-        output[index] = ApplicationPolynomialV1::new(coefficients).map_err(|error| {
-            PyValueError::new_err(format!(
-                "{label}[{index}] contains a non-canonical coefficient: {error}"
-            ))
-        })?;
-    }
-    Ok(output)
-}
-
 #[derive(Clone)]
 struct PythonPrivacyActionTransactionContextV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     creation_time: Duration,
     time_to_live: Option<Duration>,
     nonce: Option<NonZeroU32>,
     fee_payment: FeePaymentIntent,
     metadata: Metadata,
-}
-
-fn python_privacy_statement_context_v1(
-    context: &PythonPrivacyActionTransactionContextV1,
-    profile: CompiledPrivacyProfileV1,
-    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
-) -> PrivacyStatementContextV1 {
-    PrivacyStatementContextV1 {
-        chain_id: context.chain_id.clone(),
-        action_index: 0,
-        transaction_intent_digest,
-        parameter_id: profile.parameter_id,
-        parameter_digest: profile.parameter_digest,
-        verifier_digest: profile.verifier_digest,
-        statement_schema_digest: profile.statement_schema_digest,
-        engine_manifest_digest: profile.engine_manifest_digest,
-    }
-}
-
-/// Construct the canonical pre-proof envelope used only for transaction-intent
-/// projection.
-///
-/// The shared intent algorithm erases proof bytes, the statement's intent
-/// digest, and the envelope statement digest before hashing. The zero digest
-/// here is therefore the exact unresolved derived field and is never emitted
-/// in a verifier-visible envelope.
-fn python_privacy_intent_projection_envelope_v1(
-    profile: CompiledPrivacyProfileV1,
-    statement: PrivacyStatementV1,
-    proof: PrivacyProofV1,
-) -> PrivacyProofEnvelopeV1 {
-    PrivacyProofEnvelopeV1 {
-        protocol_id: profile.protocol_id,
-        proof_system_id: profile.proof_system_id,
-        engine_id: profile.engine_id,
-        parameter_id: profile.parameter_id,
-        parameter_digest: profile.parameter_digest,
-        verifier_digest: profile.verifier_digest,
-        statement_schema_digest: profile.statement_schema_digest,
-        engine_manifest_digest: profile.engine_manifest_digest,
-        statement_digest: PrivacyStatementDigestV1::new([0; 32]),
-        statement,
-        proof,
-    }
-}
-
-fn python_privacy_action_payload_v1(
-    context: &PythonPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
-) -> PyResult<TransactionPayload> {
-    let mut builder = ModelTransactionBuilder::new(
-        context.chain_id.clone(),
-        context.authority.clone(),
-        context.fee_payment.clone(),
-    )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-    .with_metadata(context.metadata.clone());
-    builder.set_creation_time(context.creation_time);
-    if let Some(time_to_live) = context.time_to_live {
-        builder.set_ttl(time_to_live);
-    }
-    if let Some(nonce) = context.nonce {
-        builder.set_nonce(nonce);
-    }
-    builder.into_payload().map_err(|_| {
-        PyValueError::new_err("native privacy action has an invalid transaction context")
-    })
-}
-
-fn python_privacy_action_intent_v1(
-    context: &PythonPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
-) -> PyResult<PrivacyTransactionIntentDigestV1> {
-    python_privacy_action_payload_v1(context, envelope)?
-        .privacy_transaction_intent_digest_v1()
-        .map_err(|_| {
-            PyValueError::new_err("native privacy action intent digest construction failed")
-        })
-}
-
-struct PythonSignedPrivacyActionV1 {
-    signed_transaction: SignedTransaction,
-    transaction_hash: [u8; 32],
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-}
-
-fn finalize_python_privacy_action_v1(
-    context: &PythonPrivacyActionTransactionContextV1,
-    profile: CompiledPrivacyProfileV1,
-    statement: PrivacyStatementV1,
-    proof: PrivacyProofV1,
-    private_key: &PrivateKey,
-) -> PyResult<PythonSignedPrivacyActionV1> {
-    let statement_digest = statement
-        .digest()
-        .map_err(|_| PyRuntimeError::new_err("native privacy statement digest failed"))?;
-    let statement_bytes = u32::try_from(
-        norito::to_bytes(&statement)
-            .map_err(|_| PyRuntimeError::new_err("native privacy statement encoding failed"))?
-            .len(),
-    )
-    .map_err(|_| PyRuntimeError::new_err("native privacy statement length overflowed"))?;
-    let proof_bytes = u32::try_from(proof.bytes().as_bytes().len())
-        .map_err(|_| PyRuntimeError::new_err("native privacy proof length overflowed"))?;
-    let envelope = PrivacyProofEnvelopeV1 {
-        protocol_id: profile.protocol_id,
-        proof_system_id: profile.proof_system_id,
-        engine_id: profile.engine_id,
-        parameter_id: profile.parameter_id,
-        parameter_digest: profile.parameter_digest,
-        verifier_digest: profile.verifier_digest,
-        statement_schema_digest: profile.statement_schema_digest,
-        engine_manifest_digest: profile.engine_manifest_digest,
-        statement_digest,
-        statement,
-        proof,
-    };
-    envelope
-        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
-        .map_err(|error| {
-            PyRuntimeError::new_err(format!(
-                "native privacy proof envelope validation failed: {error}"
-            ))
-        })?;
-    let envelope_encoding = norito::to_bytes(&envelope)
-        .map_err(|_| PyRuntimeError::new_err("native privacy proof envelope encoding failed"))?;
-    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
-        .map_err(|_| PyRuntimeError::new_err("native privacy proof envelope length overflowed"))?;
-    let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
-    let payload = python_privacy_action_payload_v1(context, envelope)?;
-    let transaction_intent_digest = payload
-        .validate_privacy_transaction_intent_binding_v1()
-        .map_err(|_| PyRuntimeError::new_err("native privacy action intent binding failed"))?;
-    let signed_transaction = ModelTransactionBuilder::from_payload(payload)
-        .map_err(|_| PyValueError::new_err("native privacy transaction payload is invalid"))?
-        .try_sign(private_key)
-        .map_err(|_| PyValueError::new_err("native privacy transaction signing failed"))?;
-    let signed_intent = signed_transaction
-        .privacy_transaction_intent_digest_v1()
-        .map_err(|_| PyRuntimeError::new_err("signed privacy action intent validation failed"))?;
-    if signed_intent != transaction_intent_digest {
-        return Err(PyRuntimeError::new_err(
-            "signed privacy action intent digest changed during signing",
-        ));
-    }
-    let transaction_hash = *signed_transaction.hash().as_ref();
-    let adaptive_signed_transaction_bytes =
-        u32::try_from(norito::codec::encode_adaptive(&signed_transaction).len())
-            .map_err(|_| PyRuntimeError::new_err("signed privacy action length overflowed"))?;
-    Ok(PythonSignedPrivacyActionV1 {
-        signed_transaction,
-        transaction_hash,
-        transaction_intent_digest: *transaction_intent_digest.as_bytes(),
-        statement_digest: *statement_digest.as_bytes(),
-        proof_envelope_hash,
-        statement_bytes,
-        proof_bytes,
-        encoded_proof_envelope_bytes,
-        adaptive_signed_transaction_bytes,
-    })
 }
 
 fn python_compiled_privacy_profile_v1(
@@ -11779,127 +11398,6 @@ fn python_nonzero_privacy_digest_v1(value: &[u8], field: &str) -> PyResult<[u8; 
     Ok(digest)
 }
 
-#[derive(Clone, Copy)]
-struct PythonZkAmsGovernanceV1 {
-    issuer_id: PrivacyIssuerIdV1,
-    issuer_public_key: PrivacyP256PointV1,
-    issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
-    registry_id: PrivacyZkAmsRegistryIdV1,
-    registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
-    policy_id: PrivacyPolicyIdV1,
-    policy_digest: PrivacyPolicyDigestV1,
-    account_registry_root: PrivacyRootV1,
-    account_registry_root_epoch: u64,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn python_zk_ams_governance_v1(
-    issuer_id: &[u8],
-    issuer_public_key: &[u8],
-    issuer_policy_record_digest: &[u8],
-    registry_id: &[u8],
-    registry_record_digest: &[u8],
-    policy_id: &[u8],
-    policy_digest: &[u8],
-    account_registry_root: &[u8],
-    account_registry_root_epoch: u64,
-) -> PyResult<PythonZkAmsGovernanceV1> {
-    if account_registry_root_epoch == 0 {
-        return Err(PyValueError::new_err(
-            "account_registry_root_epoch must be greater than zero",
-        ));
-    }
-    let issuer_id =
-        PrivacyIssuerIdV1::new(python_nonzero_privacy_digest_v1(issuer_id, "issuer_id")?);
-    let issuer_public_key = CompressedPointV1::from_slice(issuer_public_key).map_err(|error| {
-        PyValueError::new_err(format!(
-            "issuer_public_key is not a canonical compressed non-identity P-256 point: {error}"
-        ))
-    })?;
-    let issuer_public_key = PrivacyP256PointV1::new(*issuer_public_key.as_bytes());
-    let issuer_policy_record_digest =
-        PrivacyZkAmsIssuerPolicyRecordDigestV1::new(python_nonzero_privacy_digest_v1(
-            issuer_policy_record_digest,
-            "issuer_policy_record_digest",
-        )?);
-    let registry_id = PrivacyZkAmsRegistryIdV1::new(python_nonzero_privacy_digest_v1(
-        registry_id,
-        "registry_id",
-    )?);
-    let registry_record_digest = PrivacyZkAmsRegistryRecordDigestV1::new(
-        python_nonzero_privacy_digest_v1(registry_record_digest, "registry_record_digest")?,
-    );
-    let policy_id =
-        PrivacyPolicyIdV1::new(python_nonzero_privacy_digest_v1(policy_id, "policy_id")?);
-    let policy_digest = PrivacyPolicyDigestV1::new(python_nonzero_privacy_digest_v1(
-        policy_digest,
-        "policy_digest",
-    )?);
-    let account_registry_root = PrivacyRootV1::new(python_nonzero_privacy_digest_v1(
-        account_registry_root,
-        "account_registry_root",
-    )?);
-
-    let expected_issuer_policy_record_digest = zk_ams_issuer_policy_record_digest_v1(
-        issuer_id,
-        policy_id,
-        issuer_public_key,
-        policy_digest,
-    );
-    if issuer_policy_record_digest != expected_issuer_policy_record_digest {
-        return Err(PyValueError::new_err(
-            "issuer_policy_record_digest does not authenticate the exact ZK-AMS issuer, key, policy, and policy digest",
-        ));
-    }
-    let expected_registry_record_digest = zk_ams_registry_record_digest_v1(
-        issuer_id,
-        registry_id,
-        policy_id,
-        issuer_policy_record_digest,
-        policy_digest,
-        account_registry_root,
-        account_registry_root_epoch,
-    );
-    if registry_record_digest != expected_registry_record_digest {
-        return Err(PyValueError::new_err(
-            "registry_record_digest does not authenticate the exact ZK-AMS governance record and current root/epoch",
-        ));
-    }
-
-    Ok(PythonZkAmsGovernanceV1 {
-        issuer_id,
-        issuer_public_key,
-        issuer_policy_record_digest,
-        registry_id,
-        registry_record_digest,
-        policy_id,
-        policy_digest,
-        account_registry_root,
-        account_registry_root_epoch,
-    })
-}
-
-fn python_zk_ams_transcript_binding_v1<'a>(
-    context: &'a PythonPrivacyActionTransactionContextV1,
-    profile: CompiledPrivacyProfileV1,
-    canonical_genesis_hash: [u8; 32],
-    statement_digest: [u8; 32],
-) -> TranscriptBindingV1<'a> {
-    TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
-        genesis_hash: canonical_genesis_hash,
-        action_index: 0,
-        statement_digest,
-        parameter_id: *profile.parameter_id.as_bytes(),
-        parameter_digest: *profile.parameter_digest.as_bytes(),
-        verifier_digest: *profile.verifier_digest.as_bytes(),
-        statement_schema_digest: *profile.statement_schema_digest.as_bytes(),
-        engine_manifest_digest: *profile.engine_manifest_digest.as_bytes(),
-        generator_digest: zk_ams_generator_digest_v1(),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 fn python_vega_draft_statement_v1(
     context: PrivacyStatementContextV1,
     issuer_id: [u8; 32],
@@ -11986,10 +11484,14 @@ fn python_vega_statement_v1(
     )
 }
 
+/// Native transaction builder with JSON instruction support.
+///
+/// Generic privacy proving is intentionally absent: the Rust-owned wallet
+/// worker accepts an owner-only credential path and returns signed public wire.
 #[pyclass(from_py_object, module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     fee_payment: FeePaymentIntent,
     creation_time: Option<Duration>,
@@ -12000,6 +11502,8 @@ struct TransactionBuilder {
     metadata: Metadata,
     executable_override: Option<Executable>,
     attachments: Option<ProofAttachmentList>,
+    privacy_capability_manifest:
+        Option<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
 }
 
 impl TransactionBuilder {
@@ -12013,7 +11517,11 @@ impl TransactionBuilder {
         .map_err(|error| PyValueError::new_err(format!("invalid proof attachment list: {error}")))
     }
 
-    fn require_empty_privacy_action_builder_v1(&self, protocol_label: &str) -> PyResult<()> {
+    fn require_empty_privacy_action_builder_v1(
+        &self,
+        protocol_id: PrivacyProtocolIdV1,
+        protocol_label: &str,
+    ) -> PyResult<()> {
         if self.explicit_batch
             || !self.executable_items.is_empty()
             || self.executable_override.is_some()
@@ -12023,6 +11531,12 @@ impl TransactionBuilder {
                 "native {protocol_label} action requires an otherwise empty transaction builder"
             )));
         }
+        let manifest = self.privacy_capability_manifest.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "native {protocol_label} construction requires a validated Torii Exact12 capability manifest"
+            ))
+        })?;
+        manifest.require_network_profile(protocol_id)?;
         Ok(())
     }
 
@@ -12031,7 +11545,7 @@ impl TransactionBuilder {
         // final signing must use this same signature-bound millisecond value.
         let resolved_builder = self.to_model_builder();
         PythonPrivacyActionTransactionContextV1 {
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             authority: self.authority.clone(),
             creation_time: Duration::from_millis(resolved_builder.payload().creation_time_ms),
             time_to_live: self.ttl,
@@ -12046,7 +11560,7 @@ impl TransactionBuilder {
     ) -> crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
         let context = self.privacy_action_transaction_context_v1();
         crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
-            chain_id: context.chain_id,
+            network_id: context.network_id,
             authority: context.authority,
             creation_time: context.creation_time,
             time_to_live: context.time_to_live,
@@ -12101,59 +11615,6 @@ impl TransactionBuilder {
         })
     }
 
-    fn sign_privacy_wallet_bundle_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-        expected_protocol: PrivacyProtocolIdV1,
-        protocol_label: &'static str,
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.require_empty_privacy_action_builder_v1(protocol_label)?;
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let mut execution_bundle = zeroize::Zeroizing::new(execution_bundle);
-        let decoded = crate::privacy_wallet_bundle::decode_privacy_wallet_execution_bundle_v1(
-            execution_bundle.as_mut_slice(),
-            public_action_json,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid {protocol_label} wallet execution bundle at {}",
-                error.stage()
-            ))
-        })?;
-        if decoded.manifest.protocol_id != expected_protocol
-            || decoded.request.protocol_id() != expected_protocol
-        {
-            return Err(PyValueError::new_err(format!(
-                "wallet execution bundle is not an exact {protocol_label} request"
-            )));
-        }
-        if decoded.manifest.authority != self.authority {
-            return Err(PyValueError::new_err(
-                "wallet execution bundle authority does not match the transaction builder",
-            ));
-        }
-        let context = self.privacy_native_action_transaction_context_v1();
-        let signed = crate::privacy_native_actions::build_signed_privacy_native_action_v1(
-            context,
-            decoded.request,
-            canonical_genesis_hash,
-            &decoded.signer_private_key,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "native {protocol_label} action failed at {}",
-                error.stage()
-            ))
-        })?;
-        let result = self.privacy_native_action_build_result_v1(py, &signed)?;
-        self.clear_transaction_state();
-        Ok(result)
-    }
-
     fn validate_executable(&self) -> PyResult<()> {
         if self.executable_override.is_some()
             && (self.explicit_batch || !self.executable_items.is_empty())
@@ -12182,7 +11643,7 @@ impl TransactionBuilder {
 
     fn to_model_builder(&self) -> ModelTransactionBuilder {
         let mut builder = ModelTransactionBuilder::new(
-            self.chain_id.clone(),
+            self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
         );
@@ -12232,7 +11693,7 @@ impl TransactionBuilder {
         let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
         let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
         Ok(SignedTransactionEnvelope {
-            chain_id: self.chain_id.to_string(),
+            network_id: self.network_id,
             authority: self.authority.to_string(),
             signed_transaction: signed_bytes,
             signed_transaction_versioned: signed_versioned,
@@ -12247,16 +11708,15 @@ impl TransactionBuilder {
         self.explicit_batch = false;
         self.executable_override = None;
         self.attachments = None;
+        self.privacy_capability_manifest = None;
     }
 }
 
 #[pymethods]
 impl TransactionBuilder {
     #[new]
-    fn new(chain_id: &str, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
-        require_non_blank_unpadded(chain_id, "chain_id")?;
+    fn new(network_id: &PyNetworkId, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(authority, "authority")?;
-        let chain_id = parse_chain_id(chain_id)?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;
         let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
@@ -12266,7 +11726,7 @@ impl TransactionBuilder {
                 PyValueError::new_err(format!("system clock precedes UNIX epoch: {err}"))
             })?;
         Ok(Self {
-            chain_id,
+            network_id: network_id.inner,
             authority,
             fee_payment,
             creation_time: Some(creation_time),
@@ -12277,7 +11737,26 @@ impl TransactionBuilder {
             metadata: Metadata::default(),
             executable_override: None,
             attachments: None,
+            privacy_capability_manifest: None,
         })
+    }
+
+    /// Bind the exact canonical manifest fetched from authenticated Torii state.
+    ///
+    /// Every native privacy constructor consumes this binding and rejects a
+    /// locally available profile unless its complete tuple is active and
+    /// byte-for-byte equal to the committed manifest row.
+    fn bind_privacy_exact12_capability_manifest_v1(
+        &mut self,
+        manifest: PyRef<'_, privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
+    ) -> PyResult<()> {
+        if self.privacy_capability_manifest.is_some() {
+            return Err(PyValueError::new_err(
+                "transaction builder already has an Exact12 capability manifest binding",
+            ));
+        }
+        self.privacy_capability_manifest = Some(manifest.clone());
+        Ok(())
     }
 
     /// Replace the exact signature-bound fee payment intent.
@@ -12565,100 +12044,6 @@ impl TransactionBuilder {
         Ok(envelope)
     }
 
-    /// Build and sign one canonical Anonymous-PGC payment from an owner-only bundle.
-    ///
-    /// The supported SDK surface is deliberately bundle-backed: signer and
-    /// witness material are decoded by the same strict Rust boundary used by
-    /// the isolated worker and never reconstructed in this binding.
-    fn sign_privacy_anonymous_pgc_payment_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.sign_privacy_wallet_bundle_action_v1(
-            py,
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            "Anonymous-PGC",
-        )
-    }
-
-    /// Build and sign one canonical Orchard note action from an owner-only bundle.
-    fn sign_privacy_orchard_note_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.sign_privacy_wallet_bundle_action_v1(
-            py,
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            "Orchard",
-        )
-    }
-
-    /// Build and sign one canonical FCMP++ payment from an owner-only bundle.
-    fn sign_privacy_fcmp_membership_payment_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.sign_privacy_wallet_bundle_action_v1(
-            py,
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            "FCMP++",
-        )
-    }
-
-    /// Build and sign one canonical private-IVM note action from an owner-only bundle.
-    fn sign_privacy_ivm_private_note_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.sign_privacy_wallet_bundle_action_v1(
-            py,
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            "private-IVM note",
-        )
-    }
-
-    /// Build and sign one canonical PQ-MASP note action from an owner-only bundle.
-    fn sign_privacy_pq_masp_note_action_v1(
-        &mut self,
-        py: Python<'_>,
-        execution_bundle: Vec<u8>,
-        public_action_json: &[u8],
-        canonical_genesis_hash: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.sign_privacy_wallet_bundle_action_v1(
-            py,
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-            PrivacyProtocolIdV1::PqMaspStarkV0,
-            "PQ-MASP",
-        )
-    }
-
     /// Derive the sole transaction intent that an isolated ZK-X509 prover worker must bind.
     ///
     /// The canonical statement archive must contain the exact public action
@@ -12669,12 +12054,18 @@ impl TransactionBuilder {
         py: Python<'py>,
         canonical_statement_archive: &[u8],
     ) -> PyResult<Bound<'py, PyBytes>> {
-        self.require_empty_privacy_action_builder_v1("ZK-X509")?;
+        self.require_empty_privacy_action_builder_v1(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            "ZK-X509",
+        )?;
+        let canonical_genesis_hash = *self.network_id.as_bytes();
         let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
         let context = self.privacy_native_action_transaction_context_v1();
         let intent =
             crate::privacy_native_actions::prepare_zk_x509_identity_presentation_action_intent_v1(
-                &context, &statement,
+                &context,
+                canonical_genesis_hash,
+                &statement,
             )
             .map_err(|error| {
                 PyValueError::new_err(format!(
@@ -12697,19 +12088,20 @@ impl TransactionBuilder {
         &mut self,
         py: Python<'_>,
         private_key: &[u8],
-        canonical_genesis_hash: &[u8],
         canonical_statement_archive: &[u8],
         credential_proof: &[u8],
     ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.require_empty_privacy_action_builder_v1("ZK-X509")?;
+        self.require_empty_privacy_action_builder_v1(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            "ZK-X509",
+        )?;
         let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1;
         if credential_proof.is_empty() || credential_proof.len() > maximum {
             return Err(PyValueError::new_err(format!(
                 "credential_proof must contain between 1 and {maximum} bytes"
             )));
         }
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let canonical_genesis_hash = *self.network_id.as_bytes();
         let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
         let private_key = parse_private_key(private_key)?;
         self.validate_privacy_action_signing_authority_v1(&private_key)?;
@@ -12736,1280 +12128,6 @@ impl TransactionBuilder {
         let result = self.privacy_native_action_build_result_v1(py, &signed)?;
         self.clear_transaction_state();
         Ok(result)
-    }
-
-    /// Build and sign one canonical, intent-bound ZK-ACE transparent transfer.
-    ///
-    /// The governed policy is accepted only as its canonical typed archive.
-    /// The three witness components move into zeroizing native storage and
-    /// never appear in the returned public result.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        canonical_policy_archive,
-        source_account_id,
-        destination_account_id,
-        amount,
-        identity_root,
-        identity_blinding,
-        replay_secret
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn sign_privacy_zk_ace_transfer_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        canonical_policy_archive: &[u8],
-        source_account_id: &str,
-        destination_account_id: &str,
-        amount: &str,
-        identity_root: Vec<u8>,
-        identity_blinding: Vec<u8>,
-        replay_secret: Vec<u8>,
-    ) -> PyResult<PrivacyZkAceTransferActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingZkAceWitnessBytes {
-            identity_root,
-            identity_blinding,
-            replay_secret,
-        };
-        self.require_empty_privacy_action_builder_v1("ZK-ACE transparent-transfer")?;
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let policy = python_zk_ace_policy_v1(canonical_policy_archive)?;
-        let source = parse_exact_i105_account_id(source_account_id, "source_account_id")?;
-        let destination =
-            parse_exact_i105_account_id(destination_account_id, "destination_account_id")?;
-        let amount = parse_canonical_u128_text(amount, "amount")?;
-        if amount == 0 {
-            return Err(PyValueError::new_err(
-                "amount must use canonical positive unsigned-integer spelling",
-            ));
-        }
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let transfer = ZkAcePrivacyTransferV1::try_new(
-            policy,
-            source,
-            destination,
-            AssetBalanceScope::Global,
-            amount,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid native ZK-ACE transparent transfer: {error}"
-            ))
-        })?;
-        for (bytes, label) in [
-            (&witness_bytes.identity_root, "identity_root"),
-            (&witness_bytes.identity_blinding, "identity_blinding"),
-            (&witness_bytes.replay_secret, "replay_secret"),
-        ] {
-            if bytes.len() != 32 {
-                return Err(PyValueError::new_err(format!(
-                    "{label} must be exactly 32 bytes"
-                )));
-            }
-        }
-        let mut identity_root = [0_u8; 32];
-        identity_root.copy_from_slice(&witness_bytes.identity_root);
-        let mut identity_blinding = [0_u8; 32];
-        identity_blinding.copy_from_slice(&witness_bytes.identity_blinding);
-        let mut replay_secret = [0_u8; 32];
-        replay_secret.copy_from_slice(&witness_bytes.replay_secret);
-        witness_bytes.erase();
-        let witness =
-            ZkAcePrivacyWitnessV1::try_new(identity_root, identity_blinding, replay_secret)
-                .map_err(|error| {
-                    PyValueError::new_err(format!("invalid native ZK-ACE witness: {error}"))
-                })?;
-        let context = self.privacy_action_transaction_context_v1();
-        let native_context = ZkAcePrivacyActionTransactionContextV1 {
-            chain_id: context.chain_id,
-            authority: context.authority,
-            creation_time: context.creation_time,
-            time_to_live: context.time_to_live,
-            nonce: context.nonce,
-            fee_payment: context.fee_payment,
-            metadata: context.metadata,
-        };
-        let result = build_signed_zk_ace_privacy_transfer_v1(
-            native_context,
-            transfer,
-            witness,
-            canonical_genesis_hash,
-            &private_key,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "native ZK-ACE transparent-transfer construction failed: {error}"
-            ))
-        })?;
-        let envelope = self.envelope_from_signed(result.signed_transaction())?;
-        if envelope.hash != result.transaction_hash() {
-            return Err(PyRuntimeError::new_err(
-                "native ZK-ACE transaction hash recomputation failed",
-            ));
-        }
-        let effect = result.effect();
-        let output = PrivacyZkAceTransferActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: result.transaction_intent_digest(),
-            statement_digest: result.statement_digest(),
-            proof_envelope_hash: result.proof_envelope_hash(),
-            statement_bytes: result.statement_bytes(),
-            proof_bytes: result.proof_bytes(),
-            encoded_proof_envelope_bytes: result.encoded_proof_envelope_bytes(),
-            adaptive_signed_transaction_bytes: result.adaptive_signed_transaction_bytes(),
-            policy_id: *effect.policy_id.as_bytes(),
-            authorization_epoch: effect.authorization_epoch,
-            source_account_id: effect.source.to_string(),
-            destination_account_id: effect.destination.to_string(),
-            asset_definition_id: effect.asset_definition_id.to_string(),
-            amount: effect.amount.to_string(),
-            replay_nullifier: *effect.replay_nullifier.as_bytes(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
-    }
-
-    /// Build and sign exactly one native, intent-bound Jindo component action.
-    ///
-    /// The builder must not contain an executable, batch, contract, IVM
-    /// override, or attachment. Witness bytes are copied once into fixed-width
-    /// native field elements and erased on every return path.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        witness_polynomials,
-        evaluation_point
-    ))]
-    fn sign_privacy_jindo_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        witness_polynomials: Vec<Vec<Vec<u8>>>,
-        evaluation_point: &[u8],
-    ) -> PyResult<PrivacyJindoActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingJindoWitnessBytes(witness_polynomials);
-        if self.explicit_batch
-            || !self.executable_items.is_empty()
-            || self.executable_override.is_some()
-            || self.attachments.is_some()
-        {
-            return Err(PyValueError::new_err(
-                "native Jindo action requires an otherwise empty transaction builder",
-            ));
-        }
-
-        let canonical_genesis_hash: [u8; 32] = canonical_genesis_hash.try_into().map_err(|_| {
-            PyValueError::new_err("canonical_genesis_hash must be exactly 32 bytes")
-        })?;
-        let mut evaluation_encoding: [u8; 32] = evaluation_point
-            .try_into()
-            .map_err(|_| PyValueError::new_err("evaluation_point must be exactly 32 bytes"))?;
-        let evaluation_point = PrivacyJindoFieldElementV1::new(evaluation_encoding);
-        evaluation_encoding.fill(0);
-
-        let mut polynomials = Vec::with_capacity(witness_bytes.0.len());
-        for (polynomial_index, raw_polynomial) in witness_bytes.0.iter_mut().enumerate() {
-            let mut polynomial = Vec::with_capacity(raw_polynomial.len());
-            for (coefficient_index, raw_coefficient) in raw_polynomial.iter_mut().enumerate() {
-                if raw_coefficient.len() != 32 {
-                    return Err(PyValueError::new_err(format!(
-                        "witness_polynomials[{polynomial_index}][{coefficient_index}] must be exactly 32 bytes"
-                    )));
-                }
-                let mut encoding = [0_u8; 32];
-                encoding.copy_from_slice(raw_coefficient);
-                raw_coefficient.fill(0);
-                polynomial.push(PrivacyJindoFieldElementV1::new(encoding));
-                encoding.fill(0);
-            }
-            polynomials.push(polynomial);
-        }
-        let witness = JindoPrivacyActionWitnessV1::try_new(polynomials, evaluation_point).map_err(
-            |error| PyValueError::new_err(format!("invalid native Jindo witness: {error}")),
-        )?;
-        let private_key = parse_private_key(private_key)?;
-
-        // Resolve the default clock once. Both construction passes receive
-        // this exact signature-bound millisecond value.
-        let resolved_builder = self.to_model_builder();
-        let context = JindoPrivacyActionTransactionContextV1 {
-            chain_id: self.chain_id.clone(),
-            authority: self.authority.clone(),
-            creation_time: Duration::from_millis(resolved_builder.payload().creation_time_ms),
-            time_to_live: self.ttl,
-            nonce: self.nonce,
-            fee_payment: self.fee_payment.clone(),
-            metadata: self.metadata.clone(),
-        };
-        let result =
-            build_signed_privacy_action_v1(context, witness, canonical_genesis_hash, &private_key)
-                .map_err(|error| {
-                    PyValueError::new_err(format!(
-                        "native Jindo action construction failed: {error}"
-                    ))
-                })?;
-        let envelope = self.envelope_from_signed(result.signed_transaction())?;
-        if envelope.hash != result.transaction_hash() {
-            return Err(PyRuntimeError::new_err(
-                "native Jindo action transaction hash recomputation failed",
-            ));
-        }
-        let output = PrivacyJindoActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: result.transaction_intent_digest(),
-            statement_digest: result.statement_digest(),
-            proof_envelope_hash: result.proof_envelope_hash(),
-            statement_bytes: result.statement_bytes(),
-            proof_bytes: result.proof_bytes(),
-            encoded_proof_envelope_bytes: result.encoded_proof_envelope_bytes(),
-            adaptive_signed_transaction_bytes: result.adaptive_signed_transaction_bytes(),
-            polynomial_count: result.polynomial_count(),
-            coefficient_counts: result.coefficient_counts().to_vec(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
-    }
-
-    /// Build and sign exactly one native, intent-bound VeRange component action.
-    ///
-    /// `values` and `blindings` are private prover inputs. The signed result
-    /// exposes only their ordered P-256 commitments and public proof metadata.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        asset_definition_id,
-        policy_id,
-        bit_length,
-        values,
-        blindings
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn sign_privacy_verange_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        asset_definition_id: &str,
-        policy_id: &[u8],
-        bit_length: u16,
-        values: Vec<u64>,
-        blindings: Vec<Vec<u8>>,
-    ) -> PyResult<PrivacyVeRangeActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingVeRangeWitnessBytes { values, blindings };
-        self.require_empty_privacy_action_builder_v1("VeRange")?;
-        if witness_bytes.values.is_empty() || witness_bytes.values.len() > 8 {
-            return Err(PyValueError::new_err(
-                "VeRange values and blindings must contain between 1 and 8 entries",
-            ));
-        }
-        if witness_bytes.values.len() != witness_bytes.blindings.len() {
-            return Err(PyValueError::new_err(
-                "VeRange values and blindings must have exactly matching lengths",
-            ));
-        }
-        let (native_bit_length, public_bit_length) = match bit_length {
-            32 => (
-                VeRangeBitLengthV1::Bits32,
-                PrivacyVeRangeBitLengthV1::Bits32,
-            ),
-            64 => (
-                VeRangeBitLengthV1::Bits64,
-                PrivacyVeRangeBitLengthV1::Bits64,
-            ),
-            _ => {
-                return Err(PyValueError::new_err(
-                    "VeRange bit_length must be exactly 32 or 64",
-                ));
-            }
-        };
-        if native_bit_length == VeRangeBitLengthV1::Bits32
-            && witness_bytes
-                .values
-                .iter()
-                .any(|value| *value > u64::from(u32::MAX))
-        {
-            return Err(PyValueError::new_err(
-                "VeRange 32-bit values must be in the closed range [0, 2^32)",
-            ));
-        }
-        require_non_blank_unpadded(asset_definition_id, "asset_definition_id")?;
-        let asset_definition_id =
-            AssetDefinitionId::from_str(asset_definition_id).map_err(|error| {
-                PyValueError::new_err(format!(
-                    "invalid VeRange asset_definition_id `{asset_definition_id}`: {error}"
-                ))
-            })?;
-        let policy_id =
-            PrivacyPolicyIdV1::new(python_nonzero_privacy_digest_v1(policy_id, "policy_id")?);
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let profile = python_compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            "VeRange",
-        )?;
-        let parameters = VeRangeParametersV1::for_profile(native_bit_length).map_err(|error| {
-            PyRuntimeError::new_err(format!(
-                "native VeRange parameter construction failed: {error}"
-            ))
-        })?;
-        if parameters.parameter_digest() != *profile.parameter_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native VeRange parameters do not match the compiled privacy profile",
-            ));
-        }
-
-        let mut blindings = Vec::with_capacity(witness_bytes.blindings.len());
-        for (index, raw_blinding) in witness_bytes.blindings.iter_mut().enumerate() {
-            if raw_blinding.len() != 32 {
-                return Err(PyValueError::new_err(format!(
-                    "blindings[{index}] must be exactly 32 bytes"
-                )));
-            }
-            let mut encoding = [0_u8; 32];
-            encoding.copy_from_slice(raw_blinding);
-            raw_blinding.fill(0);
-            let blinding = SecretScalarV1::from_bytes(encoding).map_err(|error| {
-                PyValueError::new_err(format!(
-                    "blindings[{index}] is not a canonical non-zero P-256 scalar: {error}"
-                ))
-            })?;
-            encoding.fill(0);
-            blindings.push(blinding);
-        }
-        let commitments = witness_bytes
-            .values
-            .iter()
-            .copied()
-            .zip(&blindings)
-            .map(|(value, blinding)| commit(native_bit_length, value, blinding))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                PyValueError::new_err(format!("invalid native VeRange witness: {error}"))
-            })?;
-        let public_commitments = commitments
-            .iter()
-            .map(|commitment| PrivacyP256PointV1::new(*commitment.as_bytes()))
-            .collect::<Vec<_>>();
-        let aggregation_count = u32::try_from(public_commitments.len())
-            .map_err(|_| PyRuntimeError::new_err("VeRange aggregation count overflowed"))?;
-        let context = self.privacy_action_transaction_context_v1();
-        let mut statement = VeRangeTransparentRangeStatementV1 {
-            context: python_privacy_statement_context_v1(
-                &context,
-                profile,
-                PrivacyTransactionIntentDigestV1::new([0; 32]),
-            ),
-            asset_definition_id,
-            policy_id,
-            value_commitments: public_commitments,
-            bit_length: public_bit_length,
-            aggregation_count,
-        };
-        let draft_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
-        let transaction_intent_digest = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                draft_statement,
-                PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new())),
-            ),
-        )?;
-        statement.context.transaction_intent_digest = transaction_intent_digest;
-        let typed_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
-        let statement_digest = typed_statement
-            .digest()
-            .map_err(|_| PyRuntimeError::new_err("native VeRange statement digest failed"))?;
-        let transcript_binding = TranscriptBindingV1 {
-            chain_id: context.chain_id.as_str().as_bytes(),
-            genesis_hash: canonical_genesis_hash,
-            action_index: 0,
-            statement_digest: *statement_digest.as_bytes(),
-            parameter_id: *profile.parameter_id.as_bytes(),
-            parameter_digest: *profile.parameter_digest.as_bytes(),
-            verifier_digest: *profile.verifier_digest.as_bytes(),
-            statement_schema_digest: *profile.statement_schema_digest.as_bytes(),
-            engine_manifest_digest: *profile.engine_manifest_digest.as_bytes(),
-            generator_digest: parameters.generator_digest(),
-        };
-        let native_statement = VeRangeType1BatchStatementV1::new(
-            native_bit_length,
-            commitments.clone(),
-            transcript_binding,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!("invalid native VeRange statement: {error}"))
-        })?;
-        let proof = prove_batch(
-            &native_statement,
-            &witness_bytes.values,
-            &blindings,
-            &mut OsRng06,
-        )
-        .map_err(|error| {
-            PyRuntimeError::new_err(format!("native VeRange proof construction failed: {error}"))
-        })?
-        .encode();
-        let signed = finalize_python_privacy_action_v1(
-            &context,
-            profile,
-            typed_statement,
-            PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
-            &private_key,
-        )?;
-        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native VeRange action intent digest changed during proof construction",
-            ));
-        }
-        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
-        if envelope.hash != signed.transaction_hash {
-            return Err(PyRuntimeError::new_err(
-                "native VeRange action transaction hash recomputation failed",
-            ));
-        }
-        let output = PrivacyVeRangeActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: signed.transaction_intent_digest,
-            statement_digest: signed.statement_digest,
-            proof_envelope_hash: signed.proof_envelope_hash,
-            statement_bytes: signed.statement_bytes,
-            proof_bytes: signed.proof_bytes,
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
-            asset_definition_id: statement.asset_definition_id.to_string(),
-            policy_id: *statement.policy_id.as_bytes(),
-            bit_length,
-            aggregation_count,
-            value_commitments: commitments
-                .iter()
-                .map(|commitment| *commitment.as_bytes())
-                .collect(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
-    }
-
-    /// Build and sign one canonical ZK-AMS credential-admission batch.
-    ///
-    /// Hidden credential fields, seed scalars, and issuer signatures are
-    /// copied into zeroizing native storage and erased before the signed
-    /// transaction is returned. The resulting action atomically advances the
-    /// admitted-identity registry if consensus accepts every ordered anchor.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        issuer_id,
-        issuer_public_key,
-        issuer_policy_record_digest,
-        registry_id,
-        registry_record_digest,
-        policy_id,
-        policy_digest,
-        account_registry_root,
-        account_registry_root_epoch,
-        subject_commitments,
-        credential_nonces,
-        seed_secrets,
-        issuer_signatures
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn sign_privacy_zk_ams_batch_admission_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        issuer_id: &[u8],
-        issuer_public_key: &[u8],
-        issuer_policy_record_digest: &[u8],
-        registry_id: &[u8],
-        registry_record_digest: &[u8],
-        policy_id: &[u8],
-        policy_digest: &[u8],
-        account_registry_root: &[u8],
-        account_registry_root_epoch: u64,
-        subject_commitments: Vec<Vec<u8>>,
-        credential_nonces: Vec<Vec<u8>>,
-        seed_secrets: Vec<Vec<u8>>,
-        issuer_signatures: Vec<Vec<u8>>,
-    ) -> PyResult<PrivacyZkAmsBatchAdmissionActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingZkAmsBatchWitnessBytes {
-            subject_commitments,
-            credential_nonces,
-            seed_secrets,
-            issuer_signatures,
-        };
-        self.require_empty_privacy_action_builder_v1("ZK-AMS batch-admission")?;
-        let batch_size = witness_bytes.subject_commitments.len();
-        if batch_size == 0 || batch_size > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
-            return Err(PyValueError::new_err(format!(
-                "ZK-AMS admission batch must contain between 1 and {ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1} credentials"
-            )));
-        }
-        if witness_bytes.credential_nonces.len() != batch_size
-            || witness_bytes.seed_secrets.len() != batch_size
-            || witness_bytes.issuer_signatures.len() != batch_size
-        {
-            return Err(PyValueError::new_err(
-                "ZK-AMS subject commitments, credential nonces, seed secrets, and issuer signatures must have exactly matching lengths",
-            ));
-        }
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let governance = python_zk_ams_governance_v1(
-            issuer_id,
-            issuer_public_key,
-            issuer_policy_record_digest,
-            registry_id,
-            registry_record_digest,
-            policy_id,
-            policy_digest,
-            account_registry_root,
-            account_registry_root_epoch,
-        )?;
-        let next_epoch = governance
-            .account_registry_root_epoch
-            .checked_add(1)
-            .ok_or_else(|| {
-                PyValueError::new_err(
-                    "account_registry_root_epoch has no canonical successor epoch",
-                )
-            })?;
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let profile =
-            python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, "ZK-AMS")?;
-
-        let mut material = ZeroizingZkAmsBatchNativeMaterial {
-            credentials: Vec::with_capacity(batch_size),
-            issuer_signatures: Vec::with_capacity(batch_size),
-            seed_secrets: Vec::with_capacity(batch_size),
-        };
-        let mut anchors = Vec::with_capacity(batch_size);
-        for index in 0..batch_size {
-            let mut subject_commitment = python_nonzero_privacy_digest_v1(
-                &witness_bytes.subject_commitments[index],
-                &format!("subject_commitments[{index}]"),
-            )?;
-            witness_bytes.subject_commitments[index].fill(0);
-            let mut credential_nonce = python_nonzero_privacy_digest_v1(
-                &witness_bytes.credential_nonces[index],
-                &format!("credential_nonces[{index}]"),
-            )?;
-            witness_bytes.credential_nonces[index].fill(0);
-
-            if witness_bytes.seed_secrets[index].len() != 32 {
-                return Err(PyValueError::new_err(format!(
-                    "seed_secrets[{index}] must be exactly 32 bytes"
-                )));
-            }
-            let mut seed_encoding = [0_u8; 32];
-            seed_encoding.copy_from_slice(&witness_bytes.seed_secrets[index]);
-            witness_bytes.seed_secrets[index].fill(0);
-            let seed_secret_result = ZkAmsSeedSecretV1::from_bytes(seed_encoding);
-            seed_encoding.fill(0);
-            let seed_secret = seed_secret_result.map_err(|error| {
-                PyValueError::new_err(format!(
-                    "seed_secrets[{index}] is not a canonical non-zero Ristretto scalar: {error}"
-                ))
-            })?;
-            let seed_public_key =
-                PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret));
-
-            if witness_bytes.issuer_signatures[index].len() != 64 {
-                return Err(PyValueError::new_err(format!(
-                    "issuer_signatures[{index}] must be exactly 64 bytes"
-                )));
-            }
-            let mut issuer_signature = [0_u8; 64];
-            issuer_signature.copy_from_slice(&witness_bytes.issuer_signatures[index]);
-            witness_bytes.issuer_signatures[index].fill(0);
-
-            let credential = PrivacyZkAmsPersonhoodCredentialV1 {
-                version: ZK_AMS_PHC_VERSION_V1,
-                issuer_id: governance.issuer_id,
-                policy_id: governance.policy_id,
-                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new(subject_commitment),
-                seed_public_key,
-                credential_nonce: PrivacyZkAmsCredentialNonceV1::new(credential_nonce),
-            };
-            subject_commitment.fill(0);
-            credential_nonce.fill(0);
-            anchors.push(PrivacyZkAmsAdmissionAnchorV1 {
-                phc_hash: credential.digest(),
-                seed_public_key,
-            });
-            material.credentials.push(credential);
-            material.issuer_signatures.push(issuer_signature);
-            issuer_signature.fill(0);
-            material.seed_secrets.push(seed_secret);
-        }
-        witness_bytes.erase();
-
-        let batch_size_u32 = u32::try_from(batch_size)
-            .map_err(|_| PyRuntimeError::new_err("ZK-AMS admission batch size overflowed"))?;
-        let mut next_root = governance.account_registry_root;
-        for (index, anchor) in anchors.iter().copied().enumerate() {
-            next_root = zk_ams_registry_transition_root_v1(
-                governance.registry_id,
-                next_root,
-                governance.account_registry_root_epoch,
-                next_epoch,
-                batch_size_u32,
-                u32::try_from(index).expect("ZK-AMS admission batch is bounded to eight"),
-                anchor,
-            );
-        }
-
-        let context = self.privacy_action_transaction_context_v1();
-        let mut statement = IrohaZkAmsStatementV1 {
-            context: python_privacy_statement_context_v1(
-                &context,
-                profile,
-                PrivacyTransactionIntentDigestV1::new([0; 32]),
-            ),
-            issuer_id: governance.issuer_id,
-            issuer_public_key: governance.issuer_public_key,
-            issuer_policy_record_digest: governance.issuer_policy_record_digest,
-            registry_id: governance.registry_id,
-            registry_record_digest: governance.registry_record_digest,
-            policy_id: governance.policy_id,
-            policy_digest: governance.policy_digest,
-            action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
-                account_registry_root: governance.account_registry_root,
-                account_registry_root_epoch: governance.account_registry_root_epoch,
-                next_account_registry_root: next_root,
-                next_account_registry_root_epoch: next_epoch,
-                anchors: anchors.clone(),
-            }),
-        };
-        let transaction_intent_digest = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
-                PrivacyProofV1::IrohaZkAmsV1(
-                    IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
-                        PrivacyProofBytesV1::new(Vec::new()),
-                    ),
-                ),
-            ),
-        )?;
-        statement.context.transaction_intent_digest = transaction_intent_digest;
-        let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
-        let statement_digest = typed_statement
-            .digest()
-            .map_err(|_| PyRuntimeError::new_err("native ZK-AMS statement digest failed"))?;
-        let binding = python_zk_ams_transcript_binding_v1(
-            &context,
-            profile,
-            canonical_genesis_hash,
-            *statement_digest.as_bytes(),
-        );
-        let native_witnesses = material
-            .credentials
-            .iter()
-            .zip(&material.issuer_signatures)
-            .zip(&material.seed_secrets)
-            .map(|((credential, signature), secret)| {
-                ZkAmsBatchCredentialWitnessV1::new(credential, signature, secret)
-            })
-            .collect::<Vec<_>>();
-        let config = ZkAmsMaskedProverConfigV1::new(1).map_err(|error| {
-            PyRuntimeError::new_err(format!(
-                "native ZK-AMS prover configuration failed: {error}"
-            ))
-        })?;
-        let proof = prove_zk_ams_batch_admission_v1(
-            &statement,
-            &binding,
-            &native_witnesses,
-            config,
-            &mut OsRng06,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "native ZK-AMS batch-admission proof construction failed: {error}"
-            ))
-        })?;
-        drop(native_witnesses);
-        material.erase();
-        let signed = finalize_python_privacy_action_v1(
-            &context,
-            profile,
-            typed_statement,
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
-                PrivacyProofBytesV1::new(proof),
-            )),
-            &private_key,
-        )?;
-        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native ZK-AMS batch-admission action intent digest changed during proof construction",
-            ));
-        }
-        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
-        if envelope.hash != signed.transaction_hash {
-            return Err(PyRuntimeError::new_err(
-                "native ZK-AMS batch-admission transaction hash recomputation failed",
-            ));
-        }
-        let output = PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: signed.transaction_intent_digest,
-            statement_digest: signed.statement_digest,
-            proof_envelope_hash: signed.proof_envelope_hash,
-            statement_bytes: signed.statement_bytes,
-            proof_bytes: signed.proof_bytes,
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
-            issuer_id: *governance.issuer_id.as_bytes(),
-            issuer_public_key: *governance.issuer_public_key.as_bytes(),
-            issuer_policy_record_digest: *governance.issuer_policy_record_digest.as_bytes(),
-            registry_id: *governance.registry_id.as_bytes(),
-            registry_record_digest: *governance.registry_record_digest.as_bytes(),
-            policy_id: *governance.policy_id.as_bytes(),
-            policy_digest: *governance.policy_digest.as_bytes(),
-            account_registry_root: *governance.account_registry_root.as_bytes(),
-            account_registry_root_epoch: governance.account_registry_root_epoch,
-            next_account_registry_root: *next_root.as_bytes(),
-            next_account_registry_root_epoch: next_epoch,
-            phc_hashes: anchors
-                .iter()
-                .map(|anchor| *anchor.phc_hash.as_bytes())
-                .collect(),
-            seed_public_keys: anchors
-                .iter()
-                .map(|anchor| *anchor.seed_public_key.as_bytes())
-                .collect(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
-    }
-
-    /// Build and sign one canonical anonymous ZK-AMS account provisioning.
-    ///
-    /// The signer position is derived by matching the native public key of the
-    /// private seed against the strictly ordered 16/32/64-member registry ring;
-    /// callers cannot select or alias a signer index.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        issuer_id,
-        issuer_public_key,
-        issuer_policy_record_digest,
-        registry_id,
-        registry_record_digest,
-        policy_id,
-        policy_digest,
-        account_registry_root,
-        account_registry_root_epoch,
-        admitted_seed_key_ring,
-        account_id,
-        seed_secret
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn sign_privacy_zk_ams_provision_account_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        issuer_id: &[u8],
-        issuer_public_key: &[u8],
-        issuer_policy_record_digest: &[u8],
-        registry_id: &[u8],
-        registry_record_digest: &[u8],
-        policy_id: &[u8],
-        policy_digest: &[u8],
-        account_registry_root: &[u8],
-        account_registry_root_epoch: u64,
-        admitted_seed_key_ring: Vec<Vec<u8>>,
-        account_id: &str,
-        seed_secret: Vec<u8>,
-    ) -> PyResult<PrivacyZkAmsProvisionAccountActionBuildResultV1> {
-        let mut seed_secret_bytes = ZeroizingZkAmsProvisionWitnessBytes(seed_secret);
-        self.require_empty_privacy_action_builder_v1("ZK-AMS account-provisioning")?;
-        if !ZK_AMS_RING_SIZES_V1.contains(&admitted_seed_key_ring.len()) {
-            return Err(PyValueError::new_err(format!(
-                "admitted_seed_key_ring must contain exactly one of the canonical sizes {ZK_AMS_RING_SIZES_V1:?}"
-            )));
-        }
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let governance = python_zk_ams_governance_v1(
-            issuer_id,
-            issuer_public_key,
-            issuer_policy_record_digest,
-            registry_id,
-            registry_record_digest,
-            policy_id,
-            policy_digest,
-            account_registry_root,
-            account_registry_root_epoch,
-        )?;
-        let mut ring = Vec::with_capacity(admitted_seed_key_ring.len());
-        for (index, key) in admitted_seed_key_ring.iter().enumerate() {
-            ring.push(PrivacyZkAmsSeedPublicKeyV1::new(
-                python_nonzero_privacy_digest_v1(key, &format!("admitted_seed_key_ring[{index}]"))?,
-            ));
-        }
-        if ring.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(PyValueError::new_err(
-                "admitted_seed_key_ring must be strictly increasing and duplicate-free",
-            ));
-        }
-        let account_id = parse_exact_i105_account_id(account_id, "account_id")?;
-        if seed_secret_bytes.0.len() != 32 {
-            return Err(PyValueError::new_err(
-                "seed_secret must be exactly 32 bytes",
-            ));
-        }
-        let mut seed_encoding = [0_u8; 32];
-        seed_encoding.copy_from_slice(&seed_secret_bytes.0);
-        seed_secret_bytes.0.fill(0);
-        let seed_secret_result = ZkAmsSeedSecretV1::from_bytes(seed_encoding);
-        seed_encoding.fill(0);
-        let seed_secret = seed_secret_result.map_err(|error| {
-            PyValueError::new_err(format!(
-                "seed_secret is not a canonical non-zero Ristretto scalar: {error}"
-            ))
-        })?;
-        let signer_public_key =
-            PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret));
-        let signer_index = ring.binary_search(&signer_public_key).map_err(|_| {
-            PyValueError::new_err(
-                "seed_secret does not correspond to a member of admitted_seed_key_ring",
-            )
-        })?;
-        let key_image =
-            PrivacyZkAmsKeyImageV1::new(zk_ams_key_image_v1(&seed_secret).map_err(|error| {
-                PyValueError::new_err(format!(
-                    "native ZK-AMS key-image derivation failed: {error}"
-                ))
-            })?);
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let profile =
-            python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, "ZK-AMS")?;
-        let context = self.privacy_action_transaction_context_v1();
-        let mut statement = IrohaZkAmsStatementV1 {
-            context: python_privacy_statement_context_v1(
-                &context,
-                profile,
-                PrivacyTransactionIntentDigestV1::new([0; 32]),
-            ),
-            issuer_id: governance.issuer_id,
-            issuer_public_key: governance.issuer_public_key,
-            issuer_policy_record_digest: governance.issuer_policy_record_digest,
-            registry_id: governance.registry_id,
-            registry_record_digest: governance.registry_record_digest,
-            policy_id: governance.policy_id,
-            policy_digest: governance.policy_digest,
-            action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
-                account_registry_root: governance.account_registry_root,
-                account_registry_root_epoch: governance.account_registry_root_epoch,
-                admitted_seed_key_ring: ring.clone(),
-                account_id: account_id.clone(),
-                key_image,
-            }),
-        };
-        let transaction_intent_digest = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
-                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                    PrivacyProofBytesV1::new(Vec::new()),
-                )),
-            ),
-        )?;
-        statement.context.transaction_intent_digest = transaction_intent_digest;
-        let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
-        let statement_digest = typed_statement
-            .digest()
-            .map_err(|_| PyRuntimeError::new_err("native ZK-AMS statement digest failed"))?;
-        let binding = python_zk_ams_transcript_binding_v1(
-            &context,
-            profile,
-            canonical_genesis_hash,
-            *statement_digest.as_bytes(),
-        );
-        let proof = sign_zk_ams_provision_statement_v1(
-            &statement,
-            &binding,
-            signer_index,
-            &seed_secret,
-            &mut OsRng06,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "native ZK-AMS account-provisioning proof construction failed: {error}"
-            ))
-        })?;
-        drop(seed_secret);
-        let signed = finalize_python_privacy_action_v1(
-            &context,
-            profile,
-            typed_statement,
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                PrivacyProofBytesV1::new(proof),
-            )),
-            &private_key,
-        )?;
-        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native ZK-AMS account-provisioning action intent digest changed during proof construction",
-            ));
-        }
-        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
-        if envelope.hash != signed.transaction_hash {
-            return Err(PyRuntimeError::new_err(
-                "native ZK-AMS account-provisioning transaction hash recomputation failed",
-            ));
-        }
-        let output = PrivacyZkAmsProvisionAccountActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: signed.transaction_intent_digest,
-            statement_digest: signed.statement_digest,
-            proof_envelope_hash: signed.proof_envelope_hash,
-            statement_bytes: signed.statement_bytes,
-            proof_bytes: signed.proof_bytes,
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
-            issuer_id: *governance.issuer_id.as_bytes(),
-            issuer_public_key: *governance.issuer_public_key.as_bytes(),
-            issuer_policy_record_digest: *governance.issuer_policy_record_digest.as_bytes(),
-            registry_id: *governance.registry_id.as_bytes(),
-            registry_record_digest: *governance.registry_record_digest.as_bytes(),
-            policy_id: *governance.policy_id.as_bytes(),
-            policy_digest: *governance.policy_digest.as_bytes(),
-            account_registry_root: *governance.account_registry_root.as_bytes(),
-            account_registry_root_epoch: governance.account_registry_root_epoch,
-            admitted_seed_key_ring: ring.iter().map(|key| *key.as_bytes()).collect(),
-            account_id: account_id.to_string(),
-            key_image: *key_image.as_bytes(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
-    }
-
-    /// Freeze exactly one native, intent-bound Vega mDL age action for holder signing.
-    ///
-    /// This is phase one of the first-release Vega API. It resolves the exact
-    /// transaction context once, derives the canonical transaction intent, and
-    /// returns the final `H_dev` that the credential holder must sign. The
-    /// returned preparation owns that frozen draft and is consumed by
-    /// `finalize_privacy_vega_action_v1`.
-    #[pyo3(signature = (
-        canonical_genesis_hash,
-        issuer_id,
-        issuer_record_epoch,
-        issuer_record_digest,
-        issuer_public_key,
-        presentation_year,
-        presentation_month,
-        presentation_day,
-        minimum_age_years,
-        reader_challenge,
-        session_transcript_digest
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn prepare_privacy_vega_action_v1(
-        &self,
-        canonical_genesis_hash: &[u8],
-        issuer_id: &[u8],
-        issuer_record_epoch: u64,
-        issuer_record_digest: &[u8],
-        issuer_public_key: &[u8],
-        presentation_year: u16,
-        presentation_month: u8,
-        presentation_day: u8,
-        minimum_age_years: u8,
-        reader_challenge: &[u8],
-        session_transcript_digest: &[u8],
-    ) -> PyResult<PrivacyVegaActionPreparationV1> {
-        self.require_empty_privacy_action_builder_v1("Vega")?;
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let issuer_id = python_nonzero_privacy_digest_v1(issuer_id, "issuer_id")?;
-        if issuer_record_epoch == 0 {
-            return Err(PyValueError::new_err(
-                "issuer_record_epoch must be non-zero",
-            ));
-        }
-        let issuer_record_digest =
-            python_nonzero_privacy_digest_v1(issuer_record_digest, "issuer_record_digest")?;
-        let issuer_public_key = fixed_array::<33>(issuer_public_key, "issuer_public_key")?;
-        let reader_challenge =
-            python_nonzero_privacy_digest_v1(reader_challenge, "reader_challenge")?;
-        let session_transcript_digest = python_nonzero_privacy_digest_v1(
-            session_transcript_digest,
-            "session_transcript_digest",
-        )?;
-        let profile = python_compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-            "Vega",
-        )?;
-        let context = self.privacy_action_transaction_context_v1();
-        let mut statement = python_vega_draft_statement_v1(
-            python_privacy_statement_context_v1(
-                &context,
-                profile,
-                PrivacyTransactionIntentDigestV1::new([0; 32]),
-            ),
-            issuer_id,
-            issuer_record_epoch,
-            issuer_record_digest,
-            issuer_public_key,
-            presentation_year,
-            presentation_month,
-            presentation_day,
-            minimum_age_years,
-            reader_challenge,
-            session_transcript_digest,
-        );
-        let draft_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone());
-        let transaction_intent_digest = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                draft_statement,
-                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
-            ),
-        )?;
-        if transaction_intent_digest.as_bytes() == &[0; 32] {
-            return Err(PyRuntimeError::new_err(
-                "native Vega action produced the reserved all-zero transaction intent",
-            ));
-        }
-        statement.context.transaction_intent_digest = transaction_intent_digest;
-        statement =
-            python_bind_vega_device_authentication_digest_v1(statement, canonical_genesis_hash)?;
-        let rebound_intent = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone()),
-                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
-            ),
-        )?;
-        if rebound_intent != transaction_intent_digest {
-            return Err(PyRuntimeError::new_err(
-                "native Vega action intent changed after binding the derived H_dev",
-            ));
-        }
-        Ok(PrivacyVegaActionPreparationV1 {
-            inner: Some(PrivacyVegaActionPreparationInnerV1 {
-                context,
-                profile,
-                canonical_genesis_hash,
-                statement,
-            }),
-        })
-    }
-
-    /// Build and sign one canonical Bootle/Lantern anonymous-credential presentation.
-    ///
-    /// The issuer-policy archive is an exact canonical public state artifact.
-    /// All forty private ring polynomials and all eight credential attributes
-    /// are parsed into the native relation witness and erased on every return
-    /// path. Public disclosures are derived from that witness, never accepted
-    /// as a second caller-controlled value.
-    #[pyo3(signature = (
-        private_key,
-        canonical_genesis_hash,
-        canonical_policy_archive,
-        disclosure_indices,
-        secret_polynomials,
-        attributes
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn sign_privacy_bootle_lantern_presentation_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_genesis_hash: &[u8],
-        canonical_policy_archive: &[u8],
-        disclosure_indices: Vec<u8>,
-        secret_polynomials: Vec<Vec<u16>>,
-        attributes: Vec<Vec<u8>>,
-    ) -> PyResult<PrivacyBootleLanternPresentationActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingBootleLanternWitnessBytes {
-            secret_polynomials,
-            attributes,
-        };
-        self.require_empty_privacy_action_builder_v1("Bootle/Lantern presentation")?;
-        let canonical_genesis_hash =
-            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
-        let policy = python_bootle_lantern_policy_v1(canonical_policy_archive)?;
-        if disclosure_indices
-            .iter()
-            .any(|index| usize::from(*index) >= BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
-        {
-            return Err(PyValueError::new_err(
-                "disclosure_indices must contain only indices in 0..8",
-            ));
-        }
-        if disclosure_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(PyValueError::new_err(
-                "disclosure_indices must be strictly increasing and duplicate-free",
-            ));
-        }
-        if witness_bytes.secret_polynomials.len() != BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1 {
-            return Err(PyValueError::new_err(format!(
-                "secret_polynomials must contain exactly {BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1} polynomials in randomness/tag/signature-one/signature-two order"
-            )));
-        }
-        if witness_bytes.attributes.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
-            return Err(PyValueError::new_err(format!(
-                "attributes must contain exactly {BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1} eight-byte values"
-            )));
-        }
-
-        let mut randomness = python_bootle_lantern_polynomials_v1::<16>(
-            &mut witness_bytes.secret_polynomials[0..16],
-            "secret_polynomials.randomness",
-        )?;
-        let mut tag = python_bootle_lantern_polynomials_v1::<8>(
-            &mut witness_bytes.secret_polynomials[16..24],
-            "secret_polynomials.tag",
-        )?;
-        let mut signature_one = python_bootle_lantern_polynomials_v1::<8>(
-            &mut witness_bytes.secret_polynomials[24..32],
-            "secret_polynomials.signature_one",
-        )?;
-        let mut signature_two = python_bootle_lantern_polynomials_v1::<8>(
-            &mut witness_bytes.secret_polynomials[32..40],
-            "secret_polynomials.signature_two",
-        )?;
-        let mut native_attributes = [[0_u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1];
-        for (index, (output, raw)) in native_attributes
-            .iter_mut()
-            .zip(&mut witness_bytes.attributes)
-            .enumerate()
-        {
-            if raw.len() != 8 {
-                return Err(PyValueError::new_err(format!(
-                    "attributes[{index}] must be exactly 8 bytes"
-                )));
-            }
-            output.copy_from_slice(raw);
-            raw.fill(0);
-        }
-        witness_bytes.erase();
-
-        let disclosures = disclosure_indices
-            .iter()
-            .copied()
-            .map(|index| BootleLanternDisclosedAttributeV1 {
-                index,
-                value: BootleLanternAttributeValueV1::new(native_attributes[usize::from(index)]),
-            })
-            .collect::<Vec<_>>();
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let profile = python_compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-            "Bootle/Lantern",
-        )?;
-        let context = self.privacy_action_transaction_context_v1();
-        let mut statement = IrohaBootleLanternAnoncredStatementV1 {
-            context: python_privacy_statement_context_v1(
-                &context,
-                profile,
-                PrivacyTransactionIntentDigestV1::new([0; 32]),
-            ),
-            issuer_id: policy.issuer_id,
-            policy_id: policy.policy_id,
-            issuer_policy_epoch: policy.epoch,
-            issuer_policy_record_digest: policy.record_digest,
-            issuer_parameter_id: policy.issuer_parameter_id,
-            issuer_parameter_digest: policy.issuer_parameter_digest,
-            disclosures: disclosures.clone(),
-        };
-        let transaction_intent_digest = python_privacy_action_intent_v1(
-            &context,
-            python_privacy_intent_projection_envelope_v1(
-                profile,
-                PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
-                PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(Vec::new())),
-            ),
-        )?;
-        statement.context.transaction_intent_digest = transaction_intent_digest;
-        let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
-        let witness = BootleLanternPresentationWitnessV1 {
-            randomness,
-            tag,
-            signature_one,
-            signature_two,
-            attributes: native_attributes,
-        };
-        randomness.fill(ApplicationPolynomialV1::ZERO);
-        tag.fill(ApplicationPolynomialV1::ZERO);
-        signature_one.fill(ApplicationPolynomialV1::ZERO);
-        signature_two.fill(ApplicationPolynomialV1::ZERO);
-        native_attributes.fill([0; 8]);
-        let proof = prove_bound_presentation_v1(
-            &statement,
-            &policy,
-            canonical_genesis_hash,
-            &witness,
-            &mut OsRng06,
-        )
-        .map_err(|error| {
-            PyValueError::new_err(format!(
-                "native Bootle/Lantern presentation proof construction failed: {error}"
-            ))
-        })?
-        .encode();
-        drop(witness);
-        let signed = finalize_python_privacy_action_v1(
-            &context,
-            profile,
-            typed_statement,
-            PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
-            &private_key,
-        )?;
-        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native Bootle/Lantern presentation action intent digest changed during proof construction",
-            ));
-        }
-        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
-        if envelope.hash != signed.transaction_hash {
-            return Err(PyRuntimeError::new_err(
-                "native Bootle/Lantern presentation transaction hash recomputation failed",
-            ));
-        }
-        let output = PrivacyBootleLanternPresentationActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: signed.transaction_intent_digest,
-            statement_digest: signed.statement_digest,
-            proof_envelope_hash: signed.proof_envelope_hash,
-            statement_bytes: signed.statement_bytes,
-            proof_bytes: signed.proof_bytes,
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
-            issuer_id: *policy.issuer_id.as_bytes(),
-            policy_id: *policy.policy_id.as_bytes(),
-            issuer_policy_epoch: policy.epoch,
-            issuer_policy_record_digest: *policy.record_digest.as_bytes(),
-            issuer_parameter_id: *policy.issuer_parameter_id.as_bytes(),
-            issuer_parameter_digest: *policy.issuer_parameter_digest.as_bytes(),
-            disclosure_indices,
-            disclosed_attribute_values: disclosures
-                .iter()
-                .map(|disclosure| *disclosure.value.as_bytes())
-                .collect(),
-        };
-        self.clear_transaction_state();
-        Ok(output)
     }
 
     /// Replace only fee maxima using a quote, then sign the exact quoted draft.
@@ -14081,6 +12199,12 @@ impl TransactionBuilder {
 
 const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
 const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
+const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+const VEGA_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+const ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "admission_action";
+const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str = "zk_ams_batch_admission";
+const ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1: &str = "zk_ams_provision_account";
+const BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
 const ANONYMOUS_PGC_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "payment_action";
 const ANONYMOUS_PGC_LEDGER_EFFECT_V1: &str = "anonymous_pgc_account_state_transition";
 const ORCHARD_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
@@ -14178,1341 +12302,10 @@ impl PrivacyNativeActionBuildResultV1 {
     }
 }
 
-/// Public metadata for one canonical signed ZK-ACE transparent transfer.
-///
-/// The native witness remains owned by the Rust prover and is overwritten on
-/// every exit path. The proof is exposed only inside the signed transaction.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyZkAceTransferActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    policy_id: [u8; 32],
-    authorization_epoch: u64,
-    source_account_id: String,
-    destination_account_id: String,
-    asset_definition_id: String,
-    amount: String,
-    replay_nullifier: [u8; 32],
-}
-
-#[pymethods]
-impl PrivacyZkAceTransferActionBuildResultV1 {
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label()
-    }
-
-    #[getter]
-    const fn action_kind(&self) -> &'static str {
-        "transparent_transfer"
-    }
-
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    #[getter]
-    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_id)
-    }
-
-    #[getter]
-    const fn authorization_epoch(&self) -> u64 {
-        self.authorization_epoch
-    }
-
-    #[getter]
-    fn source_account_id(&self) -> &str {
-        &self.source_account_id
-    }
-
-    #[getter]
-    fn destination_account_id(&self) -> &str {
-        &self.destination_account_id
-    }
-
-    #[getter]
-    fn asset_definition_id(&self) -> &str {
-        &self.asset_definition_id
-    }
-
-    #[getter]
-    fn amount(&self) -> &str {
-        &self.amount
-    }
-
-    #[getter]
-    fn replay_nullifier<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.replay_nullifier)
-    }
-
-    #[getter]
-    const fn execution_classification(&self) -> &'static str {
-        ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    #[getter]
-    const fn ledger_effect(&self) -> &'static str {
-        ZK_ACE_TRANSFER_LEDGER_EFFECT_V1
-    }
-
-    fn transaction_intent_digest_hex(&self) -> String {
-        hex_encode(self.transaction_intent_digest)
-    }
-
-    fn statement_digest_hex(&self) -> String {
-        hex_encode(self.statement_digest)
-    }
-
-    fn proof_envelope_hash_hex(&self) -> String {
-        hex_encode(self.proof_envelope_hash)
-    }
-}
-
-/// Public metadata for one canonical signed Jindo component action.
-///
-/// The proof remains only inside `envelope`; this result exposes no witness,
-/// opening, randomness, or duplicate proof byte surface.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyJindoActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    polynomial_count: u32,
-    coefficient_counts: Vec<u32>,
-}
-
-const JINDO_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
-
-const fn jindo_action_ledger_effect_v1() -> Option<&'static str> {
-    None
-}
-
-#[pymethods]
-impl PrivacyJindoActionBuildResultV1 {
-    /// Exact signed transaction envelope to submit.
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    /// Canonical transaction-intent digest.
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest.
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    /// Hash of the exact canonical privacy proof envelope.
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    /// Canonical encoded typed-statement byte count.
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    /// Native proof byte count.
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    /// Canonical encoded proof-envelope byte count.
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    /// Canonical adaptive signed-transaction byte count.
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    /// Number of committed witness polynomials.
-    #[getter]
-    const fn polynomial_count(&self) -> u32 {
-        self.polynomial_count
-    }
-
-    /// Canonical coefficient counts in commitment order.
-    #[getter]
-    fn coefficient_counts(&self) -> Vec<u32> {
-        self.coefficient_counts.clone()
-    }
-
-    /// Explicit execution classification for Jindo V1.
-    #[getter]
-    fn execution_classification(&self) -> &'static str {
-        JINDO_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    /// Jindo V1 verifies an action and has no ledger mutation effect.
-    #[getter]
-    fn ledger_effect(&self) -> Option<&'static str> {
-        jindo_action_ledger_effect_v1()
-    }
-
-    /// Canonical transaction-intent digest as lowercase hexadecimal.
-    fn transaction_intent_digest_hex(&self) -> String {
-        hex_encode(self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest as lowercase hexadecimal.
-    fn statement_digest_hex(&self) -> String {
-        hex_encode(self.statement_digest)
-    }
-
-    /// Canonical proof-envelope hash as lowercase hexadecimal.
-    fn proof_envelope_hash_hex(&self) -> String {
-        hex_encode(self.proof_envelope_hash)
-    }
-}
-
-/// Public metadata for one canonical signed VeRange component action.
-///
-/// Values and blindings remain only in the native prover call. The result
-/// exposes their ordered commitments but no witness or duplicate proof bytes.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyVeRangeActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    asset_definition_id: String,
-    policy_id: [u8; 32],
-    bit_length: u16,
-    aggregation_count: u32,
-    value_commitments: Vec<[u8; 33]>,
-}
-
-const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
-
-#[pymethods]
-impl PrivacyVeRangeActionBuildResultV1 {
-    /// Exact signed transaction envelope to submit.
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    /// Exact first-release protocol identifier.
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1.canonical_label()
-    }
-
-    /// Canonical transaction-intent digest.
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest.
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    /// Hash of the exact canonical privacy proof envelope.
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    /// Canonical encoded typed-statement byte count.
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    /// Native proof byte count.
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    /// Canonical encoded proof-envelope byte count.
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    /// Canonical adaptive signed-transaction byte count.
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    /// Public asset definition whose atomic values were committed.
-    #[getter]
-    fn asset_definition_id(&self) -> &str {
-        &self.asset_definition_id
-    }
-
-    /// Exact public VeRange policy identifier.
-    #[getter]
-    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_id)
-    }
-
-    /// Exact selected range width.
-    #[getter]
-    const fn bit_length(&self) -> u16 {
-        self.bit_length
-    }
-
-    /// Number of ordered commitments proved.
-    #[getter]
-    const fn aggregation_count(&self) -> u32 {
-        self.aggregation_count
-    }
-
-    /// Ordered public P-256 value commitments.
-    #[getter]
-    fn value_commitments(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
-        self.value_commitments
-            .iter()
-            .map(|commitment| Py::from(PyBytes::new(py, commitment)))
-            .collect()
-    }
-
-    /// Explicit execution classification for VeRange V1.
-    #[getter]
-    fn execution_classification(&self) -> &'static str {
-        VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    /// VeRange V1 verifies a component action and has no ledger mutation.
-    #[getter]
-    const fn ledger_effect(&self) -> Option<&'static str> {
-        None
-    }
-
-    /// Canonical transaction-intent digest as lowercase hexadecimal.
-    fn transaction_intent_digest_hex(&self) -> String {
-        hex_encode(self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest as lowercase hexadecimal.
-    fn statement_digest_hex(&self) -> String {
-        hex_encode(self.statement_digest)
-    }
-
-    /// Canonical proof-envelope hash as lowercase hexadecimal.
-    fn proof_envelope_hash_hex(&self) -> String {
-        hex_encode(self.proof_envelope_hash)
-    }
-
-    /// Public VeRange policy identifier as lowercase hexadecimal.
-    fn policy_id_hex(&self) -> String {
-        hex_encode(self.policy_id)
-    }
-}
-
-struct PrivacyVegaActionPreparationInnerV1 {
-    context: PythonPrivacyActionTransactionContextV1,
-    profile: CompiledPrivacyProfileV1,
-    canonical_genesis_hash: [u8; 32],
-    statement: VegaExistingCredentialStatementV1,
-}
-
-/// Frozen phase-one Vega action awaiting the holder's exact `H_dev` signature.
-///
-/// The preparation is deliberately single-use. Finalization consumes its
-/// exact transaction context before parsing any private witness, so a failed
-/// attempt cannot be replayed against a mutated or freshly timestamped draft.
-#[pyclass(module = "iroha_python._crypto")]
-struct PrivacyVegaActionPreparationV1 {
-    inner: Option<PrivacyVegaActionPreparationInnerV1>,
-}
-
-impl PrivacyVegaActionPreparationV1 {
-    fn require_inner(&self) -> PyResult<&PrivacyVegaActionPreparationInnerV1> {
-        self.inner.as_ref().ok_or_else(|| {
-            PyValueError::new_err("Vega action preparation has already been consumed")
-        })
-    }
-}
-
-fn python_privacy_action_signed_envelope_v1(
-    context: &PythonPrivacyActionTransactionContextV1,
-    signed: &SignedTransaction,
-) -> PyResult<SignedTransactionEnvelope> {
-    let signature: Signature = signed.signature().payload().clone();
-    let signature_bytes = signature.payload().to_vec();
-    let hash: HashOf<SignedTransaction> = signed.hash();
-    let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
-    let signed_transaction = codec::encode_adaptive(signed);
-    let signed_transaction_versioned = signed.encode_versioned();
-    let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
-    let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
-    Ok(SignedTransactionEnvelope {
-        chain_id: context.chain_id.to_string(),
-        authority: context.authority.to_string(),
-        signed_transaction,
-        signed_transaction_versioned,
-        hash: hash_bytes,
-        signature: signature_bytes,
-        public_key: public_key_bytes.to_vec(),
-    })
-}
-
-#[pymethods]
-impl PrivacyVegaActionPreparationV1 {
-    /// Exact first-release protocol identifier.
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0.canonical_label()
-    }
-
-    /// Whether finalization has already consumed this preparation.
-    #[getter]
-    fn consumed(&self) -> bool {
-        self.inner.is_none()
-    }
-
-    /// Frozen chain identifier.
-    #[getter]
-    fn chain_id(&self) -> PyResult<String> {
-        Ok(self.require_inner()?.context.chain_id.to_string())
-    }
-
-    /// Frozen transaction authority.
-    #[getter]
-    fn authority(&self) -> PyResult<String> {
-        Ok(self.require_inner()?.context.authority.to_string())
-    }
-
-    /// Frozen transaction creation time in milliseconds since UNIX epoch.
-    #[getter]
-    fn creation_time_ms(&self) -> PyResult<u64> {
-        u64::try_from(self.require_inner()?.context.creation_time.as_millis())
-            .map_err(|_| PyRuntimeError::new_err("Vega creation_time_ms overflowed"))
-    }
-
-    /// Frozen transaction time-to-live in milliseconds.
-    #[getter]
-    fn ttl_ms(&self) -> PyResult<Option<u64>> {
-        self.require_inner()?
-            .context
-            .time_to_live
-            .map(|ttl| {
-                u64::try_from(ttl.as_millis())
-                    .map_err(|_| PyRuntimeError::new_err("Vega ttl_ms overflowed"))
-            })
-            .transpose()
-    }
-
-    /// Frozen transaction nonce.
-    #[getter]
-    fn nonce(&self) -> PyResult<Option<u32>> {
-        Ok(self.require_inner()?.context.nonce.map(NonZeroU32::get))
-    }
-
-    /// Canonical nonzero transaction-intent digest for the frozen draft.
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        Ok(PyBytes::new(
-            py,
-            self.require_inner()?
-                .statement
-                .context
-                .transaction_intent_digest
-                .as_bytes(),
-        ))
-    }
-
-    /// Final public `H_dev` that the credential holder must sign.
-    #[getter]
-    fn device_authentication_digest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        Ok(PyBytes::new(
-            py,
-            self.require_inner()?
-                .statement
-                .device_authentication_digest
-                .as_bytes(),
-        ))
-    }
-
-    fn transaction_intent_digest_hex(&self) -> PyResult<String> {
-        Ok(hex_encode(
-            *self
-                .require_inner()?
-                .statement
-                .context
-                .transaction_intent_digest
-                .as_bytes(),
-        ))
-    }
-
-    fn device_authentication_digest_hex(&self) -> PyResult<String> {
-        Ok(hex_encode(
-            *self
-                .require_inner()?
-                .statement
-                .device_authentication_digest
-                .as_bytes(),
-        ))
-    }
-
-    /// Consume the frozen draft, prove it, locally validate it, and sign it.
-    #[pyo3(signature = (
-        private_key,
-        trusted_block_timestamp_ms,
-        issuer_authentication_sig_structure,
-        mobile_security_object_payload,
-        birth_date_issuer_signed_item,
-        issuer_signature,
-        device_signature
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn finalize_privacy_vega_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        trusted_block_timestamp_ms: u64,
-        issuer_authentication_sig_structure: Vec<u8>,
-        mobile_security_object_payload: Vec<u8>,
-        birth_date_issuer_signed_item: Vec<u8>,
-        issuer_signature: Vec<u8>,
-        device_signature: Vec<u8>,
-    ) -> PyResult<PrivacyVegaActionBuildResultV1> {
-        let mut witness_bytes = ZeroizingVegaWitnessBytes {
-            issuer_authentication_sig_structure,
-            mobile_security_object_payload,
-            birth_date_issuer_signed_item,
-            issuer_signature,
-            device_signature,
-        };
-        let inner = self.inner.take().ok_or_else(|| {
-            PyValueError::new_err("Vega action preparation has already been consumed")
-        })?;
-        let private_key = parse_private_key(private_key)?;
-        let expected_authority = inner.context.authority.try_signatory().ok_or_else(|| {
-            PyValueError::new_err(
-                "native privacy actions require a direct single-signatory authority",
-            )
-        })?;
-        let derived_authority = PublicKey::from(private_key.clone());
-        if expected_authority != &derived_authority {
-            return Err(PyValueError::new_err(
-                "privacy action private key does not match the frozen transaction authority",
-            ));
-        }
-        let transaction_intent_digest = inner.statement.context.transaction_intent_digest;
-        let rebound_intent = python_privacy_action_intent_v1(
-            &inner.context,
-            python_privacy_intent_projection_envelope_v1(
-                inner.profile,
-                PrivacyStatementV1::VegaExistingCredentialZkV0(inner.statement.clone()),
-                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
-            ),
-        )?;
-        if rebound_intent != transaction_intent_digest {
-            return Err(PyRuntimeError::new_err(
-                "frozen Vega action intent changed before proof construction",
-            ));
-        }
-        let rebound_device_digest = {
-            let binding = VegaMdlConsensusBindingV1::from_context(
-                &inner.statement.context,
-                inner.canonical_genesis_hash,
-            );
-            derive_device_authentication_digest_v1(&inner.statement, &binding).map_err(|error| {
-                PyValueError::new_err(format!(
-                    "invalid frozen Vega device-authentication statement: {error}"
-                ))
-            })?
-        };
-        if rebound_device_digest != inner.statement.device_authentication_digest {
-            return Err(PyRuntimeError::new_err(
-                "frozen Vega H_dev changed before proof construction",
-            ));
-        }
-        let witness = VegaMdlWitnessV1::new(
-            std::mem::take(&mut witness_bytes.issuer_authentication_sig_structure),
-            std::mem::take(&mut witness_bytes.mobile_security_object_payload),
-            std::mem::take(&mut witness_bytes.birth_date_issuer_signed_item),
-            &witness_bytes.issuer_signature,
-            &witness_bytes.device_signature,
-        )
-        .map_err(|error| PyValueError::new_err(format!("invalid native Vega witness: {error}")))?;
-        witness_bytes.erase();
-        let config = VegaMdlProverConfigV1::new(1).map_err(|error| {
-            PyRuntimeError::new_err(format!("native Vega prover configuration failed: {error}"))
-        })?;
-        let proof = {
-            let binding = VegaMdlConsensusBindingV1::from_context(
-                &inner.statement.context,
-                inner.canonical_genesis_hash,
-            );
-            prove_mdl_figure9_v1(
-                &inner.statement,
-                &binding,
-                trusted_block_timestamp_ms,
-                witness,
-                config,
-                &mut OsRng06,
-            )
-            .map_err(|error| {
-                PyValueError::new_err(format!("native Vega proof construction failed: {error}"))
-            })?
-        };
-        let signed = finalize_python_privacy_action_v1(
-            &inner.context,
-            inner.profile,
-            PrivacyStatementV1::VegaExistingCredentialZkV0(inner.statement.clone()),
-            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(proof)),
-            &private_key,
-        )?;
-        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
-            return Err(PyRuntimeError::new_err(
-                "native Vega action intent digest changed during proof construction",
-            ));
-        }
-        let envelope =
-            python_privacy_action_signed_envelope_v1(&inner.context, &signed.signed_transaction)?;
-        if envelope.hash != signed.transaction_hash {
-            return Err(PyRuntimeError::new_err(
-                "native Vega action transaction hash recomputation failed",
-            ));
-        }
-        Ok(PrivacyVegaActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            transaction_intent_digest: signed.transaction_intent_digest,
-            statement_digest: signed.statement_digest,
-            proof_envelope_hash: signed.proof_envelope_hash,
-            statement_bytes: signed.statement_bytes,
-            proof_bytes: signed.proof_bytes,
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
-            trusted_block_timestamp_ms,
-            issuer_id: *inner.statement.issuer_id.as_bytes(),
-            issuer_record_epoch: inner.statement.issuer_record_epoch,
-            issuer_record_digest: *inner.statement.issuer_record_digest.as_bytes(),
-            issuer_public_key: *inner.statement.issuer_public_key.as_bytes(),
-            device_authentication_digest: *inner.statement.device_authentication_digest.as_bytes(),
-            presentation_year: inner.statement.presentation_date.year,
-            presentation_month: inner.statement.presentation_date.month,
-            presentation_day: inner.statement.presentation_date.day,
-            minimum_age_years: inner.statement.minimum_age_years,
-            reader_challenge: *inner.statement.reader_challenge.as_bytes(),
-            session_transcript_digest: *inner.statement.session_transcript_digest.as_bytes(),
-        })
-    }
-}
-
-/// Public metadata for one canonical signed Vega mDL-age component action.
-///
-/// Credential bytes and both signatures remain private native witness inputs.
-/// This result contains only the exact public statement and proof metrics.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyVegaActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    trusted_block_timestamp_ms: u64,
-    issuer_id: [u8; 32],
-    issuer_record_epoch: u64,
-    issuer_record_digest: [u8; 32],
-    issuer_public_key: [u8; 33],
-    device_authentication_digest: [u8; 32],
-    presentation_year: u16,
-    presentation_month: u8,
-    presentation_day: u8,
-    minimum_age_years: u8,
-    reader_challenge: [u8; 32],
-    session_transcript_digest: [u8; 32],
-}
-
-const VEGA_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
-
-#[pymethods]
-impl PrivacyVegaActionBuildResultV1 {
-    /// Exact signed transaction envelope to submit.
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    /// Exact first-release protocol identifier.
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0.canonical_label()
-    }
-
-    /// Canonical transaction-intent digest.
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest.
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    /// Hash of the exact canonical privacy proof envelope.
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    /// Canonical encoded typed-statement byte count.
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    /// Native proof byte count.
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    /// Canonical encoded proof-envelope byte count.
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    /// Canonical adaptive signed-transaction byte count.
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    /// Trusted block timestamp used for UTC date binding.
-    #[getter]
-    const fn trusted_block_timestamp_ms(&self) -> u64 {
-        self.trusted_block_timestamp_ms
-    }
-
-    /// Governed issuer identifier.
-    #[getter]
-    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_id)
-    }
-
-    /// Exact governed issuer-record epoch.
-    #[getter]
-    const fn issuer_record_epoch(&self) -> u64 {
-        self.issuer_record_epoch
-    }
-
-    /// Digest of the exact governed issuer record.
-    #[getter]
-    fn issuer_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_record_digest)
-    }
-
-    /// Public issuer P-256 key.
-    #[getter]
-    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_public_key)
-    }
-
-    /// Public chain- and session-bound holder-device digest `H_dev`.
-    #[getter]
-    fn device_authentication_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.device_authentication_digest)
-    }
-
-    /// Public presentation year.
-    #[getter]
-    const fn presentation_year(&self) -> u16 {
-        self.presentation_year
-    }
-
-    /// Public presentation month.
-    #[getter]
-    const fn presentation_month(&self) -> u8 {
-        self.presentation_month
-    }
-
-    /// Public presentation day.
-    #[getter]
-    const fn presentation_day(&self) -> u8 {
-        self.presentation_day
-    }
-
-    /// Public minimum-age threshold.
-    #[getter]
-    const fn minimum_age_years(&self) -> u8 {
-        self.minimum_age_years
-    }
-
-    /// Public reader challenge.
-    #[getter]
-    fn reader_challenge<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.reader_challenge)
-    }
-
-    /// Public canonical session-transcript digest.
-    #[getter]
-    fn session_transcript_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.session_transcript_digest)
-    }
-
-    /// Explicit execution classification for Vega V0.
-    #[getter]
-    fn execution_classification(&self) -> &'static str {
-        VEGA_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    /// Vega V0 verifies a component action and has no ledger mutation.
-    #[getter]
-    const fn ledger_effect(&self) -> Option<&'static str> {
-        None
-    }
-
-    /// Canonical transaction-intent digest as lowercase hexadecimal.
-    fn transaction_intent_digest_hex(&self) -> String {
-        hex_encode(self.transaction_intent_digest)
-    }
-
-    /// Canonical typed-statement digest as lowercase hexadecimal.
-    fn statement_digest_hex(&self) -> String {
-        hex_encode(self.statement_digest)
-    }
-
-    /// Canonical proof-envelope hash as lowercase hexadecimal.
-    fn proof_envelope_hash_hex(&self) -> String {
-        hex_encode(self.proof_envelope_hash)
-    }
-
-    /// Public device-authentication digest as lowercase hexadecimal.
-    fn device_authentication_digest_hex(&self) -> String {
-        hex_encode(self.device_authentication_digest)
-    }
-}
-
-const ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "admission_action";
-const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str = "zk_ams_batch_admission";
-const ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1: &str = "zk_ams_provision_account";
-
-/// Public metadata for one canonical signed ZK-AMS admission batch.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    issuer_id: [u8; 32],
-    issuer_public_key: [u8; 33],
-    issuer_policy_record_digest: [u8; 32],
-    registry_id: [u8; 32],
-    registry_record_digest: [u8; 32],
-    policy_id: [u8; 32],
-    policy_digest: [u8; 32],
-    account_registry_root: [u8; 32],
-    account_registry_root_epoch: u64,
-    next_account_registry_root: [u8; 32],
-    next_account_registry_root_epoch: u64,
-    phc_hashes: Vec<[u8; 32]>,
-    seed_public_keys: Vec<[u8; 32]>,
-}
-
-#[pymethods]
-impl PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::IrohaZkAmsV1.canonical_label()
-    }
-
-    #[getter]
-    const fn action_kind(&self) -> &'static str {
-        "batch_admission"
-    }
-
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    #[getter]
-    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_id)
-    }
-
-    #[getter]
-    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_public_key)
-    }
-
-    #[getter]
-    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_policy_record_digest)
-    }
-
-    #[getter]
-    fn registry_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.registry_id)
-    }
-
-    #[getter]
-    fn registry_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.registry_record_digest)
-    }
-
-    #[getter]
-    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_id)
-    }
-
-    #[getter]
-    fn policy_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_digest)
-    }
-
-    #[getter]
-    fn account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.account_registry_root)
-    }
-
-    #[getter]
-    const fn account_registry_root_epoch(&self) -> u64 {
-        self.account_registry_root_epoch
-    }
-
-    #[getter]
-    fn next_account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.next_account_registry_root)
-    }
-
-    #[getter]
-    const fn next_account_registry_root_epoch(&self) -> u64 {
-        self.next_account_registry_root_epoch
-    }
-
-    #[getter]
-    fn anchor_count(&self) -> u32 {
-        u32::try_from(self.phc_hashes.len()).expect("ZK-AMS batch is bounded to eight")
-    }
-
-    #[getter]
-    fn phc_hashes(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
-        self.phc_hashes
-            .iter()
-            .map(|value| Py::from(PyBytes::new(py, value)))
-            .collect()
-    }
-
-    #[getter]
-    fn seed_public_keys(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
-        self.seed_public_keys
-            .iter()
-            .map(|value| Py::from(PyBytes::new(py, value)))
-            .collect()
-    }
-
-    #[getter]
-    const fn execution_classification(&self) -> &'static str {
-        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    #[getter]
-    const fn ledger_effect(&self) -> &'static str {
-        ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1
-    }
-}
-
-/// Public metadata for one canonical signed ZK-AMS account provisioning.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyZkAmsProvisionAccountActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    issuer_id: [u8; 32],
-    issuer_public_key: [u8; 33],
-    issuer_policy_record_digest: [u8; 32],
-    registry_id: [u8; 32],
-    registry_record_digest: [u8; 32],
-    policy_id: [u8; 32],
-    policy_digest: [u8; 32],
-    account_registry_root: [u8; 32],
-    account_registry_root_epoch: u64,
-    admitted_seed_key_ring: Vec<[u8; 32]>,
-    account_id: String,
-    key_image: [u8; 32],
-}
-
-#[pymethods]
-impl PrivacyZkAmsProvisionAccountActionBuildResultV1 {
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::IrohaZkAmsV1.canonical_label()
-    }
-
-    #[getter]
-    const fn action_kind(&self) -> &'static str {
-        "provision_account"
-    }
-
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    #[getter]
-    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_id)
-    }
-
-    #[getter]
-    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_public_key)
-    }
-
-    #[getter]
-    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_policy_record_digest)
-    }
-
-    #[getter]
-    fn registry_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.registry_id)
-    }
-
-    #[getter]
-    fn registry_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.registry_record_digest)
-    }
-
-    #[getter]
-    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_id)
-    }
-
-    #[getter]
-    fn policy_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_digest)
-    }
-
-    #[getter]
-    fn account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.account_registry_root)
-    }
-
-    #[getter]
-    const fn account_registry_root_epoch(&self) -> u64 {
-        self.account_registry_root_epoch
-    }
-
-    #[getter]
-    fn admitted_seed_key_ring(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
-        self.admitted_seed_key_ring
-            .iter()
-            .map(|value| Py::from(PyBytes::new(py, value)))
-            .collect()
-    }
-
-    #[getter]
-    fn ring_size(&self) -> u32 {
-        u32::try_from(self.admitted_seed_key_ring.len())
-            .expect("ZK-AMS ring is bounded to 64 entries")
-    }
-
-    #[getter]
-    fn account_id(&self) -> &str {
-        &self.account_id
-    }
-
-    #[getter]
-    fn key_image<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.key_image)
-    }
-
-    #[getter]
-    const fn execution_classification(&self) -> &'static str {
-        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    #[getter]
-    const fn ledger_effect(&self) -> &'static str {
-        ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1
-    }
-}
-
-const BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
-
-/// Public metadata for one canonical signed Bootle/Lantern presentation.
-#[pyclass(frozen, module = "iroha_python._crypto")]
-struct PrivacyBootleLanternPresentationActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    issuer_id: [u8; 32],
-    policy_id: [u8; 32],
-    issuer_policy_epoch: u64,
-    issuer_policy_record_digest: [u8; 32],
-    issuer_parameter_id: [u8; 32],
-    issuer_parameter_digest: [u8; 32],
-    disclosure_indices: Vec<u8>,
-    disclosed_attribute_values: Vec<[u8; 8]>,
-}
-
-#[pymethods]
-impl PrivacyBootleLanternPresentationActionBuildResultV1 {
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-
-    #[getter]
-    fn protocol_id(&self) -> &'static str {
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1.canonical_label()
-    }
-
-    #[getter]
-    const fn action_kind(&self) -> &'static str {
-        "presentation"
-    }
-
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-
-    #[getter]
-    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_id)
-    }
-
-    #[getter]
-    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.policy_id)
-    }
-
-    #[getter]
-    const fn issuer_policy_epoch(&self) -> u64 {
-        self.issuer_policy_epoch
-    }
-
-    #[getter]
-    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_policy_record_digest)
-    }
-
-    #[getter]
-    fn issuer_parameter_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_parameter_id)
-    }
-
-    #[getter]
-    fn issuer_parameter_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.issuer_parameter_digest)
-    }
-
-    #[getter]
-    fn disclosure_indices(&self) -> Vec<u8> {
-        self.disclosure_indices.clone()
-    }
-
-    #[getter]
-    fn disclosed_attribute_values(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
-        self.disclosed_attribute_values
-            .iter()
-            .map(|value| Py::from(PyBytes::new(py, value)))
-            .collect()
-    }
-
-    #[getter]
-    const fn execution_classification(&self) -> &'static str {
-        BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1
-    }
-
-    #[getter]
-    const fn ledger_effect(&self) -> Option<&'static str> {
-        None
-    }
-}
-
 /// Signed transaction outputs exposed to Python.
 #[pyclass(module = "iroha_python._crypto")]
 struct SignedTransactionEnvelope {
-    chain_id: String,
+    network_id: NetworkId,
     authority: String,
     signed_transaction: Vec<u8>,
     signed_transaction_versioned: Vec<u8>,
@@ -15533,11 +12326,47 @@ impl SignedTransactionEnvelope {
             .as_object()
             .ok_or_else(|| PyValueError::new_err("expected JSON object"))?;
 
-        let chain_id = obj
-            .get("chain_id")
+        const RETIRED_NETWORK_FIELDS: [&str; 7] = [
+            "chain",
+            "chainId",
+            "chain_id",
+            "canonicalGenesisHash",
+            "canonical_genesis_hash",
+            "genesisHash",
+            "genesis_hash",
+        ];
+        if let Some(field) = RETIRED_NETWORK_FIELDS
+            .iter()
+            .find(|field| obj.contains_key(*field))
+        {
+            return Err(PyValueError::new_err(format!(
+                "retired `{field}` envelope field is not accepted"
+            )));
+        }
+        const ENVELOPE_FIELDS: [&str; 9] = [
+            "network_id",
+            "authority",
+            "signed_transaction_b64",
+            "signed_transaction_versioned_b64",
+            "hash_hex",
+            "signature_b64",
+            "signature_hex",
+            "public_key_b64",
+            "public_key_hex",
+        ];
+        if let Some(field) = obj
+            .keys()
+            .find(|field| !ENVELOPE_FIELDS.contains(&field.as_str()))
+        {
+            return Err(PyValueError::new_err(format!(
+                "unsupported `{field}` envelope field"
+            )));
+        }
+        let network_id_literal = obj
+            .get("network_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| PyValueError::new_err("missing `chain_id` field"))?
-            .to_string();
+            .ok_or_else(|| PyValueError::new_err("missing `network_id` field"))?;
+        let network_id = PyNetworkId::parse(network_id_literal)?.inner;
         let authority = obj
             .get("authority")
             .and_then(|v| v.as_str())
@@ -15562,6 +12391,14 @@ impl SignedTransactionEnvelope {
             .get("public_key_b64")
             .and_then(|v| v.as_str())
             .ok_or_else(|| PyValueError::new_err("missing `public_key_b64` field"))?;
+        let signature_hex = obj
+            .get("signature_hex")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| PyValueError::new_err("missing `signature_hex` field"))?;
+        let public_key_hex = obj
+            .get("public_key_hex")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| PyValueError::new_err("missing `public_key_hex` field"))?;
         let hash_hex = obj
             .get("hash_hex")
             .and_then(|v| v.as_str())
@@ -15584,6 +12421,27 @@ impl SignedTransactionEnvelope {
         let public_key = BASE64
             .decode(public_key_b64.as_bytes())
             .map_err(|err| PyValueError::new_err(format!("invalid public_key_b64: {err}")))?;
+
+        for (field, encoded, decoded) in [
+            (
+                "signed_transaction_b64",
+                signed_b64,
+                signed_transaction.as_slice(),
+            ),
+            (
+                "signed_transaction_versioned_b64",
+                signed_versioned_b64,
+                signed_transaction_versioned.as_slice(),
+            ),
+            ("signature_b64", signature_b64, signature.as_slice()),
+            ("public_key_b64", public_key_b64, public_key.as_slice()),
+        ] {
+            if BASE64.encode(decoded) != encoded {
+                return Err(PyValueError::new_err(format!(
+                    "{field} must use exact canonical base64"
+                )));
+            }
+        }
 
         if signature.len() != 64 {
             return Err(PyValueError::new_err(format!(
@@ -15610,21 +12468,47 @@ impl SignedTransactionEnvelope {
             )));
         }
         hash.copy_from_slice(&hash_bytes);
+        if hex::encode(hash) != hash_hex {
+            return Err(PyValueError::new_err(
+                "hash_hex must use exact lowercase hexadecimal",
+            ));
+        }
+        if hex::encode(&signature) != signature_hex {
+            return Err(PyValueError::new_err(
+                "signature_hex does not match signature_b64",
+            ));
+        }
+        if hex::encode(&public_key) != public_key_hex {
+            return Err(PyValueError::new_err(
+                "public_key_hex does not match public_key_b64",
+            ));
+        }
 
-        Ok(Self {
-            chain_id,
-            authority,
-            signed_transaction,
-            signed_transaction_versioned,
-            hash,
-            signature,
-            public_key,
-        })
+        let decoded = decode_canonical_signed_transaction_v1(&signed_transaction_versioned)?;
+        if decoded.network_id() != Some(&network_id) {
+            return Err(PyValueError::new_err(
+                "envelope network_id does not match the signed transaction NetworkId",
+            ));
+        }
+        let authenticated = signed_transaction_envelope_from_model_v1(&decoded)?;
+        if authenticated.authority != authority
+            || authenticated.signed_transaction != signed_transaction
+            || authenticated.hash != hash
+            || authenticated.signature != signature
+            || authenticated.public_key != public_key
+        {
+            return Err(PyValueError::new_err(
+                "envelope metadata does not match the authenticated signed transaction",
+            ));
+        }
+        Ok(authenticated)
     }
 
     #[getter]
-    fn chain_id(&self) -> &str {
-        &self.chain_id
+    fn network_id(&self) -> PyNetworkId {
+        PyNetworkId {
+            inner: self.network_id,
+        }
     }
 
     #[getter]
@@ -15675,7 +12559,10 @@ impl SignedTransactionEnvelope {
     /// Return a Python dict summarising the envelope contents.
     fn as_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
-        dict.set_item("chain_id", &self.chain_id)?;
+        dict.set_item(
+            "network_id",
+            canonical_network_id_literal(&self.network_id)?,
+        )?;
         dict.set_item("authority", &self.authority)?;
         dict.set_item(
             "signed_transaction",
@@ -15717,8 +12604,8 @@ impl SignedTransactionEnvelope {
     fn to_json(&self) -> PyResult<String> {
         let mut map = norito::json::Map::new();
         map.insert(
-            "chain_id".into(),
-            norito::json::Value::String(self.chain_id.clone()),
+            "network_id".into(),
+            norito::json::Value::String(canonical_network_id_literal(&self.network_id)?),
         );
         map.insert(
             "authority".into(),
@@ -15832,6 +12719,7 @@ fn sign_py(
 fn sign_query_request(
     authority: &str,
     private_key: &[u8],
+    network_id: &NetworkId,
     request: QueryRequest,
 ) -> PyResult<Vec<u8>> {
     let authority = parse_account_id(authority)?;
@@ -15846,8 +12734,29 @@ fn sign_query_request(
             "query private key does not match the authority account",
         ));
     }
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            PyValueError::new_err(format!("system clock precedes UNIX epoch: {error}"))
+        })?
+        .as_millis()
+        .try_into()
+        .map_err(|_| PyValueError::new_err("query creation time exceeds u64"))?;
+    const QUERY_TIME_TO_LIVE_MS: u64 = 100_000;
+    let time_to_live_ms =
+        NonZeroU64::new(QUERY_TIME_TO_LIVE_MS).expect("query TTL constant is nonzero");
+    let mut nonce = [0_u8; 32];
+    OsRng06
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
     request
-        .with_authority(authority)
+        .with_authority(
+            *network_id,
+            authority,
+            creation_time_ms,
+            time_to_live_ms,
+            nonce,
+        )
         .try_sign(&key_pair)
         .map(|signed| signed.encode_versioned())
         .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
@@ -15867,12 +12776,13 @@ fn build_find_asset_escrow_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     escrow_id: &str,
 ) -> PyResult<Py<PyBytes>> {
     let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
         FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
     ));
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -15880,6 +12790,7 @@ fn build_find_asset_escrows_by_party_query(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     item: QueryItemKind,
     query_payload: Vec<u8>,
 ) -> PyResult<Py<PyBytes>> {
@@ -15895,7 +12806,7 @@ fn build_find_asset_escrows_by_party_query(
         ),
         params: QueryParams::default(),
     });
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -15906,6 +12817,7 @@ fn build_find_asset_escrows_by_seller_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     seller: &str,
 ) -> PyResult<Py<PyBytes>> {
     let query = FindAssetEscrowsBySeller {
@@ -15915,6 +12827,7 @@ fn build_find_asset_escrows_by_seller_query_py(
         py,
         authority,
         private_key,
+        network_id,
         QueryItemKind::AssetEscrowsBySeller,
         norito::codec::Encode::encode(&query),
     )
@@ -15927,6 +12840,7 @@ fn build_find_asset_escrows_by_buyer_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     buyer: &str,
 ) -> PyResult<Py<PyBytes>> {
     let query = FindAssetEscrowsByBuyer {
@@ -15936,6 +12850,7 @@ fn build_find_asset_escrows_by_buyer_query_py(
         py,
         authority,
         private_key,
+        network_id,
         QueryItemKind::AssetEscrowsByBuyer,
         norito::codec::Encode::encode(&query),
     )
@@ -15948,6 +12863,7 @@ fn build_find_committed_transaction_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     transaction_hash: &str,
 ) -> PyResult<Py<PyBytes>> {
     let transaction_hash =
@@ -15965,7 +12881,7 @@ fn build_find_committed_transaction_query_py(
         ),
         params: QueryParams::default(),
     });
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -15976,6 +12892,7 @@ fn build_find_block_by_hash_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    network_id: &PyNetworkId,
     block_hash: &str,
 ) -> PyResult<Py<PyBytes>> {
     let block_hash = parse_typed_hash::<BlockHeader>(block_hash, "block hash")?;
@@ -15989,7 +12906,7 @@ fn build_find_block_by_hash_query_py(
         selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<SignedBlock>::default()),
         params: QueryParams::default(),
     });
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -16679,8 +13596,13 @@ fn signed_transaction_envelope_from_model_v1(
     let hash: HashOf<SignedTransaction> = signed.hash();
     let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
     let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
+    let network_id = signed.network_id().copied().ok_or_else(|| {
+        PyValueError::new_err(
+            "genesis-domain transactions cannot be represented as client envelopes",
+        )
+    })?;
     Ok(SignedTransactionEnvelope {
-        chain_id: signed.chain().to_string(),
+        network_id,
         authority: signed.authority().to_string(),
         signed_transaction: codec::encode_adaptive(signed),
         signed_transaction_versioned: signed.encode_versioned(),
@@ -16695,8 +13617,14 @@ fn signed_transaction_envelope_from_model_v1(
 /// Decode one exact current signed wire and reconstruct its authenticated public envelope.
 fn signed_transaction_envelope_from_versioned_v1_py(
     signed_transaction_versioned: &[u8],
+    network_id: &PyNetworkId,
 ) -> PyResult<SignedTransactionEnvelope> {
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    if signed.network_id() != Some(&network_id.inner) {
+        return Err(PyValueError::new_err(
+            "signed transaction network does not match NetworkId",
+        ));
+    }
     signed_transaction_envelope_from_model_v1(&signed)
 }
 
@@ -16719,14 +13647,159 @@ fn canonical_signed_transaction_hash_v1_py(
     Ok(Py::from(PyBytes::new(py, &hash)))
 }
 
+const PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1: &[u8] =
+    b"iroha.taira.privacy_action_driver_seed.v1\0";
+
+fn privacy_exact12_action_driver_signing_seed_v1(
+    candidate_binding_sha256: [u8; 32],
+    request_id: [u8; 32],
+) -> Zeroizing<[u8; 32]> {
+    let mut hash = Sha256::new();
+    hash.update(PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1);
+    hash.update(candidate_binding_sha256);
+    hash.update(request_id);
+    hash.update([0]);
+    let mut seed = Zeroizing::new(hash.finalize().into());
+    if seed.iter().all(|byte| *byte == 0) {
+        seed[0] = 1;
+    }
+    seed
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_privacy_exact12_action_driver_transaction_context_v1")]
+/// Authenticate one action-driver transaction and enforce its complete public request context.
+#[allow(clippy::too_many_arguments)]
+fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+    candidate_binding_sha256: &[u8],
+    request_id: &[u8],
+    expected_network_id: &PyNetworkId,
+    expected_creation_time_millis: u64,
+    expected_ttl_millis: u64,
+    expected_nonce: u32,
+) -> PyResult<Py<PyDict>> {
+    let candidate_binding_sha256 =
+        fixed_array::<32>(candidate_binding_sha256, "candidate_binding_sha256")?;
+    let request_id = fixed_array::<32>(request_id, "request_id")?;
+    if candidate_binding_sha256 == [0; 32] || request_id == [0; 32] {
+        return Err(PyValueError::new_err(
+            "candidate_binding_sha256 and request_id must be nonzero",
+        ));
+    }
+    let expected_nonce = NonZeroU32::new(expected_nonce)
+        .ok_or_else(|| PyValueError::new_err("expected_nonce must be nonzero"))?;
+    if expected_creation_time_millis == 0 || expected_ttl_millis == 0 {
+        return Err(PyValueError::new_err(
+            "expected transaction time fields must be nonzero",
+        ));
+    }
+
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    if signed.network_id() != Some(&expected_network_id.inner) {
+        return Err(PyValueError::new_err(
+            "signed transaction does not match the expected NetworkId",
+        ));
+    }
+
+    let signing_seed =
+        privacy_exact12_action_driver_signing_seed_v1(candidate_binding_sha256, request_id);
+    let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, signing_seed.as_ref())
+        .map_err(|_| PyRuntimeError::new_err("could not derive the expected action-driver key"))?;
+    let expected_public_key = PublicKey::from(private_key);
+    let expected_authority = AccountId::new(expected_public_key.clone());
+    if signed.authority() != &expected_authority {
+        return Err(PyValueError::new_err(
+            "signed transaction authority does not match candidate and request",
+        ));
+    }
+    if signed.creation_time().as_millis() != u128::from(expected_creation_time_millis)
+        || signed.time_to_live().map(|ttl| ttl.as_millis()) != Some(u128::from(expected_ttl_millis))
+        || signed.nonce() != Some(expected_nonce)
+    {
+        return Err(PyValueError::new_err(
+            "signed transaction time or nonce differs from the exact request",
+        ));
+    }
+    if !matches!(
+        signed.fee_payment_intent(),
+        FeePaymentIntent::Authority(payment)
+            if payment.charge_limits.is_empty() && payment.gas_limit.is_none()
+    ) {
+        return Err(PyValueError::new_err(
+            "signed transaction fee intent is not the empty authority-paid qualification intent",
+        ));
+    }
+    if !signed.metadata().is_empty() {
+        return Err(PyValueError::new_err(
+            "signed transaction metadata is not the empty qualification metadata",
+        ));
+    }
+    if signed.multisig_signatures().is_some() {
+        return Err(PyValueError::new_err(
+            "signed action-driver transaction must use one direct authority signature",
+        ));
+    }
+
+    let (intent, submission) = signed
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "signed transaction has an invalid privacy transaction-intent binding",
+            )
+        })?
+        .ok_or_else(|| PyValueError::new_err("signed transaction has no direct privacy action"))?;
+    let statement_context = submission.envelope.statement.context();
+    if statement_context.network_id != expected_network_id.inner
+        || statement_context.action_index != 0
+        || statement_context.transaction_intent_digest != intent
+    {
+        return Err(PyValueError::new_err(
+            "signed privacy statement context differs from the exact transaction context",
+        ));
+    }
+
+    let (_, expected_public_key_bytes) =
+        public_key_to_bytes(&expected_public_key, "action-driver public key")?;
+    let transaction_hash = signed.hash();
+    let result = PyDict::new(py);
+    result.set_item(
+        "transaction_hash",
+        PyBytes::new(py, transaction_hash.as_ref()),
+    )?;
+    result.set_item(
+        "network_id",
+        PyBytes::new(py, expected_network_id.inner.as_bytes()),
+    )?;
+    result.set_item(
+        "statement_network_id",
+        PyBytes::new(py, statement_context.network_id.as_bytes()),
+    )?;
+    result.set_item("statement_action_index", statement_context.action_index)?;
+    result.set_item("authority", expected_authority.to_string())?;
+    result.set_item(
+        "authority_public_key",
+        PyBytes::new(py, expected_public_key_bytes),
+    )?;
+    result.set_item("creation_time_millis", expected_creation_time_millis)?;
+    result.set_item("ttl_millis", expected_ttl_millis)?;
+    result.set_item("nonce", expected_nonce.get())?;
+    result.set_item("fee_payment", "authority-empty-v1")?;
+    result.set_item("metadata", "empty-v1")?;
+    Ok(result.unbind())
+}
+
 #[pyfunction]
 #[pyo3(name = "privacy_vega_device_authentication_digest_v1")]
 /// Derive `H_dev` for an already prepared, explicit nonzero transaction intent.
 #[allow(clippy::too_many_arguments)]
 fn privacy_vega_device_authentication_digest_v1_py(
     py: Python<'_>,
-    chain_id: &str,
-    canonical_genesis_hash: &[u8],
+    network_id: &PyNetworkId,
     transaction_intent_digest: &[u8],
     issuer_id: &[u8],
     issuer_record_epoch: u64,
@@ -16739,10 +13812,6 @@ fn privacy_vega_device_authentication_digest_v1_py(
     reader_challenge: &[u8],
     session_transcript_digest: &[u8],
 ) -> PyResult<Py<PyBytes>> {
-    require_non_blank_unpadded(chain_id, "chain_id")?;
-    let chain_id = parse_chain_id(chain_id)?;
-    let canonical_genesis_hash =
-        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
     let transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(
         python_nonzero_privacy_digest_v1(transaction_intent_digest, "transaction_intent_digest")?,
     );
@@ -16764,7 +13833,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
     )?;
     let statement = python_vega_statement_v1(
         PrivacyStatementContextV1 {
-            chain_id,
+            network_id: network_id.inner,
             action_index: 0,
             transaction_intent_digest,
             parameter_id: profile.parameter_id,
@@ -16773,7 +13842,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
             statement_schema_digest: profile.statement_schema_digest,
             engine_manifest_digest: profile.engine_manifest_digest,
         },
-        canonical_genesis_hash,
+        *network_id.inner.as_bytes(),
         issuer_id,
         issuer_record_epoch,
         issuer_record_digest,
@@ -16942,6 +14011,10 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
     )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
+    )?;
     result.set_item("amount", statement.amount.to_string())?;
     result.set_item("authorization_epoch", statement.authorization_epoch)?;
     result.set_item(
@@ -17042,6 +14115,11 @@ fn inspect_signed_privacy_jindo_action_v1_py(
         submitted_versioned_transaction_bytes,
     )?;
     result.set_item("polynomial_count", polynomial_count)?;
+    result.set_item("availability", "available-experimental")?;
+    result.set_item(
+        "limitations",
+        PyList::new(py, ["MissingDistributionWideKnowledgeSoundnessEvidence"])?,
+    )?;
     Ok(result.unbind())
 }
 
@@ -17662,6 +14740,10 @@ fn inspect_signed_privacy_orchard_note_action_v1_py(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
     )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
+    )?;
     result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
     result.set_item("anchor", PyBytes::new(py, statement.anchor.as_bytes()))?;
     result.set_item("anchor_epoch", statement.anchor_epoch)?;
@@ -17765,6 +14847,10 @@ fn inspect_signed_privacy_ivm_private_note_action_v1_py(
     result.set_item(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
     )?;
     result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
     result.set_item(
@@ -18105,28 +15191,7 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let validator_set: Vec<PeerId> = Vec::new();
-    let qc = Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0xBA; 4]),
-        post_state_root: Hash::new([0xBB; 4]),
-        height: header.height().get(),
-        view: header.view_change_index(),
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: vec![0xCC; 48],
-        },
-    };
-    let envelope = LaneRelayEnvelope::new(header, Some(qc), Some(da_hash), settlement, 64)
+    let envelope = LaneRelayEnvelope::new(header, Some(da_hash), settlement, 64)
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let valid = norito::to_bytes(&envelope)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize envelope: {err}")))?;
@@ -18240,7 +15305,7 @@ fn privacy_bridge_abi_version_py() -> u32 {
 #[pyfunction]
 #[pyo3(name = "connect_norito_bridge_abi_version")]
 fn connect_norito_bridge_abi_version_py() -> u32 {
-    21
+    PRIVACY_BRIDGE_ABI_VERSION_V1
 }
 
 #[pyfunction]
@@ -18282,20 +15347,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         _py.get_type::<SorafsMultiFetchError>(),
     )?;
     module.add_class::<PyDomainId>()?;
+    module.add_class::<PyNetworkId>()?;
     module.add_class::<PyAccountId>()?;
     module.add_class::<PyAssetDefinitionId>()?;
     module.add_class::<PyAssetId>()?;
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
+    module.add_class::<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>()?;
     module.add_class::<PrivacyNativeActionBuildResultV1>()?;
-    module.add_class::<PrivacyZkAceTransferActionBuildResultV1>()?;
-    module.add_class::<PrivacyJindoActionBuildResultV1>()?;
-    module.add_class::<PrivacyVeRangeActionBuildResultV1>()?;
-    module.add_class::<PrivacyVegaActionPreparationV1>()?;
-    module.add_class::<PrivacyVegaActionBuildResultV1>()?;
-    module.add_class::<PrivacyZkAmsBatchAdmissionActionBuildResultV1>()?;
-    module.add_class::<PrivacyZkAmsProvisionAccountActionBuildResultV1>()?;
-    module.add_class::<PrivacyBootleLanternPresentationActionBuildResultV1>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
     module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
     module.add_function(wrap_pyfunction!(
@@ -18357,6 +15416,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         signed_transaction_envelope_from_versioned_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_privacy_exact12_action_driver_transaction_context_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -18437,13 +15500,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sm2_fixture_from_seed_py, module)?)?;
     module.add_function(wrap_pyfunction!(encode_connect_frame_py, module)?)?;
     module.add_function(wrap_pyfunction!(decode_connect_frame_py, module)?)?;
-    module.add_function(wrap_pyfunction!(generate_connect_keypair_py, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        connect_public_key_from_private_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(derive_connect_direction_keys_py, module)?)?;
-    module.add_function(wrap_pyfunction!(build_connect_approve_preimage_py, module)?)?;
+    connect_key_bindings::register(module)?;
     module.add_function(wrap_pyfunction!(seal_connect_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(open_connect_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(sorafs_alias_policy_defaults_py, module)?)?;
@@ -18555,6 +15612,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_capability_manifest::privacy_exact12_capability_manifest_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_capability_manifest::privacy_validate_exact12_capability_manifest_v1_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         connect_norito_bridge_abi_version_py,
         module

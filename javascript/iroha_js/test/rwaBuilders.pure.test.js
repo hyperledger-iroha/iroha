@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { AccountAddress } = await import("../src/address.js");
+const { NetworkId } = await import("../src/networkId.js");
 const {
   buildRegisterRwaInstruction,
   buildTransferRwaInstruction,
@@ -34,6 +35,10 @@ const DESTINATION = AccountAddress.fromAccount({ publicKey: Buffer.from(
   ),
 }).toI105();
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
+const NETWORK_ID_BYTES = Buffer.from(NETWORK_ID.toBytes());
 const AUTHORITY_FEE_PAYMENT = Object.freeze({
   payer: "authority",
   chargeLimits: Object.freeze([]),
@@ -175,7 +180,7 @@ test("RWA transaction builders serialize canonical instructions through injected
   const captures = [];
   globalThis.__IROHA_NATIVE_BINDING__ = {
     buildTransaction(
-      chainId,
+      networkId,
       authority,
       instructions,
       feePaymentJson,
@@ -186,7 +191,7 @@ test("RWA transaction builders serialize canonical instructions through injected
       secret,
     ) {
       captures.push({
-        chainId,
+        networkId,
         authority,
         instructions,
         feePaymentJson,
@@ -205,7 +210,7 @@ test("RWA transaction builders serialize canonical instructions through injected
 
   try {
     const register = buildRegisterRwaTransaction({
-      chainId: "test-chain",
+      networkId: NETWORK_ID,
       authority: AUTHORITY,
       feePayment: AUTHORITY_FEE_PAYMENT,
       rwa: {
@@ -221,7 +226,7 @@ test("RWA transaction builders serialize canonical instructions through injected
       privateKey: PRIVATE_KEY,
     });
     const transfer = buildTransferRwaTransaction({
-      chainId: "test-chain",
+      networkId: NETWORK_ID,
       authority: AUTHORITY,
       feePayment: AUTHORITY_FEE_PAYMENT,
       sourceAccountId: AUTHORITY,
@@ -231,7 +236,7 @@ test("RWA transaction builders serialize canonical instructions through injected
       privateKey: PRIVATE_KEY,
     });
     const setMetadata = buildSetRwaKeyValueTransaction({
-      chainId: "test-chain",
+      networkId: NETWORK_ID,
       authority: AUTHORITY,
       feePayment: AUTHORITY_FEE_PAYMENT,
       rwaId: RWA_ID,
@@ -240,7 +245,7 @@ test("RWA transaction builders serialize canonical instructions through injected
       privateKey: PRIVATE_KEY,
     });
     const removeMetadata = buildRemoveRwaKeyValueTransaction({
-      chainId: "test-chain",
+      networkId: NETWORK_ID,
       authority: AUTHORITY,
       feePayment: AUTHORITY_FEE_PAYMENT,
       rwaId: RWA_ID,
@@ -261,7 +266,7 @@ test("RWA transaction builders serialize canonical instructions through injected
   }
 
   assert.equal(captures.length, 4);
-  assert.equal(captures[0].chainId, "test-chain");
+  assert.deepEqual(Buffer.from(captures[0].networkId), NETWORK_ID_BYTES);
   assert.equal(captures[0].authority, AUTHORITY);
   assert.equal(captures[0].metadataPayload, JSON.stringify({ tag: "register" }));
   assert.equal(captures[0].creationTimeMs, 10);

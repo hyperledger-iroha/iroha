@@ -1,6 +1,9 @@
-import type { IvmProvedContractCallInput } from "../../../index.js";
+import { NetworkId, type IvmProvedContractCallInput } from "../../../index.js";
 
 const privateKey = new Uint8Array(32);
+const networkId = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const feePayment = {
   payer: "authority" as const,
   chargeLimits: [],
@@ -8,7 +11,7 @@ const feePayment = {
 };
 
 const camel: IvmProvedContractCallInput = {
-  chainId: "test-chain",
+  networkId,
   authority: "account",
   privateKey,
   vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -19,7 +22,7 @@ const camel: IvmProvedContractCallInput = {
 };
 
 const snake: IvmProvedContractCallInput = {
-  chain_id: "test-chain",
+  networkId,
   authority: "account",
   private_key: privateKey,
   vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -32,10 +35,22 @@ const snake: IvmProvedContractCallInput = {
 void camel;
 void snake;
 
-// @ts-expect-error camel/snake aliases are mutually exclusive.
-const duplicateChain: IvmProvedContractCallInput = {
+const retiredSnakeChain: IvmProvedContractCallInput = {
   ...camel,
+  // @ts-expect-error retired chain_id is not an ordinary-transaction field.
   chain_id: "test-chain",
+};
+
+const retiredCamelChain: IvmProvedContractCallInput = {
+  ...camel,
+  // @ts-expect-error retired chainId is not an ordinary-transaction field.
+  chainId: "test-chain",
+};
+
+const retiredBareChain: IvmProvedContractCallInput = {
+  ...camel,
+  // @ts-expect-error retired chain is not an ordinary-transaction field.
+  chain: "test-chain",
 };
 
 // @ts-expect-error address and alias target selectors are mutually exclusive.
@@ -46,7 +61,7 @@ const duplicateTarget: IvmProvedContractCallInput = {
 
 // @ts-expect-error both independently trusted artifact identities are required.
 const missingArtifactHash: IvmProvedContractCallInput = {
-  chainId: "test-chain",
+  networkId,
   authority: "account",
   privateKey,
   vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -55,6 +70,8 @@ const missingArtifactHash: IvmProvedContractCallInput = {
   expectedCodeHashHex: "11".repeat(32),
 };
 
-void duplicateChain;
+void retiredSnakeChain;
+void retiredCamelChain;
+void retiredBareChain;
 void duplicateTarget;
 void missingArtifactHash;

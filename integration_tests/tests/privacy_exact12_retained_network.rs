@@ -37,11 +37,11 @@ use iroha::{
             Quantity, QueryBuilderExt,
         },
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
-            PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-            PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
+            PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
+            PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1,
+            PrivacyPoolIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -138,9 +138,9 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
 }
 
 fn protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
-) -> Result<PrivacyCapabilityRowV1> {
+) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
         .iter()
@@ -150,7 +150,7 @@ fn protocol_row(
 }
 
 fn assert_protocol_expectations(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     expectations: &[ProtocolExpectationV1],
     context: &str,
 ) -> Result<()> {
@@ -181,7 +181,7 @@ async fn wait_for_all_peer_protocols(
     minimum_height: u64,
     expectations: &[ProtocolExpectationV1],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {
@@ -731,7 +731,7 @@ fn action_context(
     nonce: u32,
 ) -> PrivacyReleaseTransactionContextV1 {
     PrivacyReleaseTransactionContextV1 {
-        chain_id: client.chain.clone(),
+        network_id: client.network_id,
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
@@ -1854,6 +1854,9 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "post-restart exact stale-policy carrier subject",
         )
         .await?;
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart:passed"
+        );
         Ok(())
     }
     .await;

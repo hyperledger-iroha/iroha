@@ -14,9 +14,14 @@ import org.bouncycastle.crypto.modes.ChaCha20Poly1305
 import org.bouncycastle.crypto.params.AEADParameters
 import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.params.KeyParameter
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 
 /** Cryptographic helpers for the wallet-role Connect session. */
 object ConnectCrypto {
@@ -26,6 +31,7 @@ object ConnectCrypto {
     private const val AEAD_TAG_BITS = 128
     private val X25519_HKDF_SALT = "iroha:x25519:hkdf:v1".toByteArray(StandardCharsets.UTF_8)
     private val X25519_HKDF_INFO = "iroha:x25519:session-key".toByteArray(StandardCharsets.UTF_8)
+    private val SESSION_ID_DOMAIN = "iroha-connect|sid|".toByteArray(StandardCharsets.UTF_8)
     private val RELAY_AUTH_DOMAIN = "iroha-connect|relay-auth|v1".toByteArray(StandardCharsets.UTF_8)
 
     class KeyPair internal constructor(publicKey: ByteArray, privateKey: ByteArray) {
@@ -56,6 +62,25 @@ object ConnectCrypto {
         privateKey.encode(privateBytes, 0)
         publicKey.encode(publicBytes, 0)
         return KeyPair(publicBytes, privateBytes)
+    }
+
+    /** Derives the canonical session identifier bound to one exact deployment and launch nonce. */
+    @JvmStatic
+    @Throws(ConnectProtocolException::class)
+    fun deriveSessionId(
+        networkId: NetworkId,
+        appPublicKey: ByteArray,
+        nonce: ByteArray,
+    ): ByteArray {
+        requireLength(appPublicKey, KEY_LENGTH, "appPublicKey")
+        requireLength(nonce, 16, "nonce")
+        if (isAllZero(appPublicKey)) {
+            throw ConnectProtocolException("appPublicKey must not be all-zero")
+        }
+        if (isAllZero(nonce)) {
+            throw ConnectProtocolException("nonce must not be all-zero")
+        }
+        return blake2b32(SESSION_ID_DOMAIN, networkId.bytes(), appPublicKey, nonce)
     }
 
     @JvmStatic
@@ -143,17 +168,21 @@ object ConnectCrypto {
     @JvmStatic
     @Throws(ConnectProtocolException::class)
     fun buildApprovePreimage(
+        networkId: NetworkId,
         sessionId: ByteArray,
         appPublicKey: ByteArray,
         walletPublicKey: ByteArray,
         accountId: String?,
         permissionsHash: ByteArray?,
         proofHash: ByteArray?,
-        relayAuthHash: ByteArray? = null,
+        relayAuthHash: ByteArray,
     ): ByteArray {
         requireLength(sessionId, KEY_LENGTH, "sessionId")
         requireLength(appPublicKey, KEY_LENGTH, "appPublicKey")
         requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey")
+        if (permissionsHash != null) requireLength(permissionsHash, KEY_LENGTH, "permissionsHash")
+        if (proofHash != null) requireLength(proofHash, KEY_LENGTH, "proofHash")
+        requireLength(relayAuthHash, KEY_LENGTH, "relayAuthHash")
         val normalizedAccountId = try {
             requireCanonicalI105Address(accountId ?: "", "accountId")
         } catch (ex: IllegalArgumentException) {
@@ -167,6 +196,8 @@ object ConnectCrypto {
         val accountBytes = normalizedAccountId.toByteArray(StandardCharsets.UTF_8)
         val fields = mutableListOf(
             "domain" to prefix,
+            "network_id" to networkId.bytes(),
+            "constraints" to blake2b32(encodeConstraints(networkId)),
             "sid" to sessionId,
             "app_pk" to appPublicKey,
             "wallet_pk" to walletPublicKey,
@@ -174,7 +205,7 @@ object ConnectCrypto {
         )
         if (permissionsHash != null) fields += "permissions" to permissionsHash
         if (proofHash != null) fields += "proof" to proofHash
-        if (relayAuthHash != null) fields += "relay_auth" to relayAuthHash
+        fields += "relay_auth" to relayAuthHash
 
         var size = 0
         for ((tag, value) in fields) {
@@ -189,6 +220,49 @@ object ConnectCrypto {
             buffer.put(value)
         }
         return buffer.array()
+    }
+
+    /** Verifies an Ed25519 approval against the exact single-key account and session bindings. */
+    @JvmStatic
+    fun verifyApprovalSignature(
+        networkId: NetworkId,
+        sessionId: ByteArray,
+        appPublicKey: ByteArray,
+        walletPublicKey: ByteArray,
+        accountId: String?,
+        permissionsHash: ByteArray?,
+        proofHash: ByteArray?,
+        relayAuthHash: ByteArray,
+        algorithm: String,
+        signature: ByteArray,
+    ): Boolean {
+        if (algorithm != "ed25519" || signature.size != 64) return false
+        return try {
+            val canonicalAccount = requireCanonicalI105Address(accountId ?: "", "accountId")
+            val signatory = AccountAddress.fromI105(canonicalAccount, null)
+                .singleKeyPayloadIgnoringCurveSupport() ?: return false
+            if (signatory.curveId != 0x01 ||
+                !Ed25519PublicKeyAdmission.isValid(signatory.publicKey)
+            ) {
+                return false
+            }
+            val preimage = buildApprovePreimage(
+                networkId,
+                sessionId,
+                appPublicKey,
+                walletPublicKey,
+                canonicalAccount,
+                permissionsHash,
+                proofHash,
+                relayAuthHash,
+            )
+            val verifier = Ed25519Signer()
+            verifier.init(false, Ed25519PublicKeyParameters(signatory.publicKey, 0))
+            verifier.update(preimage, 0, preimage.size)
+            verifier.verifySignature(signature)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @JvmStatic
@@ -283,6 +357,13 @@ object ConnectCrypto {
         digest.doFinal(out, 0)
         return out
     }
+
+    private fun encodeConstraints(networkId: NetworkId): ByteArray =
+        ByteBuffer.allocate(java.lang.Long.BYTES + NetworkId.BYTE_LENGTH)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(NetworkId.BYTE_LENGTH.toLong())
+            .put(networkId.bytes())
+            .array()
 
     private fun isAllZero(value: ByteArray): Boolean {
         for (b in value) {

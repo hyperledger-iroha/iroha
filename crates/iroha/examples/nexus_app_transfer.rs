@@ -3,10 +3,11 @@
 use std::{error::Error, num::NonZeroU32, time::Duration};
 
 use iroha::{
-    crypto::{Algorithm, Hash, KeyPair, Signature},
+    crypto::{Algorithm, Hash, HashOf, KeyPair, Signature},
     data_model::{
         asset::AssetDefinitionId,
-        prelude::{AccountId, AssetId, ChainId, Metadata, Quantity},
+        block::BlockHeader,
+        prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity},
         transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
     },
     nexus_app::{
@@ -122,13 +123,19 @@ fn demo_wallet_key_pair() -> Result<KeyPair, iroha::crypto::Error> {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
 }
 
+fn demo_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xA5; 32]),
+    ))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let key_pair = demo_wallet_key_pair()?;
     let account_id = AccountId::new(key_pair.public_key().clone());
     let client = NexusAppClient::new(
         NexusAppConfig {
             authority: Some(account_id.clone()),
-            ..NexusAppConfig::new(ChainId::from("test-chain"))
+            ..NexusAppConfig::new(ChainId::from("test-chain"), demo_network_id())
         },
         DemoConnectTransport { key_pair },
         DemoToriiSubmitter,
@@ -238,7 +245,7 @@ mod tests {
         let client = NexusAppClient::new(
             NexusAppConfig {
                 authority: Some(account_id.clone()),
-                ..NexusAppConfig::new(ChainId::from("test-chain"))
+                ..NexusAppConfig::new(ChainId::from("test-chain"), demo_network_id())
             },
             DemoConnectTransport {
                 key_pair: key_pair.clone(),

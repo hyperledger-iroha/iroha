@@ -56,7 +56,7 @@ pub(crate) enum SafetyWalError {
         /// Validation failure.
         reason: &'static str,
     },
-    /// The WAL belongs to another chain, protocol, or consensus key.
+    /// The WAL belongs to another network, protocol, or consensus key.
     #[error("sumeragi safety WAL identity mismatch at {path}: {field}")]
     IdentityMismatch {
         /// WAL path.
@@ -117,14 +117,14 @@ pub(crate) struct SafetyWal {
 }
 
 impl SafetyWal {
-    /// Open or create a WAL bound to the supplied chain, protocol, and consensus-key hashes.
+    /// Open or create a WAL bound to the supplied network, protocol, and consensus-key hashes.
     ///
     /// An incomplete final frame is treated as an unacknowledged crash tail and truncated. Any
     /// earlier structural or hash-chain failure is returned as an error.
     pub(crate) fn open(
         path: impl Into<PathBuf>,
         protocol_version: u16,
-        chain_hash: [u8; HASH_LEN],
+        network_id: [u8; HASH_LEN],
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let path = path.into();
@@ -138,7 +138,7 @@ impl SafetyWal {
             })?;
         }
 
-        let identity = WalFileIdentity::new(protocol_version, chain_hash, key_hash);
+        let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
         let created = !path.exists();
         let mut file = OpenOptions::new()
             .create(true)
@@ -328,7 +328,7 @@ fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
             path: path.to_path_buf(),
             field: match field {
                 WalIdentityField::ProtocolVersion => "protocol version",
-                WalIdentityField::ChainHash => "chain hash",
+                WalIdentityField::NetworkId => "network id",
                 WalIdentityField::ConsensusKeyHash => "consensus key hash",
             },
         },
@@ -364,7 +364,7 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const CHAIN: [u8; HASH_LEN] = [0x11; HASH_LEN];
+    const NETWORK_ID: [u8; HASH_LEN] = [0x11; HASH_LEN];
     const KEY: [u8; HASH_LEN] = [0x22; HASH_LEN];
     const PROTOCOL: u16 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
 
@@ -375,11 +375,11 @@ mod tests {
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
         let header =
-            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, CHAIN, KEY), &frame_hash);
+            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY), &frame_hash);
         let format_offset = FILE_MAGIC.len();
         let protocol_offset = format_offset + 2;
-        let chain_offset = protocol_offset + 2;
-        let key_offset = chain_offset + HASH_LEN;
+        let network_id_offset = protocol_offset + 2;
+        let key_offset = network_id_offset + HASH_LEN;
 
         assert_eq!(&header[..FILE_MAGIC.len()], &FILE_MAGIC);
         assert_eq!(
@@ -387,10 +387,10 @@ mod tests {
             FORMAT_VERSION
         );
         assert_eq!(
-            read_test_u16(&header[protocol_offset..chain_offset]),
+            read_test_u16(&header[protocol_offset..network_id_offset]),
             PROTOCOL
         );
-        assert_eq!(&header[chain_offset..key_offset], &CHAIN);
+        assert_eq!(&header[network_id_offset..key_offset], &NETWORK_ID);
         assert_eq!(&header[key_offset..FILE_HEADER_PREFIX_LEN], &KEY);
         assert_eq!(
             &header[FILE_HEADER_PREFIX_LEN..],
@@ -403,12 +403,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
             assert_eq!(wal.append(b"prepare").expect("append Prepare"), 0);
             assert_eq!(wal.append(b"commit").expect("append Commit"), 1);
         }
 
-        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("reopen WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("reopen WAL");
         assert_eq!(
             wal.recovered_records(),
             [
@@ -429,7 +429,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
             wal.append(b"durable").expect("append durable record");
         }
         let good_len = fs::metadata(&path).expect("metadata").len();
@@ -440,7 +440,7 @@ mod tests {
             .write_all(b"S2FR\x01\x00")
             .expect("write crash tail");
 
-        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
         assert_eq!(wal.recovered_records().len(), 1);
         assert_eq!(fs::metadata(path).expect("metadata").len(), good_len);
     }
@@ -451,7 +451,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let good_len;
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
             wal.append(b"durable decision")
                 .expect("append acknowledged decision");
             good_len = wal.file.metadata().expect("metadata").len();
@@ -468,7 +468,7 @@ mod tests {
             .set_len(partial_len)
             .expect("truncate in final payload");
 
-        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
         assert_eq!(
             wal.recovered_records(),
             [RecoveredRecord {
@@ -484,7 +484,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
             wal.append(b"prepare").expect("append record");
         }
         let mut bytes = fs::read(&path).expect("read WAL");
@@ -493,7 +493,7 @@ mod tests {
         fs::write(&path, bytes).expect("corrupt WAL");
 
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
             Err(SafetyWalError::CorruptFrame { .. })
         ));
     }
@@ -504,7 +504,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let first_payload_len = b"prepare".len();
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
             wal.append(b"prepare").expect("append first record");
             wal.append(b"decision").expect("append second record");
         }
@@ -515,7 +515,7 @@ mod tests {
         fs::write(&path, bytes).expect("break hash chain");
 
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
             Err(SafetyWalError::CorruptFrame {
                 sequence: 1,
                 reason: "previous-frame hash mismatch",
@@ -528,17 +528,17 @@ mod tests {
     fn identity_mismatch_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        drop(SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL"));
+        drop(SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL"));
 
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, CHAIN, [0x33; HASH_LEN]),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, [0x33; HASH_LEN]),
             Err(SafetyWalError::IdentityMismatch {
                 field: "consensus key hash",
                 ..
             })
         ));
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL.saturating_add(1), CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL.saturating_add(1), NETWORK_ID, KEY),
             Err(SafetyWalError::IdentityMismatch {
                 field: "protocol version",
                 ..
@@ -547,7 +547,7 @@ mod tests {
         assert!(matches!(
             SafetyWal::open(&path, PROTOCOL, [0x44; HASH_LEN], KEY),
             Err(SafetyWalError::IdentityMismatch {
-                field: "chain hash",
+                field: "network id",
                 ..
             })
         ));
@@ -557,7 +557,7 @@ mod tests {
     fn append_io_failure_poisoning_requires_verified_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
         let read_only = File::open(&path).expect("open read-only WAL handle");
         let writable = std::mem::replace(&mut wal.file, read_only);
         drop(writable);
@@ -577,7 +577,7 @@ mod tests {
         assert!(wal.recovered_records().is_empty());
 
         drop(wal);
-        let reopened = SafetyWal::open(path, PROTOCOL, CHAIN, KEY).expect("verified reopen");
+        let reopened = SafetyWal::open(path, PROTOCOL, NETWORK_ID, KEY).expect("verified reopen");
         assert!(reopened.recovered_records().is_empty());
         assert!(!reopened.append_state.is_failed_closed());
     }
@@ -586,7 +586,7 @@ mod tests {
     fn physical_retirement_removes_and_directory_syncs_a_closed_height_log() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
         wal.append(b"decision").expect("append decision");
         let SafetyWal { path, file, .. } = wal;
         let retired_path = path.clone();

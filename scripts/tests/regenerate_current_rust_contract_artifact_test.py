@@ -57,6 +57,34 @@ def _artifact_and_manifest() -> tuple[bytes, dict[str, object]]:
     return frozen, manifest
 
 
+def _closure_with_file(
+    path: Path, snapshot: MODULE.FileSnapshot
+) -> MODULE.SourceClosure:
+    entry = MODULE.GitIndexEntry(path=path, mode="100644", object_id="a" * 40)
+    record = MODULE.SourceClosureRecord(
+        kind=MODULE.SOURCE_RECORD_FILE,
+        path=path,
+        snapshot=snapshot,
+        index_entry=entry,
+    )
+    return MODULE.SourceClosure(
+        records=(record,),
+        files={path: snapshot},
+        index_entries={path: entry},
+        untracked_paths=frozenset(),
+        package_directories=frozenset(),
+        required_present_paths=frozenset({path}),
+        closure_sha256=MODULE._source_record_digest((record,)),
+        git_binding="test-binding",
+    )
+
+
+def _raw_index(
+    entries: dict[Path, MODULE.GitIndexEntry],
+) -> dict[Path, tuple[MODULE.GitIndexEntry, ...]]:
+    return {path: (entry,) for path, entry in entries.items()}
+
+
 def test_git_blob_id_matches_git_object_format() -> None:
     assert MODULE._git_blob_id(b"test content\n") == (
         "d670460b4b4aece5915caf5c68d12f560a9fe3e4"
@@ -98,10 +126,10 @@ def test_semantic_expectation_derives_only_platform_independent_fields() -> None
 def test_fixture_document_has_no_host_tool_or_binary_identity() -> None:
     artifact, manifest = _artifact_and_manifest()
     provenance = {
-        "scope": "tracked-semantic-source-closure-v1",
-        "closure_algorithm": "sha256-framed-path-and-bytes-v1",
+        "scope": "semantic-worktree-source-closure-v2",
+        "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
         "closure_sha256": "01" * 32,
-        "file_count": 17,
+        "file_count": 16,
         "contract_source_git_blob": "02" * 20,
         "artifact_generator_git_blob": "03" * 20,
     }
@@ -126,8 +154,8 @@ def test_attestation_keeps_local_koto_identity_outside_fixture(tmp_path: Path) -
         artifact,
         manifest,
         {
-            "scope": "tracked-semantic-source-closure-v1",
-            "closure_algorithm": "sha256-framed-path-and-bytes-v1",
+            "scope": "semantic-worktree-source-closure-v2",
+            "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
             "closure_sha256": "01" * 32,
             "file_count": 1,
             "contract_source_git_blob": "02" * 20,
@@ -149,11 +177,15 @@ def test_attestation_keeps_local_koto_identity_outside_fixture(tmp_path: Path) -
             {"git": "darwin-sealed-private-path", "koto": "darwin-sealed-private-path"},
             fixture_text,
             fixture,
+            _closure_with_file(Path("source"), koto_snapshot),
         )
     )
 
     assert attestation["koto_sha256"] == MODULE._sha256(b"host-specific-koto")
     assert attestation["cargo_lock_sha256"] == MODULE._sha256(b"host-specific-lock")
+    assert attestation["source_inventory"]["tracked_file_count"] == 1
+    assert attestation["source_inventory"]["tracked_absent_count"] == 0
+    assert attestation["source_inventory"]["untracked_file_count"] == 0
     assert attestation["darwin_executable_binding_limitation"] is not None
     assert "koto_sha256" not in fixture_text
     assert "cargo_lock_sha256" not in fixture_text
@@ -377,7 +409,7 @@ def test_hermetic_environment_drops_hostile_ambient_values(
     assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
 
 
-def test_tracked_inventory_uses_only_the_explicit_authenticated_git(
+def test_index_inventory_uses_only_the_explicit_authenticated_git(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -400,16 +432,392 @@ def test_tracked_inventory_uses_only_the_explicit_authenticated_git(
             environment=environment,
             inherited_fds=inherited_fds,
         )
-        return subprocess.CompletedProcess([], 0, "tracked/file\0", ""), "test-binding"
+        return subprocess.CompletedProcess(
+            [],
+            0,
+            "100644 " + "a" * 40 + " 0\ttracked/file\0",
+            "",
+        ), "test-binding"
 
     monkeypatch.setattr(MODULE, "_run_bound_executable", enumerate_paths)
-    paths, binding = MODULE._tracked_paths(git, {"PATH": "/trusted"})
+    entries, binding = MODULE._index_entries(git, {"PATH": "/trusted"})
 
     assert observed["executable"] is git
-    assert observed["arguments"][-2:] == ("ls-files", "-z")
+    assert observed["arguments"][-4:] == ("ls-files", "--stage", "-z", "--")
     assert observed["environment"] == {"PATH": "/trusted"}
-    assert paths == frozenset({Path("tracked/file")})
+    assert entries == {
+        Path("tracked/file"): (
+            MODULE.GitIndexEntry(
+                path=Path("tracked/file"), mode="100644", object_id="a" * 40
+            ),
+        )
+    }
     assert binding == "test-binding"
+
+
+@pytest.mark.parametrize(
+    ("entry", "path", "message"),
+    [
+        (
+            "100644 " + "a" * 40 + " 2\tconflicted",
+            Path("conflicted"),
+            "unresolved stages",
+        ),
+        (
+            "100644 " + "0" * 40 + " 0\tintent",
+            Path("intent"),
+            "intent-to-add",
+        ),
+    ],
+)
+def test_index_inventory_preserves_anomalies_for_relevant_path_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    entry: str,
+    path: Path,
+    message: str,
+) -> None:
+    git_path = tmp_path / "git"
+    git_path.write_bytes(b"git")
+    git_path.chmod(0o500)
+    git = MODULE._snapshot_file(git_path, "Git", executable=True)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_bound_executable",
+        lambda *_args, **_kwargs: (
+            subprocess.CompletedProcess([], 0, entry + "\0", ""),
+            "test-binding",
+        ),
+    )
+
+    entries, _binding = MODULE._index_entries(git, {})
+    with pytest.raises(MODULE.FixtureError, match=message):
+        MODULE._canonical_index_entry(entries, path)
+
+
+def test_index_inventory_rejects_noncanonical_repository_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    git_path = tmp_path / "git"
+    git_path.write_bytes(b"git")
+    git_path.chmod(0o500)
+    git = MODULE._snapshot_file(git_path, "Git", executable=True)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_bound_executable",
+        lambda *_args, **_kwargs: (
+            subprocess.CompletedProcess(
+                [], 0, "100644 " + "a" * 40 + " 0\t../escape\0", ""
+            ),
+            "test-binding",
+        ),
+    )
+
+    with pytest.raises(MODULE.FixtureError, match="noncanonical"):
+        MODULE._index_entries(git, {})
+
+
+def test_canonical_closure_is_invariant_to_tracking_and_committed_deletion(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.rs"
+    source.write_bytes(b"pub fn current() {}\n")
+    snapshot = MODULE._snapshot_file(source, "source")
+    path = Path("crates/pkg/src/source.rs")
+    entry = MODULE.GitIndexEntry(path=path, mode="100644", object_id="a" * 40)
+    tracked = MODULE.SourceClosureRecord(
+        MODULE.SOURCE_RECORD_FILE, path, snapshot, entry
+    )
+    untracked = MODULE.SourceClosureRecord(
+        MODULE.SOURCE_RECORD_UNTRACKED_FILE, path, snapshot, None
+    )
+    absent = MODULE.SourceClosureRecord(
+        MODULE.SOURCE_RECORD_ABSENT,
+        Path("crates/pkg/src/deleted.rs"),
+        None,
+        MODULE.GitIndexEntry(
+            path=Path("crates/pkg/src/deleted.rs"),
+            mode="100644",
+            object_id="b" * 40,
+        ),
+    )
+
+    assert MODULE._source_record_digest((tracked,)) == MODULE._source_record_digest(
+        (untracked,)
+    )
+    assert MODULE._source_record_digest((absent, tracked)) == (
+        MODULE._source_record_digest((tracked,))
+    )
+
+
+def test_private_inventory_records_file_absent_and_untracked_states(
+    tmp_path: Path,
+) -> None:
+    tracked_path = Path("crates/pkg/src/lib.rs")
+    untracked_path = Path("crates/pkg/src/new.rs")
+    absent_path = Path("crates/pkg/src/deleted.rs")
+    source = tmp_path / "source.rs"
+    source.write_bytes(b"source\n")
+    snapshot = MODULE._snapshot_file(source, "source")
+    tracked_entry = MODULE.GitIndexEntry(tracked_path, "100644", "a" * 40)
+    absent_entry = MODULE.GitIndexEntry(absent_path, "100644", "b" * 40)
+    records = (
+        MODULE.SourceClosureRecord(
+            MODULE.SOURCE_RECORD_ABSENT, absent_path, None, absent_entry
+        ),
+        MODULE.SourceClosureRecord(
+            MODULE.SOURCE_RECORD_FILE, tracked_path, snapshot, tracked_entry
+        ),
+        MODULE.SourceClosureRecord(
+            MODULE.SOURCE_RECORD_UNTRACKED_FILE, untracked_path, snapshot, None
+        ),
+    )
+    closure = MODULE.SourceClosure(
+        records=records,
+        files={tracked_path: snapshot, untracked_path: snapshot},
+        index_entries={tracked_path: tracked_entry, absent_path: absent_entry},
+        untracked_paths=frozenset({untracked_path}),
+        package_directories=frozenset({Path("crates/pkg")}),
+        required_present_paths=frozenset(),
+        closure_sha256=MODULE._source_record_digest(records),
+        git_binding="test-binding",
+    )
+
+    inventory = MODULE._source_inventory_document(closure)
+
+    assert inventory["tracked_file_count"] == 1
+    assert inventory["tracked_absent_count"] == 1
+    assert inventory["untracked_file_count"] == 1
+    absent_document = next(
+        record for record in inventory["records"] if record["kind"] == "ABSENT"
+    )
+    assert absent_document == {
+        "kind": "ABSENT",
+        "path": str(absent_path),
+        "index_mode": "100644",
+        "index_object_id": "b" * 40,
+    }
+    assert inventory["inventory_sha256"] == MODULE._sha256(
+        MODULE._render(
+            {key: value for key, value in inventory.items() if key != "inventory_sha256"}
+        ).encode("utf-8")
+    )
+
+
+def test_source_closure_includes_tracked_absence_and_untracked_build_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    package = Path("crates/pkg")
+    (repo / package / "src").mkdir(parents=True)
+    tracked_path = package / "src/lib.rs"
+    absent_path = package / "src/deleted.rs"
+    untracked_path = package / "src/new.rs"
+    (repo / tracked_path).write_bytes(b"tracked\n")
+    (repo / untracked_path).write_bytes(b"untracked\n")
+    entries = {
+        tracked_path: MODULE.GitIndexEntry(tracked_path, "100644", "a" * 40),
+        absent_path: MODULE.GitIndexEntry(absent_path, "100644", "b" * 40),
+    }
+    monkeypatch.setattr(MODULE, "REPOSITORY_ROOT", repo)
+    monkeypatch.setattr(MODULE, "ROOT_INPUTS", ())
+    monkeypatch.setattr(
+        MODULE, "_package_source_closure", lambda _available, *_args: ({}, {package})
+    )
+    monkeypatch.setattr(
+        MODULE, "_index_entries", lambda *_args, **_kwargs: (_raw_index(entries), "binding")
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_untracked_paths",
+        lambda *_args, **_kwargs: (frozenset({untracked_path}), "binding"),
+    )
+
+    closure = MODULE._source_closure(object(), {})
+
+    assert [(record.path, record.kind) for record in closure.records] == [
+        (absent_path, MODULE.SOURCE_RECORD_ABSENT),
+        (tracked_path, MODULE.SOURCE_RECORD_FILE),
+        (untracked_path, MODULE.SOURCE_RECORD_UNTRACKED_FILE),
+    ]
+    assert set(closure.files) == {tracked_path, untracked_path}
+    assert closure.untracked_paths == frozenset({untracked_path})
+
+
+def test_source_closure_reauthentication_detects_absence_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    package = Path("crates/pkg")
+    (repo / package / "src").mkdir(parents=True)
+    absent_path = package / "src/deleted.rs"
+    entries = {
+        absent_path: MODULE.GitIndexEntry(absent_path, "100644", "b" * 40),
+    }
+    monkeypatch.setattr(MODULE, "REPOSITORY_ROOT", repo)
+    monkeypatch.setattr(MODULE, "ROOT_INPUTS", ())
+    monkeypatch.setattr(
+        MODULE, "_package_source_closure", lambda _available, *_args: ({}, {package})
+    )
+    monkeypatch.setattr(
+        MODULE, "_index_entries", lambda *_args, **_kwargs: (_raw_index(entries), "binding")
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_untracked_paths",
+        lambda *_args, **_kwargs: (frozenset(), "binding"),
+    )
+    authenticate_absent = MODULE._assert_path_absent
+    calls = 0
+
+    def materialize_after_first_check(path: Path, label: str) -> None:
+        nonlocal calls
+        authenticate_absent(path, label)
+        calls += 1
+        if calls == 1:
+            path.write_bytes(b"appeared\n")
+
+    monkeypatch.setattr(MODULE, "_assert_path_absent", materialize_after_first_check)
+
+    with pytest.raises(MODULE.FixtureError, match="no longer absent"):
+        MODULE._source_closure(object(), {})
+
+
+def test_required_source_input_cannot_be_an_absent_index_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    required = Path("required.rs")
+    entries = {
+        required: MODULE.GitIndexEntry(required, "100644", "a" * 40),
+    }
+    monkeypatch.setattr(MODULE, "REPOSITORY_ROOT", repo)
+    monkeypatch.setattr(MODULE, "ROOT_INPUTS", (required,))
+    monkeypatch.setattr(
+        MODULE, "_package_source_closure", lambda _available, *_args: ({}, set())
+    )
+    monkeypatch.setattr(
+        MODULE, "_index_entries", lambda *_args, **_kwargs: (_raw_index(entries), "binding")
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_untracked_paths",
+        lambda *_args, **_kwargs: (frozenset(), "binding"),
+    )
+
+    with pytest.raises(MODULE.FixtureError, match="required source closure input is absent"):
+        MODULE._source_closure(object(), {})
+
+
+def test_source_closure_digest_rejects_unsorted_or_duplicate_records(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.rs"
+    source.write_bytes(b"source\n")
+    snapshot = MODULE._snapshot_file(source, "source")
+
+    def record(path: str) -> MODULE.SourceClosureRecord:
+        relative = Path(path)
+        return MODULE.SourceClosureRecord(
+            MODULE.SOURCE_RECORD_UNTRACKED_FILE, relative, snapshot, None
+        )
+
+    with pytest.raises(MODULE.FixtureError, match="unique sorted paths"):
+        MODULE._source_record_digest((record("z.rs"), record("a.rs")))
+    with pytest.raises(MODULE.FixtureError, match="unique sorted paths"):
+        MODULE._source_record_digest((record("a.rs"), record("a.rs")))
+
+
+@pytest.mark.parametrize("anomaly", ["conflict", "intent"])
+def test_source_closure_authentication_allows_unrelated_index_anomaly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    anomaly: str,
+) -> None:
+    source = tmp_path / "source.rs"
+    source.write_bytes(b"source\n")
+    path = Path("required.rs")
+    closure = _closure_with_file(path, MODULE._snapshot_file(source, "source"))
+    unrelated = Path("docs/unrelated.md")
+    index_now = _raw_index(closure.index_entries)
+    if anomaly == "conflict":
+        index_now[unrelated] = (
+            MODULE.GitIndexEntry(unrelated, "100644", "b" * 40, stage=1),
+            MODULE.GitIndexEntry(unrelated, "100644", "c" * 40, stage=2),
+            MODULE.GitIndexEntry(unrelated, "100644", "d" * 40, stage=3),
+        )
+    else:
+        index_now[unrelated] = (
+            MODULE.GitIndexEntry(unrelated, "100644", "0" * 40),
+        )
+    monkeypatch.setattr(
+        MODULE, "_index_entries", lambda *_args, **_kwargs: (index_now, "test-binding")
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_untracked_paths",
+        lambda *_args, **_kwargs: (frozenset(), "test-binding"),
+    )
+
+    MODULE._authenticate_source_closure(closure, object(), {})
+
+
+@pytest.mark.parametrize("change", ["modify", "add", "conflict", "intent"])
+def test_source_closure_authentication_rejects_relevant_index_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    change: str,
+) -> None:
+    source = tmp_path / "source.rs"
+    source.write_bytes(b"source\n")
+    path = Path("crates/pkg/src/lib.rs")
+    base = _closure_with_file(path, MODULE._snapshot_file(source, "source"))
+    closure = MODULE.SourceClosure(
+        records=base.records,
+        files=base.files,
+        index_entries=base.index_entries,
+        untracked_paths=base.untracked_paths,
+        package_directories=frozenset({Path("crates/pkg")}),
+        required_present_paths=base.required_present_paths,
+        closure_sha256=base.closure_sha256,
+        git_binding=base.git_binding,
+    )
+    index_now = _raw_index(closure.index_entries)
+    if change == "modify":
+        index_now[path] = (MODULE.GitIndexEntry(path, "100644", "c" * 40),)
+    elif change == "add":
+        added = Path("crates/pkg/src/new.rs")
+        index_now[added] = (MODULE.GitIndexEntry(added, "100644", "d" * 40),)
+    elif change == "conflict":
+        index_now[path] = (
+            MODULE.GitIndexEntry(path, "100644", "a" * 40, stage=1),
+            MODULE.GitIndexEntry(path, "100644", "b" * 40, stage=2),
+            MODULE.GitIndexEntry(path, "100644", "c" * 40, stage=3),
+        )
+    else:
+        index_now[path] = (MODULE.GitIndexEntry(path, "100644", "0" * 40),)
+    monkeypatch.setattr(
+        MODULE, "_index_entries", lambda *_args, **_kwargs: (index_now, "test-binding")
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_untracked_paths",
+        lambda *_args, **_kwargs: (frozenset(), "test-binding"),
+    )
+
+    expected = {
+        "modify": "index-stage inventory changed",
+        "add": "index-stage inventory changed",
+        "conflict": "unresolved stages",
+        "intent": "intent-to-add",
+    }[change]
+    with pytest.raises(MODULE.FixtureError, match=expected):
+        MODULE._authenticate_source_closure(closure, object(), {})
 
 
 def test_koto_receives_the_authenticated_source_through_an_inherited_fd(

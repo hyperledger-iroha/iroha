@@ -181,14 +181,14 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
+    let (network_id, epoch, payload) = autonomous_retirement_payload(
         extended_incarnations[&LaneId::SINGLE],
         LaneId::new(1),
         DataSpaceId::new(8),
         extended_incarnations[&LaneId::new(1)],
         &producer,
     );
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist coordinator-owned participant work");
 
     let error = kura
@@ -330,14 +330,14 @@ fn scale_in_allows_unrelated_participant_work() {
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
+    let (network_id, epoch, payload) = autonomous_retirement_payload(
         extended_incarnations[&LaneId::SINGLE],
         LaneId::new(9),
         DataSpaceId::new(19),
         Hash::new(b"unrelated participant incarnation"),
         &producer,
     );
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist non-target participant work");
 
     kura.apply_lane_geometry_transition(
@@ -435,9 +435,7 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
         &extended_activations,
     );
     let retiring_lane = LaneId::new(1);
-    let retiring_entry = extended
-        .entry(retiring_lane)
-        .expect("retiring lane entry");
+    let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
     let retiring_incarnation = extended_incarnations[&retiring_lane];
     let work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
     let execution = work
@@ -607,14 +605,14 @@ fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
             &extended_activations,
         );
         let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
+        let (network_id, epoch, payload) = autonomous_retirement_payload(
             extended_incarnations[&LaneId::SINGLE],
             participant_lane,
             participant_dataspace,
             participant_incarnation,
             &producer,
         );
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+        kura.persist_lane_executable_payload(&payload, network_id, epoch)
             .expect("persist non-target participant work");
 
         kura.apply_lane_geometry_transition(
@@ -1445,11 +1443,9 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let chain: ChainId = "geometry-retirement-committed"
-        .parse()
-        .expect("geometry retirement committed chain");
+    let network_id = crate::sumeragi::synthetic_network_id("geometry-retirement-committed");
     let transaction = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1498,7 +1494,7 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         )],
     );
     let receipt = geometry_native_amx_receipt(
-        Hash::new(chain.into_inner().as_bytes()),
+        *network_id,
         source_id,
         entrypoint_hash,
         &plan,

@@ -267,7 +267,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         None,
     );
     let transaction = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -354,7 +354,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
         None,
     );
     let transaction = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -389,7 +389,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
         asset: bob_coin_id.clone(),
     };
     let grant_exact = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -405,7 +405,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
     )?;
 
     let revoke_exact = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -426,7 +426,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
         asset_definition: bob_coin_id.definition().clone(),
     };
     let grant_definition = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -498,7 +498,7 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
     )?;
 
     let issue = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         definition_owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -567,7 +567,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
     // register NFT by "bob@kingdom" so he is owner of it
     let nft = Nft::new(nft_id.clone(), Metadata::default());
     let transaction = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -662,7 +662,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
             .any(|cause| cause.to_string().contains("Missing CanRegisterTrigger"))
     );
     let grant_register_permission = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -675,7 +675,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&grant_register_permission)?;
     let transaction = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

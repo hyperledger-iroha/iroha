@@ -1,5 +1,3 @@
-// State commit-lock ordering and lifecycle publication regressions.
-
 use std::{
     sync::{Arc, Barrier, mpsc},
     thread,
@@ -276,7 +274,7 @@ fn apply_without_execution_rejects_duplicate_sccp_records_before_state_mutation(
         .expect("valid SCCP apply-without-execution fixture payload encodes");
     let record = crate::bridge::test_record_sccp_message(payload_bytes.clone());
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        ChainId::from("apply-sccp-duplicate"),
+        *DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -335,7 +333,7 @@ fn apply_without_execution_rejects_invalid_sccp_record_payload_before_state_muta
     let authority = AccountId::new(keypair.public_key().clone());
     let record = crate::bridge::test_record_sccp_message(b"not a canonical SCCP payload".to_vec());
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        ChainId::from("apply-sccp-invalid-record"),
+        *DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -406,7 +404,7 @@ fn apply_without_execution_rejects_unbound_sccp_record_route_before_state_mutati
             .expect("valid SCCP apply-without-execution fixture payload encodes"),
     );
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        ChainId::from("apply-sccp-unbound-route"),
+        *DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -477,7 +475,7 @@ fn apply_without_execution_rejects_scoped_sccp_asset_alias_before_state_mutation
             .expect("valid SCCP apply-without-execution fixture payload encodes"),
     );
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        ChainId::from("apply-sccp-scoped-asset-alias"),
+        *DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -547,7 +545,7 @@ fn apply_without_execution_rejects_resultless_sccp_root_before_state_mutation() 
         .expect("valid SCCP apply-without-execution fixture payload encodes");
     let record = crate::bridge::test_record_sccp_message(payload_bytes);
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        ChainId::from("apply-sccp-resultless"),
+        *DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

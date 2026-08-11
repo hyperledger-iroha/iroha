@@ -17,6 +17,7 @@ import {
 } from "./instructionBuilders.js";
 import { computeIvmArtifactHashes } from "./ivmArtifact.js";
 import { verifyCompiledContractArtifact } from "./kotodamaCompiler/normalize.js";
+import { networkIdBytes } from "./networkId.js";
 import { noritoEncodeContractManifestSignaturePayload } from "./norito.js";
 import {
   browserTransactionPayloadHashHex,
@@ -34,7 +35,6 @@ const CONTRACT_ADDRESS_DOMAIN = Buffer.from(
   "utf8",
 );
 const CONTRACT_ADDRESS_HASH_BYTES = 20;
-const CHAIN_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u;
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 const CURRENT_IVM_ABI_VERSION = 1;
 const CURRENT_DATA_MODEL_VERSION = 4;
@@ -45,7 +45,7 @@ const BROWSER_DEPLOYMENT_OPTION_KEYS = Object.freeze([
   "manifest",
   "compilerCodeHash",
   "compilerAbiHash",
-  "chainId",
+  "networkId",
   "chainDiscriminant",
   "authority",
   "contractAlias",
@@ -94,19 +94,6 @@ function requireExactString(value, context) {
   ) {
     throw new TypeError(
       `${context} must be a non-empty exact NFC string without control characters`,
-    );
-  }
-  return value;
-}
-
-function requireCanonicalChainId(value) {
-  if (
-    typeof value !== "string" ||
-    !CHAIN_ID_PATTERN.test(value) ||
-    Buffer.byteLength(value, "utf8") > 128
-  ) {
-    throw new TypeError(
-      "chainId must be an exact canonical ASCII ChainId of at most 128 bytes",
     );
   }
   return value;
@@ -329,27 +316,27 @@ function authorityDetails(authority, expectedDiscriminant) {
 }
 
 /** Derive the exact current V1 Bech32m contract address locally. */
-export function deriveContractAddress({
-  chainId,
-  chainDiscriminant,
-  authority,
-  deployNonce,
-  dataspaceId,
-}) {
-  const canonicalChainId = requireCanonicalChainId(chainId);
-  const chainIdBytes = Buffer.from(canonicalChainId, "ascii");
+export function deriveContractAddress(input) {
+  const source = requirePlainObject(input, "contract-address derivation input");
+  assertOnlyObjectKeys(
+    source,
+    ["networkId", "chainDiscriminant", "authority", "deployNonce", "dataspaceId"],
+    "contract-address derivation input",
+  );
+  const networkBytes = Buffer.from(
+    networkIdBytes(source.networkId, "contract-address derivation input.networkId"),
+  );
   const discriminant = normalizeUnsigned(
-    chainDiscriminant,
+    source.chainDiscriminant,
     U16_MAX,
     "chainDiscriminant",
   );
-  const nonce = normalizeUnsigned(deployNonce, U64_MAX, "deployNonce");
-  const dataspace = normalizeUnsigned(dataspaceId, U64_MAX, "dataspaceId");
-  const authorityInfo = authorityDetails(authority, discriminant);
+  const nonce = normalizeUnsigned(source.deployNonce, U64_MAX, "deployNonce");
+  const dataspace = normalizeUnsigned(source.dataspaceId, U64_MAX, "dataspaceId");
+  const authorityInfo = authorityDetails(source.authority, discriminant);
   const preimage = Buffer.concat([
     CONTRACT_ADDRESS_DOMAIN,
-    u16Be(BigInt(chainIdBytes.length)),
-    chainIdBytes,
+    networkBytes,
     u64Be(dataspace),
     u64Be(nonce),
     u32Be(BigInt(authorityInfo.canonicalBytes.length)),
@@ -639,7 +626,7 @@ function validateDeploymentState(
 
 async function submitDeploymentStep({
   step,
-  chainId,
+  networkId,
   authority,
   chainDiscriminant,
   signingPublicKey,
@@ -652,7 +639,7 @@ async function submitDeploymentStep({
   metadata,
 }) {
   const payloadBytes = buildBrowserInstructionTransactionPayload({
-    chainId,
+    networkId,
     authority,
     chainDiscriminant,
     instructions: [step.instruction],
@@ -663,6 +650,7 @@ async function submitDeploymentStep({
     metadata,
   });
   const signable = validateBrowserInstructionTransactionSignable({
+    networkId,
     payloadBytes,
     payloadHashHex: browserTransactionPayloadHashHex(payloadBytes),
     authority,
@@ -710,6 +698,8 @@ export async function deploySmartContractBrowser(options) {
     BROWSER_DEPLOYMENT_OPTION_KEYS,
     "deployment options",
   );
+  networkIdBytes(source.networkId, "deployment options.networkId");
+  const networkId = source.networkId;
   if (typeof source.sign !== "function") {
     throw new TypeError("deployment options.sign must be a local signer callback");
   }
@@ -741,7 +731,6 @@ export async function deploySmartContractBrowser(options) {
       "deployment options require feePayment or a feePaymentForStep callback",
     );
   }
-  const chainId = requireCanonicalChainId(source.chainId);
   const chainDiscriminant = normalizeUnsigned(
     source.chainDiscriminant,
     U16_MAX,
@@ -753,7 +742,7 @@ export async function deploySmartContractBrowser(options) {
   const nodeCapabilities = validateNodeCapabilities(
     await source.readNodeCapabilities(
       Object.freeze({
-        chainId,
+        networkId,
         chainDiscriminant: chainDiscriminant.toString(),
       }),
     ),
@@ -784,7 +773,7 @@ export async function deploySmartContractBrowser(options) {
     }
   }
   const contractAddress = deriveContractAddress({
-    chainId,
+    networkId,
     chainDiscriminant,
     authority: authority.literal,
     deployNonce: state.deployNonce,
@@ -815,7 +804,7 @@ export async function deploySmartContractBrowser(options) {
     sequence += 1;
     const result = await submitDeploymentStep({
       step,
-      chainId,
+      networkId,
       authority: authority.literal,
       chainDiscriminant,
       signingPublicKey: authority.signingPublicKey,

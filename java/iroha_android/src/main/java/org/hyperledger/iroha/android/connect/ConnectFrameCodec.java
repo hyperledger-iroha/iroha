@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
 import java.util.Optional;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -116,19 +117,19 @@ public final class ConnectFrameCodec {
 
   public static final class OpenControl {
     private final byte[] appPublicKey;
-    private final String chainId;
+    private final NetworkId networkId;
 
-    OpenControl(final byte[] appPublicKey, final String chainId) {
+    OpenControl(final byte[] appPublicKey, final NetworkId networkId) {
       this.appPublicKey = appPublicKey.clone();
-      this.chainId = chainId;
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
     }
 
     public byte[] appPublicKey() {
       return appPublicKey.clone();
     }
 
-    public String chainId() {
-      return chainId;
+    public NetworkId networkId() {
+      return networkId;
     }
   }
 
@@ -277,10 +278,10 @@ public final class ConnectFrameCodec {
   }
 
   private static final class Constraints {
-    private final String chainId;
+    private final NetworkId networkId;
 
-    Constraints(final String chainId) {
-      this.chainId = chainId;
+    Constraints(final NetworkId networkId) {
+      this.networkId = networkId;
     }
   }
 
@@ -324,14 +325,43 @@ public final class ConnectFrameCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final Constraints value) {
-          STRING.encode(encoder, value.chainId);
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          encoder.writeLength(NetworkId.BYTE_LENGTH, compactLen);
+          encoder.writeBytes(value.networkId.bytes());
         }
 
         @Override
         public Constraints decode(final NoritoDecoder decoder) {
-          return new Constraints(STRING.decode(decoder));
+          final long length = decoder.readLength(decoder.compactLenActive());
+          if (length != NetworkId.BYTE_LENGTH || decoder.remaining() != NetworkId.BYTE_LENGTH) {
+            throw new IllegalArgumentException("Connect NetworkId must contain exactly 32 bytes");
+          }
+          return new Constraints(NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH)));
         }
       };
+
+  /** Encodes the launch-bound, first app-to-wallet {@code Open} control frame. */
+  public static byte[] encodeOpenFrame(
+      final byte[] sessionId, final byte[] appPublicKey, final NetworkId networkId)
+      throws ConnectProtocolException {
+    final byte[] appPkField = encodeField(appPublicKey, FIXED_ARRAY_U8_32, "open.app_pk");
+    final byte[] appMetaField =
+        encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.app_meta");
+    final byte[] constraintsField =
+        encodeField(new Constraints(networkId), CONSTRAINTS_ADAPTER, "open.constraints");
+    final byte[] permissionsField =
+        encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.permissions");
+
+    final ByteArrayOutputStream body = new ByteArrayOutputStream();
+    writeLengthPrefixed(body, appPkField);
+    writeLengthPrefixed(body, appMetaField);
+    writeLengthPrefixed(body, constraintsField);
+    writeLengthPrefixed(body, permissionsField);
+
+    final byte[] controlPayload = wrapTaggedPayload(CONTROL_OPEN, body.toByteArray());
+    final byte[] kindPayload = wrapTaggedPayload(FRAME_KIND_CONTROL, controlPayload);
+    return encodeFrame(sessionId, ConnectDirection.APP_TO_WALLET, 1L, kindPayload);
+  }
 
   private static final TypeAdapter<WalletSignature> WALLET_SIGNATURE_ADAPTER =
       new TypeAdapter<>() {
@@ -557,7 +587,7 @@ public final class ConnectFrameCodec {
     skipLengthPrefixedField(cursor, "open.permissions");
     cursor.ensureFullyConsumed("open control");
 
-    final OpenControl open = new OpenControl(appPk, constraints.chainId);
+    final OpenControl open = new OpenControl(appPk, constraints.networkId);
     return new DecodedFrame(sid, direction, sequence, FrameType.OPEN, open, null, null, null);
   }
 

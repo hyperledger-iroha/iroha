@@ -914,6 +914,7 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
         candidates.push(ReserveGeneratedCandidateV1 {
             operation,
             context: ReserveTransactionContextV1 {
+                network_id: *state.state.network_id_ref(),
                 chain_id: state.chain_id.as_ref().clone(),
                 policy_record: policy_record.clone(),
                 projection: ReserveTransactionProjectionV1::Provider { account },
@@ -1105,7 +1106,7 @@ fn decode_exact_reserve_signed_transaction(
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
     if norito::to_bytes(&transaction).ok()?.as_slice() != bytes
         || transaction.verify_signature().is_err()
-        || transaction.chain() != &request.chain_id
+        || transaction.network_id() != Some(&request.network_id)
         || transaction.authority() != &request.authority
     {
         return None;
@@ -1283,6 +1284,7 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
         {
             Ok(retained)
                 if retained.request.operation_id == delivery.operation_id
+                    && retained.request.network_id == delivery.network_id
                     && retained.request.chain_id == delivery.chain_id
                     && retained.request.authority == delivery.authority
                     && validate_reserve_reconciliation_material_v1(&delivery, &retained)
@@ -1296,6 +1298,15 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
                 continue;
             }
         };
+        if retained.request.network_id != *state.state.network_id_ref()
+            || retained.request.chain_id != *state.chain_id
+        {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!(
+                "durable native SoraFS reserve/rent delivery belongs to another network or business chain"
+            );
+            continue;
+        }
 
         let exact_transaction = match delivery.signed_transaction_bytes.as_deref() {
             Some(bytes) => {
@@ -1578,11 +1589,14 @@ async fn sign_sorafs_reserve_transaction(
     signer: Arc<dyn SoraFsReserveTransactionSigner>,
     request: &ReserveTransactionSigningRequestV1,
 ) -> Option<(SignedTransaction, Vec<u8>)> {
-    if signer.authority() != request.authority || request.chain_id != *state.chain_id {
+    if signer.authority() != request.authority
+        || request.network_id != *state.state.network_id_ref()
+        || request.chain_id != *state.chain_id
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1613,11 +1627,10 @@ async fn submit_sorafs_reserve_transaction(
     transaction_bytes: Vec<u8>,
     transaction: SignedTransaction,
 ) -> ReserveTransactionSubmissionResultV1 {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return ReserveTransactionSubmissionResultV1::Deferred;
     }
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,

@@ -1026,8 +1026,7 @@ fn request() -> (PublicationRequestV1, KeyPair) {
     let (broker, broker_keypair) = account(21);
     (
         PublicationRequestV1 {
-            chain_id: ChainId::from("musubi-publish-test"),
-            genesis_block_hash: [0x15; 32],
+            network_id: publication_test_network_id(0x15),
             publisher,
             ingress_broker: broker,
             seed_provider: ProviderId::new([0x16; 32]),
@@ -1063,7 +1062,7 @@ fn signed_release_transaction(request: &PublicationRequestV1, nonce: u32) -> Sig
     let (publisher, publisher_keypair) = account(20);
     assert_eq!(publisher, request.publisher);
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1099,7 +1098,7 @@ fn maximum_multisig_release_transaction(
         .expect("multisig fixture policy"),
     );
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1248,8 +1247,7 @@ fn release_absence_evidence(
                     cursor: None,
                 },
             },
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
@@ -1259,8 +1257,7 @@ fn release_absence_evidence(
             expected_snapshot: Some(snapshot),
         },
         retention_page: MusubiArchiveRetentionPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             items: vec![retention],
             snapshot,
             finalized_time_ms,
@@ -1317,8 +1314,7 @@ fn archive_absence_evidence(
     finalized_height: u64,
 ) -> PublicationArchiveAbsenceEvidenceV1 {
     PublicationArchiveAbsenceEvidenceV1 {
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height,
             finalized_block_hash: [0xA5; 32],
@@ -1344,7 +1340,7 @@ fn registration_intent(
     let (publisher, publisher_keypair) = account(20);
     assert_eq!(publisher, request.publisher);
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1365,8 +1361,7 @@ fn registered_archive(
     archive.staging_receipt = intent.staging_receipt.clone();
     PublicationRegisteredArchiveV1 {
         finalized_transaction_hash: intent.transaction_hash,
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: 60,
             finalized_block_hash: [0x3C; 32],
@@ -1394,8 +1389,7 @@ fn registration(
 ) -> PublicationArchiveRegistrationV1 {
     let archive = archive_record(request, broker);
     let prepared_page = MusubiArchiveLocationPageV1 {
-        chain_id: request.chain_id.clone(),
-        genesis_hash: request.genesis_block_hash,
+        network_id: request.network_id(),
         archive: archive.clone(),
         items: Vec::new(),
         next_cursor: None,
@@ -1426,7 +1420,7 @@ fn registration(
     };
     let (_, publisher_keypair) = account(20);
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1462,8 +1456,7 @@ fn registration(
         intent,
         applied_height: 70,
         finalized_page: MusubiArchiveLocationPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             archive: finalized_archive,
             items: vec![location],
             next_cursor: None,
@@ -1500,8 +1493,7 @@ fn location_registration_generation(
     prepared_archive.location_revision = prepared_revision;
     prepared_archive.location_ids.clear();
     let prepared_page = MusubiArchiveLocationPageV1 {
-        chain_id: request.chain_id.clone(),
-        genesis_hash: request.genesis_block_hash,
+        network_id: request.network_id(),
         archive: prepared_archive,
         items: Vec::new(),
         next_cursor: None,
@@ -1528,7 +1520,7 @@ fn location_registration_generation(
     };
     let (_, publisher_keypair) = account(20);
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id(),
         request.publisher.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1577,8 +1569,7 @@ fn finalized_location_registration(
         intent: intent.clone(),
         applied_height: finalized_height,
         finalized_page: MusubiArchiveLocationPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             archive: finalized_archive,
             items: vec![location],
             next_cursor: None,
@@ -1625,8 +1616,7 @@ fn provider_attestation(
 ) -> MusubiProviderBundleVerificationAttestationV1 {
     let (owner, keypair) = account(provider_byte.saturating_add(60));
     let binding = MusubiProviderBundleVerificationBindingV1 {
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id(),
         provider_id: ProviderId::new([provider_byte; 32]),
         completed_by: owner.clone(),
         completion_authority: ProviderIngestCompletionAuthorityV1::new(
@@ -1876,8 +1866,7 @@ fn final_evidence(request: &PublicationRequestV1) -> PublicationFinalEvidenceV1 
         index_revision: snapshot.index_revision,
     };
     PublicationFinalEvidenceV1 {
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot,
         home_release,
         universal_release,

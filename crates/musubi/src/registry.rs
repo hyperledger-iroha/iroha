@@ -309,8 +309,9 @@ impl RegistryReadClientV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the bounded configuration cannot be read or its
-    /// public endpoint, timeout, profile, or chain discriminant is invalid.
+    /// Returns `MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID` on non-Unix targets before the selected
+    /// absolute path is inspected. On Unix, returns an error when the bounded configuration cannot
+    /// be read or its public endpoint, timeout, profile, or chain discriminant is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
         Self::load_with_config_image(config).map(|(reader, _image)| reader)
     }
@@ -803,6 +804,12 @@ impl fmt::Debug for RegistrySigningClientV1 {
 }
 
 impl RegistrySigningClientV1 {
+    /// Return the exact genesis-derived identity from the trusted signing configuration.
+    #[must_use]
+    pub(crate) fn network_id(&self) -> NetworkId {
+        self.client.network_id
+    }
+
     /// Load a required explicit `--config` or the platform `client.toml`, without env overrides.
     ///
     /// # Errors
@@ -1412,13 +1419,17 @@ impl<S> RegistryPublicationBackendV1<S> {
         else {
             return Ok(None);
         };
+        if page.network_id != request.network_id() {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_REGISTRATION_CONFLICT",
+            ));
+        }
         if minimum_finalized_height.is_some_and(|height| page.snapshot.finalized_height < height) {
             return Ok(None);
         }
         let recovered = PublicationRegisteredArchiveV1 {
             finalized_transaction_hash: intent.transaction_hash,
-            chain_id: page.chain_id,
-            genesis_block_hash: page.genesis_hash,
+            network_id: request.network_id,
             snapshot: page.snapshot,
             archive: page.archive,
         };
@@ -1440,13 +1451,12 @@ impl<S> RegistryPublicationBackendV1<S> {
                 expected_snapshot: None,
             })
             .map_err(registry_backend_error)?;
-        let actual_genesis_hash = page.genesis_hash;
-        let expected_genesis_hash = request.genesis_block_hash;
-        if page.chain_id != request.chain_id
-            || actual_genesis_hash != expected_genesis_hash
-            || minimum_finalized_height
-                .is_some_and(|height| page.snapshot.finalized_height < height)
-        {
+        if page.network_id != request.network_id() {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_ABSENCE_NETWORK_CONFLICT",
+            ));
+        }
+        if minimum_finalized_height.is_some_and(|height| page.snapshot.finalized_height < height) {
             return Ok(None);
         }
         let decision = page.items.into_iter().next().ok_or_else(|| {
@@ -1456,8 +1466,7 @@ impl<S> RegistryPublicationBackendV1<S> {
             return Ok(None);
         }
         Ok(Some(PublicationArchiveAbsenceEvidenceV1 {
-            chain_id: page.chain_id,
-            genesis_block_hash: page.genesis_hash,
+            network_id: request.network_id,
             snapshot: page.snapshot,
             finalized_time_ms: page.finalized_time_ms,
             decision,
@@ -1481,6 +1490,11 @@ impl<S> RegistryPublicationBackendV1<S> {
             .read
             .resolver_index(&resolver_query)
             .map_err(registry_backend_error)?;
+        if resolver_page.network_id != request.network_id() {
+            return Err(PublicationBackendError::permanent(
+                "RELEASE_FINALIZED_NETWORK_CONFLICT",
+            ));
+        }
         if minimum_finalized_height
             .is_some_and(|height| resolver_page.snapshot.finalized_height < height)
         {
@@ -1685,8 +1699,7 @@ fn validate_finalized_idempotent_release(
         release: manifest.release.clone(),
     };
     if exact_release.validate_for(&exact_query).is_err()
-        || exact_release.chain_id != request.chain_id
-        || exact_release.genesis_hash != request.genesis_block_hash
+        || exact_release.network_id != request.network_id()
         || &home.manifest != manifest
         || home.release_digest != manifest.release_digest()
         || universal.release != manifest.release
@@ -2232,12 +2245,16 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         else {
             return Ok(None);
         };
+        if exact_release.network_id != request.network_id() {
+            return Err(PublicationBackendError::permanent(
+                "RELEASE_FINALIZED_NETWORK_CONFLICT",
+            ));
+        }
         if exact_release.snapshot.finalized_height < submission.applied_height {
             return Ok(None);
         }
         Ok(Some(PublicationFinalEvidenceV1 {
-            chain_id: exact_release.chain_id,
-            genesis_block_hash: exact_release.genesis_hash,
+            network_id: request.network_id,
             snapshot: exact_release.snapshot,
             home_release: exact_release.home_release,
             universal_release: exact_release.universal_release,
@@ -2407,10 +2424,11 @@ fn read_bounded_config(path: &Path) -> Result<Vec<u8>, RegistryErrorV1> {
 mod tests {
     use std::{cell::Cell, io::Write as _, net::TcpListener, time::Duration};
 
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, SignatureOf};
+    use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
+        block::BlockHeader,
         isi::{InstructionBox, musubi::AddMusubiArchiveLocationV1},
         musubi::{
             ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveAvailabilityV1,
@@ -2442,6 +2460,12 @@ mod tests {
     use crate::publish::{
         PublicationReleaseSignedEnvelopeV1, PublicationReleaseSubmissionTerminalReasonV1,
     };
+
+    fn test_network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([byte; Hash::LENGTH]),
+        ))
+    }
 
     fn serve_http_once(
         status: &'static str,
@@ -2576,8 +2600,7 @@ mod tests {
         snapshot: MusubiRegistrySnapshotV1,
     ) -> MusubiArchiveRetentionPageV1 {
         MusubiArchiveRetentionPageV1 {
-            chain_id: ChainId::from("musubi-retention-client-test"),
-            genesis_hash: [0x81; 32],
+            network_id: test_network_id(0x81),
             items: archive_ids
                 .iter()
                 .map(|archive_id| MusubiArchiveRetentionDecisionV1 {
@@ -2683,6 +2706,7 @@ mod tests {
         assert_eq!(error.code(), "MUSUBI_REGISTRY_RETENTION_REQUEST_INVALID");
     }
 
+    #[cfg(unix)]
     #[test]
     fn public_config_ignores_signer_fields() {
         let temporary = tempdir().expect("temporary directory");
@@ -2773,6 +2797,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn public_config_image_anchors_a_relative_selection_once() {
         let current = std::env::current_dir().expect("current directory");
@@ -2796,6 +2821,19 @@ mod tests {
             .expect("load relative public configuration");
         assert!(image.path().is_absolute());
         assert_eq!(image.path(), path.as_path());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn public_config_is_unsupported_before_path_io() {
+        let parent = tempdir().expect("temporary parent");
+        let path = parent.path().join("must-remain-absent/client.toml");
+
+        let error = RegistryReadClientV1::load_with_config_image(Some(&path))
+            .expect_err("non-Unix public configuration must fail closed");
+
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+        assert!(!path.parent().expect("requested path has a parent").exists());
     }
 
     #[test]
@@ -2825,11 +2863,13 @@ mod tests {
         let signer_keypair = KeyPair::try_from_seed(vec![89; 32], Algorithm::Ed25519)
             .expect("signer fixture key pair");
         let private_key = ExposedPrivateKey(signer_keypair.private_key().clone()).to_string();
+        let network_id = test_network_id(0x15);
         fs::write(
             &path,
             format!(
                 r#"
                     chain = "musubi-registry-test"
+                    network_id = "{network_id}"
                     torii_url = "https://registry.example/iroha/"
                     [account]
                     domain = "dex.universal"
@@ -2868,7 +2908,11 @@ mod tests {
         assert_eq!(error.code(), "MUSUBI_ACCOUNT_ID_INVALID");
     }
 
-    fn signing_client_at(url: &Url, signer_keypair: &KeyPair) -> RegistrySigningClientV1 {
+    fn signing_client_at(
+        url: &Url,
+        signer_keypair: &KeyPair,
+        network_id: NetworkId,
+    ) -> RegistrySigningClientV1 {
         let temporary = tempdir().expect("temporary signing configuration");
         let path = temporary.path().join("client.toml");
         let private_key = ExposedPrivateKey(signer_keypair.private_key().clone()).to_string();
@@ -2877,6 +2921,7 @@ mod tests {
             format!(
                 r#"
                     chain = "musubi-registry-test"
+                    network_id = "{network_id}"
                     torii_url = "{url}"
                     [account]
                     domain = "dex.universal"
@@ -2895,7 +2940,7 @@ mod tests {
     fn signed_status_probe(signer: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(signer.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            ChainId::from("musubi-registry-test"),
+            test_network_id(0x15),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2932,7 +2977,7 @@ mod tests {
             ("Queued", RegistryTransactionStateV1::Pending),
         ] {
             let (url, server) = serve_json_once(transaction_status_body(&transaction, kind));
-            let signing = signing_client_at(&url, &signer);
+            let signing = signing_client_at(&url, &signer, test_network_id(0x15));
             assert_eq!(
                 signing
                     .transaction_application_state_v1(&transaction)
@@ -2950,7 +2995,7 @@ mod tests {
         let transaction = signed_status_probe(&signer);
 
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Rejected"));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let state = signing
             .transaction_application_state_v1(&transaction)
             .expect("state-final rejected transaction");
@@ -2964,7 +3009,7 @@ mod tests {
         server.join().expect("rejected status server");
 
         let (url, server) = serve_http_once("404 Not Found", Vec::new());
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -2989,7 +3034,7 @@ mod tests {
         }))
         .expect("cached rejection JSON");
         let (url, server) = serve_json_once(cached_rejection);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -3007,7 +3052,7 @@ mod tests {
         }))
         .expect("heightless applied JSON");
         let (url, server) = serve_json_once(heightless_applied);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("applied status without committed height is not finality evidence");
@@ -3016,7 +3061,7 @@ mod tests {
         server.join().expect("heightless applied server");
 
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Expired"));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -3036,7 +3081,7 @@ mod tests {
         }))
         .expect("zero-height expiry JSON");
         let (url, server) = serve_json_once(zero_height_expiry);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("zero is not a valid finalized block height");
@@ -3053,7 +3098,7 @@ mod tests {
             &"ff".repeat(32),
             "Applied",
         ));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("another transaction's applied status must fail closed");
@@ -3274,8 +3319,7 @@ mod tests {
         };
         let page = MusubiOrderedPackagePageV1 {
             query,
-            chain_id: ChainId::from("musubi-registry-test"),
-            genesis_hash: [1; 32],
+            network_id: test_network_id(1),
             namespace_binding: MusubiNamespaceBindingV1 {
                 namespace: selector.namespace.clone(),
                 home_dataspace: DataSpaceId::new(7),
@@ -3424,8 +3468,7 @@ mod tests {
             index_revision: 3,
         };
         let request = PublicationRequestV1 {
-            chain_id: ChainId::from("musubi-registry-test"),
-            genesis_block_hash: [0x3b; 32],
+            network_id: test_network_id(0x3b),
             publisher: publisher.clone(),
             ingress_broker: broker.clone(),
             seed_provider: ProviderId::new([0x3c; 32]),
@@ -3444,8 +3487,7 @@ mod tests {
         let payload = MusubiSeedIngressReceiptPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: MusubiSeedIngressReceiptBindingV1 {
-                chain_id: request.chain_id.clone(),
-                genesis_block_hash: request.genesis_block_hash,
+                network_id: request.network_id(),
                 publisher,
                 ingress_broker: broker,
                 seed_provider: request.seed_provider,
@@ -3470,7 +3512,7 @@ mod tests {
             payload,
         };
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3505,8 +3547,7 @@ mod tests {
             index_revision: 4,
         };
         MusubiExactReleaseSnapshotV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             snapshot,
             home_release: MusubiReleaseRecordV1 {
                 release_digest: manifest.release_digest(),
@@ -3551,8 +3592,7 @@ mod tests {
         receipt: MusubiSeedIngressReceiptV1,
     ) -> MusubiArchiveLocationPageV1 {
         MusubiArchiveLocationPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             archive: MusubiArchiveRecordV1 {
                 archive_id: request.archive_commitment.archive_id(),
                 commitment: request.archive_commitment.clone(),
@@ -3587,8 +3627,7 @@ mod tests {
                 ),
                 page: first_page(1),
             },
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             items,
             next_cursor: None,
             snapshot,
@@ -3601,8 +3640,7 @@ mod tests {
         finalized_time_ms: u64,
     ) -> MusubiArchiveRetentionPageV1 {
         MusubiArchiveRetentionPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             items: vec![MusubiArchiveRetentionDecisionV1 {
                 archive_id: request.archive_commitment.archive_id(),
                 disposition: MusubiArchiveRetentionDispositionV1::PruneUnreferenced,
@@ -3647,7 +3685,7 @@ mod tests {
             expected_location_revision: prepared_page.archive.location_revision,
         };
         let mut location_builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3714,7 +3752,7 @@ mod tests {
         )
         .expect("valid release preparation fixture");
         let mut release_builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3736,8 +3774,7 @@ mod tests {
         finalized_time_ms: u64,
     ) -> PublicationArchiveAbsenceEvidenceV1 {
         PublicationArchiveAbsenceEvidenceV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_block_hash: request.genesis_block_hash,
+            network_id: request.network_id,
             snapshot: MusubiRegistrySnapshotV1 {
                 finalized_height: 60,
                 finalized_block_hash: [0x3e; 32],
@@ -3822,7 +3859,7 @@ mod tests {
         ]);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -3883,6 +3920,83 @@ mod tests {
     }
 
     #[test]
+    fn finalized_release_absence_rejects_a_foreign_network_resolver_page() {
+        let (request, publisher_key, _, _) = publication_fixture();
+        let mut resolver = release_resolver_page(
+            &request,
+            Vec::new(),
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 62,
+                finalized_block_hash: [0x62; 32],
+                index_revision: 6,
+            },
+        );
+        resolver.network_id = test_network_id(0x91);
+        resolver
+            .validate()
+            .expect("foreign network remains a structurally valid response");
+        let response = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(&resolver).expect("foreign resolver page JSON")
+        };
+        let (url, server) = serve_json_once(response);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
+        let backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+
+        let error = backend
+            .finalized_release_absence(&request, None)
+            .expect_err("a foreign resolver page cannot prove release absence");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "RELEASE_FINALIZED_NETWORK_CONFLICT");
+        server.join().expect("foreign resolver query server");
+    }
+
+    #[test]
+    fn finalized_archive_absence_rejects_a_foreign_network_retention_page() {
+        let (request, publisher_key, _, _) = publication_fixture();
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 62,
+            finalized_block_hash: [0x62; 32],
+            index_revision: 6,
+        };
+        let mut retention = release_absence_retention_page(&request, snapshot, 1_700_000_000_000);
+        retention.network_id = test_network_id(0x91);
+        retention
+            .validate()
+            .expect("foreign network remains a structurally valid response");
+        let response = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(&retention).expect("foreign retention page JSON")
+        };
+        let (url, server) = serve_json_once(response);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
+        let backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+
+        let error = backend
+            .finalized_archive_absence(&request, None)
+            .expect_err("a foreign retention page cannot prove archive absence");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "ARCHIVE_ABSENCE_NETWORK_CONFLICT");
+        server.join().expect("foreign retention query server");
+    }
+
+    #[test]
     fn pending_release_becomes_terminal_after_finalized_deadline_and_exact_absence() {
         let (request, publisher_key, intent) = release_submission_fixture();
         let transaction = intent
@@ -3910,7 +4024,7 @@ mod tests {
         ]);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -3984,13 +4098,14 @@ mod tests {
         let signing = signing_client_at(
             &"http://127.0.0.1:9/".parse().expect("loopback URL"),
             &publisher_key,
+            request.network_id(),
         );
         let instruction = request.archive_registration_instruction(&intent.staging_receipt);
         let exact_instruction: InstructionBox = instruction.clone().into();
         let payload = signing
             .prebuild_v1(instruction)
             .expect("offline exact transaction prebuild");
-        assert_eq!(payload.chain(), &request.chain_id);
+        assert_eq!(payload.network_id().copied(), Some(request.network_id()));
         assert_eq!(payload.authority(), &request.publisher);
         assert!(matches!(
             payload.instructions(),
@@ -4021,13 +4136,15 @@ mod tests {
             753,
         )
         .expect("different-profile reader");
-        let error = RegistryPublicationBackendV1::new(
+        let error = match RegistryPublicationBackendV1::new(
             read,
             signing,
             UnavailablePublicationRuntimeV1,
             &request,
-        )
-        .expect_err("read and signing clients must share one address profile");
+        ) {
+            Ok(_) => panic!("read and signing clients must share one address profile"),
+            Err(error) => error,
+        };
         assert_eq!(error.code(), "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH");
     }
 
@@ -4037,9 +4154,10 @@ mod tests {
         let signing = signing_client_at(
             &"http://127.0.0.1:9/".parse().expect("loopback URL"),
             &publisher_key,
+            request.network_id(),
         );
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4070,7 +4188,7 @@ mod tests {
         let (url, server) = serve_json_once(response);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4093,7 +4211,7 @@ mod tests {
             .finalized_release_and_index(operation_id, &request, &submission)
             .expect("paired final query succeeds")
             .expect("paired final evidence is visible");
-        assert_eq!(evidence.chain_id, exact_release.chain_id);
+        assert_eq!(evidence.network_id, request.network_id);
         assert_eq!(evidence.snapshot, exact_release.snapshot);
         assert_eq!(evidence.home_release, exact_release.home_release);
         assert_eq!(evidence.universal_release, exact_release.universal_release);
@@ -4102,6 +4220,48 @@ mod tests {
         let query: MusubiExactReleaseQueryV1 =
             norito::json::from_slice(&request_body).expect("exact release query JSON");
         assert_eq!(query.release, request.publication.manifest.release);
+    }
+
+    #[test]
+    fn final_publication_verification_rejects_a_foreign_network_snapshot() {
+        let (request, publisher_key, _, _) = publication_fixture();
+        let mut exact_release = exact_release_snapshot(&request);
+        exact_release.network_id = test_network_id(0x91);
+        exact_release
+            .validate()
+            .expect("foreign network remains a structurally valid response");
+        let response = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(&exact_release).expect("foreign exact release snapshot JSON")
+        };
+        let (url, server) = serve_json_once(response);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
+        let mut backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+        let operation_id = request.operation_id();
+        let instruction = PublishMusubiReleaseV1::new(
+            request.namespace.clone(),
+            request.publication.clone(),
+            request.namespace_delegation.clone(),
+            request.expected_policy_revision,
+            request.expected_governance_revision,
+        );
+        let submission =
+            PublicationAmxSubmissionV1::new(operation_id, &instruction, [0x72; 32], 55);
+
+        let error = backend
+            .finalized_release_and_index(operation_id, &request, &submission)
+            .expect_err("a foreign network response cannot become final evidence");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "RELEASE_FINALIZED_NETWORK_CONFLICT");
+        server.join().expect("foreign exact release query server");
     }
 
     #[test]
@@ -4115,7 +4275,7 @@ mod tests {
         let (url, server) = serve_json_once(exact_page_json);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4162,7 +4322,7 @@ mod tests {
         let (url, server) = serve_json_once(conflicting_page_json);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4188,7 +4348,7 @@ mod tests {
         let (url, server) = serve_json_once(response);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4221,8 +4381,7 @@ mod tests {
 
     fn binding() -> MusubiSeedIngressReceiptBindingV1 {
         MusubiSeedIngressReceiptBindingV1 {
-            chain_id: ChainId::from("musubi-registry-test"),
-            genesis_block_hash: [1; 32],
+            network_id: test_network_id(1),
             publisher: account(2),
             ingress_broker: account(3),
             seed_provider: ProviderId::new([4; 32]),

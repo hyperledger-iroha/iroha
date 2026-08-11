@@ -4,6 +4,7 @@
 mod config;
 mod consensus_message_control;
 pub mod fslock_ports;
+pub mod genesis_support;
 
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
@@ -51,7 +52,7 @@ use iroha_config::base::{
 };
 use iroha_core::sumeragi::{
     consensus::{
-        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_parameters_fingerprint,
     },
     signed_genesis_voting_peers,
 };
@@ -1013,11 +1014,11 @@ impl Program {
     fn spec(&self) -> ProgramSpec {
         match self {
             Self::Irohad => ProgramSpec {
-                name: "irohad",
+                name: "iroha3d",
                 env: PROGRAM_IROHAD_ENV,
                 pkg: "irohad",
                 build_args: {
-                    let mut args: Vec<OsString> = ["--bin", "irohad"]
+                    let mut args: Vec<OsString> = ["--bin", "iroha3d"]
                         .into_iter()
                         .map(OsString::from)
                         .collect();
@@ -1033,12 +1034,12 @@ impl Program {
                 isolated_target_subdir: None,
             },
             Self::IrohadMessageControl => ProgramSpec {
-                name: "irohad",
+                name: "iroha3d",
                 env: PROGRAM_IROHAD_MESSAGE_CONTROL_ENV,
                 pkg: "irohad",
                 build_args: [
                     "--bin",
-                    "irohad",
+                    "iroha3d",
                     "--features",
                     "test-network-message-control",
                 ]
@@ -1121,8 +1122,8 @@ impl ReleasePrebuiltBinary {
 
     const fn relative_path(self) -> &'static str {
         match self {
-            Self::Irohad => "release/irohad",
-            Self::IrohadMessageControl => "message-control/release/irohad",
+            Self::Irohad => "release/iroha3d",
+            Self::IrohadMessageControl => "message-control/release/iroha3d",
             Self::Iroha => "release/iroha",
             Self::Kagami => "release/kagami",
         }
@@ -3323,7 +3324,7 @@ struct ConsensusBootstrapProfile {
 
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
-        compute_consensus_fingerprint_from_params(&self.chain_id, &self.params)
+        compute_consensus_parameters_fingerprint(&self.params)
             .expect("test-network consensus profile must be canonical")
     }
 }
@@ -3488,7 +3489,7 @@ impl Network {
             }
         }
 
-        // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
+        // Ensure we resolve `iroha3d` once before spawning peers; caches for subsequent calls.
         // This may trigger a re-entrant build, so keep it off the async runtime threads.
         let program = self
             .peers
@@ -3972,6 +3973,11 @@ impl Network {
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
         self.consensus_profile.chain_id.clone()
+    }
+
+    /// Exact network identity derived from this network's signed genesis header.
+    pub fn network_id(&self) -> NetworkId {
+        NetworkId::from_genesis_hash(self.genesis().0.hash())
     }
 
     /// Torii URLs for all peers in the network.
@@ -6381,7 +6387,7 @@ fn normalize_genesis_consensus_handshake(
     genesis_post_topology_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
     genesis_key_pair: &KeyPair,
-    fallback_chain_id: &ChainId,
+    _fallback_chain_id: &ChainId,
 ) -> GenesisBlock {
     let mut param_instructions = genesis_isi
         .iter()
@@ -6411,16 +6417,9 @@ fn normalize_genesis_consensus_handshake(
         consensus_handshake_meta.clone(),
     )));
 
-    let chain_id = source
-        .0
-        .transactions_vec()
-        .first()
-        .map(|tx| tx.chain().clone())
-        .unwrap_or_else(|| fallback_chain_id.clone());
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
-        chain_id,
+    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_genesis_with_time_source(
         authority,
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -7756,13 +7755,21 @@ impl NetworkBuilder {
             _permit: permit,
         };
 
+        let exact_genesis_hash = network.genesis().0.hash();
+        let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
+        for peer in network.all_peers() {
+            peer.network_id
+                .set(network_id)
+                .expect("test-network peer lineage must be initialized exactly once");
+        }
+
         // The test-network generator is the operator provisioning both the
         // signed in-memory genesis and its independent runtime trust anchor.
         // Insert this generated layer before caller layers so deliberate
         // wrong-hash configurations remain observable by negative tests.
         let expected_hash_layer = Table::new().write(
             ["genesis", "expected_hash"],
-            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string()),
+            genesis_expected_hash_config_literal(&exact_genesis_hash.to_string()),
         );
         debug_assert!(
             !network.config_layers.is_empty(),
@@ -7923,7 +7930,7 @@ fn start_checked_storage_fallback_ready(
     has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
 
-/// Controls execution of `irohad` child process.
+/// Controls execution of an `iroha3d` child process.
 ///
 /// While exists, allocates socket ports and a temporary directory (not cleared automatically).
 ///
@@ -7936,6 +7943,7 @@ pub struct NetworkPeer {
     mnemonic: String,
     span: tracing::Span,
     key_pair: KeyPair,
+    network_id: Arc<OnceLock<NetworkId>>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -8140,12 +8148,12 @@ impl NetworkPeer {
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 warn!(
                     binary = %irohad.display(),
-                    "cached `irohad` path vanished before spawn; rebuilding and retrying once"
+                    "cached `iroha3d` path vanished before spawn; rebuilding and retrying once"
                 );
                 let program = self.program;
                 let refreshed = spawn_blocking(move || program.resolve_force_build())
                     .await
-                    .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                    .wrap_err("failed to join blocking task while refreshing `iroha3d` path")??;
                 let refreshed = revalidate_release_prebuilt_binary(
                     program.release_prebuilt_binary(),
                     &refreshed,
@@ -8153,12 +8161,12 @@ impl NetworkPeer {
                 .unwrap_or(refreshed);
                 make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
                     eyre!(
-                        "failed to spawn `irohad` after refreshing binary path: {}",
+                        "failed to spawn `iroha3d` after refreshing binary path: {}",
                         refreshed.display()
                     )
                 })?
             }
-            Err(err) => return Err(err).wrap_err("failed to spawn `irohad`"),
+            Err(err) => return Err(err).wrap_err("failed to spawn `iroha3d`"),
         };
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
@@ -9168,6 +9176,21 @@ impl NetworkPeer {
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
+                    .write(
+                        "network_id",
+                        norito::literal::format(
+                            "hash",
+                            &self
+                                .network_id
+                                .get()
+                                .copied()
+                                .expect(
+                                    "peer must be attached to a network before creating clients",
+                                )
+                                .to_string()
+                                .to_ascii_uppercase(),
+                        ),
+                    )
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
@@ -9667,6 +9690,7 @@ impl NetworkPeerBuilder {
             mnemonic,
             span,
             key_pair,
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -10130,7 +10154,7 @@ mod tests {
     };
 
     use iroha_config::parameters::defaults;
-    use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
+    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::{
@@ -10624,6 +10648,7 @@ mod tests {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -10670,6 +10695,7 @@ mod tests {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -10718,6 +10744,7 @@ mod tests {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11999,7 +12026,7 @@ mod tests {
             );
         }
         let escaped = fixture.repo.join("escaped");
-        fs::write(&escaped, b"irohad release executable\n").expect("write escaped candidate");
+        fs::write(&escaped, b"iroha3d release executable\n").expect("write escaped candidate");
         set_mode(&escaped, RELEASE_BINARY_MODE);
         assert!(
             validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, escaped)
@@ -12043,8 +12070,8 @@ mod tests {
         let path_fixture = create_release_prebuilt_fixture();
         let path_manifest_sha256 = rewrite_release_manifest(
             &path_fixture,
-            "irohad_relative_path\trelease/irohad",
-            "irohad_relative_path\trelease/not-irohad",
+            "irohad_relative_path\trelease/iroha3d",
+            "irohad_relative_path\trelease/not-iroha3d",
         );
         {
             let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256, "0");
@@ -12073,7 +12100,7 @@ mod tests {
             validate_release_program_candidate(
                 &contract,
                 ReleasePrebuiltBinary::Irohad,
-                hash_fixture.target.join("release/irohad")
+                hash_fixture.target.join("release/iroha3d")
             )
             .is_err(),
             "forged binary digest must fail independent hashing"
@@ -12091,9 +12118,9 @@ mod tests {
         let contract = release_program_contract(&fixture.repo)
             .expect("parse release manifest")
             .expect("release contract active");
-        let binary = fixture.target.join("release/irohad");
-        let replacement = fixture.repo.join("replacement-irohad");
-        fs::write(&replacement, b"irohad release executable\n").expect("write replacement");
+        let binary = fixture.target.join("release/iroha3d");
+        let replacement = fixture.repo.join("replacement-iroha3d");
+        fs::write(&replacement, b"iroha3d release executable\n").expect("write replacement");
         set_mode(&replacement, RELEASE_BINARY_MODE);
         let parent = binary.parent().expect("binary parent");
         set_mode(parent, 0o700);
@@ -12115,7 +12142,7 @@ mod tests {
         let contract = release_program_contract(&fixture.repo)
             .expect("parse release manifest")
             .expect("release contract active");
-        let binary = fixture.target.join("release/irohad");
+        let binary = fixture.target.join("release/iroha3d");
         validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
             .expect("initial resolution");
 
@@ -12135,7 +12162,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
 
         let mode_fixture = create_release_prebuilt_fixture();
-        let binary = mode_fixture.target.join("release/irohad");
+        let binary = mode_fixture.target.join("release/iroha3d");
         set_mode(&binary, 0o700);
         {
             let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256, "0");
@@ -12154,8 +12181,8 @@ mod tests {
         }
 
         let link_fixture = create_release_prebuilt_fixture();
-        let binary = link_fixture.target.join("release/irohad");
-        let extra_link = link_fixture.repo.join("irohad-hard-link");
+        let binary = link_fixture.target.join("release/iroha3d");
+        let extra_link = link_fixture.repo.join("iroha3d-hard-link");
         fs::hard_link(&binary, &extra_link).expect("create adversarial hard link");
         let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256, "0");
         let contract = release_program_contract(&link_fixture.repo)
@@ -12210,7 +12237,7 @@ mod tests {
 
     #[test]
     fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
-        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/irohad"));
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
         assert_eq!(hint.as_deref(), Some("ci"));
     }
 
@@ -12222,7 +12249,7 @@ mod tests {
         fs::write(
             &stamp_path,
             format!(
-                r#"{{"version":{wrapped_version},"fingerprint":7,"profile":"debug","binary":"irohad"}}"#
+                r#"{{"version":{wrapped_version},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
             ),
         )
         .expect("write wrapped-version stamp");
@@ -12237,7 +12264,7 @@ mod tests {
         fs::write(
             &stamp_path,
             format!(
-                r#"{{"version":{BUILD_STAMP_VERSION},"fingerprint":7,"profile":"debug","binary":"irohad"}}"#
+                r#"{{"version":{BUILD_STAMP_VERSION},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
             ),
         )
         .expect("write supported-version stamp");
@@ -12246,7 +12273,7 @@ mod tests {
             .expect("supported version should load");
         assert_eq!(stamp.fingerprint, 7);
         assert_eq!(stamp.profile, "debug");
-        assert_eq!(stamp.binary, PathBuf::from("irohad"));
+        assert_eq!(stamp.binary, PathBuf::from("iroha3d"));
     }
 
     #[cfg(unix)]
@@ -12653,13 +12680,13 @@ exit 0
     fn colocated_binary_candidate_for_resolves_sibling_binary() {
         let temp = tempdir().expect("temporary workspace");
         let current_exe = temp.path().join("release/izanami");
-        let sibling = temp.path().join("release/irohad");
+        let sibling = temp.path().join("release/iroha3d");
         fs::create_dir_all(current_exe.parent().expect("current exe parent"))
             .expect("create release dir");
         fs::write(&current_exe, b"izanami").expect("write current exe");
-        fs::write(&sibling, b"irohad").expect("write sibling binary");
+        fs::write(&sibling, b"iroha3d").expect("write sibling binary");
 
-        let resolved = colocated_binary_candidate_for(&current_exe, "irohad")
+        let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
             .expect("sibling binary should resolve");
 
         assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
@@ -12674,7 +12701,7 @@ exit 0
         fs::write(&current_exe, b"izanami").expect("write current exe");
 
         assert!(
-            colocated_binary_candidate_for(&current_exe, "irohad").is_none(),
+            colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
             "missing sibling binary should not resolve"
         );
     }
@@ -13044,9 +13071,8 @@ exit 0
             reconstructed, profile.params,
             "genesis must preserve the complete canonical consensus carrier"
         );
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual.to_ascii_lowercase(),
@@ -13095,9 +13121,8 @@ exit 0
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("NPoS profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("NPoS profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual, expected,
@@ -13150,7 +13175,7 @@ exit 0
         let expected = format!(
             "0x{}",
             hex_lower(
-                &compute_consensus_fingerprint_from_params(&network.chain_id(), &shared_params)
+                &compute_consensus_parameters_fingerprint(&shared_params)
                     .expect("shared NPoS params must fingerprint")
             )
         );
@@ -13175,9 +13200,8 @@ exit 0
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
         let profile = network.consensus_bootstrap_profile();
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         let reconstructed = reconstructed_consensus_params(&genesis);
 
@@ -14299,8 +14323,8 @@ exit 0
                 Program::Irohad.resolve_async(),
             )
             .await
-            .expect("irohad binary resolution should not hang")
-            .expect("irohad binary should resolve for network startup tests");
+            .expect("iroha3d binary resolution should not hang")
+            .expect("iroha3d binary should resolve for network startup tests");
         }
         let first = build_with_isolated_permit_async(first_builder).await;
         let first_timeout = first
@@ -14374,8 +14398,8 @@ exit 0
                 Program::Irohad.resolve_async(),
             )
             .await
-            .expect("irohad binary resolution should not hang")
-            .expect("irohad binary should resolve for fallback startup test");
+            .expect("iroha3d binary resolution should not hang")
+            .expect("iroha3d binary should resolve for fallback startup test");
         }
         // Intentionally avoid providing a default executor sample; in CI the
         // prebuilt samples are usually absent so JSON genesis will fail to
@@ -15224,7 +15248,7 @@ exit 0
     #[test]
     fn cached_binary_if_present_ignores_missing_path() {
         let cache = OnceLock::new();
-        let missing = repo_root().join("target/test-bin-dummy/missing-irohad");
+        let missing = repo_root().join("target/test-bin-dummy/missing-iroha3d");
         let _ = fs::remove_file(&missing);
         cache.set(missing).expect("cache should be empty for test");
 
@@ -15240,7 +15264,7 @@ exit 0
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         assert!(args.contains(&"--bin".to_string()));
-        assert!(args.contains(&"irohad".to_string()));
+        assert!(args.contains(&"iroha3d".to_string()));
         assert!(!args.contains(&"--features".to_string()));
         assert!(spec.isolated_target_subdir.is_none());
         assert_ne!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);

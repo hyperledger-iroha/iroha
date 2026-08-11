@@ -194,7 +194,7 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         &schemas,
         "SumeragiV2HeightContext",
         &[
-            "chain_id",
+            "network_id",
             "protocol_version",
             "height",
             "epoch",
@@ -208,7 +208,7 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             "leader_seed",
         ],
         &[
-            "chain_id",
+            "network_id",
             "protocol_version",
             "height",
             "epoch",
@@ -347,13 +347,13 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         &schemas,
         "BridgeCommitment",
         &[
-            "chain_id",
+            "network_id",
             "height_context_id",
             "block_height",
             "block_hash",
         ],
         &[
-            "chain_id",
+            "network_id",
             "height_context_id",
             "block_height",
             "block_hash",
@@ -1635,7 +1635,7 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         .and_then(Value::as_array)
         .expect("native AMX receipt required fields");
     for field in [
-        "chain_id_hash",
+        "network_id",
         "lane_incarnation",
         "authority_context_height",
         "lane_block_height",
@@ -1911,7 +1911,7 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
     for field in [
         "round",
         "epoch",
-        "chain_id_hash",
+        "network_id",
         "coordinator_lane_incarnation",
         "participant_lane_incarnation",
         "participant_previous_block_height",

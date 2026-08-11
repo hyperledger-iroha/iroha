@@ -229,7 +229,7 @@ printf 'irohad\t%s\n' "$TEST_NETWORK_BIN_IROHAD" >>"$NEXUS_HELPER_CAPTURE"
     assert fields["reentrant"] == "0"
     assert fields["target"] == env["CARGO_TARGET_DIR"]
     assert fields["artifacts"] == env["IROHA_RELEASE_ARTIFACT_ROOT"]
-    assert fields["irohad"] == str(bundle / "release" / "irohad")
+    assert fields["irohad"] == str(bundle / "release" / "iroha3d")
 
 
 def test_cross_lane_helper_routes_all_filters_through_pinned_cargo(
@@ -259,7 +259,7 @@ printf '%s\t%s\t%s\t%s\n' \
     ]
     assert len(rows) == 4
     assert all(
-        row[0].startswith("+1.93.1 -j1 test --locked --offline ")
+        row[0].startswith("+1.93.1 test -j1 --locked --offline ")
         for row in rows
     )
     assert [
@@ -280,4 +280,4 @@ printf '%s\t%s\t%s\t%s\n' \
         )
     ]
     assert all(row[1:3] == ["1", "0"] for row in rows)
-    assert all(row[3] == str(bundle / "release" / "irohad") for row in rows)
+    assert all(row[3] == str(bundle / "release" / "iroha3d") for row in rows)

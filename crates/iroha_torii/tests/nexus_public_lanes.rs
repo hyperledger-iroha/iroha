@@ -397,6 +397,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -414,6 +415,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

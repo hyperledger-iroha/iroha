@@ -10,9 +10,9 @@ use norito::{
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
-    account::AccountId,
     da::{
         commitment::{DaCommitmentLocation, MerklePathItem},
+        ingest::DaIngestAuthorizationV1,
         types::StorageTicketId,
     },
     nexus::LaneId,
@@ -36,13 +36,15 @@ pub struct DaPinIntent {
     /// Optional alias to register in the `SoraFS` registry.
     #[norito(default)]
     pub alias: Option<String>,
-    /// Optional owner account for governance/registry tracking.
-    #[norito(default)]
-    pub owner: Option<AccountId>,
+    /// Consensus-verifiable account authorization and quota charge identity.
+    ///
+    /// This is a required V1 wire field. Legacy owner-only pin intents do not
+    /// decode and there is no unsigned sidecar representation.
+    pub authorization: DaIngestAuthorizationV1,
 }
 
 impl DaPinIntent {
-    /// Construct a pin intent without optional alias/owner fields.
+    /// Construct a fully authorised pin intent.
     #[must_use]
     pub fn new(
         lane_id: LaneId,
@@ -50,6 +52,7 @@ impl DaPinIntent {
         sequence: u64,
         storage_ticket: StorageTicketId,
         manifest_hash: ManifestDigest,
+        authorization: DaIngestAuthorizationV1,
     ) -> Self {
         Self {
             lane_id,
@@ -58,7 +61,7 @@ impl DaPinIntent {
             storage_ticket,
             manifest_hash,
             alias: None,
-            owner: None,
+            authorization,
         }
     }
 }
@@ -81,25 +84,17 @@ impl DaPinIntentBundle {
     #[must_use]
     pub fn new(intents: Vec<DaPinIntent>) -> Self {
         let mut intents = intents;
-        intents.sort_by(|a, b| {
+        intents.sort_by_cached_key(|intent| {
             (
-                a.lane_id.as_u32(),
-                a.epoch,
-                a.sequence,
-                *a.storage_ticket.as_bytes(),
-                *a.manifest_hash.as_bytes(),
-                a.alias.as_deref(),
-                a.owner.as_ref(),
+                intent.lane_id.as_u32(),
+                intent.epoch,
+                intent.sequence,
+                *intent.storage_ticket.as_bytes(),
+                *intent.manifest_hash.as_bytes(),
+                intent.alias.clone(),
+                to_bytes(&intent.authorization)
+                    .expect("DA ingest authorization must have a canonical Norito encoding"),
             )
-                .cmp(&(
-                    b.lane_id.as_u32(),
-                    b.epoch,
-                    b.sequence,
-                    *b.storage_ticket.as_bytes(),
-                    *b.manifest_hash.as_bytes(),
-                    b.alias.as_deref(),
-                    b.owner.as_ref(),
-                ))
         });
         Self {
             version: Self::VERSION_V1,
@@ -254,7 +249,43 @@ pub fn pin_intent_merkle_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{da::types::StorageTicketId, nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+
+    use crate::{
+        NetworkId,
+        account::AccountId,
+        block::BlockHeader,
+        da::{
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+            types::{BlobDigest, StorageTicketId},
+        },
+        nexus::LaneId,
+        sorafs::pin_registry::ManifestDigest,
+    };
+
+    fn test_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+        let key_pair = KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
+            .expect("valid deterministic pin-intent key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32])),
+            ),
+            owner: AccountId::new(key_pair.public_key().clone()),
+            lane_id: lane,
+            epoch,
+            sequence,
+            payload_hash: BlobDigest::new([0xDB; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xDC; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic pin-intent authorization"),
+        });
+        authorization
+    }
 
     #[test]
     fn bundle_sorts_intents_deterministically() {
@@ -264,6 +295,7 @@ mod tests {
             1,
             StorageTicketId::new([2; 32]),
             ManifestDigest::new([2; 32]),
+            test_authorization(LaneId::new(2), 2, 1),
         );
         first.alias = Some("z-alias".to_string());
         let mut second = DaPinIntent::new(
@@ -272,6 +304,7 @@ mod tests {
             3,
             StorageTicketId::new([1; 32]),
             ManifestDigest::new([1; 32]),
+            test_authorization(LaneId::new(1), 2, 3),
         );
         second.alias = Some("a-alias".to_string());
         let third = DaPinIntent::new(
@@ -280,6 +313,7 @@ mod tests {
             9,
             StorageTicketId::new([3; 32]),
             ManifestDigest::new([3; 32]),
+            test_authorization(LaneId::new(1), 1, 9),
         );
 
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone(), third.clone()]);
@@ -329,6 +363,7 @@ mod tests {
             1,
             StorageTicketId::new([1; 32]),
             ManifestDigest::new([2; 32]),
+            test_authorization(LaneId::new(1), 1, 1),
         );
         let encoded = to_bytes(&intent).expect("encode pin intent");
         assert_ne!(pin_intent_leaf_hash(&intent), Hash::new(encoded));

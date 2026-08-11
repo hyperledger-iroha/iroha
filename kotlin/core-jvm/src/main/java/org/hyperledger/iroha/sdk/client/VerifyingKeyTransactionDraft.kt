@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.util.Base64
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -42,21 +43,31 @@ class VerifyingKeyTransactionDraft internal constructor(
 internal object VerifyingKeyTransactionDraftParser {
     internal fun parseRegister(
         bytes: ByteArray,
-        expectedChainId: String,
+        expectedNetworkId: NetworkId,
         request: Map<String, Any>,
     ): VerifyingKeyTransactionDraft =
-        parse(bytes, expectedChainId, request, VerifyingKeyDraftOperation.REGISTER)
+        parse(
+            bytes,
+            expectedNetworkId,
+            request,
+            VerifyingKeyDraftOperation.REGISTER,
+        )
 
     internal fun parseUpdate(
         bytes: ByteArray,
-        expectedChainId: String,
+        expectedNetworkId: NetworkId,
         request: Map<String, Any>,
     ): VerifyingKeyTransactionDraft =
-        parse(bytes, expectedChainId, request, VerifyingKeyDraftOperation.UPDATE)
+        parse(
+            bytes,
+            expectedNetworkId,
+            request,
+            VerifyingKeyDraftOperation.UPDATE,
+        )
 
     private fun parse(
         bytes: ByteArray,
-        expectedChainId: String,
+        expectedNetworkId: NetworkId,
         request: Map<String, Any>,
         operation: VerifyingKeyDraftOperation,
     ): VerifyingKeyTransactionDraft {
@@ -95,7 +106,7 @@ internal object VerifyingKeyTransactionDraftParser {
         }
         VerifyingKeyDraftBinding.validate(
             transactionPayload,
-            expectedChainId,
+            expectedNetworkId,
             request,
             operation,
         )

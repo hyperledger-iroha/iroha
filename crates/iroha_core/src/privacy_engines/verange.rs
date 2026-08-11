@@ -1380,7 +1380,7 @@ mod tests {
     fn binding(profile: VeRangeBitLengthV1) -> TranscriptBindingV1<'static> {
         let parameters = VeRangeParametersV1::for_profile(profile).expect("parameters");
         TranscriptBindingV1 {
-            chain_id: b"taira-test",
+            network_id: &[0x11; 32],
             genesis_hash: [0x11; 32],
             action_index: 3,
             statement_digest: [0x22; 32],
@@ -1858,7 +1858,8 @@ mod tests {
 
         let mut changed_bindings = Vec::new();
         let mut changed = statement.transcript_binding;
-        changed.chain_id = b"other-chain";
+        changed.network_id = &[0x12; 32];
+        changed.genesis_hash = [0x12; 32];
         changed_bindings.push(changed);
         let mut changed = statement.transcript_binding;
         changed.genesis_hash[0] ^= 1;

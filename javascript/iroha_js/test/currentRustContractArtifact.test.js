@@ -78,11 +78,11 @@ test("canonical provenance is platform-independent and contains no build-machine
   ]);
   assert.equal(
     FIXTURE.source_provenance.scope,
-    "tracked-semantic-source-closure-v1",
+    "semantic-worktree-source-closure-v2",
   );
   assert.equal(
     FIXTURE.source_provenance.closure_algorithm,
-    "sha256-framed-path-and-bytes-v1",
+    "sha256-framed-present-path-and-bytes-v2",
   );
   assert.match(FIXTURE.source_provenance.closure_sha256, /^[0-9a-f]{64}$/u);
   assert.ok(FIXTURE.source_provenance.file_count > 0);

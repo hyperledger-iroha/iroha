@@ -19,7 +19,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let sponsorKeypair = try Keypair(privateKeyBytes: Data(repeating: 0x12, count: 32))
         let sponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
         let programId = try FeeSponsorProgramId(sponsor: sponsor, name: "wallet_fx")
-        let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "2",
@@ -47,7 +47,6 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let seed = Data(repeating: 0x24, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
-        let chainId = "00000000-0000-0000-0000-000000000000"
         guard let authority = try? AccountId.makeI105(
             publicKey: sm2Keypair.publicKey,
             algorithm: "sm2",
@@ -57,7 +56,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                 "SM2 account-id encoding is unavailable in this build."
             )
         }
-        let request = TransferRequest(chainId: chainId,
+        let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "5",
@@ -80,7 +79,6 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let seed = Data(repeating: 0x33, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
-        let chainId = "00000000-0000-0000-0000-000000000000"
         guard let authority = try? AccountId.makeI105(
             publicKey: sm2Keypair.publicKey,
             algorithm: "sm2",
@@ -90,7 +88,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                 "SM2 account-id encoding is unavailable in this build."
             )
         }
-        let request = MintRequest(chainId: chainId,
+        let request = MintRequest(networkId: TestNetworkIds.canonical,
                                   authority: authority,
                                   assetDefinitionId: Self.fixtureAssetDefinitionId,
                                   quantity: "42",
@@ -112,9 +110,8 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let privateKey = Data((1...Secp256k1Keypair.privateKeyLength).map(UInt8.init))
         let keypair = try Secp256k1Keypair(privateKey: privateKey)
         let signingKey = SigningKey.secp256k1(keypair)
-        let chainId = "00000000-0000-0000-0000-000000000000"
         let authority = try AccountId.makeI105(publicKey: keypair.publicKey, algorithm: "secp256k1")
-        let request = TransferRequest(chainId: chainId,
+        let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "7",

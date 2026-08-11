@@ -997,7 +997,7 @@ internal object CandidateLabHarness {
     }
 
     private fun installCandidate(context: Context): AcceptedIdentity {
-        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 21)
+        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 22)
         check(!KagemushaCandidateLabNative.nativeProductionCapabilityObservedV4()) {
             "candidate lab native library unexpectedly reports production capability"
         }
@@ -1277,7 +1277,7 @@ internal object CandidateLabHarness {
                 1L..(64L * 1024 * 1024 * 1024) &&
                 validation.getString("generation_memory_enforcement_profile") ==
                 "self-physical-footprint-v1" &&
-                validation.getInt("bridge_abi_version") == 21 &&
+                validation.getInt("bridge_abi_version") == 22 &&
                 validation.getInt("artifact_count") == artifacts.size &&
                 validation.getString("topup_finality_roster_file_name") ==
                 "topup-finality-roster-v4.norito" &&
@@ -1695,7 +1695,7 @@ internal object CandidateLabHarness {
 
     private fun requireVerified(
         projection: VerifyProjection,
-        expectedAmount: Amount,
+        expectedAmount: AtomicQuantity,
         expectedHops: Int,
         expectedProofSteps: Int,
     ) {
@@ -1769,7 +1769,10 @@ internal object CandidateLabHarness {
         }
     }
 
-    private fun requireFullRedemption(projection: RedeemProjection, expectedAmount: Amount) {
+    private fun requireFullRedemption(
+        projection: RedeemProjection,
+        expectedAmount: AtomicQuantity,
+    ) {
         check(projection.change == null) {
             "full branch redemption unexpectedly produced offline change"
         }
@@ -1855,7 +1858,7 @@ internal object CandidateLabHarness {
         check(fields.size >= 7) { "redeem projection omitted value fields" }
         val redeemedAtomic = requireAscii(fields[fields.lastIndex - 1], "redeemed atomic units")
         val redeemedScale = requireAscii(fields[fields.lastIndex], "redeemed scale")
-        val redeemed = Amount(BigInteger(redeemedAtomic), redeemedScale.toInt())
+        val redeemed = AtomicQuantity(BigInteger(redeemedAtomic), redeemedScale.toInt())
         val cursor = ProjectionCursor(fields.copyOfRange(0, fields.size - 2), "redeem")
         cursor.version()
         cursor.next("unsigned redemption")
@@ -1871,7 +1874,11 @@ internal object CandidateLabHarness {
         return RedeemProjection(redeemed, change)
     }
 
-    private fun requireConservation(input: Amount, output: Amount, change: Amount) {
+    private fun requireConservation(
+        input: AtomicQuantity,
+        output: AtomicQuantity,
+        change: AtomicQuantity,
+    ) {
         check(input.scale == output.scale && input.scale == change.scale) {
             "value conservation scales differ"
         }
@@ -2452,7 +2459,7 @@ internal object CandidateLabHarness {
         val artifacts: List<AcceptedArtifact>,
     )
 
-    private data class Amount(val atomicUnits: BigInteger, val scale: Int) {
+    private data class AtomicQuantity(val atomicUnits: BigInteger, val scale: Int) {
         init {
             check(atomicUnits.signum() >= 0 && scale in 0..28)
         }
@@ -2466,7 +2473,7 @@ internal object CandidateLabHarness {
         val bundle: ByteArray,
         val topUpProvenance: ByteArray,
         val membershipWitness: ByteArray,
-        val amount: Amount,
+        val amount: AtomicQuantity,
         val hopCount: Int,
         val proofStepCount: Int,
     )
@@ -2480,12 +2487,12 @@ internal object CandidateLabHarness {
         val chainAdmissible: Boolean,
         val lineageRedeemable: Boolean,
         val witnesslessRedemptionSupported: Boolean,
-        val amount: Amount,
+        val amount: AtomicQuantity,
         val hopCount: Int,
         val proofStepCount: Int,
     )
     private data class RedeemProjection(
-        val redeemed: Amount,
+        val redeemed: AtomicQuantity,
         val change: BranchProjection?,
     )
 
@@ -2525,10 +2532,10 @@ internal object CandidateLabHarness {
         fun decimalInt(field: String): Int = ascii(field).toInt().also { check(it >= 0) }
         fun decimalLong(field: String): Long = ascii(field).toLong().also { check(it >= 0) }
 
-        fun amount(field: String): Amount {
+        fun amount(field: String): AtomicQuantity {
             val atomic = BigInteger(ascii("$field atomic units"))
             val scale = decimalInt("$field scale")
-            return Amount(atomic, scale)
+            return AtomicQuantity(atomic, scale)
         }
 
         fun count(field: String): Int {

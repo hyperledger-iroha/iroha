@@ -1,4 +1,20 @@
 
+    fn verified_zk_ivm_derive_request(
+        account: AccountId,
+    ) -> axum::Extension<crate::app_auth::VerifiedCanonicalRequest> {
+        let signer = checked_torii_test_ed25519_keypair(
+            0xfe,
+            "derive verified ZK IVM request signer fixture key",
+        )
+        .public_key()
+        .clone();
+        axum::Extension(crate::app_auth::VerifiedCanonicalRequest {
+            account,
+            signer: signer.clone(),
+            verified_signers: vec![signer],
+        })
+    }
+
     #[tokio::test]
     async fn configured_proof_body_layer_accepts_above_axum_default_and_rejects_limit_plus_one() {
         let app = mk_app_state_for_tests();
@@ -53,6 +69,7 @@
         );
         let error = match handler_zk_ivm_derive(
             State(app.clone()),
+            verified_zk_ivm_derive_request(ALICE_ID.clone()),
             wrong_mime,
             crate::loopback_connect_info(),
             Bytes::from_static(b"{}"),
@@ -73,6 +90,7 @@
         .expect("encode Norito fixture");
         let error = match handler_zk_ivm_derive(
             State(app.clone()),
+            verified_zk_ivm_derive_request(ALICE_ID.clone()),
             proof_json_headers(),
             crate::loopback_connect_info(),
             Bytes::from(norito),
@@ -322,7 +340,7 @@
 
     #[tokio::test]
     async fn zk_ivm_prove_get_enforces_response_egress_with_retry_after() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app state");
             state.proof_limits.retry_after = std::time::Duration::from_secs(5);
@@ -346,6 +364,7 @@
         app.zk_ivm_prove_jobs.insert(
             job_id.clone(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms,
                 last_access_ms: created_ms,
                 status: ZkIvmProveJobStatus::Pending,
@@ -355,14 +374,7 @@
             },
         );
 
-        let err = match handler_zk_ivm_prove_get(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove_get(app.clone(), job_id).await {
             Ok(_) => panic!("prove-job response larger than the egress burst must be throttled"),
             Err(err) => err,
         };
@@ -517,6 +529,7 @@
         jobs.insert(
             "pending".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 1,
                 last_access_ms: 1,
                 status: ZkIvmProveJobStatus::Pending,
@@ -535,10 +548,12 @@
     fn zk_ivm_completion_growth_failure_discards_material_and_shrinks_to_error() {
         let budget = Arc::new(ZkIvmProveJobBudget::new(1_100));
         let reservation = budget.try_reserve(1_024).expect("pending reservation");
+        let expected_reservation = Arc::clone(&reservation);
         let jobs = DashMap::new();
         jobs.insert(
             "capacity".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 1,
                 last_access_ms: 1,
                 status: ZkIvmProveJobStatus::Pending,
@@ -550,7 +565,10 @@
 
         zk_ivm_prove_store_terminal(
             &jobs,
+            budget.as_ref(),
+            usize::MAX,
             "capacity",
+            &expected_reservation,
             ZkIvmProveJobStatus::Done,
             Bytes::from(vec![0_u8; 1_101]),
         );
@@ -564,6 +582,206 @@
                 .expect("error JSON is UTF-8")
                 .contains("retained-job memory budget exhausted")
         );
+    }
+
+    #[test]
+    fn zk_ivm_terminal_eviction_is_scoped_to_the_requesting_owner() {
+        let owner = sample_ivm_prove_authority();
+        let other = checked_torii_test_account_id(
+            0x84,
+            "derive foreign ZK IVM prove owner fixture key",
+        );
+        let budget = Arc::new(ZkIvmProveJobBudget::new(1_024));
+        let jobs = DashMap::new();
+        for (job_id, job_owner, last_access_ms) in
+            [("owner", owner.clone(), 1_u64), ("other", other, 0_u64)]
+        {
+            jobs.insert(
+                job_id.to_owned(),
+                ZkIvmProveJobState {
+                    owner: job_owner,
+                    created_ms: 1,
+                    last_access_ms,
+                    status: ZkIvmProveJobStatus::Done,
+                    response_body: Bytes::from_static(b"{}"),
+                    retention: budget.try_reserve(2).expect("test reservation"),
+                    cancel: tokio::sync::watch::channel(false).0,
+                },
+            );
+        }
+
+        assert!(zk_ivm_prove_evict_terminal_lru(&jobs, &owner, None));
+        assert!(jobs.get("owner").is_none());
+        assert!(
+            jobs.get("other").is_some(),
+            "one tenant must never evict another tenant's completed proof"
+        );
+    }
+
+    #[test]
+    fn zk_ivm_owner_count_quota_cannot_evict_another_tenant() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.zk_ivm_prove_job_max_entries = 2;
+            state.zk_ivm_prove_job_max_entries_per_owner = 1;
+            state.zk_ivm_prove_job_max_retained_bytes_per_owner = usize::MAX;
+        }
+        let owner = sample_ivm_prove_authority();
+        let other = checked_torii_test_account_id(
+            0x84,
+            "derive foreign ZK IVM quota owner fixture key",
+        );
+        app.zk_ivm_prove_jobs.insert(
+            "other-terminal".to_owned(),
+            ZkIvmProveJobState {
+                owner: other,
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Done,
+                response_body: Bytes::from_static(b"{}"),
+                retention: app
+                    .zk_ivm_prove_job_budget
+                    .try_reserve(2)
+                    .expect("foreign reservation"),
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        let (first_cancel, _first_rx) = tokio::sync::watch::channel(false);
+        let first = zk_ivm_prove_insert_pending(
+            &app,
+            owner.clone(),
+            "owner-pending".to_owned(),
+            2,
+            Bytes::from_static(b"{}"),
+            2,
+            first_cancel,
+        )
+        .expect("first owner job admitted");
+        let (second_cancel, _second_rx) = tokio::sync::watch::channel(false);
+        assert!(
+            zk_ivm_prove_insert_pending(
+                &app,
+                owner,
+                "owner-over-quota".to_owned(),
+                3,
+                Bytes::from_static(b"{}"),
+                2,
+                second_cancel,
+            )
+            .is_none(),
+            "pending owner work cannot be evicted to admit another job"
+        );
+        drop(first);
+        assert!(app.zk_ivm_prove_jobs.contains_key("other-terminal"));
+        assert!(app.zk_ivm_prove_jobs.contains_key("owner-pending"));
+    }
+
+    #[test]
+    fn zk_ivm_job_id_collision_never_replaces_another_owner() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.zk_ivm_prove_job_max_entries = 0;
+            state.zk_ivm_prove_job_max_entries_per_owner = 0;
+            state.zk_ivm_prove_job_max_retained_bytes_per_owner = 0;
+        }
+        let existing_owner = checked_torii_test_account_id(
+            0x84,
+            "derive existing ZK IVM collision owner fixture key",
+        );
+        let requested_owner = sample_ivm_prove_authority();
+        let existing_retention = app
+            .zk_ivm_prove_job_budget
+            .try_reserve(2)
+            .expect("existing reservation");
+        app.zk_ivm_prove_jobs.insert(
+            "collision".to_owned(),
+            ZkIvmProveJobState {
+                owner: existing_owner.clone(),
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Pending,
+                response_body: Bytes::from_static(b"{}"),
+                retention: existing_retention,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        let used_before = app.zk_ivm_prove_job_budget.used_bytes();
+        let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        assert!(
+            zk_ivm_prove_insert_pending(
+                &app,
+                requested_owner,
+                "collision".to_owned(),
+                2,
+                Bytes::from_static(b"replacement"),
+                11,
+                cancel,
+            )
+            .is_none()
+        );
+        let retained = app
+            .zk_ivm_prove_jobs
+            .get("collision")
+            .expect("existing job remains");
+        assert_eq!(retained.owner, existing_owner);
+        assert_eq!(retained.response_body, Bytes::from_static(b"{}"));
+        assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), used_before);
+    }
+
+    #[test]
+    fn zk_ivm_stale_worker_cannot_overwrite_reused_job_id() {
+        let budget = Arc::new(ZkIvmProveJobBudget::new(1_024));
+        let jobs = DashMap::new();
+        let original = budget.try_reserve(2).expect("original reservation");
+        let worker_reservation = Arc::clone(&original);
+        jobs.insert(
+            "reused".to_owned(),
+            ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Running,
+                response_body: Bytes::from_static(b"{}"),
+                retention: original,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        jobs.remove("reused");
+
+        let replacement_owner = checked_torii_test_account_id(
+            0x84,
+            "derive replacement ZK IVM job owner fixture key",
+        );
+        jobs.insert(
+            "reused".to_owned(),
+            ZkIvmProveJobState {
+                owner: replacement_owner.clone(),
+                created_ms: 2,
+                last_access_ms: 2,
+                status: ZkIvmProveJobStatus::Pending,
+                response_body: Bytes::from_static(b"replacement"),
+                retention: budget.try_reserve(11).expect("replacement reservation"),
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+
+        zk_ivm_prove_store_terminal(
+            &jobs,
+            budget.as_ref(),
+            usize::MAX,
+            "reused",
+            &worker_reservation,
+            ZkIvmProveJobStatus::Done,
+            Bytes::from_static(b"stale result"),
+        );
+
+        let replacement = jobs.get("reused").expect("replacement remains");
+        assert_eq!(replacement.owner, replacement_owner);
+        assert_eq!(replacement.status, ZkIvmProveJobStatus::Pending);
+        assert_eq!(replacement.response_body, Bytes::from_static(b"replacement"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -601,7 +819,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -675,16 +893,15 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
             .unwrap()
@@ -695,16 +912,21 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
             assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(axum::http::header::CACHE_CONTROL),
+                Some(&HeaderValue::from_static("private, no-store"))
+            );
+            assert_eq!(
+                response.headers().get(axum::http::header::VARY),
+                Some(&HeaderValue::from_static(
+                    crate::content::CANONICAL_CONTENT_AUTH_VARY
+                ))
+            );
             let body = http_body_util::BodyExt::collect(response.into_body())
                 .await
                 .unwrap()
@@ -732,12 +954,7 @@
             .expect("expected proof attachment in done response");
         assert_eq!(attachment.vk_commitment, Some(vk_commitment));
 
-        let response = handler_zk_ivm_prove_delete(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id.clone()),
-        )
+        let response = call_zk_ivm_prove_delete(app.clone(), job_id.clone())
         .await
         .expect("prove delete ok")
         .into_response();
@@ -748,7 +965,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_completes_for_stark_backend() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -814,12 +1031,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -834,12 +1046,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -879,7 +1086,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -955,12 +1162,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -975,12 +1177,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1016,7 +1213,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1086,12 +1283,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -1106,12 +1298,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1143,7 +1330,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1224,12 +1411,7 @@
 
         let req = make_ivm_prove_request(vk_id, bytecode, Some(mismatched_proved));
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -1244,12 +1426,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1364,6 +1541,7 @@
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_derive(
             State(app.clone()),
+            verified_zk_ivm_derive_request(authority.clone()),
             proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -1385,6 +1563,25 @@
         let dto: ZkIvmDeriveResponseDto = norito::json::from_slice(&body).expect("decode dto");
         assert_eq!(dto.proved.bytecode, bytecode);
 
+        let foreign = checked_torii_test_account_id(
+            0xfc,
+            "derive foreign ZK IVM request authority fixture key",
+        );
+        let mismatched_body = norito::json::to_vec(&req).expect("encode mismatched request");
+        let err = match handler_zk_ivm_derive(
+            State(app.clone()),
+            verified_zk_ivm_derive_request(foreign),
+            proof_json_headers(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(mismatched_body),
+        )
+        .await
+        {
+            Ok(_) => panic!("authenticated account must match the derive authority"),
+            Err(err) => err,
+        };
+        assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
+
         Arc::get_mut(&mut app)
             .expect("unique app after derive response")
             .proof_egress_limiter =
@@ -1393,6 +1590,7 @@
         let request_body = norito::json::to_vec(&req).expect("re-encode derive request");
         let err = match handler_zk_ivm_derive(
             State(app.clone()),
+            verified_zk_ivm_derive_request(authority),
             proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(request_body),
@@ -1421,6 +1619,7 @@
         jobs.insert(
             "old".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 10,
                 last_access_ms: 10,
                 status: ZkIvmProveJobStatus::Done,
@@ -1433,6 +1632,7 @@
         jobs.insert(
             "fresh".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: ttl_ms + 10,
                 last_access_ms: ttl_ms + 10,
                 status: ZkIvmProveJobStatus::Done,
@@ -1467,6 +1667,7 @@
             app.zk_ivm_prove_jobs.insert(
                 (*job_id).clone(),
                 ZkIvmProveJobState {
+                    owner: sample_ivm_prove_authority(),
                     created_ms: 0,
                     last_access_ms: 0,
                     status: ZkIvmProveJobStatus::Done,
@@ -1479,6 +1680,10 @@
 
         let Err(error) = handler_zk_ivm_prove_get(
             State(app.clone()),
+            axum::http::Method::GET,
+            format!("/v1/zk/ivm/prove/{get_job_id}")
+                .parse()
+                .expect("GET URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(get_job_id.clone()),
@@ -1490,6 +1695,10 @@
         assert_unconfigured_api_token_error(error);
         let Err(error) = handler_zk_ivm_prove_delete(
             State(app.clone()),
+            axum::http::Method::DELETE,
+            format!("/v1/zk/ivm/prove/{delete_job_id}")
+                .parse()
+                .expect("DELETE URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(delete_job_id.clone()),
@@ -1501,6 +1710,8 @@
         assert_unconfigured_api_token_error(error);
         let Err(error) = handler_zk_ivm_prove(
             State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/zk/ivm/prove".parse().expect("POST URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::new(),
@@ -1522,8 +1733,125 @@
     }
 
     #[tokio::test]
+    async fn zk_ivm_prove_jobs_reject_cross_tenant_read_and_delete() {
+        let owner_key = sample_ivm_prove_authority_keypair();
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let foreign_key = checked_torii_test_ed25519_keypair(
+            0x84,
+            "derive foreign ZK IVM request signer fixture key",
+        );
+        let foreign = AccountId::new(foreign_key.public_key().clone());
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&owner);
+        let owner_account = Account::new(owner.clone()).build(&owner);
+        let foreign_account = Account::new(foreign.clone()).build(&owner);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [owner_account, foreign_account],
+            [],
+        ));
+        let job_id = "33333333333333333333333333333333".to_owned();
+        let retention = app
+            .zk_ivm_prove_job_budget
+            .try_reserve(2)
+            .expect("test reservation");
+        app.zk_ivm_prove_jobs.insert(
+            job_id.clone(),
+            ZkIvmProveJobState {
+                owner: owner.clone(),
+                created_ms: zk_ivm_prove_now_ms(),
+                last_access_ms: 0,
+                status: ZkIvmProveJobStatus::Done,
+                response_body: Bytes::from_static(b"{}"),
+                retention,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+
+        let get_method = axum::http::Method::GET;
+        let get_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("GET URI");
+        let foreign_get_headers =
+            signed_app_headers(&foreign, &foreign_key, &get_method, &get_uri, &[]);
+        let response = handler_zk_ivm_prove_get(
+            State(app.clone()),
+            get_method,
+            get_uri,
+            foreign_get_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("foreign GET is concealed as missing")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        assert_eq!(
+            response.headers().get(axum::http::header::VARY),
+            Some(&HeaderValue::from_static(
+                crate::content::CANONICAL_CONTENT_AUTH_VARY
+            ))
+        );
+        assert!(app.zk_ivm_prove_jobs.contains_key(&job_id));
+
+        let delete_method = axum::http::Method::DELETE;
+        let delete_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("DELETE URI");
+        let foreign_delete_headers = signed_app_headers(
+            &foreign,
+            &foreign_key,
+            &delete_method,
+            &delete_uri,
+            &[],
+        );
+        let response = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            delete_method,
+            delete_uri,
+            foreign_delete_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("foreign DELETE is concealed as missing")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(app.zk_ivm_prove_jobs.contains_key(&job_id));
+
+        let owner_delete_method = axum::http::Method::DELETE;
+        let owner_delete_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("owner DELETE URI");
+        let owner_delete_headers = signed_app_headers(
+            &owner,
+            &owner_key,
+            &owner_delete_method,
+            &owner_delete_uri,
+            &[],
+        );
+        let response = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            owner_delete_method,
+            owner_delete_uri,
+            owner_delete_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("owner DELETE succeeds")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!app.zk_ivm_prove_jobs.contains_key(&job_id));
+    }
+
+    #[tokio::test]
     async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
-        let app = mk_app_state_for_tests();
+        let app = mk_ivm_prove_app_state_for_tests();
 
         let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-schema-mismatch");
         let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
@@ -1583,14 +1911,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body)).await {
             Ok(_) => panic!("schema mismatch should be rejected"),
             Err(err) => err,
         };
@@ -1609,7 +1930,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_rejects_when_queue_full() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1683,14 +2004,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body)).await {
             Ok(_) => panic!("queue full should be rejected"),
             Err(err) => err,
         };
@@ -1707,7 +2021,7 @@
 
     #[tokio::test]
     async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
@@ -1776,10 +2090,8 @@
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let req_body = norito::json::to_vec(&req).expect("json encode request");
 
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
+        let response = call_zk_ivm_prove(
+            app.clone(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -1794,10 +2106,8 @@
             norito::json::from_slice(&resp_body).expect("json decode created dto");
         let job_id = created.job_id;
 
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
+        let err = match call_zk_ivm_prove(
+            app.clone(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -1809,12 +2119,7 @@
             matches!(err, Error::ProofRateLimited { endpoint, .. } if endpoint == "v1/zk/ivm/prove")
         );
 
-        let response = handler_zk_ivm_prove_delete(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id),
-        )
+        let response = call_zk_ivm_prove_delete(app.clone(), job_id)
         .await
         .expect("prove delete ok")
         .into_response();
@@ -1843,1110 +2148,4 @@
         );
     }
 
-    #[tokio::test]
-    async fn alias_resolve_index_rejects_unsigned_request() {
-        let authority = checked_torii_test_account_id(
-            0x0a,
-            "derive alias resolve-index unsigned authority fixture key",
-        );
-        let alias_label = AccountAlias::new(
-            "banking".parse().expect("label"),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "centralbank".parse::<Name>().expect("domain id"),
-            )),
-            DataSpaceId::UNIVERSAL,
-        );
-        let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
-            .build(&authority);
-        let account = Account::new(authority.clone())
-            .with_label(Some(alias_label))
-            .build(&authority);
-        let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
-            .expect("encode request");
-        let error = handler_alias_resolve_index(
-            State(mk_app_state_for_tests_with_world(World::with(
-                [domain],
-                [authority_account, account],
-                [],
-            ))),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect_err("unsigned index enumeration must be rejected");
-
-        assert!(matches!(
-            error,
-            Error::AppUnauthorized {
-                code: "alias_auth_required",
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_rejects_malformed_json_body() {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x0b,
-            "derive alias resolve-index malformed body authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let body = b"{";
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, body);
-
-        let err = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from_static(body),
-        )
-        .await
-        .expect_err("malformed resolve-index bodies should be rejected");
-
-        match err {
-            Error::Query(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => assert!(
-                !message.trim().is_empty(),
-                "malformed request bodies should surface a parse diagnostic"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    fn multisig_read_payload<T>(value: T) -> NoritoJsonWithBytes<T>
-    where
-        T: norito::json::JsonSerialize,
-    {
-        let raw = norito::json::to_vec(&value).expect("encode multisig read request");
-        NoritoJsonWithBytes {
-            value,
-            raw: axum::body::Bytes::from(raw),
-        }
-    }
-
-    #[tokio::test]
-    async fn contract_code_artifact_read_rejects_unsigned_requests() {
-        let uri: axum::http::Uri = format!("/v1/contracts/code-bytes/{}", "a".repeat(64))
-            .parse()
-            .expect("contract code URI");
-        let error = match handler_get_contract_code_bytes(
-            State(mk_app_state_for_tests()),
-            Method::GET,
-            uri,
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path("a".repeat(64)),
-        )
-        .await
-        {
-            Ok(_) => panic!("unsigned contract artifact read must fail closed"),
-            Err(error) => error,
-        };
-
-        assert!(matches!(
-            error,
-            Error::AppUnauthorized {
-                code: "contract_code_auth_required",
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn multisig_spec_rejects_unsigned_alias_selector() {
-        let request = routing::MultisigSpecRequestDto {
-            selector: routing::MultisigAccountSelectorDto {
-                multisig_account_id: None,
-                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-            },
-        };
-        let error = handler_post_multisig_spec(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_SPEC
-                .parse()
-                .expect("multisig spec uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed");
-
-        assert!(matches!(
-            error,
-            Error::AppUnauthorized {
-                code: "multisig_read_auth_required",
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn multisig_proposals_query_rejects_unsigned_alias_selector() {
-        let request = routing::MultisigProposalsQueryRequestDto {
-            selector: routing::MultisigAccountSelectorDto {
-                multisig_account_id: None,
-                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-            },
-            status: Vec::new(),
-            cursor: None,
-            limit: None,
-        };
-        let error = handler_post_multisig_proposals_query(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
-                .parse()
-                .expect("multisig proposals query uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed");
-
-        assert!(matches!(
-            error,
-            Error::AppUnauthorized {
-                code: "multisig_read_auth_required",
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn multisig_proposals_resolve_rejects_unsigned_alias_selector() {
-        let request = routing::MultisigProposalsResolveRequestDto {
-            selector: routing::MultisigAccountSelectorDto {
-                multisig_account_id: None,
-                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-            },
-            proposal_id: Some("deadbeef".to_owned()),
-            instructions_hash: None,
-        };
-        let error = handler_post_multisig_proposals_resolve(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
-                .parse()
-                .expect("multisig proposals resolve uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed");
-
-        assert!(matches!(
-            error,
-            Error::AppUnauthorized {
-                code: "multisig_read_auth_required",
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
-        let selector = || routing::MultisigAccountSelectorDto {
-            multisig_account_id: Some((*ALICE_ID).clone()),
-            multisig_account_alias: None,
-        };
-
-        let spec = handler_post_multisig_spec(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_SPEC
-                .parse()
-                .expect("multisig spec uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(routing::MultisigSpecRequestDto {
-                selector: selector(),
-            }),
-        )
-        .await
-        .expect_err("unsigned concrete spec read must fail closed")
-        .into_response();
-        assert_eq!(spec.status(), StatusCode::UNAUTHORIZED);
-
-        let query = handler_post_multisig_proposals_query(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
-                .parse()
-                .expect("multisig proposals query uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(routing::MultisigProposalsQueryRequestDto {
-                selector: selector(),
-                status: Vec::new(),
-                cursor: None,
-                limit: None,
-            }),
-        )
-        .await
-        .expect_err("unsigned concrete proposal query must fail closed")
-        .into_response();
-        assert_eq!(query.status(), StatusCode::UNAUTHORIZED);
-
-        let resolve = handler_post_multisig_proposals_resolve(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
-                .parse()
-                .expect("multisig proposals resolve uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(routing::MultisigProposalsResolveRequestDto {
-                selector: selector(),
-                proposal_id: Some("a".repeat(64)),
-                instructions_hash: None,
-            }),
-        )
-        .await
-        .expect_err("unsigned concrete proposal resolve must fail closed")
-        .into_response();
-        assert_eq!(resolve.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
-        Router::new()
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST.path(),
-                post(handler_post_multisig_spec)
-                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
-                    .path(),
-                post(handler_post_multisig_proposals_query)
-                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
-                    .path(),
-                post(handler_post_multisig_proposals_resolve)
-                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-            )
-            .fallback(|| async { StatusCode::NOT_FOUND })
-            .with_state(app)
-    }
-
-    fn multisig_read_contract_request(
-        method: HttpMethod,
-        path: &str,
-        body: impl Into<Body>,
-    ) -> Request<Body> {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .header(axum::http::header::ACCEPT, "application/json")
-            .body(body.into())
-            .expect("multisig read contract request");
-        request
-            .extensions_mut()
-            .insert(crate::loopback_connect_info());
-        request
-    }
-
-    #[tokio::test]
-    async fn multisig_read_http_contract_is_signed_post_only_closed_and_bounded() {
-        let router = multisig_read_contract_test_router(mk_app_state_for_tests());
-        let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
-
-        let unsigned = router
-            .clone()
-            .oneshot(multisig_read_contract_request(
-                HttpMethod::POST,
-                "/v1/multisig/spec",
-                alias_body,
-            ))
-            .await
-            .expect("unsigned spec response");
-        assert_eq!(
-            unsigned.status(),
-            StatusCode::UNAUTHORIZED,
-            "unsigned alias selectors must fail before alias resolution"
-        );
-
-        for path in [
-            "/v1/multisig/spec",
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/resolve",
-        ] {
-            let method_response = router
-                .clone()
-                .oneshot(multisig_read_contract_request(
-                    HttpMethod::GET,
-                    path,
-                    Body::empty(),
-                ))
-                .await
-                .expect("method response");
-            assert_eq!(
-                method_response.status(),
-                StatusCode::METHOD_NOT_ALLOWED,
-                "{path}"
-            );
-        }
-        for retired in [
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/search",
-        ] {
-            let response = router
-                .clone()
-                .oneshot(multisig_read_contract_request(
-                    HttpMethod::POST,
-                    retired,
-                    alias_body,
-                ))
-                .await
-                .expect("retired route response");
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");
-        }
-
-        for (path, body) in [
-            (
-                "/v1/multisig/spec",
-                r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
-            ),
-            (
-                "/v1/multisig/proposals/query",
-                r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
-            ),
-            (
-                "/v1/multisig/proposals/resolve",
-                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
-            ),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(multisig_read_contract_request(HttpMethod::POST, path, body))
-                .await
-                .expect("closed-schema response");
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
-        }
-
-        let malformed = router
-            .clone()
-            .oneshot(multisig_read_contract_request(
-                HttpMethod::POST,
-                "/v1/multisig/proposals/query",
-                r#"{"multisig_account_alias": "unterminated"#,
-            ))
-            .await
-            .expect("malformed JSON response");
-        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
-
-        let mut missing_content_type = multisig_read_contract_request(
-            HttpMethod::POST,
-            "/v1/multisig/proposals/query",
-            alias_body,
-        );
-        missing_content_type
-            .headers_mut()
-            .remove(axum::http::header::CONTENT_TYPE);
-        let missing_content_type = router
-            .clone()
-            .oneshot(missing_content_type)
-            .await
-            .expect("missing Content-Type response");
-        assert_eq!(
-            missing_content_type.status(),
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
-        );
-
-        let oversized = format!(
-            "{{\"multisig_account_alias\":\"banking@centralbank.universal\",\"padding\":\"{}\"}}",
-            "x".repeat(MULTISIG_READ_MAX_BODY_BYTES)
-        );
-        let oversized_response = router
-            .oneshot(multisig_read_contract_request(
-                HttpMethod::POST,
-                "/v1/multisig/proposals/query",
-                oversized,
-            ))
-            .await
-            .expect("oversized response");
-        assert_eq!(oversized_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[tokio::test]
-    async fn multisig_read_handler_requires_api_token_and_signed_viewer_auth() {
-        let mut app = mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique app state");
-        state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
-        let router = multisig_read_contract_test_router(app);
-        let canonical_account_id = checked_torii_test_account_id(
-            0x0c,
-            "derive multisig API-token policy account fixture key",
-        );
-        let body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
-            selector: routing::MultisigAccountSelectorDto {
-                multisig_account_id: Some(canonical_account_id),
-                multisig_account_alias: None,
-            },
-        })
-        .expect("encode canonical multisig selector");
-
-        let missing = router
-            .clone()
-            .oneshot(multisig_read_contract_request(
-                HttpMethod::POST,
-                "/v1/multisig/spec",
-                body.clone(),
-            ))
-            .await
-            .expect("missing-token response");
-        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
-
-        let mut authenticated =
-            multisig_read_contract_request(HttpMethod::POST, "/v1/multisig/spec", body);
-        authenticated
-            .headers_mut()
-            .insert(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
-        let still_unsigned = router
-            .oneshot(authenticated)
-            .await
-            .expect("authenticated read response");
-        assert_eq!(still_unsigned.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
-        let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
-        let headers = HeaderMap::new();
-        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-
-        let key = super::rate_limit_key(
-            &headers,
-            Some(remote_ip),
-            "v1/contracts/state",
-            app.api_token_enforced(),
-        );
-        assert!(app.deploy_rate_limiter.allow(&key).await);
-        assert!(!app.deploy_rate_limiter.allow(&key).await);
-
-        let contract_state_response = match handler_get_contract_state(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-            AxQuery(routing::ContractStateQuery {
-                prefix: Some("missing".to_owned()),
-                ..Default::default()
-            }),
-        )
-        .await
-        {
-            Ok(response) => response.into_response(),
-            Err(error) => error.into_response(),
-        };
-        assert_ne!(
-            contract_state_response.status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-
-        let selector = || routing::MultisigAccountSelectorDto {
-            multisig_account_id: None,
-            multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-        };
-
-        let spec_request = routing::MultisigSpecRequestDto {
-            selector: selector(),
-        };
-        let spec_response = handler_post_multisig_spec(
-            State(app.clone()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_SPEC
-                .parse()
-                .expect("multisig spec uri"),
-            headers.clone(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(spec_request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-        assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let query_request = routing::MultisigProposalsQueryRequestDto {
-            selector: selector(),
-            status: Vec::new(),
-            cursor: None,
-            limit: None,
-        };
-        let query_response = handler_post_multisig_proposals_query(
-            State(app.clone()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
-                .parse()
-                .expect("multisig proposals query uri"),
-            headers.clone(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(query_request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-        assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let resolve_request = routing::MultisigProposalsResolveRequestDto {
-            selector: selector(),
-            proposal_id: Some("deadbeef".to_owned()),
-            instructions_hash: None,
-        };
-        let resolve_response = handler_post_multisig_proposals_resolve(
-            State(app),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
-                .parse()
-                .expect("multisig proposals resolve uri"),
-            headers,
-            crate::loopback_connect_info(),
-            multisig_read_payload(resolve_request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-        assert_ne!(resolve_response.status(), StatusCode::TOO_MANY_REQUESTS);
-    }
-
-    #[tokio::test]
-    async fn browser_read_endpoints_use_route_scoped_query_rate_keys() {
-        let mut app = mk_app_state_for_tests();
-        {
-            let state = Arc::get_mut(&mut app).expect("unique app state");
-            state.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
-        }
-        let headers = HeaderMap::new();
-        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-
-        let shared_key = super::rate_limit_key(
-            &headers,
-            Some(remote_ip),
-            "v1/contracts/state",
-            app.api_token_enforced(),
-        );
-        assert!(app.rate_limiter.allow(&shared_key).await);
-        assert!(!app.rate_limiter.allow(&shared_key).await);
-
-        let selector = || routing::MultisigAccountSelectorDto {
-            multisig_account_id: None,
-            multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-        };
-
-        let spec_request = routing::MultisigSpecRequestDto {
-            selector: selector(),
-        };
-        let spec_response = handler_post_multisig_spec(
-            State(app.clone()),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_SPEC
-                .parse()
-                .expect("multisig spec uri"),
-            headers.clone(),
-            crate::loopback_connect_info(),
-            multisig_read_payload(spec_request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-        assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let query_request = routing::MultisigProposalsQueryRequestDto {
-            selector: selector(),
-            status: Vec::new(),
-            cursor: None,
-            limit: None,
-        };
-        let query_response = handler_post_multisig_proposals_query(
-            State(app),
-            Method::POST,
-            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
-                .parse()
-                .expect("multisig proposals query uri"),
-            headers,
-            crate::loopback_connect_info(),
-            multisig_read_payload(query_request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-        assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_returns_on_chain_alias_record() {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x0d,
-            "derive alias resolve-index on-chain authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let alias_label = AccountAlias::new(
-            "banking".parse().expect("label"),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "centralbank".parse::<Name>().expect("domain id"),
-            )),
-            DataSpaceId::UNIVERSAL,
-        );
-        let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
-            .build(&authority);
-        let account = Account::new(authority.clone())
-            .with_label(Some(alias_label.clone()))
-            .build(&authority);
-        let app = mk_app_state_for_tests_with_world(World::with(
-            [domain],
-            [authority_account, account],
-            [],
-        ));
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasResolveIndexResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.index, 0);
-        assert_eq!(dto.alias, "banking@centralbank.universal");
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("on_chain"));
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x0e,
-            "derive alias resolve-index fanout authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        configure_multiple_dataspace_routes_for_test(&mut app);
-        bind_account_alias_for_test(&app, &authority, "merchant@secondary");
-
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-attempted")
-                .and_then(|value| value.to_str().ok()),
-            Some("2")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-succeeded")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasResolveIndexResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.index, 0);
-        assert_eq!(dto.alias, "merchant@secondary");
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("fanout"));
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bindings() {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x0f,
-            "derive alias resolve-index route-conflict authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        configure_multiple_dataspace_routes_for_test(&mut app);
-        bind_account_alias_for_test(&app, &authority, "merchant@universal");
-        bind_account_alias_for_test(&app, &authority, "merchant@secondary");
-
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("route_conflict")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-succeeded")
-                .and_then(|value| value.to_str().ok()),
-            Some("2")
-        );
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x20,
-            "derive alias resolve-index missing authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let authority_account = Account::new(authority.clone()).build(&authority);
-        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_miss_fallback()
-    {
-        let authority_keypair = checked_torii_test_ed25519_keypair(
-            0x21,
-            "derive alias resolve-index signed authority fixture key",
-        );
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-miss-offline"));
-        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-            &authority,
-            uaid,
-            DataSpaceId::new(12),
-        ));
-        let (_local_route, _foreign_route) =
-            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
-                &mut app,
-            );
-
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("permission_denied"),
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-unavailable")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error");
-        assert_eq!(payload.code, "permission_denied");
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_can_resolve() {
-        let caller_keypair = checked_torii_test_ed25519_keypair(
-            0x22,
-            "derive alias resolve-index hidden-route caller fixture key",
-        );
-        let caller = AccountId::new(caller_keypair.public_key().clone());
-        let target = checked_torii_test_account_id(
-            0x23,
-            "derive alias resolve-index hidden-route target fixture key",
-        );
-        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-denied-fanout"));
-        let mut app =
-            mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
-                &target,
-                &caller,
-                uaid,
-                DataSpaceId::new(10),
-            ));
-        configure_private_ingress_routes_for_test(&mut app);
-        bind_account_alias_for_test(&app, &target, "merchant@restricted");
-
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri");
-        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
-        let response = handler_alias_resolve_index(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("permission_denied")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error");
-        assert_eq!(payload.code, "permission_denied");
-    }
-
-    #[test]
-    fn api_token_evaluator_has_one_exact_header_policy() {
-        let configured = HashSet::from(["secret".to_owned()]);
-        let empty = HashSet::new();
-        let no_headers = HeaderMap::new();
-        let mut supplied = HeaderMap::new();
-        supplied.insert(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-        assert_eq!(
-            evaluate_api_token(false, &empty, &no_headers),
-            ApiTokenEvaluation::Disabled
-        );
-        assert!(
-            evaluate_api_token(false, &configured, &supplied)
-                .authenticated_token()
-                .is_none(),
-            "an unauthenticated header must not become a rate-limit principal"
-        );
-        assert_eq!(
-            evaluate_api_token(true, &empty, &supplied),
-            ApiTokenEvaluation::Unavailable
-        );
-        assert_eq!(
-            evaluate_api_token(true, &configured, &no_headers),
-            ApiTokenEvaluation::Invalid
-        );
-
-        let mut invalid_utf8 = HeaderMap::new();
-        invalid_utf8.insert(
-            HEADER_API_TOKEN,
-            HeaderValue::from_bytes(&[0xff]).expect("opaque token fixture"),
-        );
-        assert_eq!(
-            evaluate_api_token(true, &configured, &invalid_utf8),
-            ApiTokenEvaluation::Invalid
-        );
-
-        let mut duplicate_valid = HeaderMap::new();
-        duplicate_valid.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-        duplicate_valid.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-        assert_eq!(
-            evaluate_api_token(true, &configured, &duplicate_valid),
-            ApiTokenEvaluation::Invalid
-        );
-
-        let mut mixed_duplicate = HeaderMap::new();
-        mixed_duplicate.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-        mixed_duplicate.append(HEADER_API_TOKEN, HeaderValue::from_static("other"));
-        assert_eq!(
-            evaluate_api_token(true, &configured, &mixed_duplicate),
-            ApiTokenEvaluation::Invalid
-        );
-        assert_eq!(
-            evaluate_api_token(true, &configured, &supplied),
-            ApiTokenEvaluation::Authenticated("secret")
-        );
-    }
-
-    #[test]
-    fn validate_api_token_rejects_missing_or_unconfigured() {
-        let mut app = mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique app state");
-        state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
-
-        let headers = HeaderMap::new();
-        assert!(validate_api_token(state, &headers).is_err());
-
-        let mut configured_headers = HeaderMap::new();
-        configured_headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
-        let mut tokens = HashSet::new();
-        tokens.insert("secret".to_string());
-        state.api_tokens_set = Arc::new(tokens);
-        assert!(validate_api_token(state, &configured_headers).is_ok());
-    }
-
-    fn assert_unconfigured_api_token_error(error: Error) {
-        match error {
-            Error::Query(ValidationFail::NotPermitted(message)) => {
-                assert!(
-                    message.contains("none are configured"),
-                    "unexpected API-token rejection: {message}"
-                );
-            }
-            other => panic!("unexpected API-token rejection: {other:?}"),
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn direct_result_handler_fails_closed_with_no_configured_api_tokens() {
-        let mut app = mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique app state");
-        state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
-
-        let error =
-            handler_soracloud_status(State(app), HeaderMap::new(), loopback_connect_info(), None)
-                .await
-                .expect_err("handler-local API-token validation must fail closed");
-        assert_unconfigured_api_token_error(error);
-    }
-
-    #[tokio::test]
-    async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
-        let mut app = mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique app state");
-        state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
-        let keypair = checked_torii_test_ed25519_keypair(
-            0xd1,
-            "derive fail-closed transaction ingress fixture key",
-        );
-        let transaction = TransactionBuilder::new(
-            (*app.chain_id).clone(),
-            AccountId::new(keypair.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let queue_len = app.queue.active_len();
-
-        let error = submit_signed_transaction_for_ingress_globally_synced(
-            Arc::clone(&app),
-            HeaderMap::new(),
-            None,
-            transaction,
-        )
-        .await
-        .expect_err("direct transaction ingress must fail closed");
-        assert_unconfigured_api_token_error(error);
-        assert_eq!(
-            app.queue.active_len(),
-            queue_len,
-            "authentication failure must not mutate queue state"
-        );
-    }
+    include!("part_4b_alias_multisig_auth.rs");

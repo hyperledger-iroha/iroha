@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
-use iroha_data_model::{ChainId, sorafs::reputation::derive_stream_token_gateway_id_v1};
+use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 
 use super::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionQualificationV1, StreamTokenIssuer,
@@ -12,7 +12,7 @@ use super::{
 
 /// Reject missing, unexpected, or drifting production admission ownership.
 pub(crate) fn preflight_admission_capture(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     config: &ToriiConfig,
     runtime_deps: &crate::ToriiRuntimeDeps,
 ) -> Result<(), String> {
@@ -45,7 +45,7 @@ pub(crate) fn preflight_admission_capture(
     let compliance = config.sorafs_gateway.compliance.as_ref().ok_or_else(|| {
         "enabled stream tokens require a governed gateway compliance identity".to_owned()
     })?;
-    let gateway_id = derive_stream_token_gateway_id_v1(chain_id, &compliance.gateway_id)
+    let gateway_id = derive_stream_token_gateway_id_v1(network_id, &compliance.gateway_id)
         .map_err(|_| "configured stream-token gateway identity is invalid".to_owned())?;
     let qualification = StreamTokenGatewayAdmissionQualificationV1 {
         gateway_id,

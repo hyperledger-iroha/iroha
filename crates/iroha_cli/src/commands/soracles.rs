@@ -2086,6 +2086,7 @@ mod tests {
                     }],
                 }),
             },
+            recorded_at_ms: 1_700_000_000_000,
             evidence_hashes: vec![observed, missing_hash],
         };
 
@@ -2220,6 +2221,7 @@ mod tests {
                     }],
                 }),
             },
+            recorded_at_ms: 1_700_000_000_000,
             evidence_hashes: vec![observed],
         };
         let rendered = json::to_json_pretty(&event).expect("serialize feed event");

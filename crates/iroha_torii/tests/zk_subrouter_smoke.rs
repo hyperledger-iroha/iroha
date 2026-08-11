@@ -109,6 +109,7 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -126,6 +127,7 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -239,6 +241,7 @@ async fn zk_attachments_endpoints_disabled_by_default() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -256,6 +259,7 @@ async fn zk_attachments_endpoints_disabled_by_default() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -344,6 +348,7 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -361,6 +366,7 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -465,6 +471,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -482,6 +489,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -645,6 +653,7 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -662,6 +671,7 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

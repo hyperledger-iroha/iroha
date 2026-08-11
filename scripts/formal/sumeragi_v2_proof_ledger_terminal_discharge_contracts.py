@@ -17,7 +17,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "3e00fb93a6bd95b2d6c4818c97384160fe40de5aef5b6486e76bb0e241abc01e"
     ),
     "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
-        "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
+        "e8e1d5f2dd38dc8bf4bcde7faf77b39d4e287b441a1fef870efabb1264baf59c"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
         "9be38068b2861daa6040cf38bc5d6bed182369a67ae16c709eee25eba028d7d3"
@@ -961,25 +961,25 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "61943f166f8ced64916306aa42ca38d7e9e5f697ec1744390d93c03e3fa12982"
+        "b9acd1869dc5c82249fb8c75f4b74c11d299c5ff737ae4544b20078790a30a1b"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "a9b6ca524df7d45de91a4a1af9b850fef0ff9b686d78e09967b2b2c9532e59ba"
+        "deac6004ab9d0e921848a77ce90d544a3670b127bd5aad20dd34c9572f4f059c"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "b8e3639568e60423f2b1b42db90e25bd4ee81bc82dccc1dd8ff7920d53d1d19a"
+        "4effb89b7e918ecc458e6f72ff4a9676a563ae9ac515bfc4a52fe5d94eaed80c"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
+        "c73234f0946bb5e0843e02f2d69791c60c3dcecc0e5611463b5a0dd426069b4c"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "48cce7600cbe03d7a75c274bb62485798dcba19b812bc09ade7a9012c556f55c"
+        "782f2d91e274ca6578bfcc69e8b29257c967001e46991c687706a79533dc24cd"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "7f4c316c6b8ecb1ab29c142cfc773810085d884352a1ace3eb6c48f7ebaf51ae"
+        "d5edb42d883e7b373af04494601470c2a0421c75d5e813fa871a69c2ba82fabf"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "8ceaf224db6e9220c7f5123c74eba8c8a95dca8d12648ab8d86846178b7bb521"
+        "8a0049226a5d6750fd9f5447b138cb7744c2bc0e44621be7d1020922c5cba979"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "9233e7bc930bc1dde0d74fc35163b6d4ffb553e5d20bdee149ed592a2921e7dd"
@@ -1575,6 +1575,37 @@ self.decision_body_drained |= drain_decision_body;
                 "effect reconciliation must rebind terminal protection to the exact durable Decision",
             ),
         ),
+        "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+            (
+                """
+EffectExecutorStep::Advanced { .. } => {
+    let _ = reconcile_executor_locked_body(executor, services)?;
+}
+""",
+                "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
+            ),
+        ),
+        "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+            (
+                """
+pub(crate) fn certified_serve_predecessor_completion_evidence(
+    &self,
+    runtime_capacity_available: bool,
+    serve_lifecycle_ordinal: u128,
+) -> Result<Option<ExactServePredecessorCompletionEvidence>, String> {
+    if serve_lifecycle_ordinal == 0 {
+        return Err("Sumeragi v2 Serve completion cut was zero".to_owned());
+    }
+    let ownership_position =
+        usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
+    let io_ordinal = self
+        .io
+        .as_ref()
+        .and_then(|io| io.completion_ownership_at(ownership_position))
+""",
+                "selected-Serve completion evidence must project the exact held offset without consuming a completion",
+            ),
+        ),
         "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
             (
                 """
@@ -1746,6 +1777,28 @@ if facts.install_view_unchanged {
         for sequence, description in sequences:
             _require_rust_source_token_sequence(
                 path, source, sequence, description, errors
+            )
+    worker_path_source = sources.get(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    )
+    if worker_path_source is not None:
+        worker_path, worker_source = worker_path_source
+        completion_projection = _require_qualified_rust_item(
+            worker_path,
+            worker_source,
+            "ProductionV2Services",
+            "certified_serve_predecessor_completion_evidence",
+            errors,
+            "non-consuming selected-Serve completion projection",
+        )
+        if completion_projection is not None and _token_sequence_count(
+            rust_code_tokens(completion_projection.body),
+            ("try_recv_completion_unacknowledged", "("),
+        ):
+            errors.append(
+                f"{worker_path}:{completion_projection.line}: selected-Serve "
+                "completion evidence must project the exact held offset "
+                "without consuming a completion"
             )
     return errors
 

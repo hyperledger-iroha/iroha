@@ -10,11 +10,11 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use iroha_sumeragi_core::{
-    BodyState, CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest,
-    DurableCommitReceipt, Effect, EquivocationKind, Event, EventTag, Generation, HeightContext,
-    IgnoreReason, OpaqueSignature, PayloadManifest, Phase, Quorum, QuorumCertificate, QuorumError,
-    Reducer, ReducerError, Round, SignableMessage, SignatureShare, SignedVote, StepDisposition,
-    Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId, Vote, VotingMode,
+    BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, DurableCommitReceipt, Effect,
+    EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId,
+    OpaqueSignature, PayloadManifest, Phase, Quorum, QuorumCertificate, QuorumError, Reducer,
+    ReducerError, Round, SignableMessage, SignatureShare, SignedVote, StepDisposition, Subject,
+    TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId, Vote, VotingMode,
     VotingPower, WalEntry, WalRecord,
 };
 
@@ -1815,7 +1815,7 @@ fn accelerated_context(
         .collect();
     HeightContext::new(
         ContextId::new(*accelerated_id(0xa0, height).as_bytes()),
-        ChainId::repeat(0xa1 + u8::from(mode == VotingMode::Npos)),
+        NetworkId::repeat(0xa1 + u8::from(mode == VotingMode::Npos)),
         height,
         parent,
         height / 1_000,
@@ -1853,7 +1853,7 @@ fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
     );
     HeightContext::new(
         ContextId::repeat(0x42),
-        ChainId::repeat(0x43),
+        NetworkId::repeat(0x43),
         HEIGHT,
         Some(parent),
         7,

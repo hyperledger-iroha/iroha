@@ -47,10 +47,10 @@ ExactPacketOwns(item) ==
   \E packet \in asyncTransport: packet.item = item
 
 ExactIngressOwns(item) ==
-  /\ item.source \in AsyncIngressSources
   /\ item.envelope.recipient \in ValidatorIds
-  /\ item \in SequenceSet(
-       IngressLane(item.envelope.recipient, item.source))
+  /\ \E source \in AsyncIngressSources:
+       item \in SequenceSet(
+         IngressLane(item.envelope.recipient, source))
 
 ExactDeliveryCandidateOwns(item) ==
   CandidateScheduled(DeliveryCandidate(item))

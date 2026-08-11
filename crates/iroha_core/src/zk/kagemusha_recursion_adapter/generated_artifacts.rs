@@ -345,7 +345,7 @@ fn kagemusha_initialization_diversifier_v4() -> [u8; 32] {
 /// Build the deterministic, satisfying initialization relation shared by key
 /// calibration and exact-candidate recursive qualification.
 fn kagemusha_initialization_relation_v4(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     asset_definition_id: &str,
     asset_scale: u32,
 ) -> Result<KagemushaInitializationRelationV4, String> {
@@ -354,7 +354,7 @@ fn kagemusha_initialization_relation_v4(
     let diversifier = kagemusha_initialization_diversifier_v4();
     let empty_path = confidential_v2::compute_confidential_merkle_path_v3(&[], 0)?;
     let secure = confidential_v2::prepare_kagemusha_step_topup_witness_v3(
-        chain_id,
+        network_id,
         asset_definition_id,
         KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
         KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4,
@@ -368,7 +368,7 @@ fn kagemusha_initialization_relation_v4(
     )?;
 
     let asset_tag = confidential_v2::derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let network_tag = confidential_v2::derive_confidential_network_tag_v3(network_id)?;
     let payer_tag = confidential_v2::derive_kagemusha_topup_payer_tag_v3(
         KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
     )?;
@@ -389,7 +389,7 @@ fn kagemusha_initialization_relation_v4(
         &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
         KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
         asset_tag,
-        chain_tag,
+        network_tag,
     )?;
     let initial_root = confidential_v2::compute_confidential_root_v3(&[])?;
     let final_commitments = [output_commitment];
@@ -447,7 +447,7 @@ fn kagemusha_initialization_relation_v4(
             encoded
         },
         asset_tag,
-        chain_tag,
+        network_tag,
         payer_tag,
         operation_tag,
     };
@@ -467,22 +467,26 @@ fn kagemusha_generation_calibration_v4(
     step_ep_compiled_protocol_sha256: [u8; 32],
 ) -> Result<KagemushaGenerationCalibrationV4, String> {
     use halo2_proofs::halo2curves::pasta::Fp;
-    use iroha_data_model::ChainId;
+    use iroha_data_model::NetworkId;
 
     use super::kagemusha_v2;
 
     const ASSET_DEFINITION: &str = "kagemusha-fixed-padding#internal";
-    const CHAIN: &str = "kagemusha-fixed-padding-chain";
+    const NETWORK_SEED: &[u8] = b"kagemusha-fixed-padding-network";
     const ASSET_SCALE: u32 = 0;
 
-    let chain_id = ChainId::from(CHAIN);
+    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::new(NETWORK_SEED)
+    ));
     let KagemushaInitializationRelationV4 {
         topup,
         secure,
         output_membership,
-    } = kagemusha_initialization_relation_v4(&chain_id, ASSET_DEFINITION, ASSET_SCALE)?;
+    } = kagemusha_initialization_relation_v4(&network_id, ASSET_DEFINITION, ASSET_SCALE)?;
     let asset_tag = topup.asset_tag;
-    let chain_tag = topup.chain_tag;
+    let network_tag = topup.network_tag;
     let payer_tag = topup.payer_tag;
     let operation_tag = topup.operation_tag;
     let output_commitment = topup.output_commitment;
@@ -563,7 +567,7 @@ fn kagemusha_generation_calibration_v4(
             "transfer output",
         ),
         (kagemusha_v2::I_ASSET_TAG, asset_tag, "asset tag"),
-        (kagemusha_v2::I_CHAIN_TAG, chain_tag, "chain tag"),
+        (kagemusha_v2::I_NETWORK_TAG, network_tag, "network tag"),
     ] {
         kagemusha_calibration_put_field_v4(&mut fields, index, bytes, role)?;
     }
@@ -590,8 +594,8 @@ fn kagemusha_generation_calibration_v4(
         vec![0_u32; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
     result_state[kagemusha_v2::S_VERSION] =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-    result_state[kagemusha_v2::S_CHAIN_TAG..kagemusha_v2::S_CHAIN_TAG + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(chain_tag));
+    result_state[kagemusha_v2::S_NETWORK_TAG..kagemusha_v2::S_NETWORK_TAG + 8]
+        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(network_tag));
     result_state[kagemusha_v2::S_ASSET_TAG..kagemusha_v2::S_ASSET_TAG + 8]
         .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(asset_tag));
     result_state[kagemusha_v2::S_ASSET_SCALE] = ASSET_SCALE;
@@ -889,7 +893,7 @@ fn kagemusha_candidate_qualification_init_statement_v4(
         manifest_sha256,
     };
     let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: manifest.chain_id.clone(),
+        network_id: manifest.network_id,
         asset: manifest.asset.clone(),
         asset_scale: manifest.asset_scale,
         final_root: relation.topup.finalized_root,
@@ -898,7 +902,7 @@ fn kagemusha_candidate_qualification_init_statement_v4(
         proof_step_count: 1,
         peer_hop_count: 0,
         current_note: KagemushaSpendableNoteDescriptorV2 {
-            chain_id: manifest.chain_id.clone(),
+            network_id: manifest.network_id,
             asset: manifest.asset.clone(),
             note_commitment: relation.topup.output_commitment,
             spend_nullifier: relation.topup.spend_nullifier,
@@ -1078,7 +1082,7 @@ fn kagemusha_candidate_qualification_append_v4(
         &recipient_spend_key,
         recipient_rho,
         relation.topup.asset_tag,
-        relation.topup.chain_tag,
+        relation.topup.network_tag,
     )?;
     let append_paths = confidential_v2::derive_confidential_sequential_append_paths_v3(
         next_zero_leaf_index,
@@ -1115,14 +1119,14 @@ fn kagemusha_candidate_qualification_append_v4(
     )
     .map_err(|error| error.to_string())?;
     let recipient_note = KagemushaSpendableNoteDescriptorV2 {
-        chain_id: candidate.manifest.chain_id.clone(),
+        network_id: candidate.manifest.network_id,
         asset: candidate.manifest.asset.clone(),
         note_commitment: recipient_commitment,
         spend_nullifier: recipient_nullifier,
         amount,
     };
     let split = KagemushaRecursiveSpendSplitIntentV4 {
-        chain_id: candidate.manifest.chain_id.clone(),
+        network_id: candidate.manifest.network_id,
         asset: candidate.manifest.asset.clone(),
         inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
             bundle_digest: initialization_bundle_digest,
@@ -1156,7 +1160,7 @@ fn kagemusha_candidate_qualification_append_v4(
         output_commitments: [recipient_commitment, [0; 32]],
         root: init_statement.final_root,
         asset_tag: relation.topup.asset_tag,
-        chain_tag: relation.topup.chain_tag,
+        network_tag: relation.topup.network_tag,
     };
     let operation = KagemushaStepOperationVectorV4::from_append_v4(
         &split,
@@ -1178,7 +1182,7 @@ fn kagemusha_candidate_qualification_append_v4(
         owner_tag: recipient_owner_tag,
     }];
     confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
         &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
         &input_paths,
@@ -1261,7 +1265,7 @@ where
     )?;
 
     let relation = kagemusha_initialization_relation_v4(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
         candidate.manifest.asset_scale,
     )?;
@@ -1347,7 +1351,7 @@ where
         &recipient_spend_key,
         recipient_rho,
         relation.topup.asset_tag,
-        relation.topup.chain_tag,
+        relation.topup.network_tag,
     )?;
     let append_paths = confidential_v2::derive_confidential_sequential_append_paths_v3(
         next_zero_leaf_index,
@@ -1385,14 +1389,14 @@ where
     )
     .map_err(|error| error.to_string())?;
     let recipient_note = KagemushaSpendableNoteDescriptorV2 {
-        chain_id: candidate.manifest.chain_id.clone(),
+        network_id: candidate.manifest.network_id,
         asset: candidate.manifest.asset.clone(),
         note_commitment: recipient_commitment,
         spend_nullifier: recipient_nullifier,
         amount,
     };
     let split = KagemushaRecursiveSpendSplitIntentV4 {
-        chain_id: candidate.manifest.chain_id.clone(),
+        network_id: candidate.manifest.network_id,
         asset: candidate.manifest.asset.clone(),
         inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
             bundle_digest: initialization_bundle_digest,
@@ -1426,7 +1430,7 @@ where
         output_commitments: [recipient_commitment, [0; 32]],
         root: init_statement.final_root,
         asset_tag: relation.topup.asset_tag,
-        chain_tag: relation.topup.chain_tag,
+        network_tag: relation.topup.network_tag,
     };
     let append_operation = KagemushaStepOperationVectorV4::from_append_v4(
         &split,
@@ -1448,7 +1452,7 @@ where
         owner_tag: recipient_owner_tag,
     }];
     let append_secure = confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
         &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
         &input_paths,
@@ -1728,7 +1732,7 @@ where
     drop(append_decoded);
 
     let relation = kagemusha_initialization_relation_v4(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
         candidate.manifest.asset_scale,
     )?;

@@ -167,7 +167,7 @@ ci/dual_profile_matrix.sh \
 ```
 
 The matrix verifies the bundle layout, executable inventory, profile metadata,
-version, checksums, and basic `irohad --version`/`kagami --help` execution.
+version, checksums, and basic `iroha3d --version`/`kagami --help` execution.
 Treat each target-specific matrix as part of the aggregate inventory.
 
 Follow the artifact-to-profile verification procedure in

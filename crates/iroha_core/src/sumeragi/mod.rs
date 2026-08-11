@@ -26,8 +26,10 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId,
-    block::consensus_v2::{ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode},
+    NetworkId,
+    block::consensus_v2::{
+        BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode, ConsensusRound,
+    },
     consensus::VrfEpochRecord,
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
@@ -108,6 +110,16 @@ pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
     public_key
         .try_algorithm()
         .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+}
+
+#[cfg(test)]
+/// Build a deterministic exact network identity for protocol fixtures.
+pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(CryptoHash::new(
+            seed.as_bytes(),
+        )),
+    )
 }
 
 #[cfg(test)]
@@ -408,17 +420,15 @@ pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
         .map(|params| params.slashing_delay_blocks())
 }
 
-fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
-    let chain = chain_id.clone().into_inner();
-    let hash = CryptoHash::new(chain.as_bytes());
-    <[u8; 32]>::from(hash)
+fn network_epoch_seed(network_id: &NetworkId) -> [u8; 32] {
+    *network_id.as_bytes()
 }
 
-fn npos_base_epoch_seed(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+fn npos_base_epoch_seed(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     world
         .sumeragi_npos_parameters()
         .map(|params| params.epoch_seed())
-        .unwrap_or_else(|| chain_epoch_seed(chain_id))
+        .unwrap_or_else(|| network_epoch_seed(network_id))
 }
 
 fn next_epoch_seed_from_seed_and_reveals(
@@ -455,17 +465,17 @@ fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
 
 pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
 ) -> [u8; 32] {
-    let mut seed = npos_base_epoch_seed(world, chain_id);
+    let mut seed = npos_base_epoch_seed(world, network_id);
     for _ in 0..epoch {
         seed = next_epoch_seed_from_seed(seed);
     }
     seed
 }
 
-fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     if let Some((_epoch, record)) = world.vrf_epochs().iter().last() {
         return if record.finalized {
             next_epoch_seed_from_record(record)
@@ -473,7 +483,7 @@ fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) 
             record.seed
         };
     }
-    npos_base_epoch_seed(world, chain_id)
+    npos_base_epoch_seed(world, network_id)
 }
 
 /// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
@@ -483,22 +493,22 @@ pub(crate) fn epoch_for_height_from_world(world: &impl WorldReadOnly, height: u6
 
 /// Resolve the `NPoS` PRF seed for the epoch containing `height`.
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
+    npos_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 
 /// Resolve the PRF seed for the epoch containing `height`.
 pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    prf_seed_for_height_from_world(&view.world, view.chain_id(), height)
+    prf_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
 pub fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: u64,
 ) -> [u8; 32] {
     let epoch = epoch_for_height_from_world(world, height);
-    npos_seed_for_epoch_from_world(world, chain_id, epoch)
+    npos_seed_for_epoch_from_world(world, network_id, epoch)
 }
 
 /// Resolve the `NPoS` PRF seed for one exact authenticated epoch.
@@ -507,7 +517,7 @@ pub fn npos_seed_for_height_from_world(
 /// than re-deriving an epoch from a possibly different height schedule.
 pub(crate) fn npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
 ) -> [u8; 32] {
     if let Some(record) = world.vrf_epochs().get(&epoch) {
@@ -528,19 +538,19 @@ pub(crate) fn npos_seed_for_epoch_from_world(
         return seed;
     }
     if world.sumeragi_npos_parameters().is_some() {
-        deterministic_npos_seed_for_epoch_from_world(world, chain_id, epoch)
+        deterministic_npos_seed_for_epoch_from_world(world, network_id, epoch)
     } else {
-        latest_epoch_seed_from_world(world, chain_id)
+        latest_epoch_seed_from_world(world, network_id)
     }
 }
 
 /// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
 pub(crate) fn prf_seed_for_height_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: u64,
 ) -> [u8; 32] {
-    npos_seed_for_height_from_world(world, chain_id, height)
+    npos_seed_for_height_from_world(world, network_id, height)
 }
 
 #[cfg(test)]
@@ -593,11 +603,11 @@ mod exact_epoch_seed_tests {
         let view = state.world_view();
         assert_eq!(epoch_for_height_from_world(&view, 2), 0);
         assert_ne!(
-            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 2),
+            npos_seed_for_height_from_world(&view, state.network_id_ref(), 2),
             authenticated_seed
         );
         assert_eq!(
-            npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 7),
+            npos_seed_for_epoch_from_world(&view, state.network_id_ref(), 7),
             authenticated_seed,
             "a parent-authenticated epoch number is authoritative"
         );
@@ -625,6 +635,10 @@ pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;
 pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
+// TODO: Wire the staged Certified-Serve payload durability boundary into the
+// lifecycle coordinator and retire the legacy v5 Serve scheduling snapshot.
+#[allow(dead_code)]
+pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
 pub(crate) mod v2_context_store;
@@ -641,6 +655,11 @@ pub use v2_core::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
+// TODO: Remove the dead-code allowance when the staged coordinator is wired
+// into the production services. The replacement is intentionally implemented
+// and tested as a pure reducer before any existing scheduler authority moves.
+#[allow(dead_code)]
+pub(crate) mod v2_lifecycle_coordinator;
 pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
@@ -985,6 +1004,10 @@ struct FairV2IngressEntry {
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
     encoded_bytes: Arc<[u8]>,
     encoded_len: usize,
+    /// Admission/coalescence-minted immutable ownership snapshot. Lifecycle
+    /// queue cuts clone this `Arc` under the state mutex, then perform all
+    /// validation and integrity hashing after releasing that mutex.
+    ownership_snapshot: Arc<FairV2IngressOwnershipEvidence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1929,6 +1952,34 @@ fn fair_v2_ingress_admit_leader_wire(
 }
 
 impl FairV2IngressMessageKind {
+    const fn projection_code(self) -> u8 {
+        match self {
+            Self::V2Proposal => 0,
+            Self::V2Vote => 1,
+            Self::V2QuorumCertificate => 2,
+            Self::V2TimeoutVote => 3,
+            Self::V2TimeoutCertificate => 4,
+            Self::V2PayloadManifest => 5,
+            Self::V2PayloadChunk => 6,
+            Self::V2CertifiedBodyRequest => 7,
+            Self::V2CertifiedBodyResponse => 8,
+            Self::V2CommitCertificateRequest => 9,
+            Self::V2CommitCertificateResponse => 10,
+            Self::V2VrfCommit => 11,
+            Self::V2VrfReveal => 12,
+            Self::KuraReplicaAdvert => 13,
+            Self::LaneBlockProposal => 14,
+            Self::LaneExecutablePayload => 15,
+            Self::LaneBlockNewViewVote => 16,
+            Self::LaneBlockNewViewCertificate => 17,
+            Self::LaneBlockVote => 18,
+            Self::LaneBlockQc => 19,
+            Self::LaneBlockCertificate => 20,
+            Self::LaneHistoricalRecoveryRequest => 21,
+            Self::LaneHistoricalRecoveryResponse => 22,
+        }
+    }
+
     fn classify(message: &BlockMessage) -> Option<Self> {
         use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -2483,8 +2534,9 @@ impl FairV2IngressOwnershipEvidence {
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v8");
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v10");
         for occurrence in [&self.first, &self.latest] {
+            projection.push(u8::try_from(occurrence.action.index()).unwrap_or(u8::MAX));
             projection.extend_from_slice(&occurrence.physical_admission_ordinal.to_le_bytes());
             match occurrence.lifecycle_ordinal {
                 None => projection.push(0),
@@ -2510,6 +2562,50 @@ impl FairV2IngressOwnershipEvidence {
                 &mut projection,
                 &occurrence.semantic_owner_source,
             );
+            fair_v2_ingress_append_optional_peer_identity(
+                &mut projection,
+                occurrence.wire_key.origin.as_ref(),
+            );
+            projection.extend_from_slice(occurrence.wire_key.hash.as_ref());
+            projection.push(occurrence.message_kind.projection_code());
+            projection.push(match occurrence.class {
+                FairV2IngressClass::Auxiliary => 0,
+                FairV2IngressClass::Progress => 1,
+                FairV2IngressClass::TransportCompletion => 2,
+            });
+            projection.extend_from_slice(
+                &u64::try_from(occurrence.encoded_len)
+                    .expect("bounded ingress encoding length fits u64")
+                    .to_le_bytes(),
+            );
+            fair_v2_ingress_append_resource_projection(
+                &mut projection,
+                &occurrence.resource_before,
+            );
+            fair_v2_ingress_append_resource_projection(&mut projection, &occurrence.resource_after);
+            fair_v2_ingress_append_routes_projection(
+                &mut projection,
+                occurrence.routes_before.as_ref(),
+            );
+            fair_v2_ingress_append_routes_projection(
+                &mut projection,
+                occurrence.routes_candidate.as_ref(),
+            );
+            fair_v2_ingress_append_routes_projection(
+                &mut projection,
+                occurrence.routes_after.as_ref(),
+            );
+            match occurrence.route_capacity {
+                None => projection.push(0),
+                Some(capacity) => {
+                    projection.push(1);
+                    projection.extend_from_slice(&capacity.to_le_bytes());
+                }
+            }
+            fair_v2_ingress_append_attempt_projection(&mut projection, &occurrence.attempts_before);
+            projection.extend_from_slice(occurrence.attempts_before_hash.as_ref());
+            fair_v2_ingress_append_attempt_projection(&mut projection, &occurrence.attempts_after);
+            projection.extend_from_slice(occurrence.attempts_after_hash.as_ref());
         }
         match self.runtime_physical_cut {
             None => projection.push(0),
@@ -2546,7 +2642,15 @@ impl FairV2IngressOwnershipEvidence {
                 projection.extend_from_slice(&receipt.owner().admission_ordinal().to_le_bytes());
             }
         }
-        projection.extend_from_slice(&self.first.encoded_bytes);
+        // `validate_exact` proves this digest and length are the canonical
+        // encoding of `first`. Reusing that admission-time seal keeps every
+        // later ownership projection bounded independently of body size.
+        projection.extend_from_slice(self.first.wire_key.hash.as_ref());
+        projection.extend_from_slice(
+            &u64::try_from(self.first.encoded_len)
+                .expect("bounded ingress encoding length fits u64")
+                .to_le_bytes(),
+        );
         projection.push(u8::try_from(self.latest.action.index()).unwrap_or(u8::MAX));
         match &self.current_routes {
             None => projection.push(0),
@@ -2709,6 +2813,61 @@ impl FairV2IngressOwnershipEvidence {
                 &self.attempts,
                 self.current_routes.as_ref(),
             )
+    }
+}
+
+fn fair_v2_ingress_append_resource_projection(
+    projection: &mut Vec<u8>,
+    resource: &FairV2IngressResourceSnapshot,
+) {
+    for value in [
+        resource.source_len,
+        resource.source_progress_len,
+        resource.source_certified_fence_escape_len,
+        resource.source_timeout_vote_len,
+        resource.source_transport_completion_len,
+        resource.source_bytes,
+        resource.source_certified_fence_escape_bytes,
+        resource.source_timeout_vote_bytes,
+        resource.source_transport_completion_bytes,
+        resource.global_len,
+        resource.global_bytes,
+        resource.protected_slots,
+        resource.message_capacity,
+        resource.global_byte_capacity,
+        resource.source_byte_capacity,
+        resource.certified_fence_escape_byte_reserve,
+        resource.timeout_vote_byte_reserve,
+        resource.transport_completion_byte_reserve,
+    ] {
+        projection.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn fair_v2_ingress_append_routes_projection(
+    projection: &mut Vec<u8>,
+    routes: Option<&NetworkReplyRoutes>,
+) {
+    match routes {
+        None => projection.push(0),
+        Some(routes) => {
+            projection.push(1);
+            projection.extend_from_slice(&routes.source_capacity().to_le_bytes());
+            projection.extend_from_slice(&routes.len().to_le_bytes());
+            projection.extend_from_slice(routes.process_local_exact_history_hash().as_ref());
+        }
+    }
+}
+
+fn fair_v2_ingress_append_attempt_projection(
+    projection: &mut Vec<u8>,
+    attempts: &[FairV2IngressReplyAttempt],
+) {
+    projection.extend_from_slice(&attempts.len().to_le_bytes());
+    for attempt in attempts {
+        projection.extend_from_slice(attempt.route.process_local_identity_hash().as_ref());
+        projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
+        projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
     }
 }
 
@@ -3841,7 +4000,7 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
 /// protocol-maximum public key and signature, covering non-roster observers as
 /// well as validators. The checked calculation mirrors bare Norito v1 exactly.
 fn fair_v2_ingress_required_recovery_request_bytes_for_key(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     roster_len: usize,
     raw_key_bytes: usize,
 ) -> usize {
@@ -3860,11 +4019,9 @@ fn fair_v2_ingress_required_recovery_request_bytes_for_key(
         let certified_body_request =
             fair_v2_ingress_v2_envelope_bytes(certified_body_request_bytes)?;
 
-        let chain_string_bytes = fair_v2_ingress_framed_bytes(chain_id.as_str().len())?;
-        let boxed_chain_string_bytes = fair_v2_ingress_framed_bytes(chain_string_bytes)?;
-        let embedded_chain_id_bytes = fair_v2_ingress_framed_bytes(boxed_chain_string_bytes)?;
+        let embedded_network_id_bytes = network_id.encode().len();
         let commit_certificate_request_bytes = 3_usize
-            .checked_add(embedded_chain_id_bytes)?
+            .checked_add(embedded_network_id_bytes)?
             .checked_add(34)?
             .checked_add(9)?
             .checked_add(requester_bytes)?
@@ -3876,9 +4033,12 @@ fn fair_v2_ingress_required_recovery_request_bytes_for_key(
     required().unwrap_or(usize::MAX)
 }
 
-fn fair_v2_ingress_required_recovery_request_bytes(chain_id: &ChainId, roster_len: usize) -> usize {
+fn fair_v2_ingress_required_recovery_request_bytes(
+    network_id: &NetworkId,
+    roster_len: usize,
+) -> usize {
     fair_v2_ingress_required_recovery_request_bytes_for_key(
-        chain_id,
+        network_id,
         roster_len,
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
     )
@@ -4032,6 +4192,409 @@ pub(crate) enum FairV2IngressBarrierBypass {
     TimeoutVoteEpisode,
 }
 
+/// Exact Certified-Serve authority consulted by one fair-ingress selector cut.
+///
+/// The handle is retained only to compare actor identity. Mutable queue state
+/// is projected into the selected barrier, request cutoff, and predecessor
+/// predicate while the fair-ingress state lock is held.
+#[derive(Clone, Debug)]
+struct FairV2IngressServeSelectorProjection {
+    required: bool,
+    gate: Option<v2_worker::CertifiedServeIngressGate>,
+    selected_barrier: Option<v2_worker::CertifiedServeBarrier>,
+    certified_body_request_cutoff: Option<u64>,
+    selected_predecessors_cleared: bool,
+}
+
+impl PartialEq for FairV2IngressServeSelectorProjection {
+    fn eq(&self, other: &Self) -> bool {
+        let same_gate = match (&self.gate, &other.gate) {
+            (Some(left), Some(right)) => left.ptr_eq(right),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        self.required == other.required
+            && same_gate
+            && self.selected_barrier == other.selected_barrier
+            && self.certified_body_request_cutoff == other.certified_body_request_cutoff
+            && self.selected_predecessors_cleared == other.selected_predecessors_cleared
+    }
+}
+
+impl Eq for FairV2IngressServeSelectorProjection {}
+
+fn fair_v2_ingress_serve_selector_projection(
+    state: &FairV2IngressState,
+    physical_cut: Option<u128>,
+) -> Result<FairV2IngressServeSelectorProjection, String> {
+    let gate = state.certified_serve_gate.clone();
+    let live_selected_barrier = match gate.as_ref() {
+        Some(gate) => gate.selected_barrier()?,
+        None if state.requires_certified_serve_gate => {
+            return Err("Serve selector crossed an unbound durable gate".to_owned());
+        }
+        None => None,
+    };
+    if let Some(barrier) = live_selected_barrier {
+        let matching_carriers = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter(|entry| {
+                entry.admission_ordinal == barrier.carrier_ordinal()
+                    && entry
+                        .certified_serve_reservation
+                        .as_ref()
+                        .is_some_and(|reservation| reservation.matches_barrier(barrier))
+                    // The reservation lifecycle id already binds the exact
+                    // request hash. Retain only the payload-shape check here
+                    // so final state-locked selector CAS stays hash-free.
+                    && matches!(
+                        entry.inbound.message(),
+                        BlockMessage::V2(ConsensusMessageV2 {
+                            payload: ConsensusMessageV2Payload::CertifiedBodyRequest(_),
+                            ..
+                        })
+                    )
+            })
+            .count();
+        if matching_carriers != 1 {
+            return Err(
+                "Serve selector changed its exact fair-ingress carrier identity".to_owned(),
+            );
+        }
+    }
+    let selected_barrier = live_selected_barrier.filter(|barrier| {
+        physical_cut.is_none_or(|cut| u128::from(barrier.carrier_ordinal()) < cut)
+    });
+    let certified_body_request_cutoff = selected_barrier
+        .is_none()
+        .then(|| {
+            state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .filter(|entry| {
+                    physical_cut.is_none_or(|cut| u128::from(entry.admission_ordinal) < cut)
+                        && fair_v2_ingress_is_certified_body_request(&entry.inbound)
+                        && (!state.requires_certified_serve_gate
+                            || entry.certified_serve_reservation.is_some())
+                })
+                .map(|entry| entry.admission_ordinal)
+                .min()
+        })
+        .flatten();
+    let selected_predecessors_cleared = selected_barrier.is_none_or(|serve| {
+        state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .all(|entry| entry.admission_ordinal >= serve.carrier_ordinal())
+    });
+    Ok(FairV2IngressServeSelectorProjection {
+        required: state.requires_certified_serve_gate,
+        gate,
+        selected_barrier,
+        certified_body_request_cutoff,
+        selected_predecessors_cleared,
+    })
+}
+
+/// Exact leader-wire authority consulted by one fair-ingress selector cut.
+#[derive(Clone, Debug)]
+struct FairV2IngressLeaderWireSelectorProjection {
+    required: bool,
+    gate: Option<Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>>,
+    durable_ingress_ordinals: BTreeSet<u128>,
+    active_carriers: Vec<(FairV2IngressLeaderWireRecord, u64)>,
+    obsolete_tokens: BTreeSet<FairV2IngressLeaderWireToken>,
+    selected_barrier: Option<FairV2IngressLeaderWireRecord>,
+    selected_carrier_ordinal: Option<u64>,
+    body_dependency: Option<(ConsensusRound, BlockSubject)>,
+    control_barrier: bool,
+}
+
+impl PartialEq for FairV2IngressLeaderWireSelectorProjection {
+    fn eq(&self, other: &Self) -> bool {
+        let same_gate = match (&self.gate, &other.gate) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        self.required == other.required
+            && same_gate
+            && self.durable_ingress_ordinals == other.durable_ingress_ordinals
+            && self.active_carriers == other.active_carriers
+            && self.obsolete_tokens == other.obsolete_tokens
+            && self.selected_barrier == other.selected_barrier
+            && self.selected_carrier_ordinal == other.selected_carrier_ordinal
+            && self.body_dependency == other.body_dependency
+            && self.control_barrier == other.control_barrier
+    }
+}
+
+impl Eq for FairV2IngressLeaderWireSelectorProjection {}
+
+fn fair_v2_ingress_leader_wire_selector_projection(
+    state: &FairV2IngressState,
+    selected_serve_barrier: Option<v2_worker::CertifiedServeBarrier>,
+    observe_obsolete: bool,
+    physical_cut: Option<u128>,
+) -> Result<FairV2IngressLeaderWireSelectorProjection, String> {
+    let gate = state.leader_wire_lifecycle_gate.clone();
+    let active_leader_wire_owners = state
+        .leader_wire_lifecycles
+        .values()
+        .filter(|record| record.status == FairV2IngressLeaderWireStatus::Ingress)
+        .cloned()
+        .collect::<Vec<_>>();
+    if state.requires_leader_wire_lifecycle_gate {
+        let gate = gate
+            .as_ref()
+            .ok_or_else(|| "leader-wire selector crossed an unbound durable gate".to_owned())?;
+        let durable_ingress_ordinals = gate.ingress_scheduler_ordinals()?;
+        let active_ordinals = active_leader_wire_owners
+            .iter()
+            .map(|record| record.token.scheduler_ordinal)
+            .collect::<BTreeSet<_>>();
+        if durable_ingress_ordinals != active_ordinals {
+            return Err("leader-wire selector changed its durable Ingress owner set".to_owned());
+        }
+    }
+
+    let mut carrier_ordinals = BTreeMap::new();
+    for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
+        let Some(token) = entry.leader_wire_token.as_ref() else {
+            continue;
+        };
+        if carrier_ordinals
+            .insert(token.clone(), entry.admission_ordinal)
+            .is_some()
+        {
+            return Err(
+                "leader-wire selector duplicated its exact fair-ingress carrier".to_owned(),
+            );
+        }
+    }
+    let mut active_carriers = Vec::with_capacity(active_leader_wire_owners.len());
+    for owner in active_leader_wire_owners {
+        let carrier_ordinal = carrier_ordinals
+            .remove(&owner.token)
+            .ok_or_else(|| "leader-wire selector lost its exact fair-ingress carrier".to_owned())?;
+        active_carriers.push((owner, carrier_ordinal));
+    }
+    if !carrier_ordinals.is_empty() {
+        return Err("leader-wire carrier has no matching active lifecycle owner".to_owned());
+    }
+    active_carriers
+        .retain(|(_, ordinal)| physical_cut.is_none_or(|cut| u128::from(*ordinal) < cut));
+    active_carriers.sort_by_key(|(_, ordinal)| *ordinal);
+    if active_carriers
+        .windows(2)
+        .any(|pair| pair[0].1 == pair[1].1)
+    {
+        return Err("leader-wire selector reused a physical carrier ordinal".to_owned());
+    }
+    let durable_ingress_ordinals = active_carriers
+        .iter()
+        .map(|(record, _)| record.token.scheduler_ordinal)
+        .collect::<BTreeSet<_>>();
+    let mut obsolete_tokens = BTreeSet::new();
+    if observe_obsolete && let Some(gate) = gate.as_ref() {
+        for (record, _) in &active_carriers {
+            if gate.identity_is_obsolete(&record.token.identity)? {
+                obsolete_tokens.insert(record.token.clone());
+            }
+        }
+    }
+    let (mut selected_barrier, selected_carrier_ordinal) = match active_carriers.first() {
+        Some((owner, carrier_ordinal)) => (Some(owner.clone()), Some(*carrier_ordinal)),
+        None => (None, None),
+    };
+    if selected_serve_barrier.is_some_and(|serve| {
+        selected_carrier_ordinal
+            .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
+    }) {
+        selected_barrier = None;
+    }
+
+    let body_dependency = selected_barrier.as_ref().and_then(|owner| {
+        state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .find(|entry| entry.leader_wire_token.as_ref() == Some(&owner.token))
+            .and_then(|entry| {
+                let BlockMessage::V2(message) = entry.inbound.message() else {
+                    return None;
+                };
+                match &message.payload {
+                    ConsensusMessageV2Payload::Proposal(proposal) => {
+                        Some((proposal.round, proposal.subject))
+                    }
+                    ConsensusMessageV2Payload::Vote(vote) => {
+                        Some((vote.proposal_round, vote.subject))
+                    }
+                    ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                        Some((certificate.proposal_round, certificate.subject))
+                    }
+                    ConsensusMessageV2Payload::TimeoutVote(_)
+                    | ConsensusMessageV2Payload::TimeoutCertificate(_)
+                    | ConsensusMessageV2Payload::PayloadManifest(_)
+                    | ConsensusMessageV2Payload::PayloadChunk(_)
+                    | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                    | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+                    | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                    | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+                    | ConsensusMessageV2Payload::VrfCommit(_)
+                    | ConsensusMessageV2Payload::VrfReveal(_) => None,
+                }
+            })
+    });
+    let control_barrier = selected_barrier.as_ref().is_some_and(|owner| {
+        owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control
+    });
+    Ok(FairV2IngressLeaderWireSelectorProjection {
+        required: state.requires_leader_wire_lifecycle_gate,
+        gate,
+        durable_ingress_ordinals,
+        active_carriers,
+        obsolete_tokens,
+        selected_barrier,
+        selected_carrier_ordinal,
+        body_dependency,
+        control_barrier,
+    })
+}
+
+/// Queue-local eligibility of one exact fair-ingress occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressQueueGateVerdict {
+    Blocked,
+    Strict,
+    Dependency,
+}
+
+fn fair_v2_ingress_queue_gate_verdict(
+    source: &FairV2IngressSource,
+    lane: &FairV2IngressLane,
+    index: usize,
+    serve: &FairV2IngressServeSelectorProjection,
+    leader: &FairV2IngressLeaderWireSelectorProjection,
+    barrier_bypass: FairV2IngressBarrierBypass,
+) -> FairV2IngressQueueGateVerdict {
+    let entry = &lane.entries[index];
+    let selected_serve_barrier = serve.selected_barrier;
+    let certified_body_request_cutoff = serve.certified_body_request_cutoff;
+    let selected_serve_predecessors_cleared = serve.selected_predecessors_cleared;
+    let leader_wire_barrier = leader.selected_barrier.as_ref();
+    let leader_wire_body_dependency = leader.body_dependency;
+    let leader_wire_control_barrier = leader.control_barrier;
+
+    // A control occurrence may wait for downstream capacity, but a later view
+    // or conflicting carrier in the same semantic slot cannot replace it.
+    let has_live_control_predecessor = lane
+        .entries
+        .iter()
+        .take(index)
+        .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
+    let ingress_barrier_allows = if let Some(owner) = leader_wire_barrier {
+        // A physically selected leader turn exclusively drains its immutable
+        // ingress-prefix episode.
+        index < owner.ingress_predecessors.get(source).copied().unwrap_or(0)
+            || (owner.ingress_predecessors.values().all(|count| *count == 0)
+                && entry.leader_wire_token.as_ref() == Some(&owner.token))
+    } else if let Some(selected) = selected_serve_barrier {
+        // The exact Serve target and its immutable earlier physical prefix
+        // form one finite rank goal.
+        entry.admission_ordinal < selected.carrier_ordinal()
+            || (selected_serve_predecessors_cleared
+                && entry.admission_ordinal == selected.carrier_ordinal()
+                && entry
+                    .certified_serve_reservation
+                    .as_ref()
+                    .is_some_and(|reservation| reservation.matches_barrier(selected))
+                // `matches_barrier` binds the request through its lifecycle
+                // id; do not re-hash a carrier under the queue-state lock.
+                && matches!(
+                    entry.inbound.message(),
+                    BlockMessage::V2(ConsensusMessageV2 {
+                        payload: ConsensusMessageV2Payload::CertifiedBodyRequest(_),
+                        ..
+                    })
+                ))
+    } else {
+        certified_body_request_cutoff.is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
+    };
+    let selected_serve_control_dependency =
+        leader_wire_body_dependency.is_some_and(|(round, subject)| {
+            selected_serve_barrier.is_some_and(|selected| {
+                entry.admission_ordinal == selected.carrier_ordinal()
+                    && entry
+                        .certified_serve_reservation
+                        .as_ref()
+                        .is_some_and(|reservation| reservation.matches_barrier(selected))
+                    // The reservation already binds the request hash. Only
+                    // the dependency round/subject remains to compare here.
+                    && matches!(
+                        entry.inbound.message(),
+                        BlockMessage::V2(ConsensusMessageV2 {
+                            payload: ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                            ..
+                        }) if request.round == round
+                            && request.subject == subject
+                    )
+            })
+        });
+    let earlier_dependency = selected_serve_barrier
+        .is_none_or(|selected| entry.admission_ordinal < selected.carrier_ordinal())
+        && (entry.class == FairV2IngressClass::TransportCompletion
+            || leader_wire_body_dependency.is_some_and(|(round, subject)| {
+                leader_wire_barrier
+                    .is_some_and(|owner| entry.leader_wire_token.as_ref() != Some(&owner.token))
+                    && matches!(
+                        entry.inbound.message(),
+                        BlockMessage::V2(ConsensusMessageV2 {
+                            payload: ConsensusMessageV2Payload::Proposal(proposal),
+                            ..
+                        }) if proposal.round == round && proposal.subject == subject
+                    )
+            }));
+    let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {
+        fair_v2_ingress_timeout_control_advances_owner(&owner.token, &entry.inbound)
+    });
+    let authenticated_certified_fence_escape = !matches!(source, FairV2IngressSource::Anonymous)
+        && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
+    let certified_fence_escape_dependency = authenticated_certified_fence_escape
+        && leader_wire_barrier.is_some_and(|owner| {
+            fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
+        });
+    let serve_fence_escape_dependency = authenticated_certified_fence_escape
+        && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some());
+    let timeout_vote_episode_dependency = barrier_bypass
+        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
+        && (leader_wire_barrier.is_some_and(|owner| {
+            owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
+        }) || (leader_wire_barrier.is_none()
+            && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some())));
+    let dependency_bypass = !ingress_barrier_allows
+        && (serve_fence_escape_dependency
+            || timeout_vote_episode_dependency
+            || (leader_wire_control_barrier
+                && (earlier_dependency
+                    || selected_serve_control_dependency
+                    || timeout_control_dependency
+                    || certified_fence_escape_dependency)));
+    if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
+        FairV2IngressQueueGateVerdict::Blocked
+    } else if dependency_bypass {
+        FairV2IngressQueueGateVerdict::Dependency
+    } else {
+        FairV2IngressQueueGateVerdict::Strict
+    }
+}
+
 /// Fixed-capacity, roster-aware v2 ingress with per-hop admission and service fairness.
 ///
 /// Every authenticated validator hop owns one protected source slot, one ordinary
@@ -4074,6 +4637,8 @@ pub(crate) enum FairV2IngressBarrierBypass {
 /// `CommitCertificateResponse` remains reducer-producing Progress and uses the
 /// certified reservation only when it embeds a CommitQC.
 pub(crate) struct FairV2Ingress {
+    /// Process-local identity shared only with opaque prepared queue witnesses.
+    queue_identity: Arc<()>,
     capacity: usize,
     byte_capacity: usize,
     source_byte_capacity: usize,
@@ -4160,6 +4725,7 @@ impl FairV2Ingress {
         let mut lanes = BTreeMap::new();
         lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
         Self {
+            queue_identity: Arc::new(()),
             capacity,
             byte_capacity,
             source_byte_capacity,
@@ -4589,7 +5155,7 @@ impl FairV2Ingress {
     pub(crate) fn configure_roster_for_context(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
     ) -> Result<(), FairV2IngressCapacityError> {
         let roster = roster.into_iter().collect::<BTreeSet<_>>();
@@ -4604,7 +5170,7 @@ impl FairV2Ingress {
             fair_v2_ingress_required_transport_completion_bytes(layout)
                 .max(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
         let required_recovery_request_bytes =
-            fair_v2_ingress_required_recovery_request_bytes(chain_id, roster.len());
+            fair_v2_ingress_required_recovery_request_bytes(network_id, roster.len());
         let required_lane_progress_frame_bytes =
             fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
         let required_consensus_frame_bytes =
@@ -5427,9 +5993,10 @@ impl FairV2Ingress {
             return Err("restored leader-wire runtime changed its token identity".to_owned());
         }
         let receipt = Self::mark_leader_wire_runtime_locked(state, &token, owner)?;
-        if !ownership.install_leader_wire_runtime_receipt(receipt) {
-            return Err("leader-wire runtime receipt could not bind ingress ownership".to_owned());
-        }
+        assert!(
+            ownership.install_leader_wire_runtime_receipt(receipt),
+            "the durable leader-wire receipt must bind its already validated staged ownership"
+        );
         Ok(())
     }
 
@@ -5825,6 +6392,7 @@ impl FairV2Ingress {
                     FairV2IngressRejectReason::OwnershipEvidenceInvalid,
                 ));
             };
+            let ownership_snapshot = Arc::new(evidence.clone());
             let lane = state
                 .lanes
                 .get_mut(&owner_source)
@@ -5837,6 +6405,7 @@ impl FairV2Ingress {
             let queued_inbound = Arc::make_mut(&mut queued.inbound);
             queued_inbound.reply_routes = routes_after;
             queued_inbound.ingress_ownership = Some(evidence);
+            queued.ownership_snapshot = ownership_snapshot;
             return Ok(FairV2IngressPushDisposition::Coalesced);
         }
         if !fair_v2_ingress_is_certified_body_request(&inbound) {
@@ -6396,10 +6965,10 @@ impl FairV2Ingress {
         }
         debug_assert!(state.last_admission_ordinal <= admission_ordinal);
         state.last_admission_ordinal = admission_ordinal;
-        inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(
-            occurrence,
-            leader_wire_token.clone(),
-        ));
+        let ingress_ownership =
+            FairV2IngressOwnershipEvidence::new(occurrence, leader_wire_token.clone());
+        let ownership_snapshot = Arc::new(ingress_ownership.clone());
+        inbound.ingress_ownership = Some(ingress_ownership);
         let queue_was_empty = state.len == 0;
         if let Some(key) = &wire_key {
             assert!(
@@ -6458,6 +7027,7 @@ impl FairV2Ingress {
             leader_wire_token,
             encoded_bytes: encoded,
             encoded_len,
+            ownership_snapshot,
         });
         state.len += 1;
         state.bytes = state
@@ -6586,180 +7156,15 @@ impl FairV2Ingress {
                 // scheduler starvation.
                 state.last_service_attempt_at = Some(service_attempt_at);
             }
-            let selected_serve_barrier = match state.certified_serve_gate.as_ref() {
-                Some(gate) => gate.selected_barrier()?,
-                None if state.requires_certified_serve_gate => {
-                    return Err("Serve selector crossed an unbound durable gate".to_owned());
-                }
-                None => None,
-            };
-            if let Some(barrier) = selected_serve_barrier {
-                let matching_carriers = state
-                    .lanes
-                    .values()
-                    .flat_map(|lane| lane.entries.iter())
-                    .filter(|entry| {
-                        entry.admission_ordinal == barrier.carrier_ordinal()
-                            && entry
-                                .certified_serve_reservation
-                                .as_ref()
-                                .is_some_and(|reservation| reservation.matches_barrier(barrier))
-                            && matches!(
-                                entry.inbound.message(),
-                                BlockMessage::V2(ConsensusMessageV2 {
-                                    payload:
-                                        ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                                    ..
-                                }) if HashOf::new(request) == barrier.request_hash()
-                            )
-                    })
-                    .count();
-                if matching_carriers != 1 {
-                    return Err(
-                        "Serve selector changed its exact fair-ingress carrier identity".to_owned(),
-                    );
-                }
-            }
-            let certified_body_request_cutoff = selected_serve_barrier
-                .is_none()
-                .then(|| {
-                    state
-                        .lanes
-                        .values()
-                        .flat_map(|lane| lane.entries.iter())
-                        .filter(|entry| {
-                            fair_v2_ingress_is_certified_body_request(&entry.inbound)
-                                && (!state.requires_certified_serve_gate
-                                    || entry.certified_serve_reservation.is_some())
-                        })
-                        .map(|entry| entry.admission_ordinal)
-                        .min()
-                })
-                .flatten();
-            let active_leader_wire_owners = state
-                .leader_wire_lifecycles
-                .values()
-                .filter(|record| record.status == FairV2IngressLeaderWireStatus::Ingress)
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut obsolete_leader_wire_tokens = BTreeSet::new();
-            if state.requires_leader_wire_lifecycle_gate {
-                let gate = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
-                    "leader-wire selector crossed an unbound durable gate".to_owned()
-                })?;
-                let durable_ordinals = gate.ingress_scheduler_ordinals()?;
-                let active_ordinals = active_leader_wire_owners
-                    .iter()
-                    .map(|record| record.token.scheduler_ordinal)
-                    .collect::<BTreeSet<_>>();
-                if durable_ordinals != active_ordinals {
-                    return Err(
-                        "leader-wire selector changed its durable Ingress owner set".to_owned()
-                    );
-                }
-                if retire_obsolete_leader_wire {
-                    for record in &active_leader_wire_owners {
-                        if gate.identity_is_obsolete(&record.token.identity)? {
-                            obsolete_leader_wire_tokens.insert(record.token.clone());
-                        }
-                    }
-                }
-            }
-            let mut leader_wire_carrier_ordinals = BTreeMap::new();
-            for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
-                let Some(token) = entry.leader_wire_token.as_ref() else {
-                    continue;
-                };
-                if leader_wire_carrier_ordinals
-                    .insert(token.clone(), entry.admission_ordinal)
-                    .is_some()
-                {
-                    return Err(
-                        "leader-wire selector duplicated its exact fair-ingress carrier".to_owned(),
-                    );
-                }
-            }
-            let mut active_leader_wire_carriers =
-                Vec::with_capacity(active_leader_wire_owners.len());
-            for owner in active_leader_wire_owners {
-                let carrier_ordinal = leader_wire_carrier_ordinals
-                    .remove(&owner.token)
-                    .ok_or_else(|| {
-                        "leader-wire selector lost its exact fair-ingress carrier".to_owned()
-                    })?;
-                active_leader_wire_carriers.push((owner, carrier_ordinal));
-            }
-            if !leader_wire_carrier_ordinals.is_empty() {
-                return Err("leader-wire carrier has no matching active lifecycle owner".to_owned());
-            }
-            active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);
-            if active_leader_wire_carriers
-                .windows(2)
-                .any(|pair| pair[0].1 == pair[1].1)
-            {
-                return Err("leader-wire selector reused a physical carrier ordinal".to_owned());
-            }
-            let (mut leader_wire_barrier, leader_wire_carrier_ordinal) =
-                match active_leader_wire_carriers.into_iter().next() {
-                    Some((owner, carrier_ordinal)) => (Some(owner), Some(carrier_ordinal)),
-                    None => (None, None),
-                };
-            // Physical admission order arbitrates the two independently
-            // durable reservation classes. A Dormant leader-wire retains its
-            // lifecycle and runtime scheduler identity across restart, but
-            // owns no queue position until an exact retry acquires a fresh
-            // carrier. That later carrier cannot pass an already-admitted
-            // selected Serve occurrence.
-            if selected_serve_barrier.is_some_and(|serve| {
-                leader_wire_carrier_ordinal
-                    .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
-            }) {
-                leader_wire_barrier = None;
-            }
-            let selected_serve_predecessors_cleared = selected_serve_barrier.is_none_or(|serve| {
-                state
-                    .lanes
-                    .values()
-                    .flat_map(|lane| lane.entries.iter())
-                    .all(|entry| entry.admission_ordinal >= serve.carrier_ordinal())
-            });
-
-            let leader_wire_body_dependency = leader_wire_barrier.as_ref().and_then(|owner| {
-                state
-                    .lanes
-                    .values()
-                    .flat_map(|lane| lane.entries.iter())
-                    .find(|entry| entry.leader_wire_token.as_ref() == Some(&owner.token))
-                    .and_then(|entry| {
-                        let BlockMessage::V2(message) = entry.inbound.message() else {
-                            return None;
-                        };
-                        match &message.payload {
-                            ConsensusMessageV2Payload::Proposal(proposal) => {
-                                Some((proposal.round, proposal.subject))
-                            }
-                            ConsensusMessageV2Payload::Vote(vote) => {
-                                Some((vote.proposal_round, vote.subject))
-                            }
-                            ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                                Some((certificate.proposal_round, certificate.subject))
-                            }
-                            ConsensusMessageV2Payload::TimeoutVote(_)
-                            | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                            | ConsensusMessageV2Payload::PayloadManifest(_)
-                            | ConsensusMessageV2Payload::PayloadChunk(_)
-                            | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-                            | ConsensusMessageV2Payload::CommitCertificateRequest(_)
-                            | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                            | ConsensusMessageV2Payload::VrfCommit(_)
-                            | ConsensusMessageV2Payload::VrfReveal(_) => None,
-                        }
-                    })
-            });
-            let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owner| {
-                owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control
-            });
+            let serve_projection = fair_v2_ingress_serve_selector_projection(&state, None)?;
+            let selected_serve_barrier = serve_projection.selected_barrier;
+            let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
+                &state,
+                selected_serve_barrier,
+                retire_obsolete_leader_wire,
+                None,
+            )?;
+            let obsolete_leader_wire_tokens = &leader_wire_projection.obsolete_tokens;
             let ready_sources = state.ready.iter().cloned().collect::<Vec<_>>();
             let candidates = ready_sources
                 .iter()
@@ -6773,175 +7178,24 @@ impl FairV2Ingress {
                                 .iter()
                                 .enumerate()
                                 .filter_map(|(index, entry)| {
-                                    // A control occurrence may wait for
-                                    // downstream capacity, but a later view or
-                                    // conflicting carrier in the same semantic
-                                    // slot cannot replace or bypass it.
-                                    let has_live_control_predecessor =
-                                        lane.entries.iter().take(index).any(|prior| {
-                                            fair_v2_ingress_same_control_slot(
-                                                &prior.inbound,
-                                                &entry.inbound,
-                                            )
-                                        });
-                                    let ingress_barrier_allows =
-                                        if let Some(owner) = leader_wire_barrier.as_ref() {
-                                            // A physically selected leader turn
-                                            // exclusively drains its immutable
-                                            // ingress-prefix episode.
-                                            index
-                                                < owner
-                                                    .ingress_predecessors
-                                                    .get(source)
-                                                    .copied()
-                                                    .unwrap_or(0)
-                                                || (owner
-                                                    .ingress_predecessors
-                                                    .values()
-                                                    .all(|count| *count == 0)
-                                                    && entry.leader_wire_token.as_ref()
-                                                        == Some(&owner.token))
-                                        } else if let Some(serve) = selected_serve_barrier {
-                                            // The exact Serve target and its
-                                            // immutable earlier physical prefix
-                                            // form one finite rank goal.
-                                            entry.admission_ordinal < serve.carrier_ordinal()
-                                                || (selected_serve_predecessors_cleared
-                                                    && entry.admission_ordinal
-                                                        == serve.carrier_ordinal()
-                                                    && entry
-                                                        .certified_serve_reservation
-                                                        .as_ref()
-                                                        .is_some_and(|reservation| {
-                                                            reservation.matches_barrier(serve)
-                                                        })
-                                                    && matches!(
-                                                        entry.inbound.message(),
-                                                        BlockMessage::V2(ConsensusMessageV2 {
-                                                            payload:
-                                                                ConsensusMessageV2Payload::CertifiedBodyRequest(
-                                                                    request
-                                                                ),
-                                                            ..
-                                                        }) if HashOf::new(request)
-                                                            == serve.request_hash()
-                                                    ))
-                                        } else {
-                                            certified_body_request_cutoff.is_none_or(|cutoff| {
-                                                entry.admission_ordinal <= cutoff
-                                            })
-                                        };
-                                    let selected_serve_control_dependency =
-                                        leader_wire_body_dependency.is_some_and(
-                                            |(round, subject)| {
-                                                selected_serve_barrier.is_some_and(|serve| {
-                                                entry.admission_ordinal == serve.carrier_ordinal()
-                                                    && entry
-                                                        .certified_serve_reservation
-                                                        .as_ref()
-                                                        .is_some_and(|reservation| {
-                                                            reservation.matches_barrier(serve)
-                                                        })
-                                                    && matches!(
-                                                        entry.inbound.message(),
-                                                        BlockMessage::V2(ConsensusMessageV2 {
-                                                            payload:
-                                                                ConsensusMessageV2Payload::CertifiedBodyRequest(
-                                                                    request
-                                                                ),
-                                                            ..
-                                                        }) if request.round == round
-                                                            && request.subject == subject
-                                                            && HashOf::new(request)
-                                                                == serve.request_hash()
-                                                    )
-                                                })
-                                            },
-                                        );
-                                    let earlier_dependency = selected_serve_barrier
-                                        .is_none_or(|serve| {
-                                            entry.admission_ordinal < serve.carrier_ordinal()
-                                        })
-                                        && (entry.class
-                                            == FairV2IngressClass::TransportCompletion
-                                            || leader_wire_body_dependency.is_some_and(
-                                                |(round, subject)| {
-                                                    leader_wire_barrier.as_ref().is_some_and(
-                                                        |owner| {
-                                                            entry.leader_wire_token.as_ref()
-                                                                != Some(&owner.token)
-                                                        },
-                                                    ) && matches!(
-                                                        entry.inbound.message(),
-                                                        BlockMessage::V2(ConsensusMessageV2 {
-                                                            payload:
-                                                                ConsensusMessageV2Payload::Proposal(
-                                                                    proposal
-                                                                ),
-                                                            ..
-                                                        }) if proposal.round == round
-                                                            && proposal.subject == subject
-                                                    )
-                                                },
-                                            ));
-                                    let timeout_control_dependency = leader_wire_barrier
-                                        .as_ref()
-                                        .is_some_and(|owner| {
-                                            fair_v2_ingress_timeout_control_advances_owner(
-                                                &owner.token,
-                                                &entry.inbound,
-                                            )
-                                        });
-                                    let authenticated_certified_fence_escape = !matches!(
+                                    let verdict = fair_v2_ingress_queue_gate_verdict(
                                         source,
-                                        FairV2IngressSource::Anonymous
-                                    ) && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
-                                    let certified_fence_escape_dependency =
-                                        authenticated_certified_fence_escape
-                                            && leader_wire_barrier.as_ref().is_some_and(|owner| {
-                                                fair_v2_ingress_certified_fence_escape_advances_owner(
-                                                    &owner.token,
-                                                    &entry.inbound,
-                                                )
-                                            });
-                                    let serve_fence_escape_dependency =
-                                        authenticated_certified_fence_escape
-                                            && (selected_serve_barrier.is_some()
-                                                || certified_body_request_cutoff.is_some());
-                                    let timeout_vote_episode_dependency =
-                                        barrier_bypass
-                                            == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-                                            && fair_v2_ingress_is_direct_validator_timeout_vote_owner(
-                                                source, entry,
-                                            )
-                                            && (leader_wire_barrier.as_ref().is_some_and(|owner| {
-                                                owner.token.identity.phase
-                                                    == FairV2IngressLeaderWirePhase::CertifiedResponse
-                                            }) || (leader_wire_barrier.is_none()
-                                                && (selected_serve_barrier.is_some()
-                                                    || certified_body_request_cutoff.is_some())));
-                                    let dependency_bypass = !ingress_barrier_allows
-                                        && (serve_fence_escape_dependency
-                                            || timeout_vote_episode_dependency
-                                            || (leader_wire_control_barrier
-                                                && (earlier_dependency
-                                                    || selected_serve_control_dependency
-                                                    || timeout_control_dependency
-                                                    || certified_fence_escape_dependency)));
-                                    (!has_live_control_predecessor
-                                        && (ingress_barrier_allows || dependency_bypass))
-                                        .then(|| {
-                                            (
-                                                entry.admission_ordinal,
-                                                Arc::clone(&entry.inbound),
-                                                dependency_bypass,
-                                                entry.leader_wire_token.as_ref().is_some_and(
-                                                    |token| {
-                                                        obsolete_leader_wire_tokens.contains(token)
-                                                    },
-                                                ),
-                                            )
-                                        })
+                                        lane,
+                                        index,
+                                        &serve_projection,
+                                        &leader_wire_projection,
+                                        barrier_bypass,
+                                    );
+                                    (verdict != FairV2IngressQueueGateVerdict::Blocked).then(|| {
+                                        (
+                                            entry.admission_ordinal,
+                                            Arc::clone(&entry.inbound),
+                                            verdict == FairV2IngressQueueGateVerdict::Dependency,
+                                            entry.leader_wire_token.as_ref().is_some_and(|token| {
+                                                obsolete_leader_wire_tokens.contains(token)
+                                            }),
+                                        )
+                                    })
                                 })
                         })
                         .collect::<Vec<_>>()
@@ -6987,24 +7241,54 @@ impl FairV2Ingress {
                 }
             }
         }
-        let Some((selected_source_index, admission_ordinal, mut disposition)) = selected else {
+        let Some((selected_source_index, admission_ordinal, disposition)) = selected else {
             return Ok(None);
         };
         drop(candidates);
+        let mut state = self.state.lock();
+        self.dequeue_selected_locked(
+            &mut state,
+            &ready_sources,
+            selected_source_index,
+            admission_ordinal,
+            disposition,
+            retire_obsolete_leader_wire,
+            service_attempt_at,
+        )
+        .map(Some)
+    }
+
+    /// Commit one already selected occurrence using the sole production
+    /// durable-handoff, accounting, rotation, and physical-cut mutation tail.
+    ///
+    /// The caller must retain `service_lock` and the supplied state guard. All
+    /// fallible ownership checks which can fail without publishing a durable
+    /// transition run before the first mutation below.
+    fn dequeue_selected_locked(
+        &self,
+        state: &mut FairV2IngressState,
+        ready_sources: &[FairV2IngressSource],
+        selected_source_index: usize,
+        admission_ordinal: u64,
+        mut disposition: FairV2IngressDequeueDisposition,
+        retire_obsolete_leader_wire: bool,
+        service_attempt_at: Instant,
+    ) -> Result<(InboundBlockMessage, FairV2IngressDequeueDisposition), String> {
         let source = ready_sources
             .get(selected_source_index)
             .cloned()
-            .expect("selected fair-ingress source came from the ready snapshot");
+            .ok_or_else(|| "selected fair-ingress source left its ready snapshot".to_owned())?;
 
-        let mut state = self.state.lock();
-        assert!(
-            state
-                .ready
-                .iter()
-                .take(ready_sources.len())
-                .eq(ready_sources.iter()),
-            "serialized fair-ingress service must preserve the snapshotted ready prefix"
-        );
+        if !state
+            .ready
+            .iter()
+            .take(ready_sources.len())
+            .eq(ready_sources.iter())
+        {
+            return Err(
+                "serialized fair-ingress service changed its snapshotted ready prefix".to_owned(),
+            );
+        }
         let admitted_index = state
             .lanes
             .get(&source)
@@ -7013,7 +7297,34 @@ impl FairV2Ingress {
                     .iter()
                     .position(|entry| entry.admission_ordinal == admission_ordinal)
             })
-            .expect("serialized fair-ingress candidate must remain queued until selection");
+            .ok_or_else(|| {
+                "serialized fair-ingress candidate left its selected source lane".to_owned()
+            })?;
+        let mut staged_ownership = state
+            .lanes
+            .get(&source)
+            .and_then(|lane| lane.entries.get(admitted_index))
+            .and_then(|entry| entry.inbound.ingress_ownership.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                "selected fair-ingress envelope lost its physical ownership evidence".to_owned()
+            })?;
+        let runtime_physical_cut = u128::from(state.last_admission_ordinal) + 1;
+        if Arc::strong_count(
+            &state
+                .lanes
+                .get(&source)
+                .and_then(|lane| lane.entries.get(admitted_index))
+                .expect("selected entry was just resolved")
+                .inbound,
+        ) != 1
+            || staged_ownership.first.physical_admission_ordinal != admission_ordinal
+            || staged_ownership.runtime_physical_cut.is_some()
+            || runtime_physical_cut <= u128::from(admission_ordinal)
+            || !staged_ownership.freeze_runtime_physical_cut(runtime_physical_cut)
+        {
+            return Err("selected fair-ingress ownership is not exclusively drainable".to_owned());
+        }
         if retire_obsolete_leader_wire {
             let selected_token = state
                 .lanes
@@ -7043,46 +7354,52 @@ impl FairV2Ingress {
                 disposition = FairV2IngressDequeueDisposition::RetireObsolete;
             }
         }
-        let leader_wire_ownership = {
+        let has_leader_wire_ownership = {
             let entry = state
                 .lanes
                 .get(&source)
                 .and_then(|lane| lane.entries.get(admitted_index))
                 .expect("selected fair-ingress entry remains queued for runtime handoff");
             match entry.leader_wire_token.as_ref() {
-                None => None,
+                None => {
+                    if staged_ownership.leader_wire_token().is_some()
+                        || staged_ownership.leader_wire_runtime_receipt().is_some()
+                    {
+                        return Err(
+                            "nonproductive dequeue carried leader-wire ownership".to_owned()
+                        );
+                    }
+                    false
+                }
                 Some(token) => {
-                    let ownership = entry
-                        .inbound
-                        .ingress_ownership
-                        .as_ref()
-                        .cloned()
-                        .ok_or_else(|| {
-                            "leader-wire dequeue lost its fair-ingress ownership carrier".to_owned()
-                        })?;
-                    if ownership.leader_wire_token() != Some(token)
-                        || ownership.leader_wire_runtime_receipt().is_some()
+                    if staged_ownership.leader_wire_token() != Some(token)
+                        || staged_ownership.leader_wire_runtime_receipt().is_some()
                     {
                         return Err(
                             "leader-wire dequeue changed its exact ingress ownership".to_owned()
                         );
                     }
-                    Some(ownership)
+                    true
                 }
             }
         };
-        if let Some(mut ownership) = leader_wire_ownership {
+        let has_certified_serve_reservation = state
+            .lanes
+            .get(&source)
+            .and_then(|lane| lane.entries.get(admitted_index))
+            .is_some_and(|entry| entry.certified_serve_reservation.is_some());
+        if has_leader_wire_ownership && has_certified_serve_reservation {
+            return Err(
+                "one ingress carrier cannot own both leader-wire and Certified-Serve durability"
+                    .to_owned(),
+            );
+        }
+        if has_leader_wire_ownership {
             // Persist and install the deterministic runtime owner while the
             // physical carrier, durable Ingress record, and queue lock still
             // form one atomic handoff. Existing downstream bind calls then
             // validate this receipt idempotently.
-            Self::bind_leader_wire_runtime_ownership_locked(&mut state, &mut ownership)?;
-            let entry = state
-                .lanes
-                .get_mut(&source)
-                .and_then(|lane| lane.entries.get_mut(admitted_index))
-                .expect("selected leader-wire entry remains queued through durable handoff");
-            Arc::make_mut(&mut entry.inbound).ingress_ownership = Some(ownership);
+            Self::bind_leader_wire_runtime_ownership_locked(state, &mut staged_ownership)?;
         }
         if let Some(reservation) = state
             .lanes
@@ -7090,12 +7407,7 @@ impl FairV2Ingress {
             .and_then(|lane| lane.entries.get(admitted_index))
             .and_then(|entry| entry.certified_serve_reservation.as_ref())
         {
-            let evidence_lifecycle_ordinal = state
-                .lanes
-                .get(&source)
-                .and_then(|lane| lane.entries.get(admitted_index))
-                .and_then(|entry| entry.inbound.ingress_ownership.as_ref())
-                .and_then(FairV2IngressOwnershipEvidence::runtime_lifecycle_ordinal);
+            let evidence_lifecycle_ordinal = staged_ownership.first.lifecycle_ordinal;
             if evidence_lifecycle_ordinal != Some(reservation.scheduler_ordinal()) {
                 return Err(
                     "Serve carrier ownership disagreed with its reserved lifecycle ordinal"
@@ -7108,6 +7420,15 @@ impl FairV2Ingress {
             // bookkeeping crash-safe.
             reservation.publish_physical_drain()?;
         }
+        // Install only the already validated staged ownership after every
+        // fallible durable transition. The remaining queue/accounting tail is
+        // infallible under the exact structural checks above.
+        let entry = state
+            .lanes
+            .get_mut(&source)
+            .and_then(|lane| lane.entries.get_mut(admitted_index))
+            .expect("selected fair-ingress entry remains queued through durable handoff");
+        Arc::make_mut(&mut entry.inbound).ingress_ownership = Some(staged_ownership);
         for record in state
             .leader_wire_lifecycles
             .values_mut()
@@ -7198,9 +7519,9 @@ impl FairV2Ingress {
         if state.len == 0 {
             state.nonempty_since = None;
             state.last_service_attempt_at = None;
+        } else {
+            state.last_service_attempt_at = Some(service_attempt_at);
         }
-        let runtime_physical_cut = u128::from(state.last_admission_ordinal) + 1;
-
         // Apply the same source rotation as the original lock-held scan. Any
         // producer that materialized a new source while the predicate ran is
         // ordered after the complete snapshotted service turn.
@@ -7224,25 +7545,19 @@ impl FairV2Ingress {
             debug_assert!(removed.entries.is_empty());
         }
         state.ready.append(&mut newly_ready);
-        self.debug_assert_consistent(&state);
-        let physical_admission_ordinal = entry.admission_ordinal;
-        let mut inbound = Arc::try_unwrap(entry.inbound)
+        self.debug_assert_consistent(state);
+        let inbound = Arc::try_unwrap(entry.inbound)
             .expect("serialized fair-ingress service must own the selected envelope");
-        let Some(ownership) = inbound.ingress_ownership.as_mut() else {
-            state.open = false;
-            return Err(
-                "selected fair-ingress envelope lost its physical ownership evidence".to_owned(),
-            );
-        };
-        if ownership.physical_admission_ordinal() != Some(physical_admission_ordinal)
-            || !ownership.freeze_runtime_physical_cut(runtime_physical_cut)
-        {
-            state.open = false;
-            return Err(
-                "selected fair-ingress envelope changed its immutable physical cut".to_owned(),
-            );
-        }
-        Ok(Some((inbound, disposition)))
+        let ownership = inbound
+            .ingress_ownership
+            .as_ref()
+            .expect("validated staged ownership remains installed through dequeue");
+        debug_assert_eq!(
+            ownership.first.physical_admission_ordinal,
+            entry.admission_ordinal
+        );
+        debug_assert_eq!(ownership.runtime_physical_cut, Some(runtime_physical_cut));
+        Ok((inbound, disposition))
     }
 
     /// First receiver-local physical ordinal not yet allocated at this
@@ -8208,417 +8523,6 @@ struct SumeragiWorker {
 mod authoritative_runtime_gate_tests {
     include!("tests/mod_authoritative_runtime_gate_01_support.rs");
     include!("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs");
-    #[test]
-    fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
-        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
-        let validator = PeerId::new(KeyPair::random().public_key().clone());
-        let response = v2_certified_body_response(0, 0, 1);
-        let round = match &response {
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
-                ..
-            }) => response.manifest.round,
-            _ => unreachable!("certified response fixture is a v2 envelope"),
-        };
-        let mut timeout = v2_timeout_vote();
-        match &mut timeout {
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
-                ..
-            }) => vote.round = round,
-            _ => unreachable!("timeout fixture is a v2 envelope"),
-        }
-        let _gate_directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
-
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(response, Some(validator.clone()),)),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(timeout, Some(validator))),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        {
-            let state = ingress.state.lock();
-            let earliest = state
-                .leader_wire_lifecycles
-                .values()
-                .filter(|record| record.status == super::FairV2IngressLeaderWireStatus::Ingress)
-                .min_by_key(|record| record.token.scheduler_ordinal)
-                .expect("one leader-wire barrier is active");
-            assert_eq!(
-                earliest.token.identity.phase,
-                super::FairV2IngressLeaderWirePhase::CertifiedResponse
-            );
-        }
-
-        let is_timeout_vote = |inbound: &InboundBlockMessage| {
-            matches!(
-                inbound.message(),
-                BlockMessage::V2(wire::ConsensusMessageV2 {
-                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
-                    ..
-                })
-            )
-        };
-        assert!(
-            ingress
-                .try_recv_if_checked_retiring_obsolete(is_timeout_vote)
-                .expect("ordinary selection preserves the response barrier")
-                .is_none()
-        );
-        assert!(
-            ingress
-                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-                    super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-                    |_| false,
-                )
-                .expect("the internal episode policy still needs its runtime predicate")
-                .is_none()
-        );
-        let (mut selected, disposition) = ingress
-            .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-                super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-                is_timeout_vote,
-            )
-            .expect("the response barrier preserves the checked dequeue")
-            .expect("the exact timeout vote reaches its episode predicate");
-        assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
-        assert!(is_timeout_vote(&selected));
-        let ownership = selected
-            .take_ingress_ownership()
-            .expect("the selected timeout vote retains exact ingress ownership");
-        assert!(ownership.validate_exact());
-        assert!(ownership.leader_wire_runtime_receipt().is_some());
-        assert_eq!(ingress.len(), 1, "the certified response stays retained");
-        assert!(
-            ingress
-                .state
-                .lock()
-                .leader_wire_lifecycles
-                .values()
-                .any(|record| {
-                    record.status == super::FairV2IngressLeaderWireStatus::Ingress
-                        && record.token.identity.phase
-                            == super::FairV2IngressLeaderWirePhase::CertifiedResponse
-                })
-        );
-    }
-
-    #[test]
-    fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier() {
-        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
-        assert_eq!(fixture.token.admission_ordinal(), 7);
-        assert!(matches!(
-            fixture
-                .ingress
-                .try_push(v2_certified_body_request_inbound(&fixture.validator)),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let target_ordinal = fixture
-            .ingress
-            .state
-            .lock()
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-            .find(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
-            .expect("certified request owns its fresh physical occurrence")
-            .admission_ordinal;
-        assert!(target_ordinal > fixture.token.admission_ordinal());
-
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let retry_ordinal = fixture
-            .ingress
-            .state
-            .lock()
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-            .find(|entry| entry.leader_wire_token.as_ref() == Some(&fixture.token))
-            .expect("restored productive lifecycle regained one physical carrier")
-            .admission_ordinal;
-        assert!(
-            retry_ordinal > target_ordinal,
-            "a retained lifecycle token cannot reuse its old ordinal as a new physical position"
-        );
-        assert!(
-            fixture
-                .ingress
-                .try_recv_if(|inbound| !fair_v2_ingress_is_certified_body_request(inbound))
-                .is_none(),
-            "the later productive retry cannot cross the certified target cutoff"
-        );
-
-        let target = fixture
-            .ingress
-            .try_recv_if(fair_v2_ingress_is_certified_body_request)
-            .expect("the refrozen leader prefix admits the earlier certified carrier");
-        assert_eq!(target.sender(), Some(&fixture.validator));
-        let retry = fixture
-            .ingress
-            .try_recv_if(|_| true)
-            .expect("the productive retry drains after its frozen predecessor");
-        assert!(
-            retry
-                .ingress_ownership()
-                .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
-        );
-    }
-
-    #[test]
-    fn restored_productive_retry_freezes_the_current_physical_source_prefix() {
-        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
-        let earlier = v2_commit_certificate_request(0, &fixture.validator);
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                earlier,
-                Some(fixture.validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let earlier_ordinal = fixture
-            .ingress
-            .state
-            .lock()
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-            .find(|entry| entry.leader_wire_token.is_none())
-            .expect("ordinary traffic owns its physical occurrence")
-            .admission_ordinal;
-
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let retry_ordinal = fixture
-            .ingress
-            .state
-            .lock()
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-            .find(|entry| entry.leader_wire_token.as_ref() == Some(&fixture.token))
-            .expect("restored lifecycle acquired one fresh carrier")
-            .admission_ordinal;
-        assert!(earlier_ordinal < retry_ordinal);
-
-        assert!(
-            fixture
-                .ingress
-                .try_recv_if(|inbound| {
-                    inbound
-                        .ingress_ownership()
-                        .is_some_and(|ownership| ownership.leader_wire_token().is_some())
-                })
-                .is_none(),
-            "a predicate which rejects the predecessor cannot select the leader-wire target"
-        );
-        let first = fixture
-            .ingress
-            .try_recv_if(|_| true)
-            .expect("the replay-frozen physical predecessor drains first");
-        assert!(matches!(
-            first.message(),
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(_),
-                ..
-            })
-        ));
-        let replay = fixture
-            .ingress
-            .try_recv_if(|_| true)
-            .expect("the exact replay drains after its frozen source prefix");
-        assert!(
-            replay
-                .ingress_ownership()
-                .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
-        );
-    }
-
-    #[test]
-    fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
-        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
-        let round = match &fixture.message {
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
-                ..
-            }) => proposal.round,
-            _ => unreachable!("restart fixture carries a proposal"),
-        };
-        let mut earlier_message = v2_vote(wire::GlobalPhase::Prepare);
-        let BlockMessage::V2(earlier_envelope) = &mut earlier_message else {
-            unreachable!("vote fixture is a v2 envelope");
-        };
-        let wire::ConsensusMessageV2Payload::Vote(earlier_vote) = &mut earlier_envelope.payload
-        else {
-            unreachable!("vote fixture carries a vote");
-        };
-        earlier_vote.round = round;
-        earlier_vote.proposal_round = round;
-
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                earlier_message,
-                Some(fixture.alternate_validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (earlier_token, earlier_physical_ordinal) = {
-            let state = fixture.ingress.state.lock();
-            let entry = state
-                .lanes
-                .values()
-                .flat_map(|lane| lane.entries.iter())
-                .find(|entry| {
-                    entry
-                        .leader_wire_token
-                        .as_ref()
-                        .is_some_and(|token| token != &fixture.token)
-                })
-                .expect("fresh vote owns one leader-wire carrier");
-            (
-                entry
-                    .leader_wire_token
-                    .clone()
-                    .expect("selected entry has a leader-wire token"),
-                entry.admission_ordinal,
-            )
-        };
-        assert!(
-            earlier_token.scheduler_ordinal > fixture.token.scheduler_ordinal,
-            "the fresh lifecycle has a newer logical identity"
-        );
-
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let replay_physical_ordinal = fixture
-            .ingress
-            .state
-            .lock()
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-            .find(|entry| entry.leader_wire_token.as_ref() == Some(&fixture.token))
-            .expect("restored lifecycle owns one replay carrier")
-            .admission_ordinal;
-        assert!(
-            earlier_physical_ordinal < replay_physical_ordinal,
-            "the replay carrier is physically newer despite its older logical identity"
-        );
-        assert_eq!(
-            fixture
-                .gate
-                .ingress_scheduler_ordinals()
-                .expect("read exact durable Ingress owner set"),
-            std::collections::BTreeSet::from([
-                fixture.token.scheduler_ordinal,
-                earlier_token.scheduler_ordinal,
-            ])
-        );
-        {
-            // Round-robin history is independent of physical admission order.
-            // Put the replay source first to ensure only the physical barrier,
-            // rather than incidental ready-source order, protects the earlier
-            // carrier.
-            let mut state = fixture.ingress.state.lock();
-            state.ready = std::collections::VecDeque::from([
-                super::FairV2IngressSource::Validator(fixture.validator.clone()),
-                super::FairV2IngressSource::Validator(fixture.alternate_validator.clone()),
-            ]);
-            fixture.ingress.debug_assert_consistent(&state);
-        }
-        assert!(
-            fixture
-                .ingress
-                .try_recv_if(|inbound| {
-                    inbound.ingress_ownership().is_some_and(|ownership| {
-                        ownership.leader_wire_token() == Some(&fixture.token)
-                    })
-                })
-                .is_none(),
-            "the physically later replay cannot be selected merely because its logical ordinal is older"
-        );
-
-        let mut first = fixture
-            .ingress
-            .try_recv_if(|_| true)
-            .expect("the physically earlier leader-wire carrier drains first");
-        let mut first_ownership = first
-            .take_ingress_ownership()
-            .expect("leader-wire carrier retains ingress ownership");
-        assert_eq!(
-            first_ownership.leader_wire_token(),
-            Some(&earlier_token),
-            "physical order, not retained logical order, selects the owner"
-        );
-        fixture
-            .ingress
-            .bind_leader_wire_runtime_ownership(&mut first_ownership)
-            .expect("bind the selected fresh lifecycle");
-
-        let second = fixture
-            .ingress
-            .try_recv_if(|_| true)
-            .expect("the older logical replay drains on the next turn");
-        assert!(
-            second
-                .ingress_ownership()
-                .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
-        );
-    }
-
-    #[test]
-    fn restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant() {
-        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
-        fixture.ingress.state.lock().last_admission_ordinal = u64::MAX;
-
-        assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
-            Err(super::FairV2IngressPushError::FailStop(_))
-        ));
-        {
-            let state = fixture.ingress.state.lock();
-            assert!(
-                !state.open,
-                "physical ordinal exhaustion fails admission closed"
-            );
-            assert_eq!(state.len, 0, "no carrier was admitted");
-            let record = state
-                .leader_wire_lifecycles
-                .get(&fixture.token.slot)
-                .expect("restored lifecycle remains retained");
-            assert_eq!(record.status, super::FairV2IngressLeaderWireStatus::Dormant);
-            assert_eq!(record.token, fixture.token);
-        }
-        assert_eq!(
-            fixture
-                .gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("read dormant durable selector"),
-            None,
-            "ordinal exhaustion cannot publish a carrierless scheduler owner"
-        );
-    }
-
     include!("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs");
     #[test]
     fn authenticated_non_validator_source_cap_retries_third_source_until_one_lane_drains() {
@@ -9273,6 +9177,42 @@ mod authoritative_runtime_gate_tests {
             second.process_local_projection_hash(),
             "process-local scheduler projections must bind semantic origin"
         );
+
+        let first_projection = first.process_local_projection_hash();
+        let mut widened_capacity = first;
+        widened_capacity.first.resource_before.message_capacity = widened_capacity
+            .first
+            .resource_before
+            .message_capacity
+            .checked_add(1)
+            .expect("test capacity fits usize");
+        widened_capacity.first.resource_after.message_capacity = widened_capacity
+            .first
+            .resource_after
+            .message_capacity
+            .checked_add(1)
+            .expect("test capacity fits usize");
+        widened_capacity.latest.resource_before.message_capacity = widened_capacity
+            .latest
+            .resource_before
+            .message_capacity
+            .checked_add(1)
+            .expect("test capacity fits usize");
+        widened_capacity.latest.resource_after.message_capacity = widened_capacity
+            .latest
+            .resource_after
+            .message_capacity
+            .checked_add(1)
+            .expect("test capacity fits usize");
+        assert!(
+            widened_capacity.validate_exact(),
+            "a consistently wider resource envelope remains individually valid"
+        );
+        assert_ne!(
+            first_projection,
+            widened_capacity.process_local_projection_hash(),
+            "the process-local cut must bind complete occurrence resource geometry"
+        );
     }
 
     include!("tests/mod_authoritative_runtime_gate_06_source_isolation.rs");
@@ -9685,12 +9625,12 @@ mod authoritative_runtime_gate_tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key is canonical");
-        let recovery_chain_id = ChainId::from("fair-v2-ingress-test");
+        let recovery_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
         let (body_request, commit_request, commit_response) =
-            v2_maximum_recovery_wires(&recovery_chain_id, minimal_peer, 1);
+            v2_maximum_recovery_wires(&recovery_network_id, minimal_peer, 1);
         assert_eq!(
             super::fair_v2_ingress_required_recovery_request_bytes_for_key(
-                &recovery_chain_id,
+                &recovery_network_id,
                 1,
                 minimal_peer_key_bytes.len(),
             ),
@@ -9742,7 +9682,7 @@ mod authoritative_runtime_gate_tests {
         ingress
             .configure_roster_for_context(
                 validator_peers(4),
-                &ChainId::from("fair-v2-ingress-test"),
+                &crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
                 layout,
             )
             .expect("recommended four-validator genesis context fits default ingress bytes");
@@ -9802,7 +9742,7 @@ mod authoritative_runtime_gate_tests {
             "maximum completion must retain exact protocol-maximum direct-relay geometry"
         );
         assert!(protocol_maximum_response_frame >= actual_direct_response_frame);
-        let chain_id = ChainId::from("fair-v2-ingress-test");
+        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
         let roster_len = 1;
         let certified_bytes =
             super::fair_v2_ingress_required_certified_fence_escape_bytes(roster_len);
@@ -9810,7 +9750,7 @@ mod authoritative_runtime_gate_tests {
         let control_message_bytes = proposal_bytes
             .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(roster_len));
         let request_bytes =
-            super::fair_v2_ingress_required_recovery_request_bytes(&chain_id, roster_len);
+            super::fair_v2_ingress_required_recovery_request_bytes(&network_id, roster_len);
         let lane_progress_frame = super::fair_v2_ingress_required_lane_p2p_frame_bytes(
             super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
         );
@@ -9849,11 +9789,7 @@ mod authoritative_runtime_gate_tests {
             None,
         );
         let error = short
-            .configure_roster_for_context(
-                [validator.clone()],
-                &ChainId::from("fair-v2-ingress-test"),
-                layout,
-            )
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the exact completion ceiling fails closed");
         assert_eq!(error.configured(), required - 1);
         assert_eq!(error.required(), required);
@@ -9882,11 +9818,7 @@ mod authoritative_runtime_gate_tests {
                 None,
             );
         let ordinary_error = ordinary_short
-            .configure_roster_for_context(
-                [validator.clone()],
-                &ChainId::from("fair-v2-ingress-test"),
-                layout,
-            )
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("completion reserve cannot consume the reviewed ordinary region");
         assert_eq!(ordinary_error.configured(), ordinary_bytes - 1);
         assert_eq!(ordinary_error.required(), ordinary_bytes);
@@ -9896,22 +9828,15 @@ mod authoritative_runtime_gate_tests {
             .checked_add(certified_bytes)
             .and_then(|bytes| bytes.checked_add(required))
             .expect("test source bound fits usize");
-        let invalid_chain_id =
-            "x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES.saturating_add(1));
-        assert!(
-            ChainId::try_from(invalid_chain_id).is_err(),
-            "an overlong chain id must be rejected before ingress sizing"
+        let other_network_id =
+            crate::sumeragi::synthetic_network_id("fair-v2-ingress-other-genesis");
+        let other_network_request_bytes =
+            super::fair_v2_ingress_required_recovery_request_bytes(&other_network_id, roster_len);
+        assert_eq!(
+            other_network_request_bytes, request_bytes,
+            "fixed-width exact network identity keeps ingress sizing genesis-independent"
         );
-        let maximum_chain_id =
-            ChainId::try_from("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES))
-                .expect("maximum-length canonical chain id");
-        let maximum_request_bytes =
-            super::fair_v2_ingress_required_recovery_request_bytes(&maximum_chain_id, roster_len);
-        assert!(
-            maximum_request_bytes <= ordinary_bytes,
-            "the reviewed ordinary region must cover every canonical chain id"
-        );
-        let maximum_chain_ingress =
+        let other_network_ingress =
             super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
                 7,
                 2 * source_bytes,
@@ -9925,9 +9850,9 @@ mod authoritative_runtime_gate_tests {
                 usize::MAX,
                 None,
             );
-        maximum_chain_ingress
-            .configure_roster_for_context([validator.clone()], &maximum_chain_id, layout)
-            .expect("the maximum canonical chain id fits its ordinary byte owner");
+        other_network_ingress
+            .configure_roster_for_context([validator.clone()], &other_network_id, layout)
+            .expect("every exact network id fits its fixed-width ordinary byte owner");
 
         let ingress_with_caps = |consensus, control, block_sync, outbound_high| {
             super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
@@ -9951,7 +9876,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let consensus_error = consensus_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the recovery-request frame fails closed");
         assert_eq!(consensus_error.configured(), consensus_frame - 1);
         assert_eq!(consensus_error.required(), consensus_frame);
@@ -9964,7 +9889,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let control_error = control_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the maximal safety/control frame fails closed");
         assert_eq!(control_error.configured(), control_frame - 1);
         assert_eq!(control_error.required(), control_frame);
@@ -9977,7 +9902,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let block_sync_error = block_sync_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the payload-completion frame fails closed");
         assert_eq!(block_sync_error.configured(), block_sync_frame - 1);
         assert_eq!(block_sync_error.required(), block_sync_frame);
@@ -9990,7 +9915,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame - 1,
         );
         let outbound_error = outbound_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below one encrypted high frame fails closed");
         assert_eq!(outbound_error.configured(), outbound_high_frame - 1);
         assert_eq!(outbound_error.required(), outbound_high_frame);
@@ -10003,7 +9928,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         ingress
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect("exact completion ceiling leaves a reviewed ordinary partition");
         ingress.open().expect("exactly sized ingress opens");
 
@@ -10069,7 +9994,7 @@ mod authoritative_runtime_gate_tests {
         let error = ingress
             .configure_roster_for_context(
                 validator_peers(1),
-                &ChainId::from("overflow-test"),
+                &crate::sumeragi::synthetic_network_id("overflow-test"),
                 layout,
             )
             .expect_err(

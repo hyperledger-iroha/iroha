@@ -53,7 +53,10 @@ fn commit_roster_file_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
     let current = journal.join("current");
     if current.is_file() {
-        files.push((current.clone(), fs::read(&current).expect("read roster pointer")));
+        files.push((
+            current.clone(),
+            fs::read(&current).expect("read roster pointer"),
+        ));
     }
     let generations = journal.join("generations");
     if generations.is_dir() {
@@ -276,17 +279,20 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let (mut kura, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune boundary Kura");
     let blocks = store_dummy_block_arcs(&kura, 2);
-    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 2,
-        source_tip_hash: Some(blocks[1].hash()),
-        target_height: 1,
-        target_tip_hash: Some(blocks[0].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let preview = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 2,
+            source_tip_hash: Some(blocks[1].hash()),
+            target_height: 1,
+            target_tip_hash: Some(blocks[0].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     let exact_boundary = preview.capacity.admitted_peak_bytes;
 
     Arc::get_mut(&mut kura)
@@ -306,7 +312,10 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     kura.prune_to_height(1)
         .expect("the exact maintenance reserve must admit canonical prune publication");
     assert_eq!(kura.blocks_count(), 1);
-    assert_eq!(kura.get_block(nonzero!(1_usize)).as_deref(), Some(blocks[0].as_ref()));
+    assert_eq!(
+        kura.get_block(nonzero!(1_usize)).as_deref(),
+        Some(blocks[0].as_ref())
+    );
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
     assert!(!Kura::prune_intent_temp_path_for(temp_dir.path()).exists());
 }
@@ -321,17 +330,20 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
     assert!(roster_projection.required);
     assert!(roster_projection.retained_payload_bytes > 4 * 1024);
-    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 48,
-        source_tip_hash: Some(blocks[47].hash()),
-        target_height: 24,
-        target_tip_hash: Some(blocks[23].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let preview = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 48,
+            source_tip_hash: Some(blocks[47].hash()),
+            target_height: 24,
+            target_tip_hash: Some(blocks[23].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     assert_eq!(preview.capacity.roster, roster_projection);
     let exact = preview.capacity.admitted_peak_bytes;
 
@@ -361,22 +373,25 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
 fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
     let temp_dir = TempDir::new().expect("startup large-roster prune temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (mut kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("startup large-roster Kura");
+    let (mut kura, _) =
+        Kura::new(&config, &RuntimeLaneConfig::default()).expect("startup large-roster Kura");
     let blocks = store_dummy_block_arcs(&kura, 48);
     let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
     assert!(roster_projection.retained_payload_bytes > 4 * 1024);
-    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 48,
-        source_tip_hash: Some(blocks[47].hash()),
-        target_height: 24,
-        target_tip_hash: Some(blocks[23].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let preview = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 48,
+            source_tip_hash: Some(blocks[47].hash()),
+            target_height: 24,
+            target_tip_hash: Some(blocks[23].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     let exact = preview.capacity.admitted_peak_bytes;
     Arc::get_mut(&mut kura)
         .expect("startup large-roster Kura remains exclusive")
@@ -385,7 +400,10 @@ fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
     let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = kura.prune_to_height(24);
     }));
-    assert!(crash.is_err(), "intent boundary failpoint must stop the prune");
+    assert!(
+        crash.is_err(),
+        "intent boundary failpoint must stop the prune"
+    );
     crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
     let durable_intent = Kura::read_prune_intent(temp_dir.path())
         .expect("read startup large-roster intent")
@@ -430,17 +448,20 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
         kura.store_block(Arc::clone(block))
             .expect("store temp-crash canonical fixture block");
     }
-    let intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 2,
-        source_tip_hash: Some(blocks[1].hash()),
-        target_height: 1,
-        target_tip_hash: Some(blocks[0].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let intent = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 2,
+            source_tip_hash: Some(blocks[1].hash()),
+            target_height: 1,
+            target_tip_hash: Some(blocks[0].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     let encoded_len = u64::try_from(
         norito::encode_canonical(&intent)
             .expect("encode temp-crash intent")
@@ -513,20 +534,22 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
             .expect("project publication-crash retained sidecars")
     };
-    let intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 4,
-        source_tip_hash: Some(blocks[3].hash()),
-        target_height: 2,
-        target_tip_hash: Some(blocks[1].hash()),
-        retained_merge_entries: 1,
-        retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
-        sidecar_rewrite,
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let intent = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 4,
+            source_tip_hash: Some(blocks[3].hash()),
+            target_height: 2,
+            target_tip_hash: Some(blocks[1].hash()),
+            retained_merge_entries: 1,
+            retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
+            sidecar_rewrite,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     drop(kura);
-    let bytes = norito::encode_canonical(&intent)
-        .expect("encode publication-crash prune intent");
+    let bytes = norito::encode_canonical(&intent).expect("encode publication-crash prune intent");
     let temporary_path = Kura::prune_intent_temp_path_for(temp_dir.path());
     let stable_path = Kura::prune_intent_path_for(temp_dir.path());
 
@@ -581,17 +604,20 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
             .expect("project missing retained-carrier sidecars")
     };
-    let intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 4,
-        source_tip_hash: Some(blocks[3].hash()),
-        target_height: 2,
-        target_tip_hash: Some(blocks[1].hash()),
-        retained_merge_entries: 1,
-        retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
-        sidecar_rewrite,
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let intent = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 4,
+            source_tip_hash: Some(blocks[3].hash()),
+            target_height: 2,
+            target_tip_hash: Some(blocks[1].hash()),
+            retained_merge_entries: 1,
+            retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
+            sidecar_rewrite,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     kura.persist_prune_intent(&intent)
         .expect("persist missing retained-carrier prune intent");
     let retained_carrier = kura.merge_carrier_path(2);
@@ -650,9 +676,7 @@ fn seed_large_current_tip_sidecar_rewrite(kura: &Kura, tip_hash: HashOf<BlockHea
         },
         Vec::new(),
     ));
-    assert!(kura.write_roster_metadata(&RosterSidecar::new(
-        1, tip_hash, None, None, None,
-    )));
+    assert!(kura.write_roster_metadata(&RosterSidecar::new(1, tip_hash, None, None, None,)));
     assert!(kura.write_roster_metadata(&RosterSidecar::new(
         2,
         HashOf::from_untyped_unchecked(Hash::new(b"stale roster successor")),
@@ -805,17 +829,20 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
             ),
         "sequential rewrites reserve the larger exact pair, not their sum",
     );
-    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 1,
-        source_tip_hash: Some(blocks[0].hash()),
-        target_height: 1,
-        target_tip_hash: Some(blocks[0].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: projection,
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let preview = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 1,
+            source_tip_hash: Some(blocks[0].hash()),
+            target_height: 1,
+            target_tip_hash: Some(blocks[0].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: projection,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     let exact = preview.capacity.admitted_peak_bytes;
     let before = canonical_prune_sidecar_files(&kura);
 
@@ -837,7 +864,10 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = kura.prune_to_height(1);
     }));
-    assert!(crash.is_err(), "intent failpoint must stop before sidecar allocation");
+    assert!(
+        crash.is_err(),
+        "intent failpoint must stop before sidecar allocation"
+    );
     crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
     let intent = Kura::read_prune_intent(temp_dir.path())
         .expect("read exact current-tip intent")
@@ -874,17 +904,20 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(1)
             .expect("project startup retained pairs")
     };
-    let intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 1,
-        source_tip_hash: Some(blocks[0].hash()),
-        target_height: 1,
-        target_tip_hash: Some(blocks[0].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite,
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let intent = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 1,
+            source_tip_hash: Some(blocks[0].hash()),
+            target_height: 1,
+            target_tip_hash: Some(blocks[0].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     kura.persist_prune_intent(&intent)
         .expect("persist startup-capacity intent");
     let physical = kura
@@ -913,10 +946,7 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
         );
     }
     assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
-    let pipeline_directory = before[0]
-        .0
-        .parent()
-        .expect("pipeline sidecar has parent");
+    let pipeline_directory = before[0].0.parent().expect("pipeline sidecar has parent");
     assert!(
         !pipeline_directory
             .join(PIPELINE_SIDECARS_DATA_FILE)
@@ -954,17 +984,20 @@ fn startup_rejects_ambiguous_two_pair_rewrite_residues_before_mutation() {
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(1)
             .expect("project ambiguous-residue retained pairs")
     };
-    kura.persist_prune_intent(&admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 1,
-        source_tip_hash: Some(blocks[0].hash()),
-        target_height: 1,
-        target_tip_hash: Some(blocks[0].hash()),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite,
-        capacity: unsealed_prune_capacity_fixture(),
-    }))
+    kura.persist_prune_intent(&admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 1,
+            source_tip_hash: Some(blocks[0].hash()),
+            target_height: 1,
+            target_tip_hash: Some(blocks[0].hash()),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    ))
     .expect("persist ambiguous-residue intent");
     let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
     let pipeline_temp = directory

@@ -12,7 +12,7 @@ use std::{
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     events::data::sorafs::SorafsModerationLedgerEvent,
     metadata::Metadata,
     prelude::Json,
@@ -62,6 +62,14 @@ const PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION: ModerationRuntimeProvide
     ModerationRuntimeProviderQualificationV1::new(2, [0xB5; 32]);
 const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
     ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
+
+fn test_network_id() -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+    ))
+}
 
 #[derive(Debug)]
 struct MockRuntimeProvider {
@@ -254,8 +262,8 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
         &self.strict_ingress_provider
     }
 
-    fn chain_id(&self) -> ChainId {
-        ChainId::from("moderation-orchestrator-test")
+    fn network_id(&self) -> iroha_data_model::NetworkId {
+        test_network_id()
     }
 
     fn sign(
@@ -273,7 +281,7 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
         }
         let signer = key_for_authority(&request.authority);
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id,
             request.authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -542,8 +550,8 @@ impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
         self.inner.strict_ingress_provider()
     }
 
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
+    fn network_id(&self) -> iroha_data_model::NetworkId {
+        self.inner.network_id()
     }
 
     fn sign(
@@ -650,8 +658,8 @@ impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
         self.inner.strict_ingress_provider()
     }
 
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
+    fn network_id(&self) -> iroha_data_model::NetworkId {
+        self.inner.network_id()
     }
 
     fn sign(
@@ -705,8 +713,8 @@ impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
         self.inner.strict_ingress_provider()
     }
 
-    fn chain_id(&self) -> ChainId {
-        self.inner.chain_id()
+    fn network_id(&self) -> iroha_data_model::NetworkId {
+        self.inner.network_id()
     }
 
     fn sign(
@@ -1601,7 +1609,7 @@ fn config(temp: &TempDir, name: &str) -> ModerationOrchestratorConfigV1 {
 
 fn provider_test_request() -> ModerationTransactionRequestV1 {
     ModerationTransactionRequestV1::new(
-        ChainId::from("moderation-orchestrator-test"),
+        test_network_id(),
         1,
         account(41),
         policy_action(policy(1)),
@@ -1878,7 +1886,7 @@ fn seed_ready_operation_without_delivery(
     orchestrator.reconcile().expect("initial reconciliation");
     let action_digest = action.action_digest().expect("action digest");
     let operation_id = action
-        .operation_id(&orchestrator.chain_id, &authority)
+        .operation_id(&orchestrator.network_id, &authority)
         .expect("operation id");
     let mut state = orchestrator.state.lock().expect("orchestrator state");
     state.operations.push(StoredOperationV1 {
@@ -1964,7 +1972,7 @@ fn retained_envelope(
     let [entry] = state.outbox.as_slice() else {
         panic!("one retained moderation envelope");
     };
-    let request = moderation_transaction_request(&orchestrator.chain_id, entry)
+    let request = moderation_transaction_request(&orchestrator.network_id, entry)
         .expect("retained transaction request");
     let signed = moderation_signed_transaction(entry).expect("retained signed transaction");
     let transaction = signed

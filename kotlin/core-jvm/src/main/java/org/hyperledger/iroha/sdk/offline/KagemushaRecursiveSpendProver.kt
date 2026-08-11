@@ -12,11 +12,12 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ZkMerklePathEntry
 import org.hyperledger.iroha.sdk.client.ZkMerklePathResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * ABI-21 Kagemusha V4 artifact streaming and capability bridge.
+ * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -49,7 +50,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
-        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21
+        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
         /** Mandatory sender-final peer-cash handoff/finality contract. */
         const val CASH_HANDOFF_CAPABILITY_V1: String = "cash_handoff_v1"
@@ -756,7 +757,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun prepareTopUp(
-            chainId: String,
+            networkId: NetworkId,
             chainDiscriminant: Int,
             assetDefinitionId: String,
             payerAccountId: String,
@@ -782,7 +783,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 var locallyOwnedOpening: NoteOpening? = null
                 try {
                     val nativeFields = nativePrepareTopUpV4(
-                        utf8(chainId, "chainId"),
+                        networkId.bytes(),
                         requireChainDiscriminant(chainDiscriminant),
                         utf8(assetDefinitionId, "assetDefinitionId"),
                         utf8(payerAccountId, "payerAccountId"),
@@ -843,7 +844,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun prepareRecipientPaymentRequest(
-            chainId: String,
+            networkId: NetworkId,
             chainDiscriminant: Int,
             assetDefinitionId: String,
             amount: KagemushaScaledAmount,
@@ -870,7 +871,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 var locallyOwnedOpening: NoteOpening? = null
                 try {
                     val nativeFields = nativePrepareRecipientRequestV2(
-                        utf8(chainId, "chainId"),
+                        networkId.bytes(),
                         requireChainDiscriminant(chainDiscriminant),
                         utf8(assetDefinitionId, "assetDefinitionId"),
                         utf8(amount.atomicUnits, "atomicUnits"),
@@ -1134,7 +1135,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         /** Create the request-independent selector used to prefetch portable receiver lineage. */
         @JvmStatic
         fun createRecipientLineageQueryV2(
-            chainId: String,
+            networkId: NetworkId,
             chainDiscriminant: Int,
             recipientAccountId: String,
             receiverDeviceId: String,
@@ -1145,7 +1146,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(trustedCheckpointHeight > 0) { "trustedCheckpointHeight must be positive" }
             return RecipientLineageQueryV2(
                 nativeCreateRecipientLineageQueryV2(
-                    utf8(chainId, "chainId"),
+                    networkId.bytes(),
                     requireChainDiscriminant(chainDiscriminant),
                     utf8(recipientAccountId, "recipientAccountId"),
                     utf8(receiverDeviceId, "receiverDeviceId"),
@@ -1276,7 +1277,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             val fields = nativeProjectRecipientRequestV2(request.noritoEncoded())
             requireFieldCount(fields, 14, "recipient request projection")
             return RecipientRequestProjection(
-                chainId = canonicalText(fields[0], "chainId"),
+                networkId = NetworkId.fromBytes(requireDigest(fields[0], "networkId")),
                 assetDefinitionId = canonicalText(fields[1], "assetDefinitionId"),
                 amount = amount(fields[2], fields[3]),
                 recipientAccountId = canonicalText(fields[4], "recipientAccountId"),
@@ -2397,7 +2398,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativePrepareRecipientRequestV2(
-            chainId: ByteArray,
+            networkId: ByteArray,
             chainDiscriminant: Int,
             asset: ByteArray,
             atomicUnits: ByteArray,
@@ -2415,7 +2416,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
-        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(chainId: ByteArray, chainDiscriminant: Int, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
+        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(networkId: ByteArray, chainDiscriminant: Int, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV2(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeCreateRecipientReceiveOfferV2(request: ByteArray, lineage: ByteArray, publisherCheckpointEnvelope: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientReceiveOfferV2(offer: ByteArray): Array<ByteArray>
@@ -2446,7 +2447,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeFinalizeIosAppAttestAuthorizationV2(preparation: ByteArray, assertionObject: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeTopUpV4(unsigned: ByteArray, authorization: ByteArray): ByteArray
         @JvmStatic private external fun nativeFinalizeRedeemV4(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativePrepareTopUpV4(chainId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativePrepareTopUpV4(networkId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareRedemptionChangeV4(bundle: ByteArray, inputOpening: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>
@@ -3565,7 +3566,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     class RecipientRequestProjection internal constructor(
-        val chainId: String,
+        networkId: NetworkId,
         val assetDefinitionId: String,
         val amount: KagemushaScaledAmount,
         val recipientAccountId: String,
@@ -3579,6 +3580,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         receiverPublicKey: ByteArray,
         digest: ByteArray,
     ) {
+        private val networkIdValue = networkId
         private val requestIdValue = requireDigest(requestId, "requestId")
         private val outputCommitmentValue = requireDigest(outputCommitment, "outputCommitment")
         private val outputNullifierValue = requireDigest(outputNullifier, "outputNullifier")
@@ -3586,6 +3588,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val receiverPublicKeyValue = KagemushaDevicePublicKeyV2(receiverPublicKey)
         private val digestValue = requireDigest(digest, "requestDigest")
 
+        fun networkId(): NetworkId = networkIdValue
         fun requestId(): ByteArray = requestIdValue.copyOf()
         fun outputCommitment(): ByteArray = outputCommitmentValue.copyOf()
         fun outputNullifier(): ByteArray = outputNullifierValue.copyOf()
@@ -3823,7 +3826,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
             }
             require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-                "requiredBridgeAbiVersion must be 21"
+                "requiredBridgeAbiVersion must be 22"
             }
             require(maximumHops == MAXIMUM_PEER_HOPS) {
                 "maximumHops must match the cash_handoff_v1 bound"

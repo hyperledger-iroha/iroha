@@ -213,7 +213,8 @@ public final class AndroidOkHttpClientRefactorTests {
             .setFeePayment(
                 org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
                     java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", seed))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(seed & 0xffL))
             .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})

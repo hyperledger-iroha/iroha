@@ -398,14 +398,13 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     use iroha_crypto::{Algorithm, Signature, SignatureOf};
-    use iroha_crypto::{HashOf, KeyPair, MerkleTree};
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
     #[cfg(feature = "transparent_api")]
     use iroha_primitives::const_vec::ConstVec;
     use norito::codec::DecodeAll as _;
 
     use super::*;
     use crate::{
-        ChainId,
         account::AccountId,
         domain::DomainId,
         transaction::{
@@ -430,11 +429,10 @@ mod tests {
 
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = checked_random_keypair();
-        let chain: ChainId = "proof-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -445,6 +443,12 @@ mod tests {
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked block proof fixture keypair")
+    }
+
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
     }
 
     #[test]
@@ -634,7 +638,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = HeightContext {
-            chain_id: ChainId::from("trusted-proof-anchor-finality"),
+            network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
@@ -721,10 +725,8 @@ mod tests {
         HashOf<TransactionEntrypoint>,
     ) {
         let keypair = checked_random_keypair();
-        let chain: ChainId = "trusted-proof-anchor".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            chain,
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

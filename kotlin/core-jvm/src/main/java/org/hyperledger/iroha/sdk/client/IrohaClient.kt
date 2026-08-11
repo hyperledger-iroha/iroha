@@ -20,6 +20,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
 import org.hyperledger.iroha.sdk.crypto.Signer
@@ -32,8 +33,9 @@ interface IrohaClient {
     /**
      * Submits a signed transaction to the node.
      *
-     * The returned future completes with a response summary. Implementations should ensure retries
-     * remain deterministic and avoid replaying signatures unless explicitly requested.
+     * The signed bytes are dispatched at most once. A transport or ambiguous HTTP failure completes
+     * the future with [AmbiguousTransactionSubmissionException]; reconcile its transaction hash
+     * before constructing and signing any replacement.
      */
     fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse>
 
@@ -193,6 +195,7 @@ interface IrohaClient {
     fun submitAliasSetupPlan(
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        networkId: NetworkId,
         bodyEncoder: AliasPlanBodyNoritoEncoder,
         frameCodec: AliasEnsureInstructionFrameCodec,
         chainDiscriminant: Int,
@@ -205,6 +208,7 @@ interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         bodyEncoder,
         frameCodec,
         chainDiscriminant,
@@ -219,6 +223,7 @@ interface IrohaClient {
     fun submitAliasSetupPlan(
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
@@ -229,6 +234,7 @@ interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         chainDiscriminant,
         transactionBuilder,
         signer,
@@ -241,6 +247,7 @@ interface IrohaClient {
     fun submitAliasLifecyclePlan(
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        networkId: NetworkId,
         bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
         frameCodec: AliasLifecycleInstructionFrameCodec,
         chainDiscriminant: Int,
@@ -253,6 +260,7 @@ interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         bodyEncoder,
         frameCodec,
         chainDiscriminant,
@@ -267,6 +275,7 @@ interface IrohaClient {
     fun submitAliasLifecyclePlan(
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
@@ -277,6 +286,7 @@ interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         chainDiscriminant,
         transactionBuilder,
         signer,
@@ -321,6 +331,7 @@ interface IrohaClient {
     fun planSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         onboardingToken: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
         val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
         future.completeExceptionally(
@@ -334,6 +345,7 @@ interface IrohaClient {
         request: AccountOnboardingPlanRequestV1,
         onboardingToken: String,
         expectedAuthority: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
         val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
         future.completeExceptionally(
@@ -346,6 +358,7 @@ interface IrohaClient {
     fun applySponsoredAccountOnboarding(
         receipt: AccountOnboardingPlanReceiptV1,
         onboardingToken: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingResponseV1> {
         val future = CompletableFuture<AccountOnboardingResponseV1>()
         future.completeExceptionally(
@@ -359,6 +372,7 @@ interface IrohaClient {
         receipt: AccountOnboardingPlanReceiptV1,
         onboardingToken: String,
         expectedAuthority: String,
+        expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountOnboardingResponseV1> {
         val future = CompletableFuture<AccountOnboardingResponseV1>()
         future.completeExceptionally(

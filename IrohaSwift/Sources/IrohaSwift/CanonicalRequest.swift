@@ -52,7 +52,8 @@ public struct CanonicalRequest {
         return Data(rendered.utf8)
     }
 
-    public static func signatureMessage(method: String,
+    public static func signatureMessage(networkId: NetworkId,
+                                        method: String,
                                         path: String,
                                         query: String? = nil,
                                         body: Data = Data(),
@@ -65,11 +66,15 @@ public struct CanonicalRequest {
             throw CanonicalRequestError.invalidNonce
         }
         let base = canonicalMessage(method: method, path: path, query: query, body: body)
-        let rendered = "\(String(decoding: base, as: UTF8.self))\n\(timestampMs)\n\(nonce)"
-        return Data(rendered.utf8)
+        var message = Data("iroha.app.request.network.v1\0".utf8)
+        message.append(networkId.bytes)
+        message.append(base)
+        message.append(Data("\n\(timestampMs)\n\(nonce)".utf8))
+        return message
     }
 
     public static func signingHeaders(accountId: String,
+                                      networkId: NetworkId,
                                       method: String,
                                       path: String,
                                       query: String? = nil,
@@ -87,6 +92,7 @@ public struct CanonicalRequest {
             throw CanonicalRequestError.missingSigningKey
         }
         let message = try signatureMessage(
+            networkId: networkId,
             method: method,
             path: path,
             query: query,

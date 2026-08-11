@@ -46,12 +46,6 @@ pub struct ZkAssetState {
     pub tree_frontier: crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
     /// Current root authenticated by the incremental frontier and retained history.
     pub persisted_root: [u8; 32],
-    /// First-release public-plus-confidential asset mode.
-    pub mode: iroha_data_model::isi::zk::ZkAssetMode,
-    /// Whether authenticated public-to-confidential top-ups are permitted.
-    pub allow_shield: bool,
-    /// Whether authenticated confidential-to-public redemption is permitted for this asset.
-    pub allow_unshield: bool,
     /// Append‑only list of note commitments (leaves of the Merkle tree).
     pub commitments: Vec<[u8; 32]>,
     /// Historical Merkle roots for recent states (for light clients/proofs).
@@ -73,9 +67,6 @@ impl Default for ZkAssetState {
             tree_profile,
             tree_frontier: [None; crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2],
             persisted_root: tree_profile.empty_root(),
-            mode: iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            allow_shield: false,
-            allow_unshield: false,
             commitments: Vec::new(),
             root_history: Vec::new(),
             nullifiers: std::collections::BTreeSet::new(),

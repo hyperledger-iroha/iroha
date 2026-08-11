@@ -9,7 +9,7 @@ description: High-level design for the MOCHI local Iroha devnet app.
 ## Goals
 
 - Bootstrap exact 3f+1 local validator committees (four nodes by default) quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a Ganache-style local devnet workflow.
+- Wrap `kagami`, `iroha3d`, and supporting binaries in a Ganache-style local devnet workflow.
 - Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
 - Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
 - Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
@@ -27,7 +27,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 ## Process Model
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
+- Peer nodes run as separate `iroha3d` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
 - Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
 - Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
 - The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/v1/configuration` endpoints for health.
@@ -63,7 +63,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 ## Packaging and Distribution
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
+- MOCHI bundles (or discovers on `PATH`) the `iroha3d`, `iroha`, and `kagami` binaries.
 - Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
 - Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
 - Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.

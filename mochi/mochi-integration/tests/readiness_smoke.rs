@@ -1,3 +1,5 @@
+//! Readiness smoke tests against the in-process mock Torii service.
+
 use std::{
     net::{SocketAddr, TcpListener},
     num::NonZeroU64,
@@ -6,6 +8,7 @@ use std::{
 
 use color_eyre::Result;
 use iroha_data_model::{
+    NetworkId,
     events::{
         EventBox,
         pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
@@ -19,6 +22,12 @@ use mochi_core::{
 };
 use mochi_integration::{MockToriiBuilder, MockToriiFrame};
 use tokio::time::sleep;
+
+fn test_network_id() -> NetworkId {
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        .parse()
+        .expect("test network id")
+}
 
 fn reserve_port() -> std::io::Result<u16> {
     TcpListener::bind(("127.0.0.1", 0))
@@ -44,9 +53,10 @@ async fn readiness_smoke_succeeds_on_pipeline_event() -> Result<()> {
         .spawn()
         .await?;
 
-    let client = ToriiClient::new(format!("http://{}", mock.addr()))?;
+    let network_id = test_network_id();
+    let client = ToriiClient::new_for_network(format!("http://{}", mock.addr()), network_id)?;
     let signer = &development_signing_authorities()[0];
-    let mut plan = ReadinessSmokePlan::for_signer_with_attempts("local-test", signer, 1)?;
+    let mut plan = ReadinessSmokePlan::for_signer_with_attempts(network_id, signer, 1)?;
     plan.commit_options = SmokeCommitOptions::new(Duration::from_millis(800));
     plan.status_options = ReadinessOptions::new(Duration::from_millis(500))
         .with_poll_interval(Duration::from_millis(50));
@@ -98,9 +108,10 @@ async fn readiness_smoke_times_out_without_commit() -> Result<()> {
         .spawn()
         .await?;
 
-    let client = ToriiClient::new(format!("http://{}", mock.addr()))?;
+    let network_id = test_network_id();
+    let client = ToriiClient::new_for_network(format!("http://{}", mock.addr()), network_id)?;
     let signer = &development_signing_authorities()[0];
-    let mut plan = ReadinessSmokePlan::for_signer_with_attempts("local-timeout", signer, 1)?;
+    let mut plan = ReadinessSmokePlan::for_signer_with_attempts(network_id, signer, 1)?;
     plan.commit_options = SmokeCommitOptions::new(Duration::from_millis(150));
     plan.status_options = ReadinessOptions::new(Duration::from_millis(200))
         .with_poll_interval(Duration::from_millis(30));
@@ -133,9 +144,10 @@ async fn readiness_smoke_surfaces_stream_decode_errors() -> Result<()> {
         .spawn()
         .await?;
 
-    let client = ToriiClient::new(format!("http://{}", mock.addr()))?;
+    let network_id = test_network_id();
+    let client = ToriiClient::new_for_network(format!("http://{}", mock.addr()), network_id)?;
     let signer = &development_signing_authorities()[0];
-    let mut plan = ReadinessSmokePlan::for_signer_with_attempts("local-decode", signer, 1)?;
+    let mut plan = ReadinessSmokePlan::for_signer_with_attempts(network_id, signer, 1)?;
     plan.commit_options = SmokeCommitOptions::new(Duration::from_millis(300));
     plan.status_options = ReadinessOptions::new(Duration::from_millis(200))
         .with_poll_interval(Duration::from_millis(30));

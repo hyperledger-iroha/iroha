@@ -1,9 +1,14 @@
 //! `QueryResponse` Norito/JSON roundtrip coverage to guard client/server decode issues.
 
 use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    block::BlockHeader,
     da::{
         commitment::DaCommitmentLocation,
+        ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
         pin_intent::{DaPinIntent, DaPinIntentWithLocation},
+        types::BlobDigest,
     },
     domain::DomainId,
     nexus::LaneId,
@@ -15,6 +20,36 @@ use iroha_data_model::{
     rwa::{Rwa, RwaControlPolicy, RwaId},
 };
 use nonzero_ext::nonzero;
+
+fn checked_da_authorization(lane_id: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+    let key_pair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xE1; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("valid deterministic query-response DA key");
+    let mut authorization = DaIngestAuthorizationV1 {
+        network_id: NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xE2; 32]),
+            ),
+        ),
+        owner: AccountId::new(key_pair.public_key().clone()),
+        lane_id,
+        epoch,
+        sequence,
+        payload_hash: BlobDigest::new([0xE3; 32]),
+        payload_bytes: 1,
+        request_content_hash: iroha_crypto::Hash::prehashed([0xE4; 32]),
+        signatures: Vec::new(),
+    };
+    authorization.signatures.push(DaIngestSignatureV1 {
+        signer: key_pair.public_key().clone(),
+        signature: iroha_crypto::Signature::try_new(
+            key_pair.private_key(),
+            &authorization.signing_digest(),
+        )
+        .expect("sign deterministic query-response DA authorization"),
+    });
+    authorization
+}
 
 fn checked_random_account_id() -> iroha_data_model::AccountId {
     iroha_data_model::AccountId::new(
@@ -86,6 +121,7 @@ fn da_pin_intent_singular_roundtrip() {
         7,
         iroha_data_model::da::types::StorageTicketId::new([0xAA; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
+        checked_da_authorization(LaneId::new(3), 5, 7),
     );
     let with_location = DaPinIntentWithLocation {
         intent: intent.clone(),

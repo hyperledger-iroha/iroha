@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import hashlib
 import json
 import os
@@ -31,6 +29,7 @@ EXPECTED = {
 }
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 
 # These constants mirror the first-release release-mode contract in
 # configs/soranexus/taira/validate_privacy_bootstrap.py.  The installed
@@ -41,7 +40,8 @@ CHAIN_DISCRIMINANT = 369
 GENESIS_AUTHORITY = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
-MATRIX_FILE_SHA256 = "571624275503c91179ddea166025d80ecdf81e96fb5fd3c8500b8d1aad04a9e6"
+MATRIX_FILE_SHA256 = "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
+ROLLOUT_PLAN_SHA256 = "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
 REGISTRY_SHA256 = "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51"
 ISSUER_ID = hashlib.sha256(
     b"iroha.taira.privacy.bootle-lantern.issuer.v1"
@@ -51,10 +51,10 @@ POLICY_ID = hashlib.sha256(
 ).hexdigest()
 PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "a300e33200dae1927fe8394b7b523840317edd2ce3fb4e0272276b1ef8e70525"
+    "a235a552578f612033c2d335d4d2d4ba3afa9cb38fb73b4e6d95cd7ad14eeceb"
 )
 GENESIS_PUBLIC_BASE_SHA256 = (
-    "4739c1703e3b259f540e194302ae1d7c79f4c7fa1331088fa6755f8e39f1b352"
+    "ff00af54a8e2c28e8cc324301ca240ecc26f683c33ed57c51ffe406bc5148bed"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
@@ -90,6 +90,34 @@ class SnapshotError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise SnapshotError(message)
+
+
+def _crc16_ccitt_false(payload: bytes) -> int:
+    checksum = 0xFFFF
+    for byte in payload:
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ 0x1021) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return checksum
+
+
+def _canonical_network_id(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    match = NETWORK_ID_RE.fullmatch(value)
+    if match is None:
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    identity = bytes.fromhex(match.group(1))
+    prefix = value[:69]
+    if identity[-1] & 1 == 0 or _crc16_ccitt_false(prefix.encode("ascii")) != int(
+        match.group(2), 16
+    ):
+        _fail(f"{label} must be one canonical checksummed NetworkId")
+    return value
 
 
 def _file_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -247,8 +275,9 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
             "bootle_lantern_issuer",
             "chain_discriminant",
             "chain_id",
+            "network_id",
             "genesis_authority",
-            "genesis_registration",
+            "governance_rollout",
             "governance_permission",
             "privacy_catalog",
             "schema",
@@ -263,6 +292,7 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
         or plan["governance_permission"] != "CanEnactGovernance"
     ):
         _fail("privacy bootstrap plan identity differs from canonical Taira V1")
+    _canonical_network_id(plan["network_id"], "privacy bootstrap plan network_id")
     _exact_integer(plan["schema_version"], 1, "privacy plan schema version")
     _exact_integer(
         plan["chain_discriminant"],
@@ -270,43 +300,35 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
         "privacy plan chain discriminant",
     )
 
-    registration = _exact_object(
-        plan["genesis_registration"],
+    rollout = _exact_object(
+        plan["governance_rollout"],
         {
-            "activate_at_height",
-            "assurance",
-            "instruction_encoding",
-            "instruction_norito_sha256",
-            "lifecycle",
-            "minimum_activation_delay_blocks",
-            "pending_protocol_limits_tightening",
-            "proposed_at_height",
+            "activation_state",
+            "controller_observation_required",
+            "genesis_activation_forbidden",
+            "mode",
+            "notice_interval_blocks",
+            "observation_interval_blocks",
+            "rollout_plan_path",
+            "rollout_plan_sha256",
         },
-        "privacy genesis registration",
+        "privacy governance rollout",
     )
     if (
-        registration["lifecycle"] != "Proposed"
-        or registration["assurance"] != "experimental"
-        or registration["pending_protocol_limits_tightening"] is not False
-        or registration["instruction_encoding"]
-        != "norito-instruction-box-base64"
+        rollout["activation_state"] != "not-executed"
+        or rollout["controller_observation_required"] is not True
+        or rollout["genesis_activation_forbidden"] is not True
+        or rollout["mode"] != "governance-four-wave"
+        or rollout["rollout_plan_path"]
+        != "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+        or rollout["rollout_plan_sha256"] != ROLLOUT_PLAN_SHA256
     ):
-        _fail("privacy genesis registration differs from canonical release V1")
+        _fail("privacy governance rollout differs from canonical release V1")
     for field, expected in (
-        ("proposed_at_height", 1),
-        ("activate_at_height", 301),
-        ("minimum_activation_delay_blocks", 300),
+        ("notice_interval_blocks", 300),
+        ("observation_interval_blocks", 300),
     ):
-        _exact_integer(registration[field], expected, f"privacy registration {field}")
-    activation_hashes = registration["instruction_norito_sha256"]
-    if not isinstance(activation_hashes, list) or len(activation_hashes) != 12:
-        _fail("release plan must bind exactly twelve activation digests")
-    normalized_hashes = [
-        _fixed_sha256(value, f"activation digest {index}")
-        for index, value in enumerate(activation_hashes)
-    ]
-    if len(set(normalized_hashes)) != 12:
-        _fail("release activation digests must be unique")
+        _exact_integer(rollout[field], expected, f"privacy rollout {field}")
 
     catalog = _exact_object(
         plan["privacy_catalog"],
@@ -390,7 +412,7 @@ def _validate_release_plan(payload: bytes) -> dict[str, Any]:
         or provider["handle"] != PROVIDER_HANDLE
     ):
         _fail("Bootle/Lantern provider identity differs from canonical V1")
-    _exact_integer(provider["slot_wire_id"], 54, "runtime provider slot")
+    _exact_integer(provider["slot_wire_id"], 56, "runtime provider slot")
     _exact_integer(provider["revision"], 1, "runtime provider revision")
     _fixed_sha256(
         provider["qualification_policy_digest_hex"],
@@ -441,6 +463,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
             "authorization_lifetime_blocks",
             "broker_contract_digest_hex",
             "chain_id",
+            "network_id",
             "issuer_id_hex",
             "issuer_parameter_digest_hex",
             "issuer_parameter_id_hex",
@@ -465,6 +488,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
         broker["schema"]
         != "iroha.taira.privacy.bootle-lantern-broker-public.v1"
         or broker["chain_id"] != CHAIN_ID
+        or broker["network_id"] != plan["network_id"]
         or broker["runtime_provider_handle"] != PROVIDER_HANDLE
         or broker["issuer_id_hex"] != ISSUER_ID
         or broker["policy_id_hex"] != POLICY_ID
@@ -479,6 +503,7 @@ def _validate_broker_public(payload: bytes, plan: dict[str, Any]) -> dict[str, A
         or hashlib.sha256(payload).hexdigest() != bootle["public_export_sha256"]
     ):
         _fail("broker public export differs from the checked release plan")
+    _canonical_network_id(broker["network_id"], "broker public export network_id")
     _exact_integer(
         broker["runtime_provider_revision"], 1, "broker runtime provider revision"
     )
@@ -656,14 +681,18 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
     faucet = torii.get("faucet")
     credentials = onboarding.get("credentials") if isinstance(onboarding, dict) else None
     if (
-        config.get("private_key") != "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+        "private_key" in config
+        or config.get("private_key_file")
+        != "/run/secrets/iroha/taira-validator-private-key"
         or config.get("soranet_transport_public_key")
         != "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
-        or config.get("soranet_transport_private_key")
-        != "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
+        or "soranet_transport_private_key" in config
+        or config.get("soranet_transport_private_key_file")
+        != "/run/secrets/iroha/taira-soranet-transport-private-key"
         or not isinstance(kagemusha, dict)
-        or kagemusha.get("private_key")
-        != "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+        or "private_key" in kagemusha
+        or kagemusha.get("private_key_file")
+        != "/run/secrets/iroha/taira-kagemusha-commands-private-key"
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -675,12 +704,13 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
         or not isinstance(faucet, dict)
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
-        or streaming.get("identity_private_key")
-        != "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+        or "identity_private_key" in streaming
+        or streaming.get("identity_private_key_file")
+        != "/run/secrets/iroha/taira-streaming-identity-private-key"
     ):
         _fail(
             "public Taira config materializes or replaces a required runtime-identity, "
-            "private-key, token, or key-file placeholder"
+            "private-key, token, or reviewed runtime key-file handle"
         )
     base = {
         "root_without_torii": {
@@ -721,20 +751,8 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
         _fail("public Taira issuer config has unknown, secret, or noncanonical fields")
 
 
-def _canonical_base64(value: Any, label: str) -> bytes:
-    if not isinstance(value, str):
-        _fail(f"{label} must be a canonical base64 string")
-    try:
-        payload = base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise SnapshotError(f"{label} is not canonical base64") from exc
-    if not payload or base64.b64encode(payload).decode("ascii") != value:
-        _fail(f"{label} is empty or noncanonical base64")
-    return payload
-
-
 def _validate_public_genesis(
-    payload: bytes, plan: dict[str, Any], broker: dict[str, Any]
+    payload: bytes, _plan: dict[str, Any], _broker: dict[str, Any]
 ) -> None:
     genesis = _strict_json_object(payload, "public Taira genesis")
     canonical = (
@@ -769,43 +787,19 @@ def _validate_public_genesis(
             transaction.get("instructions"), list
         ):
             _fail(f"public genesis transaction {index} has no instruction array")
-    final_instructions = transactions[-1]["instructions"]
-    if len(final_instructions) < 13:
-        _fail("public release genesis lacks the exact privacy instruction tail")
-    tail = final_instructions[-13:]
-    if not all(isinstance(value, str) for value in tail):
-        _fail("public release genesis privacy tail must contain only encoded instructions")
     if any(
         isinstance(instruction, str)
-        for transaction in transactions[:-1]
+        for transaction in transactions
         for instruction in transaction["instructions"]
-    ) or any(isinstance(instruction, str) for instruction in final_instructions[:-13]):
-        _fail("public release genesis contains an encoded instruction outside the exact tail")
-
-    base_transactions = list(transactions)
-    final_transaction = dict(base_transactions[-1])
-    final_transaction["instructions"] = list(final_instructions[:-13])
-    base_transactions[-1] = final_transaction
-    base = dict(genesis)
-    base["transactions"] = base_transactions
-    if hashlib.sha256(_semantic_bytes(base, "public genesis base")).hexdigest() != (
+    ):
+        _fail(
+            "public release genesis must not schedule encoded privacy activation or "
+            "issuer-policy instructions"
+        )
+    if hashlib.sha256(_semantic_bytes(genesis, "public genesis base")).hexdigest() != (
         GENESIS_PUBLIC_BASE_SHA256
     ):
         _fail("public Taira genesis differs from the canonical secret-free base")
-    decoded = [
-        _canonical_base64(value, f"privacy genesis instruction {index}")
-        for index, value in enumerate(tail)
-    ]
-    activation_hashes = plan["genesis_registration"]["instruction_norito_sha256"]
-    if [hashlib.sha256(value).hexdigest() for value in decoded[:12]] != activation_hashes:
-        _fail("public genesis activation tail differs from the release plan")
-    broker_instruction = bytes.fromhex(broker["registration_instruction_norito_hex"])
-    if (
-        decoded[12] != broker_instruction
-        or hashlib.sha256(decoded[12]).hexdigest()
-        != broker["registration_instruction_norito_sha256"]
-    ):
-        _fail("public genesis issuer-policy tail differs from the broker export")
 
 
 def _validate_secret_free_projection(payloads: dict[str, bytes]) -> None:

@@ -1,25 +1,21 @@
-//! Canonical Sumeragi v2 genesis/handshake fingerprint projection.
+//! Canonical Sumeragi v2 consensus-parameters fingerprint projection.
 
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
 
 use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
-use crate::{
-    ChainId,
-    block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
-};
+use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
 
-const DOMAIN: &[u8] = b"iroha:sumeragi:v2:genesis-fingerprint\0";
+const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0";
 
-/// Version of the canonical v2 genesis-fingerprint projection.
+/// Version of the canonical v2 consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;
 
 #[derive(Encode)]
-struct GenesisFingerprintInput {
+struct ConsensusParametersFingerprintInput {
     format_version: u16,
     protocol_version: u32,
-    chain_id: ChainId,
     mode: ConsensusMode,
     block_cadence_ms: core::num::NonZeroU64,
     block_max_transactions: core::num::NonZeroU64,
@@ -45,19 +41,22 @@ struct NposGenesisFingerprintInput {
     slashing_delay_blocks: u64,
 }
 
-/// Compute the live v2 genesis/handshake fingerprint.
+/// Compute the deterministic v2 consensus-parameters fingerprint.
 ///
 /// Only frozen v2 inputs are representable in the encoded projection. Legacy
 /// collectors, per-phase/adaptive timers, the global-RBC enable flag, the BLS
 /// domain string, and node-local fallbacks are deliberately discarded. Live
-/// startup therefore cannot fingerprint input that omits its v2 context.
+/// startup therefore cannot fingerprint input that omits its v2 context. Exact
+/// network identity is deliberately not part of this genesis-embedded value:
+/// runtime handshakes authenticate a separate required `NetworkId`, avoiding a
+/// self-reference through the genesis block hash.
 ///
 /// # Errors
 ///
 /// Returns an error when the signed genesis parameters violate the first-release
 /// consensus invariants.
 #[must_use = "a rejected genesis carrier must not be fingerprinted"]
-pub fn compute(chain_id: &ChainId, params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
+pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
     params.validate()?;
     let (mode, npos) = match &params.mode {
         ConsensusGenesisModeParams::Permissioned => (ConsensusMode::Permissioned, None),
@@ -81,10 +80,9 @@ pub fn compute(chain_id: &ChainId, params: &ConsensusGenesisParams) -> Result<[u
             }),
         ),
     };
-    let projection = GenesisFingerprintInput {
+    let projection = ConsensusParametersFingerprintInput {
         format_version: FORMAT_VERSION,
         protocol_version: params.protocol_version,
-        chain_id: chain_id.clone(),
         mode,
         block_cadence_ms: params.block_cadence_ms,
         block_max_transactions: params.block_max_transactions,
@@ -139,75 +137,57 @@ mod tests {
 
     #[test]
     fn signed_cadence_changes_live_fingerprint() {
-        let chain = ChainId::from("fingerprint-cadence");
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.block_cadence_ms = core::num::NonZeroU64::new(1_001).unwrap();
 
-        assert_ne!(
-            compute(&chain, &baseline).unwrap(),
-            compute(&chain, &changed).unwrap(),
-        );
+        assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
 
     #[test]
     fn signed_context_mismatch_changes_live_fingerprint() {
-        let chain = ChainId::from("fingerprint-context-mismatch");
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.v2_context.nexus_amx_context_hash[0] ^= 1;
 
-        assert_ne!(
-            compute(&chain, &baseline).unwrap(),
-            compute(&chain, &changed).unwrap(),
-        );
+        assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
 
     #[test]
     fn signed_execution_policy_mismatch_changes_live_fingerprint() {
-        let chain = ChainId::from("fingerprint-execution-policy-mismatch");
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.v2_context.execution_policy_hash[0] ^= 1;
 
-        assert_ne!(
-            compute(&chain, &baseline).unwrap(),
-            compute(&chain, &changed).unwrap(),
-        );
+        assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
 
     #[test]
     fn npos_election_input_changes_live_fingerprint() {
-        let chain = ChainId::from("fingerprint-npos-election");
         let baseline = npos_params();
         let mut changed = baseline.clone();
         let ConsensusGenesisModeParams::Npos(npos) = &mut changed.mode else {
             unreachable!()
         };
         npos.epoch_seed[0] ^= 1;
-        assert_ne!(
-            compute(&chain, &baseline).unwrap(),
-            compute(&chain, &changed).unwrap(),
-        );
+        assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
 
     #[test]
     fn all_zero_npos_seed_is_rejected_before_hashing() {
-        let chain = ChainId::from("fingerprint-zero-seed");
         let mut params = npos_params();
         let ConsensusGenesisModeParams::Npos(npos) = &mut params.mode else {
             unreachable!()
         };
         npos.epoch_seed = [0; 32];
-        assert!(compute(&chain, &params).is_err());
+        assert!(compute(&params).is_err());
     }
 
     #[test]
     fn unsupported_protocol_is_rejected_before_hashing() {
         let mut params = permissioned_params();
         params.protocol_version += 1;
-        let error = compute(&ChainId::from("unsupported-protocol"), &params)
-            .expect_err("unsupported wire revision must fail closed");
+        let error = compute(&params).expect_err("unsupported wire revision must fail closed");
         assert!(error.contains("unsupported consensus protocol version"));
     }
 
@@ -215,8 +195,7 @@ mod tests {
     fn invalid_data_availability_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
         params.v2_context.da_layout.chunk_size_bytes = 0;
-        let error = compute(&ChainId::from("invalid-da-layout"), &params)
-            .expect_err("zero DA chunk size must fail closed");
+        let error = compute(&params).expect_err("zero DA chunk size must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
 
@@ -224,8 +203,7 @@ mod tests {
     fn zero_execution_policy_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
         params.v2_context.execution_policy_hash = [0; 32];
-        let error = compute(&ChainId::from("invalid-execution-policy"), &params)
-            .expect_err("zero execution-policy hash must fail closed");
+        let error = compute(&params).expect_err("zero execution-policy hash must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
 
@@ -237,8 +215,8 @@ mod tests {
         };
         npos.vrf_commit_window_blocks = 3_599;
         npos.vrf_reveal_window_blocks = 2;
-        let error = compute(&ChainId::from("invalid-vrf-windows"), &params)
-            .expect_err("VRF windows outside the signed epoch must fail closed");
+        let error =
+            compute(&params).expect_err("VRF windows outside the signed epoch must fail closed");
         assert!(error.contains("close before the epoch boundary"));
     }
 
@@ -249,8 +227,16 @@ mod tests {
             unreachable!()
         };
         npos.max_entity_correlation_pct = 101;
-        let error = compute(&ChainId::from("invalid-election-percentage"), &params)
-            .expect_err("invalid signed election percentages must fail closed");
+        let error =
+            compute(&params).expect_err("invalid signed election percentages must fail closed");
         assert!(error.contains("percentages"));
+    }
+
+    #[test]
+    fn genesis_embedded_fingerprint_is_deterministic_without_genesis_hash_input() {
+        let params = permissioned_params();
+        let first = compute(&params).expect("valid parameters fingerprint");
+        let second = compute(&params).expect("same valid parameters fingerprint");
+        assert_eq!(first, second);
     }
 }

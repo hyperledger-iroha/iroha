@@ -59,14 +59,16 @@ def _cleanup_external_roots() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def _install_source_bound_fake_localnet_binaries(program_target: Path) -> tuple[Path, str]:
+def _install_source_bound_fake_localnet_binaries(
+    program_target: Path,
+) -> tuple[Path, str]:
     attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
     binaries = {
-        "irohad": program_target / "release" / "irohad",
+        "irohad": program_target / "release" / "iroha3d",
         "irohad_message_control": (
-            program_target / "message-control" / "release" / "irohad"
+            program_target / "message-control" / "release" / "iroha3d"
         ),
         "iroha": program_target / "release" / "iroha",
         "kagami": program_target / "release" / "kagami",
@@ -101,8 +103,8 @@ def _install_source_bound_fake_localnet_binaries(program_target: Path) -> tuple[
         ("bundle_dir", str(program_target)),
     ]
     for label, relative in (
-        ("irohad", "release/irohad"),
-        ("irohad_message_control", "message-control/release/irohad"),
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     ):
@@ -137,12 +139,13 @@ def _stubbed_environment(
     inventory_mode: str = "one",
     run_mode: str = "one",
     evidence_check_status: int = 0,
+    program_target_name: str = "invocation.tairafixture",
 ) -> tuple[dict[str, str], Path]:
     external_root = Path(
-        tempfile.mkdtemp(prefix="iroha-taira-launcher-test-", dir="/private/tmp")
+        tempfile.mkdtemp(prefix="iroha-taira-v2-soak-test-", dir="/private/tmp")
     )
     _EXTERNAL_ROOTS.append(external_root)
-    cargo_target_dir = external_root / "target"
+    cargo_target_dir = external_root / "cargo-target"
     artifact_root = external_root / "artifacts"
     cargo_target_dir.mkdir(mode=0o700)
     artifact_root.mkdir(mode=0o700)
@@ -151,7 +154,7 @@ def _stubbed_environment(
         / "sumeragi-v2-release"
         / SOURCE_MANIFEST
         / "programs"
-        / "invocation.tairafixture"
+        / program_target_name
     )
     program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries(
         program_target
@@ -376,9 +379,9 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
 ) -> None:
     env, capture = _stubbed_environment(tmp_path)
     env.update({name: "inherited-malicious-override" for name in PINNED_ENV})
-    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-irohad"
+    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-iroha3d"
     env["KAGAMI_BIN"] = "/tmp/malicious-kagami"
-    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-irohad"
+    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-iroha3d"
     env["TEST_NETWORK_BIN_IROHA"] = "/tmp/malicious-iroha"
     env["TEST_NETWORK_IROHAD_FEATURES"] = "malicious-feature"
     env["CARGO_BIN_EXE_iroha"] = "/tmp/malicious-cargo-iroha"
@@ -468,7 +471,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert checker_arguments[target_index + 1] == str(cargo_target_dir)
     assert (
         captured.count(
-            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'irohad'}\n"
+            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'}\n"
         )
         == 2
     )
@@ -479,7 +482,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert (
         captured.count(
             "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-            f"{program_target / 'message-control' / 'release' / 'irohad'}\n"
+            f"{program_target / 'message-control' / 'release' / 'iroha3d'}\n"
         )
         == 2
     )
@@ -520,9 +523,14 @@ def test_launcher_rejects_zero_test_execution_output(tmp_path: Path) -> None:
 def test_launcher_rejects_bundle_tampering_before_completion(
     tmp_path: Path,
 ) -> None:
-    env, _capture = _stubbed_environment(tmp_path, run_mode="tamper-bundle")
+    invocation_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    env, _capture = _stubbed_environment(
+        tmp_path,
+        run_mode="tamper-bundle",
+        program_target_name=f"invocation.T{invocation_suffix}",
+    )
     program_target = Path(env["IROHA_TEST_TARGET_DIR"])
-    binary = program_target / "release" / "irohad"
+    binary = program_target / "release" / "iroha3d"
     original = binary.read_bytes()
     env["TAIRA_TAMPER_BINARY"] = str(binary)
     completion_pointer = tmp_path / "taira-completion-path"

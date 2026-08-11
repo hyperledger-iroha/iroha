@@ -20,7 +20,7 @@ use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
 
-fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyPair) {
+fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
@@ -33,8 +33,9 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain = ChainId::from("chain");
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let state =
+        State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -48,7 +49,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     #[cfg(feature = "sm")]
     if matches!(algo, Algorithm::Sm2) {}
     state.set_crypto(crypto_cfg);
-    (state, account_id, chain, kp)
+    (state, account_id, network_id, kp)
 }
 
 fn checked_random_keypair() -> KeyPair {
@@ -107,12 +108,12 @@ fn build_block_with_txs(
     bad_kp: &KeyPair,
     leader_kp: &KeyPair,
     authority: &AccountId,
-    chain: &ChainId,
+    network_id: &NetworkId,
 ) -> SignedBlock {
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, kp: &KeyPair| {
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            *network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -156,7 +157,7 @@ fn bls_pop_metadata(kp: &KeyPair) -> iroha_data_model::Metadata {
 
 #[cfg(feature = "bls")]
 fn mk_tx_with_creation_time(
-    chain: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     msg: &str,
     ct_ms: u64,
@@ -165,7 +166,7 @@ fn mk_tx_with_creation_time(
 ) -> SignedTransaction {
     use core::time::Duration;
     let mut b = TransactionBuilder::new(
-        chain.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -287,14 +288,14 @@ fn enable_bls_batching(state: &mut iroha_core::state::State) {
 #[test]
 fn bls_same_message_group_duplicate_rejected() {
     // World and keys
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
 
     // Two transactions with identical payloads (same creation_time and instructions), both signed correctly
     let ct = 1_651_234_567u64;
-    let tx1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
-    let tx2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
+    let tx1 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
+    let tx2 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
 
     let ct_ms = u64::max(
         tx1.creation_time().as_millis() as u64,
@@ -313,7 +314,6 @@ fn bls_same_message_group_duplicate_rejected() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -340,18 +340,18 @@ fn bls_same_message_group_duplicate_rejected() {
 #[test]
 fn bls_mixed_group_and_singletons_duplicate_rejected() {
     // World and keys
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
 
     // Two identical valid transactions (same payload) form the same-message group
     let ct = 1_651_234_567u64;
-    let tx_same1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
-    let tx_same2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
+    let tx_same1 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
+    let tx_same2 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
 
     // Two distinct valid transactions (different payloads) serve as singletons
-    let tx_s1 = mk_tx_with_creation_time(&chain, &authority, "s1", ct + 1, &good, &good);
-    let tx_s2 = mk_tx_with_creation_time(&chain, &authority, "s2", ct + 2, &good, &good);
+    let tx_s1 = mk_tx_with_creation_time(&network_id, &authority, "s1", ct + 1, &good, &good);
+    let tx_s2 = mk_tx_with_creation_time(&network_id, &authority, "s2", ct + 2, &good, &good);
 
     let block =
         presigned_block_with_creation_after_txs(&leader, vec![tx_same1, tx_same2, tx_s1, tx_s2]);
@@ -361,7 +361,6 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -384,15 +383,15 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_same_message_group_bisect_bad() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
 
     let ct = 1_651_234_567u64;
-    let tx_good = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
+    let tx_good = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
     // Same payload but signed with a key that does not match the authority
-    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "same", ct, &bad, &good);
+    let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &bad, &good);
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_good, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
@@ -401,7 +400,6 @@ fn bls_same_message_group_bisect_bad() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -428,13 +426,13 @@ fn bls_same_message_group_bisect_bad() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_multi_message_verification_ok() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
 
     // Two distinct messages with current creation time (avoid TTL rejection)
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -442,7 +440,7 @@ fn bls_multi_message_verification_ok() {
     .with_metadata(bls_pop_metadata(&good))
     .sign(good.private_key());
     let tx2 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -457,7 +455,6 @@ fn bls_multi_message_verification_ok() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -478,16 +475,15 @@ fn bls_multi_message_verification_ok() {
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_rejected_when_sm_disabled() {
-        let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::Sm2);
+        let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
         let leader = checked_random_keypair();
-        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &chain);
+        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
         let result = ValidBlock::validate(
             block,
             &topology,
-            &chain,
             &authority,
             &iroha_primitives::time::TimeSource::new_system(),
             &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -502,16 +498,15 @@ fn bls_multi_message_verification_ok() {
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_accepted() {
-        let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::Sm2);
+        let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
         let leader = checked_random_keypair();
-        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &chain);
+        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
         let result = ValidBlock::validate(
             block,
             &topology,
-            &chain,
             &authority,
             &iroha_primitives::time::TimeSource::new_system(),
             &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -529,12 +524,12 @@ fn bls_multi_message_verification_ok() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
-    let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = signer.clone();
 
     let mut tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -545,7 +540,7 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     .with_metadata(bls_pop_metadata(&signer))
     .sign(signer.private_key());
     let mut tx2 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -594,7 +589,6 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -612,14 +606,14 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_multi_message_verification_fails_and_counts() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
 
     let ct = 1_751_234_567u64;
-    let tx_valid = mk_tx_with_creation_time(&chain, &authority, "m1", ct, &good, &good);
-    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "m2", ct + 1, &bad, &good);
+    let tx_valid = mk_tx_with_creation_time(&network_id, &authority, "m1", ct, &good, &good);
+    let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "m2", ct + 1, &bad, &good);
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
@@ -628,7 +622,6 @@ fn bls_multi_message_verification_fails_and_counts() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -663,10 +656,10 @@ fn bls_multi_message_verification_fails_and_counts() {
 #[test]
 fn bls_batch_bisection_finds_bad_sig() {
     // Normal BLS variant
-    let (state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
-    let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
+    let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
@@ -674,7 +667,6 @@ fn bls_batch_bisection_finds_bad_sig() {
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -689,17 +681,16 @@ fn bls_batch_bisection_finds_bad_sig() {
 #[test]
 fn mldsa_batch_bisection_finds_bad_sig() {
     // ML‑DSA (Dilithium3)
-    let (state, authority, chain, good) = setup_world_with_account(Algorithm::MlDsa);
+    let (state, authority, network_id, good) = setup_world_with_account(Algorithm::MlDsa);
     let bad = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
     let leader = checked_random_keypair();
-    let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
+    let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -713,17 +704,16 @@ fn mldsa_batch_bisection_finds_bad_sig() {
 
 #[test]
 fn ed25519_batch_bisection_finds_bad_sig() {
-    let (state, authority, chain, good) = setup_world_with_account(Algorithm::Ed25519);
+    let (state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
     let bad = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
     let leader = checked_random_keypair();
-    let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
+    let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -737,17 +727,16 @@ fn ed25519_batch_bisection_finds_bad_sig() {
 
 #[test]
 fn secp256k1_batch_bisection_finds_bad_sig() {
-    let (state, authority, chain, good) = setup_world_with_account(Algorithm::Secp256k1);
+    let (state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
     let bad = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
     let leader = checked_random_keypair();
-    let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
+    let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
 
     let result = ValidBlock::validate(
         block,
         &topology,
-        &chain,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
@@ -761,7 +750,7 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
 
 #[test]
 fn rejects_transaction_signed_with_disallowed_algorithm() {
-    let (state, authority, chain, secp) = setup_world_with_account(Algorithm::Secp256k1);
+    let (state, authority, network_id, secp) = setup_world_with_account(Algorithm::Secp256k1);
     let max_clock_drift = core::time::Duration::from_secs(0);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -773,7 +762,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
         default_limits.max_metadata_depth(),
     );
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -789,7 +778,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
             &crypto_cfg.allowed_signing,
         );
     state.set_crypto(crypto_cfg.clone());
-    match AcceptedTransaction::accept(tx, &chain, max_clock_drift, tx_limits, &crypto_cfg) {
+    match AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg) {
         Err(AcceptTransactionFail::SignatureVerification(fail)) => {
             assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             assert!(
@@ -804,7 +793,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
 
 #[test]
 fn accepts_transaction_once_algorithm_whitelisted() {
-    let (state, authority, chain, secp) = setup_world_with_account(Algorithm::Secp256k1);
+    let (state, authority, network_id, secp) = setup_world_with_account(Algorithm::Secp256k1);
     let max_clock_drift = Duration::from_secs(0);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -816,7 +805,7 @@ fn accepts_transaction_once_algorithm_whitelisted() {
         default_limits.max_metadata_depth(),
     );
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -831,13 +820,13 @@ fn accepts_transaction_once_algorithm_whitelisted() {
     }
     state.set_crypto(crypto_cfg.clone());
 
-    AcceptedTransaction::accept(tx, &chain, max_clock_drift, tx_limits, &crypto_cfg)
+    AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
         .expect("transaction should be accepted after whitelisting");
 }
 
 #[test]
 fn rejects_transaction_when_ttl_expired() {
-    let (state, authority, chain, kp) = setup_world_with_account(Algorithm::Ed25519);
+    let (state, authority, network_id, kp) = setup_world_with_account(Algorithm::Ed25519);
     let max_clock_drift = Duration::from_secs(0);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -850,7 +839,7 @@ fn rejects_transaction_when_ttl_expired() {
     );
 
     let mut builder = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -860,7 +849,7 @@ fn rejects_transaction_when_ttl_expired() {
     let tx = builder.sign(kp.private_key());
 
     let crypto_cfg = (*state.crypto()).clone();
-    match AcceptedTransaction::accept(tx, &chain, max_clock_drift, tx_limits, &crypto_cfg) {
+    match AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg) {
         Err(AcceptTransactionFail::TransactionExpired { .. }) => {}
         other => panic!("expected TransactionExpired failure, got {other:?}"),
     }
@@ -868,7 +857,7 @@ fn rejects_transaction_when_ttl_expired() {
 
 #[test]
 fn accepts_transaction_with_valid_ttl() {
-    let (state, authority, chain, kp) = setup_world_with_account(Algorithm::Ed25519);
+    let (state, authority, network_id, kp) = setup_world_with_account(Algorithm::Ed25519);
     let max_clock_drift = Duration::from_secs(5);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -886,7 +875,7 @@ fn accepts_transaction_with_valid_ttl() {
     let creation_time = now.saturating_sub(Duration::from_secs(1));
 
     let mut builder = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -896,6 +885,6 @@ fn accepts_transaction_with_valid_ttl() {
     let tx = builder.sign(kp.private_key());
 
     let crypto_cfg = (*state.crypto()).clone();
-    AcceptedTransaction::accept(tx, &chain, max_clock_drift, tx_limits, &crypto_cfg)
+    AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
         .expect("transaction with unexpired TTL should be accepted");
 }

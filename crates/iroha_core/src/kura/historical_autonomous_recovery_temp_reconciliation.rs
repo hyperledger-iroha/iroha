@@ -187,8 +187,7 @@ impl Kura {
                 "historical recovery publication artifact is not a regular no-follow file",
             ));
         }
-        let Some(links) =
-            Self::historical_autonomous_recovery_publication_link_count(&before)
+        let Some(links) = Self::historical_autonomous_recovery_publication_link_count(&before)
         else {
             return Err(Self::invalid_historical_autonomous_recovery(
                 path.to_path_buf(),
@@ -197,8 +196,7 @@ impl Kura {
         };
         if before.len() == 0
             || before.len()
-                > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)
-                    .unwrap_or(u64::MAX)
+                > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES).unwrap_or(u64::MAX)
         {
             return Err(Self::invalid_historical_autonomous_recovery(
                 path.to_path_buf(),
@@ -258,10 +256,7 @@ impl Kura {
         }
         let mut bytes = Vec::with_capacity(usize::try_from(before.len())?);
         std::io::Read::by_ref(&mut file)
-            .take(
-                u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?
-                    .saturating_add(1),
-            )
+            .take(u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let opened_after = file
@@ -288,14 +283,15 @@ impl Kura {
             ));
         }
         let mut cursor = bytes.as_slice();
-        let record = HistoricalAutonomousLaneRecoveryRecordV1::decode_all(&mut cursor).map_err(
-            |error| {
+        let record =
+            HistoricalAutonomousLaneRecoveryRecordV1::decode_all(&mut cursor).map_err(|error| {
                 Self::invalid_historical_autonomous_recovery(
                     path.to_path_buf(),
-                    format!("historical recovery publication artifact is not exact Norito: {error}"),
+                    format!(
+                        "historical recovery publication artifact is not exact Norito: {error}"
+                    ),
                 )
-            },
-        )?;
+            })?;
         if historical_autonomous_recovery_record_bytes(&record) != bytes {
             return Err(Self::invalid_historical_autonomous_recovery(
                 path.to_path_buf(),
@@ -393,7 +389,8 @@ impl Kura {
             count: usize,
         }
 
-        let mut aliases = BTreeMap::<HistoricalAutonomousRecoveryPublicationIdentity, Aliases>::new();
+        let mut aliases =
+            BTreeMap::<HistoricalAutonomousRecoveryPublicationIdentity, Aliases>::new();
         let mut unique_bytes = 0_u64;
         for (index, artifact) in artifacts.iter().enumerate() {
             match aliases.entry(artifact.identity) {
@@ -531,10 +528,8 @@ impl Kura {
         let mut temporary_by_stable_path = BTreeMap::new();
         let mut stable_by_path = BTreeMap::new();
         for entry in entries {
-            let directory = Self::historical_autonomous_recovery_directory_for_entry(
-                entry,
-                &self.store_root,
-            );
+            let directory =
+                Self::historical_autonomous_recovery_directory_for_entry(entry, &self.store_root);
             if self.canonical_sidecar_directory(&directory)?.is_none() {
                 continue;
             }
@@ -580,8 +575,7 @@ impl Kura {
                 )?;
                 let bound = self
                     .read_bound_historical_autonomous_recovery_publication_artifact(
-                        &namespace,
-                        &path,
+                        &namespace, &path,
                     )?
                     .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -639,10 +633,7 @@ impl Kura {
                         ));
                     }
                     temporary_indices.push(artifact_index);
-                } else if stable_by_path
-                    .insert(stable_path, artifact_index)
-                    .is_some()
-                {
+                } else if stable_by_path.insert(stable_path, artifact_index).is_some() {
                     return Err(Self::invalid_historical_autonomous_recovery(
                         directory.clone(),
                         "historical recovery publication inventory contains duplicate stable targets",
@@ -651,22 +642,18 @@ impl Kura {
             }
             let directory_after = std::fs::symlink_metadata(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
-            if !Self::sidecar_directory_metadata_unchanged(
-                &directory_before,
-                &directory_after,
-            ) || !Self::progress_mutation_namespace_unchanged(&namespace)
+            if !Self::sidecar_directory_metadata_unchanged(&directory_before, &directory_after)
+                || !Self::progress_mutation_namespace_unchanged(&namespace)
             {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     directory,
                     "historical recovery publication directory changed during bounded inventory",
                 ));
             }
-            directories.push(
-                HistoricalAutonomousRecoveryPublicationDirectorySnapshot {
-                    path: namespace.directories[0].expected_path.clone(),
-                    metadata: directory_after,
-                },
-            );
+            directories.push(HistoricalAutonomousRecoveryPublicationDirectorySnapshot {
+                path: namespace.directories[0].expected_path.clone(),
+                metadata: directory_after,
+            });
         }
 
         let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
@@ -735,13 +722,10 @@ impl Kura {
         {
             use std::os::unix::fs::MetadataExt as _;
 
-            let current = rustix::fs::statat(
-                &immediate.file,
-                name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(std::io::Error::from)
-            .map_err(|error| Error::IO(error, artifact.path.clone()))?;
+            let current =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             if rustix::fs::FileType::from_raw_mode(current.st_mode)
                 != rustix::fs::FileType::RegularFile
                 || current.st_dev as u64 != opened.dev()
@@ -813,11 +797,10 @@ impl Kura {
                 "historical recovery publication temporary changed after authenticated preflight",
             ));
         }
-        let current_stable = self
-            .read_bound_historical_autonomous_recovery_publication_artifact(
-                &namespace,
-                &temporary.stable_path,
-            )?;
+        let current_stable = self.read_bound_historical_autonomous_recovery_publication_artifact(
+            &namespace,
+            &temporary.stable_path,
+        )?;
         if let Some(expected_stable) = expected_stable
             && current_stable.as_ref().is_none_or(|current| {
                 !Self::historical_autonomous_recovery_publication_snapshot_unchanged(
@@ -923,8 +906,7 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let _historical_recovery_guard =
-            self.historical_autonomous_recovery_mutation_lock.lock();
+        let _historical_recovery_guard = self.historical_autonomous_recovery_mutation_lock.lock();
         let entries = {
             let _geometry_guard = self.lane_geometry_lock.lock();
             self.lane_storage_entries
@@ -979,10 +961,9 @@ impl Kura {
         }
         drop(_sidecar_guard);
         drop(_geometry_guard);
-        let _ = self
-            .historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
-                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-            )?;
+        let _ = self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+        )?;
         self.note_committed_lane_status_change();
         Ok(())
     }

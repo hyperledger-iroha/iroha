@@ -38,12 +38,11 @@ async fn push_records_teu_using_router_assignment() {
     ));
 
     let (account_id, key_pair) = gen_account_in("wonderland");
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let domain_name = unique_test_domain_name("tagged");
     let unregister =
         Unregister::domain(DomainId::try_new(&domain_name, "test-dataspace-42").unwrap());
     let tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        state.network_id,
         account_id,
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -62,7 +61,7 @@ async fn push_records_teu_using_router_assignment() {
     let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     let tx = AcceptedTransaction::accept(
         tx,
-        &chain_id,
+        state.network_id_ref(),
         Duration::from_secs(60),
         tx_limits,
         &crypto_cfg,
@@ -394,7 +393,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
         nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
 
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -404,7 +402,7 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
         None,
     );
     let signed = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        state.network_id,
         authority,
         &time_source,
         fee_payment,
@@ -425,7 +423,7 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     );
     let tx = AcceptedTransaction::accept_with_time_source(
         signed,
-        &chain_id,
+        state.network_id_ref(),
         Duration::from_millis(10),
         tx_limits,
         &iroha_config::parameters::actual::Crypto::default(),

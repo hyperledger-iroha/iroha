@@ -1316,6 +1316,12 @@ def test_rejects_any_nonzero_or_partial_source_pin(
     tmp_path: Path, source_path: Path, pin_name: str, kind: str
 ) -> None:
     fixture = _fixture(tmp_path)
+    fixture.native_verifier.chmod(0o700)
+    fixture.native_verifier.write_text("#!/bin/sh\nexit 29\n", encoding="utf-8")
+    fixture.native_verifier.chmod(0o500)
+    fixture.native_verifier_sha256 = hashlib.sha256(
+        fixture.native_verifier.read_bytes()
+    ).hexdigest()
     path = fixture.repository / source_path
     source = path.read_text()
     if kind == "digest":
@@ -1335,6 +1341,8 @@ def test_rejects_any_nonzero_or_partial_source_pin(
     result = _run(fixture)
 
     assert result.returncode != 0
+    assert f"{pin_name} must have exactly one all-zero declaration" in result.stderr
+    assert "native typed capture validation failed" not in result.stderr
     _assert_unmodified(fixture, profile, readiness)
 
 

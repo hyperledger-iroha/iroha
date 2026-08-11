@@ -17,7 +17,7 @@ use iroha_config::{
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::Sm2PublicKey;
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, PublicKey, RamLfeBackend,
+    Algorithm, Hash, HashOf, KeyPair, MerkleTree, PolicyCommitment, PublicKey, RamLfeBackend,
     RamLfeVerificationMode, Signature, bls_normal_pop_prove,
 };
 use iroha_data_model::account::AccountDetails;
@@ -63,11 +63,12 @@ use iroha_data_model::{
     },
     name::Name,
     nexus::{
-        AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
-        AxtFastpqBinding, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtProofEnvelope, AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec,
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget,
-        HandleSubject, LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneId,
+        AssetHandle, AssetHandleDraft, AssetPermissionManifest, AxtBinding, AxtDescriptor,
+        AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1,
+        AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment,
+        AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId,
+        DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
+        LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement, LaneId,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneStorageProfile,
         LaneVisibility, ManifestVersion, ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare,
         PublicLaneUnbonding, RemoteSpendIntent, SpendOp, TouchManifest,
@@ -91,13 +92,40 @@ use iroha_primitives::{
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::Metrics;
-use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+};
 use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
 use nonzero_ext::nonzero;
 
 use super::{deserialize::default_zk, *};
 use crate::smartcontracts::ValidQuery;
 use crate::telemetry::StateTelemetry;
+
+fn test_da_pin_intent(
+    network_id: NetworkId,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+    manifest_hash: ManifestDigest,
+) -> DaPinIntent {
+    DaPinIntent::new(
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        manifest_hash,
+        crate::da::signed_test_ingest_authorization(
+            network_id,
+            &ALICE_KEYPAIR,
+            lane_id,
+            epoch,
+            sequence,
+            1,
+        ),
+    )
+}
 
 #[test]
 fn musubi_v1_world_defaults_and_domain_generation_are_deterministic() {
@@ -799,7 +827,7 @@ ledger::nft::create_for_all_users();
     let authority = ALICE_ID.clone();
     let code_hash = ivm::contract_code_hash(&program);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &DEFAULT_TEST_NETWORK_ID,
         &authority,
         95,
         DataSpaceId::UNIVERSAL,
@@ -1201,7 +1229,14 @@ fn world_transaction_apply_commits_sorafs_da_and_direct_lane_overlays() {
     let ticket = StorageTicketId::new([0x94; 32]);
     let manifest = ManifestDigest::new([0x95; 32]);
     let alias = "world-transaction-apply-regression".to_owned();
-    let mut intent = DaPinIntent::new(lane_id, epoch, sequence, ticket, manifest);
+    let mut intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
+        lane_id,
+        epoch,
+        sequence,
+        ticket,
+        manifest,
+    );
     intent.alias = Some(alias.clone());
     let intent_with_location = DaPinIntentWithLocation {
         intent: intent.clone(),
@@ -1379,7 +1414,7 @@ fn sccp_lane_with_custody_seed_for_testing(
     seed: u8,
 ) -> SccpGovernedLaneV1 {
     let mut lane = sccp_evm_lane_for_testing(network);
-    lane.routes[0].settlement.custody_account_id = AccountId::new(
+    lane.routes[0].settlement.custody_owner = AccountId::new(
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive SCCP custody fixture")
             .public_key()
@@ -2029,8 +2064,8 @@ fn asset_domain_index_rebuild_uses_only_definition_ownership() {
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     use iroha_data_model::privacy::{
         PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
     };
 
     let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
@@ -2056,14 +2091,16 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
             pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
         }),
     );
-    let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0xA2; 32]);
-    let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
-        bootstrap_digest,
+    let bootstrap = iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1::new(
+        PrivacyPoolIdV1::new([0xA1; 32]),
         asset_definition_id.clone(),
         iroha_data_model::asset::AssetBalanceScope::Global,
         reserve_account.clone(),
     )
-    .expect("canonical Orchard pool state");
+    .expect("canonical Orchard pool bootstrap");
+    let bootstrap_digest = bootstrap.digest().expect("Orchard bootstrap digest");
+    let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
+        .expect("canonical Orchard pool state");
     let root = pool_state.root();
     let provenance =
         crate::privacy_state::PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 1)
@@ -3552,7 +3589,7 @@ fn asset_definition_alias_bindings_roundtrip_through_state_json() {
 fn contract_alias_bindings_roundtrip_through_state_json() {
     let mut world = World::default();
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &DEFAULT_TEST_NETWORK_ID,
         &ALICE_ID,
         41,
         DataSpaceId::UNIVERSAL,
@@ -3638,7 +3675,7 @@ fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
         LiveQueryStore::start_test(),
     );
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         42,
         DataSpaceId::UNIVERSAL,
@@ -4012,7 +4049,7 @@ fn install_existing_nexus_geometry_for_test(
         .kura
         .reconcile_lane_segments_for_testing(&diff.added, &diff.retired, &fixture_replacements)
         .expect("test Nexus lane storage must match the installed catalog");
-    let incarnations = derive_static_lane_incarnations(state.chain_id_ref(), &nexus.lane_catalog);
+    let incarnations = derive_static_lane_incarnations(state.network_id_ref(), &nexus.lane_catalog);
     let activation_heights = nexus
         .lane_catalog
         .lanes()
@@ -4522,41 +4559,46 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         [],
         [],
     );
-    let mut block = world.block();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let world = &state.world;
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
 
     {
-        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut transaction = block.transaction();
         let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
-        transaction.track_asset_holder(&asset_id);
-        transaction.assets.insert(asset_id.clone(), value);
+        transaction.world.track_asset_holder(&asset_id);
+        transaction.world.assets.insert(asset_id.clone(), value);
         let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
             .build(&ALICE_ID)
             .into_key_value();
-        transaction.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(nft_id.clone(), value);
         // Drop without applying: the primary rows and every derived bucket must roll back.
     }
-    assert!(block.assets.get(&asset_id).is_none());
-    assert!(block.assets_by_account.get(&ALICE_ID).is_none());
-    assert!(block.assets_by_domain.get(&domain).is_none());
-    assert!(block.nfts.get(&nft_id).is_none());
-    assert!(block.nfts_by_domain.get(&domain).is_none());
+    assert!(block.world.assets.get(&asset_id).is_none());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_none());
+    assert!(block.world.assets_by_domain.get(&domain).is_none());
+    assert!(block.world.nfts.get(&nft_id).is_none());
+    assert!(block.world.nfts_by_domain.get(&domain).is_none());
 
     {
-        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut transaction = block.transaction();
         let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
-        transaction.track_asset_holder(&asset_id);
-        transaction.assets.insert(asset_id.clone(), value);
+        transaction.world.track_asset_holder(&asset_id);
+        transaction.world.assets.insert(asset_id.clone(), value);
         let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
             .build(&ALICE_ID)
             .into_key_value();
-        transaction.insert_nft_entry(nft_id.clone(), value);
+        transaction.world.insert_nft_entry(nft_id.clone(), value);
         transaction.apply();
     }
-    assert!(block.assets_by_account.get(&ALICE_ID).is_some());
-    assert!(block.assets_by_domain.get(&domain).is_some());
-    assert!(block.nfts_by_domain.get(&domain).is_some());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_some());
+    assert!(block.world.assets_by_domain.get(&domain).is_some());
+    assert!(block.world.nfts_by_domain.get(&domain).is_some());
 
-    block.commit();
+    block.commit().expect("commit explorer index fixture");
     let view = world.view();
     assert_eq!(
         view.assets_by_account().get(&ALICE_ID),
@@ -5043,11 +5085,10 @@ fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 
 fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-    let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
     let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let authority = AccountId::new(keypair.public_key().clone());
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        *super::DEFAULT_TEST_NETWORK_ID,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -5335,7 +5376,6 @@ fn committed_transaction_height_reads_transactions_index() {
 
 #[test]
 fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
-    let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
     let (authority, keypair) = gen_account_in("wonderland");
     let domain = Domain::new(sample_domain_id()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
@@ -5344,9 +5384,10 @@ fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let network_id = *state.network_id_ref();
 
     let inner_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -5354,13 +5395,13 @@ fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
     let salt = [0x57; 32];
     let reveal_deadline_height = 3;
     let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-        &chain_id,
+        &network_id,
         &inner_tx,
         salt,
         reveal_deadline_height,
     );
     let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-        chain_id,
+        network_id,
         authority,
         commitment,
         reveal_after_height: 2,
@@ -5402,7 +5443,6 @@ fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
 
 #[test]
 fn committed_replay_skips_failed_external_after_sealed_commitment() {
-    let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
     let (authority, keypair) = gen_account_in("wonderland");
     let domain = Domain::new(sample_domain_id()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
@@ -5411,19 +5451,23 @@ fn committed_replay_skips_failed_external_after_sealed_commitment() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let network_id = *state.network_id_ref();
 
     let inner_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .sign(keypair.private_key());
     let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-        &chain_id, &inner_tx, [0x58; 32], 5,
+        &network_id,
+        &inner_tx,
+        [0x58; 32],
+        5,
     );
     let sealed_payload =
         iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-            chain_id: chain_id.clone(),
+            network_id,
             authority: authority.clone(),
             commitment,
             reveal_after_height: 2,
@@ -5439,7 +5483,7 @@ fn committed_replay_skips_failed_external_after_sealed_commitment() {
     let sealed_hash = sealed_entrypoint.hash();
     let rejected_domain_id = DomainId::try_new("rejectedreplay", "universal").expect("domain id");
     let rejected_tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -5493,7 +5537,6 @@ fn committed_replay_skips_failed_external_after_sealed_commitment() {
 
 #[test]
 fn apply_without_execution_keeps_plain_external_transaction_hashes() {
-    let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
     let (authority, keypair) = gen_account_in("wonderland");
     let domain = Domain::new(sample_domain_id()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
@@ -5502,9 +5545,10 @@ fn apply_without_execution_keeps_plain_external_transaction_hashes() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let network_id = *state.network_id_ref();
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -5544,23 +5588,23 @@ fn block_proofs_for_sealed_commitment_use_full_executed_merkle_root() {
         LiveQueryStore::start_test(),
     );
 
-    let chain: ChainId = "block-proof-sealed".parse().expect("chain id");
+    let network_id = *state.network_id_ref();
     let (authority, keypair) = gen_account_in("wonderland");
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .sign(keypair.private_key());
     let reveal_deadline_height = 5;
     let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-        &chain,
+        &network_id,
         &tx,
         [0xA5; 32],
         reveal_deadline_height,
     );
     let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-        chain_id: chain,
+        network_id,
         authority: authority.clone(),
         commitment,
         reveal_after_height: 2,
@@ -5798,7 +5842,7 @@ fn sccp_registry_transaction_discard_and_block_revert_are_atomic() {
     let committed_custody = || {
         state.sccp_registry_snapshot().lanes()[0].routes[0]
             .settlement
-            .custody_account_id
+            .custody_owner
             .clone()
     };
 
@@ -7081,8 +7125,8 @@ fn autoscale_committee_pin_is_part_of_catalog_config_and_incarnation_commitments
         merge_lane_catalog_hash(&catalog_b)
     );
     assert_ne!(
-        derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &catalog_a)[&LaneId::new(1)],
-        derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &catalog_b)[&LaneId::new(1)],
+        derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog_a)[&LaneId::new(1)],
+        derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog_b)[&LaneId::new(1)],
         "re-pinning authority is necessarily a new lane incarnation"
     );
 }
@@ -9742,7 +9786,7 @@ fn drain_intent_uses_incarnation_pin_across_disjoint_roster_and_key_rotation() {
 
     let overlay_committee = State::derive_new_autoscale_lane_committee_from_sources(
         &state_block.world,
-        &state_block.chain_id,
+        &state_block.network_id,
         lane_id,
         state_block.lane_manifests.as_ref(),
         &state_block.nexus,
@@ -9758,7 +9802,6 @@ fn drain_intent_uses_incarnation_pin_across_disjoint_roster_and_key_rotation() {
     );
     let pinned_overlay_authority = State::authoritative_lane_peer_ids_from_sources(
         &state_block.world,
-        &state_block.chain_id,
         lane_id,
         state_block
             .nexus
@@ -10215,7 +10258,7 @@ fn commit_state_block_with_empty_autoscale_queue(
 
 fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
     let expected_catalog = LaneCatalog::default();
-    let incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &expected_catalog);
+    let incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &expected_catalog);
     let incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
         &expected_catalog,
         &incarnations,
@@ -10262,7 +10305,7 @@ fn committed_manual_lane_lifecycle_block(
 ) -> CommittedBlock {
     let parameter = manual_lane_lifecycle_payload().into_custom_parameter();
     let transaction = TransactionBuilder::new(
-        (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+        *super::DEFAULT_TEST_NETWORK_ID,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -10420,7 +10463,7 @@ fn normal_validation_requires_can_set_parameters_for_lane_lifecycle() {
         }
         let state = manual_lane_lifecycle_test_state(world);
         let transaction = TransactionBuilder::new(
-            (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+            *state.network_id_ref(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10488,7 +10531,7 @@ fn signed_lane_lifecycle_transaction_rejects_duplicate_transition_atomically() {
         ))
     };
     let transaction = TransactionBuilder::new(
-        (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -10541,7 +10584,7 @@ fn signed_lane_lifecycle_rejects_stale_catalog_after_prior_commit() {
     assert!(before.lanes().iter().any(|lane| lane.id == LaneId::new(1)));
 
     let stale_incarnations =
-        derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &LaneCatalog::default());
+        derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &LaneCatalog::default());
     let stale_incarnations =
         iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
             &LaneCatalog::default(),
@@ -10562,7 +10605,7 @@ fn signed_lane_lifecycle_rejects_stale_catalog_after_prior_commit() {
     )
     .expect("stale lifecycle payload is structurally canonical");
     let transaction = TransactionBuilder::new(
-        (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -11073,7 +11116,7 @@ fn autoscale_drain_state_for_test(
         version: 1,
         intent: LaneDrainIntentV1 {
             version: 1,
-            chain_id_digest: crate::merge::merge_chain_id_digest(&DEFAULT_TEST_CHAIN_ID),
+            network_id: DEFAULT_TEST_NETWORK_ID,
             lane_id,
             dataspace_id,
             lane_incarnation,
@@ -11965,7 +12008,8 @@ fn autoscale_scale_out_height_mismatch_does_not_publish_storage_or_da() {
     store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xB8);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13397,7 +13441,8 @@ fn autoscale_commit_failure_does_not_publish_staged_da_indexes() {
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root), None, 1, 0);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xC0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13513,7 +13558,8 @@ fn autoscale_commit_kura_preflight_failure_does_not_publish_staged_da_or_tiered_
     let elastic_snapshot_dir = cold_root.join("lanes").join(&elastic_entry.kura_segment);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13638,7 +13684,8 @@ fn autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_
         .expect("seed conflicting tiered snapshot path");
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD4);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -13821,7 +13868,8 @@ fn autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_o
     seed_verified_lane_relay_record(&state, &retired_relay);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xE0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -14080,7 +14128,8 @@ fn autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da
     record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xE4);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -15367,7 +15416,6 @@ fn autoscale_scale_out_committee_preflight_accepts_four_live_peers() {
     let topology: Vec<_> = state_block.commit_topology.iter().cloned().collect();
     let committee = State::authoritative_lane_peer_ids_from_sources(
         &state_block.world,
-        &state_block.chain_id,
         LaneId::new(1),
         validator_mode,
         state_block.lane_manifests.as_ref(),
@@ -17027,7 +17075,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
     ));
     let validator_set = vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())];
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, 0x5B),
         &routing_plan,
         crate::queue::QueuePlanAdmissionContextV2 {
@@ -17059,7 +17107,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
             .expect("block-local route-member key");
     let route_member_payload = State::queue_plan_pending_route_member_marker_payload(&route_member)
         .expect("block-local route-member payload");
-    let chain_id_digest = binding.chain_id_digest;
+    let network_id_digest = binding.network_id_digest;
     let entrypoint_hash = binding.entrypoint_hash.clone();
     let registry_key = binding.registry_key();
     state_block.world.smart_contract_state.insert(
@@ -17069,7 +17117,7 @@ fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
             .expect("block-local registry payload"),
     );
     state_block.world.smart_contract_state.insert(
-        State::queue_plan_pending_obligation_marker_key(chain_id_digest, entrypoint_hash)
+        State::queue_plan_pending_obligation_marker_key(network_id_digest, entrypoint_hash)
             .expect("block-local obligation key"),
         State::queue_plan_pending_obligation_marker_payload(&obligation)
             .expect("block-local obligation payload"),
@@ -19757,7 +19805,8 @@ fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
         block.commit();
     }
 
-    let mut retired_pin_intent = DaPinIntent::new(
+    let mut retired_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         9,
         0,
@@ -19765,7 +19814,8 @@ fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
         ManifestDigest::new([0xF4; 32]),
     );
     retired_pin_intent.alias = Some("committed-autoscale-retired-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         9,
         1,
@@ -20333,7 +20383,8 @@ fn da_pin_intent_index_prune_keys_select_embedded_and_index_lanes() {
         block_height: 9,
         index_in_bundle: 0,
     };
-    let mut reset_intent = DaPinIntent::new(
+    let mut reset_intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
         reset_lane,
         3,
         0,
@@ -20341,7 +20392,8 @@ fn da_pin_intent_index_prune_keys_select_embedded_and_index_lanes() {
         ManifestDigest::new([0x51; 32]),
     );
     reset_intent.alias = Some("reset-pin".to_owned());
-    let mut survivor_intent = DaPinIntent::new(
+    let mut survivor_intent = test_da_pin_intent(
+        *DEFAULT_TEST_NETWORK_ID,
         survivor_lane,
         3,
         1,
@@ -20527,7 +20579,8 @@ fn autoscale_transition_prunes_retired_managed_lane_runtime_caches_and_pin_index
             .is_some(),
         "test setup should seed retired-lane pin intents"
     );
-    let mut retired_pin_intent = DaPinIntent::new(
+    let mut retired_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         7,
         0,
@@ -20535,7 +20588,8 @@ fn autoscale_transition_prunes_retired_managed_lane_runtime_caches_and_pin_index
         ManifestDigest::new([0xB5; 32]),
     );
     retired_pin_intent.alias = Some("retired-lane-world-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         7,
         1,
@@ -20692,7 +20746,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
     let mut retirement = autoscale_signed_block_with_committed_fragments(Some(&carrier), 300, 0);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &close);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &carrier);
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         9,
         0,
@@ -20700,7 +20755,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
         ManifestDigest::new([0xC5; 32]),
     );
     retired_intent.alias = Some("same-block-retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         9,
         1,
@@ -20708,7 +20764,8 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
         ManifestDigest::new([0xC7; 32]),
     );
     retained_intent.alias = Some("same-block-retained-pin".to_owned());
-    let mut retained_side_intent = DaPinIntent::new(
+    let mut retained_side_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retained_side_lane_id,
         9,
         2,
@@ -21692,8 +21749,8 @@ fn autoscale_transition_refreshes_axt_policy_after_retiring_target_lane() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: retired_lane_id,
-            min_handle_era: 9,
-            min_sub_nonce: 4,
+            active_handle_era: 9,
+            next_handle_counter: 4,
             current_slot: 0,
         },
     );
@@ -21715,8 +21772,8 @@ fn autoscale_transition_refreshes_axt_policy_after_retiring_target_lane() {
         .copied()
         .expect("autoscale lifecycle should refresh AXT policy cache");
     assert_eq!(refreshed.target_lane, LaneId::SINGLE);
-    assert_eq!(refreshed.min_handle_era, 1);
-    assert_eq!(refreshed.min_sub_nonce, 0);
+    assert_eq!(refreshed.active_handle_era, 1);
+    assert_eq!(refreshed.next_handle_counter, 0);
     assert_eq!(refreshed.manifest_root, manifest_root);
 }
 
@@ -21751,15 +21808,15 @@ fn autoscale_transition_removes_explicit_stale_axt_policy_after_retiring_target_
     let stale_policy = AxtPolicyEntry {
         manifest_root: [0xA5; 32],
         target_lane: retired_lane_id,
-        min_handle_era: 9,
-        min_sub_nonce: 4,
+        active_handle_era: 9,
+        next_handle_counter: 4,
         current_slot: 0,
     };
     let preserved_policy = AxtPolicyEntry {
         manifest_root: [0x5A; 32],
         target_lane: LaneId::SINGLE,
-        min_handle_era: 3,
-        min_sub_nonce: 2,
+        active_handle_era: 3,
+        next_handle_counter: 2,
         current_slot: 0,
     };
     state.set_axt_policy(stale_dataspace, stale_policy);
@@ -21931,8 +21988,8 @@ fn autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lan
         AxtPolicyEntry {
             manifest_root: [0xC3; 32],
             target_lane: LaneId::SINGLE,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -21963,6 +22020,8 @@ fn autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lan
         manifest_view_root: [0xC3; 32],
         expiry_slot: 100,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let replay_key = AxtHandleReplayKey::from_handle(&handle);
     let envelope = AxtEnvelopeRecord {
@@ -21993,7 +22052,7 @@ fn autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lan
     };
 
     let mut state_block = state.block(second.header());
-    state_block.apply_axt_envelope(&envelope, 1);
+    state_block.record_replayed_axt_envelope(&envelope, 1);
     assert!(
         state_block
             .world
@@ -22181,18 +22240,54 @@ fn set_gov_seeds_sorafs_provider_permissions() {
 }
 
 #[test]
-fn set_gov_skips_sorafs_provider_owner_without_account() {
+fn set_gov_can_seed_sorafs_provider_owner_before_genesis_account_registration() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), Arc::clone(&kura), query_handle);
 
     let provider_id = ProviderId::new([7_u8; 32]);
     let keypair = crate::state::checked_keypair();
-    let missing_owner = AccountId::new(keypair.public_key().clone());
+    let future_owner = AccountId::new(keypair.public_key().clone());
 
     let mut gov = iroha_config::parameters::actual::Governance::default();
     gov.sorafs_provider_owners
-        .insert(provider_id, missing_owner.clone());
+        .insert(provider_id, future_owner.clone());
+    state.set_gov(gov);
+
+    assert_eq!(
+        state.world.provider_owners.view().get(&provider_id),
+        Some(&future_owner),
+        "trusted bootstrap configuration is loaded before genesis registers accounts"
+    );
+    let permission = Permission::from(CanOperateSorafsRepair { provider_id });
+    assert!(
+        state
+            .world
+            .account_permissions
+            .view()
+            .get(&future_owner)
+            .is_some_and(|permissions| permissions.contains(&permission)),
+        "bootstrap repair authority must survive until genesis registers the owner"
+    );
+}
+
+#[test]
+fn set_gov_does_not_mutate_provider_owners_after_genesis() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let mut state = State::new(
+        World::with([], [Account::new(owner.clone()).build(&owner)], []),
+        Arc::clone(&kura),
+        query_handle,
+    );
+    let genesis = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    state.push_block_hash_for_testing(genesis.hash());
+
+    let provider_id = ProviderId::new([0x81; 32]);
+    let mut gov = iroha_config::parameters::actual::Governance::default();
+    gov.sorafs_provider_owners
+        .insert(provider_id, owner.clone());
     state.set_gov(gov);
 
     assert!(
@@ -22201,17 +22296,16 @@ fn set_gov_skips_sorafs_provider_owner_without_account() {
             .provider_owners
             .view()
             .get(&provider_id)
-            .is_none(),
-        "provider owner should not be inserted when account is missing"
+            .is_none()
     );
+    let permission = Permission::from(CanOperateSorafsRepair { provider_id });
     assert!(
-        state
+        !state
             .world
             .account_permissions
             .view()
-            .get(&missing_owner)
-            .is_none(),
-        "no permissions should be seeded for missing account"
+            .get(&owner)
+            .is_some_and(|permissions| permissions.contains(&permission))
     );
 }
 
@@ -22943,7 +23037,7 @@ fn apply_lane_geometry_updates_relabels_kura_storage() {
 
     let old_dir = lane_entry.blocks_dir(&store_root);
     assert!(old_dir.exists(), "expected original directory to exist");
-    let incarnations = derive_static_lane_incarnations(&state.chain_id, &initial_catalog);
+    let incarnations = derive_static_lane_incarnations(&state.network_id, &initial_catalog);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let lineage = state.lane_incarnation_lineage_snapshot();
 
@@ -25091,7 +25185,8 @@ fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() 
     };
     nexus.autoscale.enabled = true;
     let state = State::new_with_nexus_for_testing(World::default(), nexus, query_handle);
-    let mut future_pin_intent = DaPinIntent::new(
+    let mut future_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(1),
         7,
         0,
@@ -25099,7 +25194,8 @@ fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() 
         ManifestDigest::new([0x75; 32]),
     );
     future_pin_intent.alias = Some("future-created-repair-pin".to_owned());
-    let mut retained_pin_intent = DaPinIntent::new(
+    let mut retained_pin_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         7,
         1,
@@ -26042,7 +26138,7 @@ fn authenticated_startup_anchors_custom_primary_and_journals_secondaries_exactly
         );
         assert_eq!(
             state.lane_incarnations_snapshot(),
-            derive_static_lane_incarnations(&state.chain_id, &anchored.lane_catalog)
+            derive_static_lane_incarnations(&state.network_id, &anchored.lane_catalog)
         );
         assert_eq!(
             state.lane_incarnation_activation_heights_snapshot(),
@@ -26125,7 +26221,7 @@ fn restored_primary_anchor_rejects_lane_zero_mismatch_before_kura_mutation() {
     )
     .expect("configured primary-only catalog");
     let expected_primary_incarnation =
-        derive_static_lane_incarnations(&state.chain_id, &configured_primary_catalog)
+        derive_static_lane_incarnations(&state.network_id, &configured_primary_catalog)
             [&LaneId::SINGLE];
     let before_journal = kura
         .lane_geometry_journal_state_for_test()
@@ -26759,8 +26855,8 @@ fn restored_runtime_geometry_is_recovered_before_later_catalog_replay() {
         },
     );
     let configured_lineage_root =
-        lane_incarnation_lineage_root(state.chain_id_ref(), &configured_lineage);
-    let later_lineage_root = lane_incarnation_lineage_root(state.chain_id_ref(), &later_lineage);
+        lane_incarnation_lineage_root(state.network_id_ref(), &configured_lineage);
+    let later_lineage_root = lane_incarnation_lineage_root(state.network_id_ref(), &later_lineage);
     kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
         &configured_runtime,
         &later_runtime,
@@ -28518,8 +28614,8 @@ fn set_nexus_prunes_axt_policies_for_removed_dataspaces() {
         AxtPolicyEntry {
             manifest_root: [0xAA; 32],
             target_lane: LaneId::SINGLE,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -28528,8 +28624,8 @@ fn set_nexus_prunes_axt_policies_for_removed_dataspaces() {
         AxtPolicyEntry {
             manifest_root: [0xBB; 32],
             target_lane: LaneId::SINGLE,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -29265,7 +29361,8 @@ fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             reset_lane,
             1,
             1,
@@ -29475,7 +29572,8 @@ fn apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             reset_lane,
             1,
             1,
@@ -31055,7 +31153,8 @@ fn apply_lane_lifecycle_retire_prunes_lane_relays() {
     }
     {
         let mut intents = state.da_pin_intents.write();
-        let mut intent = DaPinIntent::new(
+        let mut intent = test_da_pin_intent(
+            *state.network_id_ref(),
             LaneId::new(1),
             1,
             1,
@@ -31206,7 +31305,8 @@ fn apply_lane_lifecycle_retire_prunes_da_pin_intent_world_indexes() {
         .apply_lane_lifecycle(&plan)
         .expect("added pin test lane");
 
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         5,
         0,
@@ -31214,7 +31314,8 @@ fn apply_lane_lifecycle_retire_prunes_da_pin_intent_world_indexes() {
         ManifestDigest::new([0x71; 32]),
     );
     retired_intent.alias = Some("retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         5,
         1,
@@ -31316,7 +31417,8 @@ fn set_nexus_retire_prunes_da_pin_intent_world_indexes() {
         })
         .expect("seed pin test lane through set_nexus");
 
-    let mut retired_intent = DaPinIntent::new(
+    let mut retired_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         retired_lane_id,
         5,
         0,
@@ -31324,7 +31426,8 @@ fn set_nexus_retire_prunes_da_pin_intent_world_indexes() {
         ManifestDigest::new([0x73; 32]),
     );
     retired_intent.alias = Some("set-nexus-retired-pin".to_owned());
-    let mut retained_intent = DaPinIntent::new(
+    let mut retained_intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::SINGLE,
         5,
         1,
@@ -31615,7 +31718,8 @@ fn apply_lane_lifecycle_recreated_lane_hides_previous_da_indexes_after_kura_repl
     );
 
     let stale_record = sample_da_commitment_record(recreated_lane_id, 2, 1, 0xC8);
-    let mut stale_pin = DaPinIntent::new(
+    let mut stale_pin = test_da_pin_intent(
+        *state.network_id_ref(),
         recreated_lane_id,
         2,
         1,
@@ -33612,7 +33716,8 @@ fn lane_lifecycle_same_shard_dataspace_rebind_hides_previous_da_indexes_after_ku
     );
 
     let stale_record = sample_da_commitment_record(rebound_lane_id, 2, 1, 0xCE);
-    let mut stale_pin = DaPinIntent::new(
+    let mut stale_pin = test_da_pin_intent(
+        *state.network_id_ref(),
         rebound_lane_id,
         2,
         1,
@@ -34947,7 +35052,8 @@ fn seed_da_runtime_record_for_lane(
             Vec::new(),
         ),
     );
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         1,
         1,
@@ -35175,95 +35281,222 @@ fn seed_consensus_key_with_lifecycle_for_test(
     world_block.commit();
 }
 
-fn commit_qc_with_signers(
-    envelope: &LaneRelayEnvelope,
-    parent_state_root: Hash,
-    post_state_root: Hash,
-    signers: &[&KeyPair],
-    signers_bitmap: Vec<u8>,
-    chain_id: &ChainId,
-) -> Qc {
-    let validator_set: Vec<_> = signers
-        .iter()
-        .map(|keypair| PeerId::new(keypair.public_key().clone()))
-        .collect();
-    commit_qc_with_signers_and_validator_set(
-        envelope,
-        parent_state_root,
-        post_state_root,
-        signers,
-        &validator_set,
-        signers_bitmap,
-        chain_id,
+fn structural_lane_finality_authority(envelope: &LaneRelayEnvelope) -> LaneFinalityAuthorityV1 {
+    LaneFinalityAuthorityV1 {
+        version: 1,
+        global_block_height: envelope.block_header.height().get(),
+        finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"state-test-structural-lane-finality-authority",
+        )),
+        statement_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+    }
+}
+
+fn lane_relay_header_for_state_test(state: &State, height: u64, view: u64) -> BlockHeader {
+    let height_index = usize::try_from(height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .expect("relay fixture height fits usize");
+    if let Some(block) = state.kura.get_block(height_index) {
+        return block.header();
+    }
+    let parent_block_hash = height
+        .checked_sub(1)
+        .and_then(|parent_height| usize::try_from(parent_height).ok())
+        .and_then(NonZeroUsize::new)
+        .and_then(|parent_height| state.kura.get_block(parent_height))
+        .map(|block| block.hash());
+    BlockHeader::new(
+        NonZeroU64::new(height).expect("non-zero relay fixture height"),
+        parent_block_hash,
+        None,
+        None,
+        1_700_000_000_000,
+        view,
     )
 }
 
-fn commit_qc_with_signers_and_validator_set(
-    envelope: &LaneRelayEnvelope,
-    parent_state_root: Hash,
-    post_state_root: Hash,
-    signers: &[&KeyPair],
-    validator_set: &[PeerId],
-    signers_bitmap: Vec<u8>,
-    chain_id: &ChainId,
-) -> Qc {
-    let header = &envelope.block_header;
-    let mode_tag = envelope
-        .lane_finality_qc_mode_tag(crate::sumeragi::consensus::PERMISSIONED_TAG)
-        .expect("test relay must have a complete finality statement before QC signing");
-    let validator_set = validator_set.to_vec();
-    let mut qc = Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: header.hash(),
-        parent_state_root,
-        post_state_root,
-        height: header.height().get(),
-        view: header.view_change_index(),
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: mode_tag.clone(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap: Vec::new(),
-            bls_aggregate_signature: Vec::new(),
-        },
+fn finalize_lane_relay_for_state_test(
+    state: &State,
+    envelope: &mut LaneRelayEnvelope,
+    validator_keypairs: &[KeyPair],
+) {
+    use iroha_data_model::block::consensus_v2 as wire;
+
+    let height = envelope.block_header.height().get();
+    let height_index = usize::try_from(height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .expect("relay fixture height fits usize");
+    let block = if let Some(block) = state.kura.get_block(height_index) {
+        assert_eq!(
+            block.header(),
+            envelope.block_header,
+            "relay fixture must bind the canonical Kura header"
+        );
+        block
+    } else {
+        let keypair = checked_keypair();
+        let block = Arc::new(
+            iroha_data_model::block::builder::BlockBuilder::new(envelope.block_header)
+                .build_with_signature(0, keypair.private_key()),
+        );
+        state
+            .kura
+            .store_block(Arc::clone(&block))
+            .expect("store canonical relay finality carrier");
+        block
     };
-    let vote = crate::sumeragi::consensus::Vote {
-        phase: qc.phase,
-        block_hash: qc.subject_block_hash,
-        parent_state_root: qc.parent_state_root,
-        post_state_root: qc.post_state_root,
-        height: qc.height,
-        view: qc.view,
-        epoch: qc.epoch,
-        chain_order_hash: qc.chain_order_hash,
-        rechain_seq: qc.rechain_seq,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage = crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag.as_str(), &vote);
-    let signatures: Vec<Vec<u8>> = signers
+
+    let statement = envelope
+        .lane_finality_statement()
+        .expect("complete relay finality statement");
+    let statement_tree: MerkleTree<LaneFinalityStatement> =
+        core::iter::once(HashOf::new(&statement)).collect();
+    let statement_commitment = statement_tree
+        .commitment()
+        .expect("one-leaf relay finality commitment");
+    let statement_proof = statement_tree
+        .get_proof(0)
+        .expect("one-leaf relay finality proof");
+
+    let mut validators = validator_keypairs
         .iter()
-        .map(|keypair| {
+        .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair))
+        .collect::<Vec<_>>();
+    validators.sort_by(|left, right| left.0.cmp(&right.0));
+    let roster = validators
+        .iter()
+        .map(|(validator, _)| wire::ValidatorPower {
+            validator: validator.clone(),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let snapshot_bootstrap = (height > 1).then(|| {
+        let parent_height =
+            NonZeroUsize::new(usize::try_from(height - 1).expect("relay parent height fits usize"))
+                .expect("relay parent height is non-zero");
+        let parent = state
+            .kura
+            .get_block(parent_height)
+            .expect("non-genesis relay finality requires a canonical parent");
+        wire::SnapshotBootstrapAnchor {
+            snapshot_height: height - 1,
+            snapshot_block_hash: parent.hash(),
+            snapshot_block_creation_time_ms: parent.header().creation_time_ms,
+            snapshot_state_hash: Hash::new(b"state-test-relay-snapshot-state"),
+        }
+    });
+    let context = wire::HeightContext {
+        network_id: *state.network_id_ref(),
+        protocol_version: wire::PROTOCOL_VERSION,
+        height,
+        epoch: 0,
+        epoch_end_height: height.saturating_add(100),
+        next_epoch_snapshot: None,
+        mode: wire::ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap,
+        quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"),
+        execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"),
+        da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+        leader_seed: [0x5A; 32],
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: block.header().prev_block_hash(),
+        block_hash: block.hash(),
+        payload_hash: block
+            .canonical_proposal_wire_hash()
+            .expect("encode relay finality proposal"),
+    };
+    let executed_block_wire_len = u64::try_from(
+        block
+            .canonical_wire()
+            .expect("encode relay finality carrier")
+            .as_framed()
+            .len(),
+    )
+    .expect("relay finality carrier length fits u64");
+    let mut execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new([0xBC; 4]),
+        Hash::new([0xAB; 4]),
+        Hash::new(b"state-test-relay-ordinary-writes"),
+        executed_block_wire_len,
+        block
+            .executed_block_wire_hash()
+            .expect("encode relay finality carrier"),
+    );
+    execution_commitment.lane_finality_manifest = Some(statement_commitment);
+    execution_commitment
+        .validate()
+        .expect("valid relay execution commitment");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height,
+        view: block.header().view_change_index(),
+    };
+    let mut commit_qc = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signers: (0..validators.len())
+            .map(|index| u32::try_from(index).expect("relay signer index fits u32"))
+            .collect(),
+        aggregate_signature: vec![1],
+    };
+    let preimage = commit_qc
+        .signer_preimage(&context, 0)
+        .expect("derive relay finality signer preimage");
+    let signatures = validators
+        .iter()
+        .map(|(_, keypair)| {
             Signature::try_new(keypair.private_key(), &preimage)
-                .expect("test fixture signing should succeed")
+                .expect("sign relay finality vote")
                 .payload()
                 .to_vec()
         })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate relay finality votes");
+    let validator_set_pops = validators
+        .iter()
+        .map(|(_, keypair)| {
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("derive relay finality proof of possession")
+        })
         .collect();
-    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
-    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
-        .expect("aggregate commit QC signatures");
-    qc.aggregate = crate::sumeragi::consensus::QcAggregate {
-        signers_bitmap,
-        bls_aggregate_signature: aggregate_signature,
-    };
-    qc
+    let artifact =
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+    artifact
+        .verify()
+        .expect("relay finality artifact is cryptographically valid");
+    if state
+        .kura
+        .v2_finality_artifact(height)
+        .expect("read existing relay finality")
+        .is_some()
+    {
+        state
+            .kura
+            .overwrite_v2_finality_without_validation_for_tests(height, artifact.clone())
+            .expect("replace relay finality fixture");
+    } else {
+        let _commit_receipt = state
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store relay finality fixture");
+    }
+    envelope.finality_authority = Some(LaneFinalityAuthorityV1 {
+        version: 1,
+        global_block_height: height,
+        finality_artifact_hash: HashOf::new(&artifact),
+        statement_proof,
+    });
 }
 
 fn signer_bitmap(signers: &[usize], roster_len: usize) -> Vec<u8> {
@@ -35289,26 +35522,26 @@ fn sample_lane_relay_envelope(
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain(
+    sample_lane_relay_envelope_with_network(
         height,
         lane_id,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         signers,
         signers_bitmap,
     )
 }
 
-fn sample_lane_relay_envelope_with_chain(
+fn sample_lane_relay_envelope_with_network(
     height: u64,
     lane_id: LaneId,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain_and_view(
+    sample_lane_relay_envelope_with_network_and_view(
         height,
         lane_id,
-        chain_id,
+        network_id,
         0,
         signers,
         signers_bitmap,
@@ -35322,49 +35555,49 @@ fn sample_lane_relay_envelope_with_view(
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain_and_view(
+    sample_lane_relay_envelope_with_network_and_view(
         height,
         lane_id,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         view,
         signers,
         signers_bitmap,
     )
 }
 
-fn sample_lane_relay_envelope_with_chain_and_view(
+fn sample_lane_relay_envelope_with_network_and_view(
     height: u64,
     lane_id: LaneId,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     view: u64,
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain_dataspace_and_view(
+    sample_lane_relay_envelope_with_network_dataspace_and_view(
         height,
         lane_id,
         DataSpaceId::UNIVERSAL,
-        chain_id,
+        network_id,
         view,
         signers,
         signers_bitmap,
     )
 }
 
-fn sample_lane_relay_envelope_with_chain_dataspace_and_view(
+fn sample_lane_relay_envelope_with_network_dataspace_and_view(
     height: u64,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     view: u64,
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         height,
         lane_id,
         dataspace_id,
-        chain_id,
+        network_id,
         view,
         iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         signers,
@@ -35372,15 +35605,15 @@ fn sample_lane_relay_envelope_with_chain_dataspace_and_view(
     )
 }
 
-fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+fn sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
     height: u64,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-    chain_id: &ChainId,
+    _network_id: &NetworkId,
     view: u64,
     lane_incarnation: Hash,
-    signers: &[&KeyPair],
-    signers_bitmap: Vec<u8>,
+    _signers: &[&KeyPair],
+    _signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero height"),
@@ -35390,8 +35623,6 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
         1_700_000_000_000,
         view,
     );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
@@ -35414,7 +35645,7 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("valid envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             format!(
@@ -35425,14 +35656,8 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
             .as_bytes(),
         )))
         .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        signers,
-        signers_bitmap,
-        chain_id,
-    ));
+    let finality_authority = structural_lane_finality_authority(&envelope);
+    let envelope = envelope.with_finality_authority(Some(finality_authority));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, view);
     envelope.with_fastpq_proof_material(Some(fastpq_proof))
 }
@@ -35464,7 +35689,6 @@ fn lane_relay_committee_for_state_test(
     let world = state.world.view();
     let base_pool = State::authoritative_lane_peer_ids_from_sources(
         &world,
-        state.chain_id_ref(),
         lane_id,
         validator_mode,
         manifest_registry.as_ref(),
@@ -35502,11 +35726,11 @@ fn sample_lane_relay_envelope_with_state_incarnation_unchecked(
         .get(&lane_id)
         .copied()
         .expect("test lane must have an active incarnation");
-    sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         height,
         lane_id,
         DataSpaceId::UNIVERSAL,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        state.network_id_ref(),
         0,
         incarnation,
         signers,
@@ -35524,11 +35748,11 @@ fn sample_lane_relay_envelope_for_state_with_keypair_signers(
     let incarnation = state
         .lane_incarnation_at_height(lane_id, height)
         .expect("test lane must have an active incarnation");
-    sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         height,
         lane_id,
         DataSpaceId::UNIVERSAL,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        state.network_id_ref(),
         0,
         incarnation,
         signers,
@@ -35563,36 +35787,7 @@ fn resign_lane_relay_for_state_test(
     envelope: &mut LaneRelayEnvelope,
     keypairs: &[KeyPair],
 ) {
-    let proposal_height = envelope.block_header.height().get();
-    let committee = lane_relay_committee_for_state_test(
-        state,
-        proposal_height,
-        envelope.lane_id,
-        envelope.dataspace_id,
-    );
-    let keypairs_by_peer: BTreeMap<_, _> = keypairs
-        .iter()
-        .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair))
-        .collect();
-    let signer_keys = committee
-        .iter()
-        .map(|peer| {
-            keypairs_by_peer
-                .get(peer)
-                .copied()
-                .expect("test committee keypair")
-        })
-        .collect::<Vec<_>>();
-    let prior = envelope.qc.take().expect("relay QC before re-signing");
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        envelope,
-        prior.parent_state_root,
-        prior.post_state_root,
-        &signer_keys,
-        &committee,
-        full_signer_bitmap(committee.len()),
-        &state.chain_id,
-    ));
+    finalize_lane_relay_for_state_test(state, envelope, keypairs);
 }
 
 fn sample_lane_relay_envelope_for_state_at_heights_with_view(
@@ -35635,33 +35830,10 @@ fn sample_lane_relay_envelope_for_state_signers(
     dataspace_id: DataSpaceId,
     view: u64,
     keypairs: &[KeyPair],
-    committee: &[PeerId],
-    signer_indices: &[usize],
+    _committee: &[PeerId],
+    _signer_indices: &[usize],
 ) -> LaneRelayEnvelope {
-    let keypairs_by_peer: BTreeMap<_, _> = keypairs
-        .iter()
-        .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair))
-        .collect();
-    let signer_keys: Vec<_> = signer_indices
-        .iter()
-        .map(|idx| {
-            keypairs_by_peer
-                .get(&committee[*idx])
-                .copied()
-                .expect("test signer keypair must exist")
-        })
-        .collect();
-    let signers_bitmap = signer_bitmap(signer_indices, committee.len());
-    let header = BlockHeader::new(
-        NonZeroU64::new(proposal_height).expect("non-zero height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        view,
-    );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
+    let header = lane_relay_header_for_state_test(state, proposal_height, view);
     let settlement = LaneBlockCommitment {
         block_height: lane_block_height,
         lane_id,
@@ -35686,7 +35858,8 @@ fn sample_lane_relay_envelope_for_state_signers(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let da_commitment_hash = header.da_commitments_hash();
+    let mut envelope = LaneRelayEnvelope::new(header, da_commitment_hash, settlement, 0)
         .expect("valid envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             format!(
@@ -35697,17 +35870,17 @@ fn sample_lane_relay_envelope_for_state_signers(
             .as_bytes(),
         )))
         .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, view);
-    envelope.with_fastpq_proof_material(Some(fastpq_proof))
+    envelope.fastpq_proof = Some(fastpq_proof);
+    let next_global_height = u64::try_from(state.committed_height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    if proposal_height <= next_global_height {
+        finalize_lane_relay_for_state_test(state, &mut envelope, keypairs);
+    } else {
+        envelope.finality_authority = Some(structural_lane_finality_authority(&envelope));
+    }
+    envelope
 }
 
 fn sample_lane_relay_envelope_with_dataspace(
@@ -35717,11 +35890,11 @@ fn sample_lane_relay_envelope_with_dataspace(
     signers: &[&KeyPair],
     signers_bitmap: Vec<u8>,
 ) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_chain_dataspace_and_view(
+    sample_lane_relay_envelope_with_network_dataspace_and_view(
         height,
         lane_id,
         dataspace_id,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         0,
         signers,
         signers_bitmap,
@@ -35756,7 +35929,7 @@ fn sample_lane_relay_envelope_for_dataspace(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("valid dataspace-specific envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             format!(
@@ -35767,6 +35940,8 @@ fn sample_lane_relay_envelope_for_dataspace(
             .as_bytes(),
         )))
         .with_manifest_root(Some([0x44; 32]));
+    let finality_authority = structural_lane_finality_authority(&envelope);
+    let envelope = envelope.with_finality_authority(Some(finality_authority));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     envelope.with_fastpq_proof_material(Some(fastpq_proof))
 }
@@ -35824,10 +35999,8 @@ fn sample_verified_lane_relay_record(envelope: &LaneRelayEnvelope) -> VerifiedLa
     let lane_finality_statement_hash = envelope
         .lane_finality_statement_hash()
         .expect("sample verified relay must have a finality statement");
-    let (fastpq_old_root, fastpq_new_root) =
-        envelope.qc.as_ref().map_or(([0; 32], [0; 32]), |qc| {
-            (qc.parent_state_root.into(), qc.post_state_root.into())
-        });
+    let fastpq_old_root = Hash::new([0xBC; 4]).into();
+    let fastpq_new_root = Hash::new([0xAB; 4]).into();
     VerifiedLaneRelayRecord::new(
         envelope.clone(),
         material.proof_digest,
@@ -35846,7 +36019,6 @@ fn sample_verified_lane_relay_record(envelope: &LaneRelayEnvelope) -> VerifiedLa
 fn prove_finalized_lane_relay_for_registration(
     mut envelope: LaneRelayEnvelope,
 ) -> (LaneRelayEnvelope, ProofBlob) {
-    let qc = envelope.qc.as_ref().expect("finalized relay QC");
     let manifest_root = envelope.manifest_root.expect("relay manifest root");
     let finality_statement_hash = envelope
         .lane_finality_statement_hash()
@@ -35880,8 +36052,8 @@ fn prove_finalized_lane_relay_for_registration(
         fastpq_prover::PublicInputs {
             dsid,
             slot: envelope.block_header.height().get(),
-            old_root: qc.parent_state_root.into(),
-            new_root: qc.post_state_root.into(),
+            old_root: Hash::new([0xBC; 4]).into(),
+            new_root: Hash::new([0xAB; 4]).into(),
             perm_root: Hash::new(manifest_root).into(),
             tx_set_hash: finality_statement_hash.into(),
         },
@@ -36149,7 +36321,7 @@ fn transaction_relay_registration_authenticates_valid_committee_qc() {
     let state_transaction = state_block.transaction();
 
     state_transaction
-        .authenticate_finalized_lane_relay(&envelope)
+        .finalized_lane_relay_execution_commitment(&envelope)
         .expect("contract registration must accept the same authenticated QC as relay ingress");
 }
 
@@ -36350,21 +36522,21 @@ fn lane_relay_store_rejects_identity_drift_during_pending_upgrade() {
 fn lane_relay_store_namespaces_reused_heights_by_incarnation() {
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let retired = sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    let retired = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         1,
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         0,
         Hash::new(b"retired-relay-incarnation"),
         &signers,
         vec![0b0000_0001],
     );
-    let fresh = sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    let fresh = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         1,
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         0,
         Hash::new(b"fresh-relay-incarnation"),
         &signers,
@@ -36745,7 +36917,7 @@ fn register_rejects_reproved_settlement_substitution_under_genuine_qc_before_sta
         let mut authentication_block = state.block(header);
         authentication_block
             .transaction()
-            .authenticate_finalized_lane_relay(&genuine)
+            .finalized_lane_relay_execution_commitment(&genuine)
             .expect("fixture must carry a genuine committee QC over the original effect");
     }
 
@@ -37737,7 +37909,7 @@ fn record_lane_relay_rejects_when_nexus_disabled() {
 }
 
 #[test]
-fn record_lane_relay_rejects_without_qc() {
+fn record_lane_relay_rejects_without_finality_authority() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -37756,11 +37928,11 @@ fn record_lane_relay_rejects_without_qc() {
 
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-    envelope.qc = None;
+    envelope.finality_authority = None;
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("relay without QC should be rejected");
-    assert!(matches!(err, LaneRelayError::MissingQc));
+        .expect_err("relay without global finality authority should be rejected");
+    assert!(matches!(err, LaneRelayError::MissingFinalityAuthority));
 }
 
 #[test]
@@ -37932,7 +38104,6 @@ fn record_lane_relay_rejects_conflicting_relay() {
     settlement.receipts[0].source_id = [0xBB; 32];
     let mut conflicting = LaneRelayEnvelope::new(
         envelope.block_header,
-        None,
         envelope.da_commitment_hash,
         settlement,
         envelope.rbc_bytes_total,
@@ -37940,8 +38111,8 @@ fn record_lane_relay_rejects_conflicting_relay() {
     .expect("conflicting relay envelope is structurally valid")
     .with_lane_block_descriptor_hash(envelope.lane_block_descriptor_hash)
     .with_manifest_root(envelope.manifest_root)
+    .with_finality_authority(envelope.finality_authority.clone())
     .with_fastpq_proof_material(envelope.fastpq_proof.clone());
-    conflicting.qc = envelope.qc.clone();
     resign_lane_relay_for_state_test(&state, &mut conflicting, &validator_keypairs);
     let err = state
         .record_lane_relay(&conflicting)
@@ -37985,7 +38156,7 @@ fn record_lane_relay_rejects_dataspace_mismatch() {
 }
 
 #[test]
-fn record_lane_relay_rejects_insufficient_quorum() {
+fn record_lane_relay_rejects_finality_artifact_hash_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -38002,27 +38173,22 @@ fn record_lane_relay_rejects_insufficient_quorum() {
     );
     configure_commit_topology_preserving_world_peers(&state, 1);
 
-    let committee =
-        lane_relay_committee_for_state_test(&state, 1, LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let envelope = sample_lane_relay_envelope_for_state_signers(
-        &state,
-        1,
-        1,
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-        0,
-        &validator_keypairs,
-        &committee,
-        &[0],
-    );
+    let mut envelope =
+        sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs);
+    envelope
+        .finality_authority
+        .as_mut()
+        .expect("sample relay finality authority")
+        .finality_artifact_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"mismatched-relay-finality-artifact"));
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("insufficient quorum should be rejected");
-    assert!(matches!(err, LaneRelayError::InsufficientQuorum { .. }));
+        .expect_err("a relay naming another finality artifact must be rejected");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
 }
 
 #[test]
-fn record_lane_relay_rejects_invalid_aggregate_signature() {
+fn record_lane_relay_rejects_finality_authority_height_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -38041,19 +38207,22 @@ fn record_lane_relay_rejects_invalid_aggregate_signature() {
 
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-    if let Some(qc) = envelope.qc.as_mut() {
-        if let Some(first) = qc.aggregate.bls_aggregate_signature.first_mut() {
-            *first ^= 0xFF;
-        }
-    }
+    let authority = envelope
+        .finality_authority
+        .as_mut()
+        .expect("sample relay finality authority");
+    authority.global_block_height = authority.global_block_height.saturating_add(1);
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("invalid aggregate signature should be rejected");
-    assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
+        .expect_err("a finality reference from another height must be rejected");
+    assert!(matches!(
+        err,
+        LaneRelayError::FinalityAuthorityHeightMismatch
+    ));
 }
 
 #[test]
-fn record_lane_relay_rejects_qc_epoch_mismatch() {
+fn record_lane_relay_rejects_unsupported_finality_authority_version() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -38068,70 +38237,24 @@ fn record_lane_relay_rejects_qc_epoch_mismatch() {
 
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs);
-    let qc = envelope.qc.as_mut().expect("sample relay QC");
-    qc.epoch = qc.epoch.saturating_add(1);
+    envelope
+        .finality_authority
+        .as_mut()
+        .expect("sample relay finality authority")
+        .version = 2;
 
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("a QC from another global epoch must be rejected");
-    assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
+        .expect_err("an unsupported finality authority version must be rejected");
+    assert!(matches!(
+        err,
+        LaneRelayError::UnsupportedFinalityAuthorityVersion(2)
+    ));
     assert!(state.lane_relay_snapshot().is_empty());
 }
 
 #[test]
-fn record_lane_relay_rejects_qc_validator_set_metadata_mismatch() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    state.nexus.write().enabled = true;
-    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
-    seed_consensus_keys_with_pops(&state, &validator_keypairs);
-    install_lane_manifest_registry(
-        &state,
-        &[(
-            LaneId::new(0),
-            DataSpaceId::UNIVERSAL,
-            validator_ids.clone(),
-        )],
-    );
-    configure_commit_topology_preserving_world_peers(&state, 1);
-
-    let envelope =
-        sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-    let reject = |envelope: LaneRelayEnvelope, case: &str| {
-        let err = match state.record_lane_relay(&envelope) {
-            Ok(inserted) => {
-                panic!("tampered validator-set metadata accepted for {case}: {inserted:?}")
-            }
-            Err(err) => err,
-        };
-        assert!(
-            matches!(err, LaneRelayError::AggregateSignatureInvalid),
-            "expected aggregate signature failure for {case}, got {err:?}"
-        );
-    };
-
-    let mut unsupported_hash_version = envelope.clone();
-    unsupported_hash_version
-        .qc
-        .as_mut()
-        .expect("QC")
-        .validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1 + 1;
-    reject(unsupported_hash_version, "hash-version mismatch");
-
-    let mut hash_mismatch = envelope.clone();
-    hash_mismatch.qc.as_mut().expect("QC").validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
-    reject(hash_mismatch, "validator-set hash mismatch");
-
-    let mut reordered_set = envelope;
-    let qc = reordered_set.qc.as_mut().expect("QC");
-    qc.validator_set.swap(0, 1);
-    qc.validator_set_hash = HashOf::new(&qc.validator_set);
-    reject(reordered_set, "validator-set order mismatch");
-}
-
-#[test]
-fn record_lane_relay_rejects_global_qc_mode_tag() {
+fn record_lane_relay_rejects_finality_statement_proof_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -38150,54 +38273,15 @@ fn record_lane_relay_rejects_global_qc_mode_tag() {
 
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
-    if let Some(qc) = envelope.qc.as_mut() {
-        qc.mode_tag = crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned();
-    }
+    envelope
+        .finality_authority
+        .as_mut()
+        .expect("sample relay finality authority")
+        .statement_proof = iroha_crypto::MerkleProof::from_audit_path(1, Vec::new());
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("global block QC mode tag must not satisfy lane relay QC");
-    assert!(matches!(err, LaneRelayError::QcFinalityStatementMismatch));
-}
-
-#[test]
-fn record_lane_relay_rejects_when_validator_pool_under_quorum() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
-        dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog"),
-        ..Default::default()
-    };
-    state.set_nexus(nexus).expect("apply nexus config");
-    install_lane_manifest_registry(
-        &state,
-        &[(
-            LaneId::new(0),
-            DataSpaceId::UNIVERSAL,
-            vec![ALICE_ID.clone(), BOB_ID.clone()],
-        )],
-    );
-
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
-    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
-        &state,
-        1,
-        LaneId::new(0),
-        &signers,
-        vec![0b0000_0001],
-    );
-    let err = state
-        .record_lane_relay(&envelope)
-        .expect_err("under-quorum validator pool should be rejected");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("a non-member statement proof must be rejected");
+    assert!(matches!(err, LaneRelayError::FinalityStatementProofInvalid));
 }
 
 #[test]
@@ -38381,16 +38465,6 @@ fn record_lane_relay_accepts_emergency_override_under_quorum() {
     );
 
     let height = 1;
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
     let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
     let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
@@ -38398,57 +38472,12 @@ fn record_lane_relay_accepts_emergency_override_under_quorum() {
     let mut committee = base_pool.clone();
     committee.extend(fillers);
     assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
-    let keypairs: BTreeMap<PeerId, KeyPair> = [
-        (peer_id_for_account(&base_1), base_1_kp.clone()),
-        (peer_id_for_account(&base_2), base_2_kp.clone()),
-        (peer_id_for_account(&extra_1), extra_1_kp.clone()),
-        (peer_id_for_account(&extra_2), extra_2_kp.clone()),
-    ]
-    .into_iter()
-    .collect();
-    let signer_indices = [0usize, 1, 2];
-    let signer_keys: Vec<&KeyPair> = signer_indices
-        .iter()
-        .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
-        .collect();
-    let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-    let settlement = LaneBlockCommitment {
-        block_height: height,
-        lane_id: LaneId::new(0),
-        lane_incarnation: active_lane_incarnation_for_state_test(&state, height, LaneId::SINGLE),
-        dataspace_id: DataSpaceId::UNIVERSAL,
-        tx_count: 1,
-        total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: vec![LaneSettlementReceipt {
-            source_id: [0xAA; 32],
-            local_amount: "0.000001".parse().expect("valid settlement quantity"),
-            xor_due: "0.000001".parse().expect("valid settlement quantity"),
-            xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
-            xor_variance: "0".parse().expect("valid settlement quantity"),
-            timestamp_ms: 1_700_000_000_000,
-        }],
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
-        .expect("lane relay envelope")
-        .with_lane_block_descriptor_hash(Some(Hash::new(b"state-test-emergency-lane-descriptor")))
-        .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
-    let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
-    let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
+    let envelope = sample_lane_relay_envelope_for_state(
+        &state,
+        height,
+        LaneId::new(0),
+        &[base_1_kp, base_2_kp, extra_1_kp, extra_2_kp],
+    );
     let inserted = state
         .record_lane_relay(&envelope)
         .expect("relay accepted with emergency override");
@@ -38523,16 +38552,6 @@ fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
     );
     wb.commit();
 
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
     let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
     let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
@@ -38540,57 +38559,12 @@ fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
     let mut committee = base_pool.clone();
     committee.extend(fillers);
     assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
-    let keypairs: BTreeMap<PeerId, KeyPair> = [
-        (peer_id_for_account(&base_1), base_1_kp.clone()),
-        (peer_id_for_account(&base_2), base_2_kp.clone()),
-        (peer_id_for_account(&extra_1), extra_1_kp.clone()),
-        (peer_id_for_account(&extra_2), extra_2_kp.clone()),
-    ]
-    .into_iter()
-    .collect();
-    let signer_indices = [0usize, 1, 2];
-    let signer_keys: Vec<&KeyPair> = signer_indices
-        .iter()
-        .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
-        .collect();
-    let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-    let settlement = LaneBlockCommitment {
-        block_height: height,
-        lane_id: LaneId::new(0),
-        lane_incarnation: active_lane_incarnation_for_state_test(&state, height, LaneId::SINGLE),
-        dataspace_id: DataSpaceId::UNIVERSAL,
-        tx_count: 1,
-        total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: vec![LaneSettlementReceipt {
-            source_id: [0xAA; 32],
-            local_amount: "0.000001".parse().expect("valid settlement quantity"),
-            xor_due: "0.000001".parse().expect("valid settlement quantity"),
-            xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
-            xor_variance: "0".parse().expect("valid settlement quantity"),
-            timestamp_ms: 1_700_000_000_000,
-        }],
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
-        .expect("lane relay envelope")
-        .with_lane_block_descriptor_hash(Some(Hash::new(b"state-test-emergency-lane-descriptor")))
-        .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
-    let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
-    let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
+    let envelope = sample_lane_relay_envelope_for_state(
+        &state,
+        height,
+        LaneId::new(0),
+        &[base_1_kp, base_2_kp, extra_1_kp, extra_2_kp],
+    );
     let inserted = state
         .record_lane_relay(&envelope)
         .expect("relay accepted on expiry height");
@@ -38654,8 +38628,8 @@ fn record_lane_relay_rejects_when_emergency_override_expired() {
     );
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("expired override should be rejected");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
 }
 
 #[test]
@@ -38711,8 +38685,8 @@ fn record_lane_relay_rejects_when_emergency_override_disabled() {
     );
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("disabled override should be rejected");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
 }
 
 #[test]
@@ -38770,8 +38744,8 @@ fn record_lane_relay_rejects_when_emergency_override_overlaps_base() {
     );
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("overlapping override should be rejected");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
 }
 
 #[test]
@@ -38830,8 +38804,8 @@ fn record_lane_relay_rejects_when_emergency_override_insufficient() {
     );
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("insufficient override should be rejected");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
 }
 
 #[test]
@@ -38908,8 +38882,8 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topol
         0,
         0,
     );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
+    let _parent_state_root = Hash::new([0xBC; 4]);
+    let _post_state_root = Hash::new([0xAB; 4]);
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
     let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
     let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&outside)];
@@ -38929,11 +38903,11 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topol
     .into_iter()
     .collect();
     let signer_indices = [0usize, 1, 2];
-    let signer_keys: Vec<&KeyPair> = signer_indices
+    let _signer_keys: Vec<&KeyPair> = signer_indices
         .iter()
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
-    let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
+    let _signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -38956,28 +38930,20 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topol
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let mut envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("lane relay envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             b"state-test-stale-emergency-lane-descriptor",
         )))
         .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
+    envelope.finality_authority = Some(structural_lane_finality_authority(&envelope));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("stale out-of-topology emergency peer must not fill relay committee");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
     assert!(
         state.lane_relay_snapshot().is_empty(),
         "rejected stale-topology override must not populate relay cache"
@@ -39066,8 +39032,8 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consens
         0,
         0,
     );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
+    let _parent_state_root = Hash::new([0xBC; 4]);
+    let _post_state_root = Hash::new([0xAB; 4]);
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
     let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
     let expired_peer = peer_id_for_account(&expired);
@@ -39102,11 +39068,11 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consens
     ]
     .into_iter()
     .collect();
-    let signer_keys: Vec<&KeyPair> = signer_indices
+    let _signer_keys: Vec<&KeyPair> = signer_indices
         .iter()
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
-    let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
+    let _signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -39129,28 +39095,20 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consens
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let mut envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("lane relay envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             b"state-test-stale-emergency-lane-descriptor",
         )))
         .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
+    envelope.finality_authority = Some(structural_lane_finality_authority(&envelope));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("expired emergency peer must not fill relay committee");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
     assert!(
         state.lane_relay_snapshot().is_empty(),
         "rejected expired-key override must not populate relay cache"
@@ -39243,8 +39201,8 @@ fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
         0,
         0,
     );
-    let parent_state_root = Hash::new([0xBC; 4]);
-    let post_state_root = Hash::new([0xAB; 4]);
+    let _parent_state_root = Hash::new([0xBC; 4]);
+    let _post_state_root = Hash::new([0xAB; 4]);
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
     let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
     let emergency_pool = vec![peer_id_for_account(&extra_1), removed_peer.clone()];
@@ -39278,11 +39236,11 @@ fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
     ]
     .into_iter()
     .collect();
-    let signer_keys: Vec<&KeyPair> = signer_indices
+    let _signer_keys: Vec<&KeyPair> = signer_indices
         .iter()
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
-    let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
+    let _signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -39305,28 +39263,20 @@ fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let mut envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("lane relay envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             b"state-test-stale-emergency-lane-descriptor",
         )))
         .with_manifest_root(Some([0x44; 32]));
-    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
-        &envelope,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    ));
+    envelope.finality_authority = Some(structural_lane_finality_authority(&envelope));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
     let err = state
         .record_lane_relay(&envelope)
-        .expect_err("removed emergency peer must not fill relay committee");
-    assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+        .expect_err("emergency metadata cannot replace global finality authority");
+    assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
     assert!(
         state.lane_relay_snapshot().is_empty(),
         "rejected removed-peer override must not populate relay cache"
@@ -39630,7 +39580,7 @@ fn commit_topology_signers_for_lane_relay_test(
         let world = state.world.view();
         State::autoscale_lane_committee_from_topology(
             &world,
-            state.chain_id_ref(),
+            state.network_id_ref(),
             lane_id,
             DataSpaceId::UNIVERSAL,
             &nexus,
@@ -39704,7 +39654,7 @@ fn repin_autoscale_lane_from_current_sources_for_test(
         let world = state.world.view();
         State::derive_new_autoscale_lane_committee_from_sources(
             &world,
-            state.chain_id_ref(),
+            state.network_id_ref(),
             lane_id,
             manifests.as_ref(),
             &nexus,
@@ -41937,7 +41887,8 @@ fn da_pin_intents_hydrate_from_kura_block_log() {
         })
         .expect("apply Nexus catalog for DA pin replay test");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         7,
         3,
@@ -42014,7 +41965,8 @@ fn da_pin_intents_kura_replay_rejects_future_created_autoscale_lane() {
         nexus.lane_catalog = catalog;
     }
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         0,
@@ -42180,14 +42132,22 @@ fn da_pin_intents_kura_replay_preserves_committed_owner_after_account_removed() 
         })
         .expect("apply Nexus catalog for owned DA pin replay test");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         9,
         0,
         StorageTicketId::new([0x44; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x55; 32]),
     );
-    intent.owner = Some(owner_id.clone());
+    intent.authorization = crate::da::signed_test_ingest_authorization(
+        *state.network_id_ref(),
+        &crate::state::checked_keypair(),
+        lane,
+        intent.epoch,
+        intent.sequence,
+        1,
+    );
     intent.alias = Some("owned-alias".to_string());
 
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
@@ -42233,8 +42193,7 @@ fn da_pin_intents_kura_replay_preserves_committed_owner_after_account_removed() 
         .expect("committed owned pin intent must survive Kura replay");
     assert_eq!(replayed.intent, intent);
     assert_eq!(
-        replayed.intent.owner.as_ref(),
-        Some(&owner_id),
+        &replayed.intent.authorization.owner, &owner_id,
         "replay must preserve the historical owner field"
     );
     assert_eq!(
@@ -44026,7 +43985,8 @@ fn da_bundle_indexes_are_not_committed_when_block_height_mismatches() {
     let signed_first: SignedBlock = first_block.into();
 
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xA0);
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         LaneId::new(0),
         1,
         0,
@@ -45187,7 +45147,7 @@ fn apply_without_execution_canonicalizes_commit_roster_signatures() {
         bls_sig: Vec::new(),
     };
     let preimage = crate::sumeragi::consensus::vote_preimage(
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         crate::sumeragi::consensus::PERMISSIONED_TAG,
         &vote,
     );
@@ -45286,7 +45246,7 @@ fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_hi
         bls_sig: Vec::new(),
     };
     let preimage = crate::sumeragi::consensus::vote_preimage(
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         crate::sumeragi::consensus::PERMISSIONED_TAG,
         &vote,
     );
@@ -45410,7 +45370,7 @@ fn replay_apply_with_commit_qc_hint_skips_roster_sidecar_refresh() {
         bls_sig: Vec::new(),
     };
     let preimage = crate::sumeragi::consensus::vote_preimage(
-        &super::DEFAULT_TEST_CHAIN_ID,
+        &super::DEFAULT_TEST_NETWORK_ID,
         crate::sumeragi::consensus::PERMISSIONED_TAG,
         &vote,
     );
@@ -46831,7 +46791,14 @@ fn block_and_revert_rewinds_da_indexes() {
         storage_ticket: StorageTicketId::new([0xFF; 32]),
         manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAA; 32]),
         alias: Some("rewind-alias".to_string()),
-        owner: None,
+        authorization: crate::da::signed_test_ingest_authorization(
+            *state.network_id_ref(),
+            &keypair,
+            LaneId::new(0),
+            1,
+            2,
+            1,
+        ),
     };
     let pin_bundle =
         iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![pin_intent.clone()]);
@@ -47311,7 +47278,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
 
     let lane = lane_config.primary().lane_id;
 
-    let mut superseded = DaPinIntent::new(
+    let mut superseded = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         1,
         1,
@@ -47320,7 +47288,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     superseded.alias = Some("alias-one".to_string());
 
-    let mut winner = DaPinIntent::new(
+    let mut winner = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         2,
         0,
@@ -47329,7 +47298,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     winner.alias = Some("alias-one".to_string());
 
-    let mut zero_manifest = DaPinIntent::new(
+    let mut zero_manifest = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         3,
         0,
@@ -47338,7 +47308,8 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
     );
     zero_manifest.alias = Some("alias-drop".to_string());
 
-    let plain = DaPinIntent::new(
+    let plain = test_da_pin_intent(
+        *state.network_id_ref(),
         lane,
         4,
         0,
@@ -47394,7 +47365,12 @@ fn da_pin_intents_replay_sanitizes_invalid_entries() {
 fn da_pin_intents_drop_missing_owner_accounts() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut world = World::default();
+    world.accounts.insert(
+        ALICE_ID.clone(),
+        iroha_data_model::account::AccountValue::new(AccountDetails::default()),
+    );
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let lane_count = nonzero!(1_u32);
     let catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -47406,18 +47382,27 @@ fn da_pin_intents_drop_missing_owner_accounts() {
         })
         .expect("configure nexus");
     let lane_id = state.nexus_snapshot().lane_config.primary().lane_id;
-    let (missing_owner_id, _) = gen_account_in("missing-owner");
+    let (_, missing_owner_keypair) = gen_account_in("missing-owner");
 
-    let mut missing_owner = DaPinIntent::new(
+    let mut missing_owner = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         6,
         0,
         StorageTicketId::new([0x10; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
     );
-    missing_owner.owner = Some(missing_owner_id);
+    missing_owner.authorization = crate::da::signed_test_ingest_authorization(
+        *state.network_id_ref(),
+        &missing_owner_keypair,
+        lane_id,
+        missing_owner.epoch,
+        missing_owner.sequence,
+        1,
+    );
 
-    let mut valid = DaPinIntent::new(
+    let mut valid = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         6,
         1,
@@ -47477,7 +47462,8 @@ fn da_pin_intents_persist_into_world_indexes() {
         })
         .expect("configure nexus");
 
-    let mut intent = DaPinIntent::new(
+    let mut intent = test_da_pin_intent(
+        *state.network_id_ref(),
         lane_id,
         5,
         0,
@@ -47594,7 +47580,8 @@ fn da_pin_intent_ingest_rejects_future_created_autoscale_lane() {
         nexus.lane_catalog = catalog;
     }
 
-    let mut early = DaPinIntent::new(
+    let mut early = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         0,
@@ -47614,7 +47601,8 @@ fn da_pin_intent_ingest_rejects_future_created_autoscale_lane() {
             .is_none()
     );
 
-    let mut active = DaPinIntent::new(
+    let mut active = test_da_pin_intent(
+        *state.network_id_ref(),
         future_created_lane,
         1,
         1,
@@ -47641,8 +47629,8 @@ fn axt_policies_commit_with_world_block() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x11; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 3,
-        min_sub_nonce: 1,
+        active_handle_era: 3,
+        next_handle_counter: 1,
         current_slot: 42,
     };
 
@@ -47663,8 +47651,8 @@ fn axt_policy_snapshot_uses_state_height_for_current_slot() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x22; 32],
         target_lane: LaneId::new(3),
-        min_handle_era: 4,
-        min_sub_nonce: 2,
+        active_handle_era: 4,
+        next_handle_counter: 2,
         current_slot: 999,
     };
 
@@ -47700,8 +47688,11 @@ fn axt_policy_snapshot_uses_state_height_for_current_slot() {
 
     assert_eq!(binding.policy.manifest_root, policy.manifest_root);
     assert_eq!(binding.policy.target_lane, policy.target_lane);
-    assert_eq!(binding.policy.min_handle_era, policy.min_handle_era);
-    assert_eq!(binding.policy.min_sub_nonce, policy.min_sub_nonce);
+    assert_eq!(binding.policy.active_handle_era, policy.active_handle_era);
+    assert_eq!(
+        binding.policy.next_handle_counter,
+        policy.next_handle_counter
+    );
     assert_eq!(binding.policy.current_slot, 0);
     let expected_version = AxtPolicySnapshot::compute_version(&snapshot.entries);
     assert_eq!(snapshot.version, expected_version);
@@ -48055,8 +48046,8 @@ fn axt_policy_snapshot_filters_cached_future_created_autoscale_lane() {
         AxtPolicyEntry {
             manifest_root: [0xA5; 32],
             target_lane: future_lane,
-            min_handle_era: 1,
-            min_sub_nonce: 0,
+            active_handle_era: 1,
+            next_handle_counter: 0,
             current_slot: 0,
         },
     );
@@ -48103,8 +48094,8 @@ fn axt_policy_refresh_prunes_cached_future_created_autoscale_lane() {
         AxtPolicyEntry {
             manifest_root: [0xA6; 32],
             target_lane: future_lane,
-            min_handle_era: 1,
-            min_sub_nonce: 0,
+            active_handle_era: 1,
+            next_handle_counter: 0,
             current_slot: 0,
         },
     );
@@ -48183,8 +48174,8 @@ fn axt_policy_refresh_does_not_cache_future_created_autoscale_lane() {
         AxtPolicyEntry {
             manifest_root: [0xA7; 32],
             target_lane: future_lane,
-            min_handle_era: 1,
-            min_sub_nonce: 0,
+            active_handle_era: 1,
+            next_handle_counter: 0,
             current_slot: 0,
         },
     );
@@ -48214,8 +48205,8 @@ fn axt_policy_refresh_clears_stale_entries_when_snapshot_missing() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x77; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 1,
-        min_sub_nonce: 1,
+        active_handle_era: 1,
+        next_handle_counter: 1,
         current_slot: 1,
     };
     state.set_axt_policy(dsid, policy);
@@ -48244,8 +48235,8 @@ fn state_block_axt_policy_snapshot_reads_block_scope() {
     let entry = AxtPolicyEntry {
         manifest_root: [0x66; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 5,
-        min_sub_nonce: 4,
+        active_handle_era: 5,
+        next_handle_counter: 4,
         current_slot: 99,
     };
     {
@@ -48276,8 +48267,11 @@ fn state_block_axt_policy_snapshot_reads_block_scope() {
 
     assert_eq!(binding.policy.manifest_root, entry.manifest_root);
     assert_eq!(binding.policy.target_lane, entry.target_lane);
-    assert_eq!(binding.policy.min_handle_era, entry.min_handle_era);
-    assert_eq!(binding.policy.min_sub_nonce, entry.min_sub_nonce);
+    assert_eq!(binding.policy.active_handle_era, entry.active_handle_era);
+    assert_eq!(
+        binding.policy.next_handle_counter,
+        entry.next_handle_counter
+    );
     assert_eq!(binding.policy.current_slot, expected_slot);
     let expected_version = AxtPolicySnapshot::compute_version(&snapshot.entries);
     assert_eq!(snapshot.version, expected_version);
@@ -48449,8 +48443,8 @@ fn axt_replay_ledger_survives_state_restart() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 2,
-            min_sub_nonce: 5,
+            active_handle_era: 2,
+            next_handle_counter: 5,
             current_slot: 0,
         },
     );
@@ -48495,6 +48489,8 @@ fn axt_replay_ledger_survives_state_restart() {
             manifest_view_root: manifest_root,
             expiry_slot: 5,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -48554,6 +48550,8 @@ fn axt_replay_ledger_survives_state_restart() {
         manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(),
         expiry_slot: handle_fragment.handle.expiry_slot,
         max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms,
+        issuer_context: handle_fragment.handle.issuer_context,
+        issuer_signature: handle_fragment.handle.issuer_signature.clone(),
     };
     let ivm_intent = ivm::axt::RemoteSpendIntent {
         asset_dsid: handle_fragment.intent.asset_dsid,
@@ -48580,7 +48578,8 @@ fn axt_replay_ledger_survives_state_restart() {
             proofs: vec![proof_fragment.clone()],
             handles: vec![handle_fragment.clone()],
             commit_height: 1,
-        });
+        })
+        .expect("exact AXT sequence should stage");
         stx.apply();
         block.commit().expect("commit recorded envelope");
     }
@@ -48590,8 +48589,8 @@ fn axt_replay_ledger_survives_state_restart() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -48683,8 +48682,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -48728,6 +48727,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
             manifest_view_root: manifest_root,
             expiry_slot: 8,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -48787,6 +48788,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(),
         expiry_slot: handle_fragment.handle.expiry_slot,
         max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms,
+        issuer_context: handle_fragment.handle.issuer_context,
+        issuer_signature: handle_fragment.handle.issuer_signature.clone(),
     };
     let ivm_intent = ivm::axt::RemoteSpendIntent {
         asset_dsid: handle_fragment.intent.asset_dsid,
@@ -48814,7 +48817,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
             proofs: vec![proof_fragment.clone()],
             handles: vec![handle_fragment.clone()],
             commit_height: 1,
-        });
+        })
+        .expect("exact AXT sequence should stage");
         stx.apply();
     }
     block
@@ -48840,8 +48844,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: prune_at,
         },
     );
@@ -48914,8 +48918,8 @@ fn state_block_installs_axt_policy_snapshot() {
     let entry = AxtPolicyEntry {
         manifest_root: [0x44; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 7,
-        min_sub_nonce: 3,
+        active_handle_era: 7,
+        next_handle_counter: 3,
         current_slot: 9,
     };
     let entries = vec![AxtPolicyBinding {
@@ -48934,8 +48938,8 @@ fn state_block_installs_axt_policy_snapshot() {
     let stored = block.world.axt_policies.get(&dsid).expect("policy written");
     assert_eq!(stored.manifest_root, entry.manifest_root);
     assert_eq!(stored.target_lane, entry.target_lane);
-    assert_eq!(stored.min_handle_era, entry.min_handle_era);
-    assert_eq!(stored.min_sub_nonce, entry.min_sub_nonce);
+    assert_eq!(stored.active_handle_era, entry.active_handle_era);
+    assert_eq!(stored.next_handle_counter, entry.next_handle_counter);
     assert_eq!(stored.current_slot, entry.current_slot);
 
     let duplicate_entries = vec![
@@ -48981,8 +48985,8 @@ fn reinstalling_exact_axt_policy_snapshot_preserves_merge_write_set() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x44; 32],
         target_lane: LaneId::new(2),
-        min_handle_era: 7,
-        min_sub_nonce: 3,
+        active_handle_era: 7,
+        next_handle_counter: 3,
         current_slot: 9,
     };
     {
@@ -49022,8 +49026,8 @@ fn installing_axt_policy_snapshot_updates_metrics() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x55; 32],
         target_lane: LaneId::new(3),
-        min_handle_era: 2,
-        min_sub_nonce: 1,
+        active_handle_era: 2,
+        next_handle_counter: 1,
         current_slot: 5,
     };
     let entries = vec![AxtPolicyBinding { dsid, policy }];
@@ -49049,8 +49053,8 @@ fn axt_policy_snapshot_metrics_record_cache_hit() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x33; 32],
         target_lane: LaneId::new(4),
-        min_handle_era: 6,
-        min_sub_nonce: 2,
+        active_handle_era: 6,
+        next_handle_counter: 2,
         current_slot: 1,
     };
 
@@ -49181,8 +49185,8 @@ fn axt_policy_rebuild_preserves_minimum_nonce_and_era() {
     let expected_policy = AxtPolicyEntry {
         manifest_root,
         target_lane: lane_id,
-        min_handle_era: 3,
-        min_sub_nonce: 5,
+        active_handle_era: 3,
+        next_handle_counter: 5,
         current_slot: 0,
     };
     {
@@ -49217,8 +49221,8 @@ fn axt_policy_rebuild_preserves_minimum_nonce_and_era() {
         .expect("policy entry should be present")
         .policy;
 
-    assert_eq!(entry.min_handle_era, 3);
-    assert_eq!(entry.min_sub_nonce, 5);
+    assert_eq!(entry.active_handle_era, 3);
+    assert_eq!(entry.next_handle_counter, 5);
 }
 
 #[test]
@@ -49227,8 +49231,8 @@ fn axt_policy_refresh_preserves_explicit_entries_without_directory() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x11; 32],
         target_lane: LaneId::new(0),
-        min_handle_era: 1,
-        min_sub_nonce: 2,
+        active_handle_era: 1,
+        next_handle_counter: 2,
         current_slot: 0,
     };
 
@@ -49255,8 +49259,8 @@ fn block_axt_policy_refresh_preserves_explicit_entries_when_nexus_disabled() {
     let policy = AxtPolicyEntry {
         manifest_root: [0x12; 32],
         target_lane: LaneId::new(0),
-        min_handle_era: 2,
-        min_sub_nonce: 3,
+        active_handle_era: 2,
+        next_handle_counter: 3,
         current_slot: 0,
     };
 
@@ -49335,8 +49339,8 @@ fn axt_policy_refresh_resets_minimums_on_lane_change() {
             AxtPolicyEntry {
                 manifest_root,
                 target_lane: old_lane,
-                min_handle_era: 4,
-                min_sub_nonce: 7,
+                active_handle_era: 4,
+                next_handle_counter: 7,
                 current_slot: 0,
             },
         );
@@ -49362,8 +49366,329 @@ fn axt_policy_refresh_resets_minimums_on_lane_change() {
         .policy;
 
     assert_eq!(entry.target_lane, new_lane);
-    assert_eq!(entry.min_handle_era, 1);
-    assert_eq!(entry.min_sub_nonce, 0);
+    assert_eq!(entry.active_handle_era, 1);
+    assert_eq!(entry.next_handle_counter, 1);
+}
+
+fn signed_axt_handle_for_block_freeze(
+    issuer: &KeyPair,
+    context: AxtHandleIssuerContextV1,
+    lane: LaneId,
+    binding: AxtBinding,
+    handle_era: u64,
+    next_handle_counter: u64,
+) -> AssetHandle {
+    AssetHandleDraft {
+        scope: vec!["transfer".into()],
+        subject: HandleSubject {
+            account: ALICE_ID.to_string(),
+            origin_dsid: Some(context.asset_dsid),
+        },
+        budget: HandleBudget {
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
+        },
+        handle_era,
+        sub_nonce: next_handle_counter,
+        group_binding: GroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: handle_era,
+        },
+        target_lane: lane,
+        axt_binding: binding,
+        manifest_view_root: context.issuer_manifest_root,
+        expiry_slot: 100,
+        max_clock_skew_ms: Some(0),
+    }
+    .sign_by_issuer_v1(context, issuer.private_key())
+    .expect("sign AXT block-freeze fixture")
+}
+
+fn axt_envelope_for_block_freeze(
+    handle: AssetHandle,
+    dataspace: DataSpaceId,
+    lane: LaneId,
+    binding: AxtBinding,
+    commit_height: u64,
+) -> AxtEnvelopeRecord {
+    AxtEnvelopeRecord {
+        binding,
+        lane,
+        descriptor: AxtDescriptor {
+            dsids: vec![dataspace],
+            touches: Vec::new(),
+        },
+        touches: Vec::new(),
+        proofs: Vec::new(),
+        handles: vec![AxtHandleFragment {
+            handle,
+            intent: RemoteSpendIntent {
+                asset_dsid: dataspace,
+                op: SpendOp {
+                    kind: "transfer".into(),
+                    from: ALICE_ID.to_string(),
+                    to: BOB_ID.to_string(),
+                    amount: Some(Quantity::from(1_u64)),
+                },
+            },
+            proof: None,
+            amount: Some(Quantity::from(1_u64)),
+            amount_commitment: None,
+        }],
+        commit_height,
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn axt_authorization_is_frozen_before_same_block_issuer_and_policy_rotation() {
+    let dataspace = DataSpaceId::new(34);
+    let lane = LaneId::new(2);
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-block-freeze"));
+    let old_issuer = crate::state::checked_keypair();
+    let new_issuer = crate::state::checked_keypair();
+    let old_account = AccountId::new(old_issuer.public_key().clone());
+    let new_account = AccountId::new(new_issuer.public_key().clone());
+    let domain_id = DomainId::try_new("axt-freeze", "universal").expect("domain id");
+    let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    let old_account_record = new_account_in_domain(&old_account, &domain_id)
+        .with_uaid(Some(uaid))
+        .build(&ALICE_ID);
+    let mut world = World::with([domain], [old_account_record], []);
+    world
+        .rebuild_uaid_account_index()
+        .expect("seed the canonical old issuer account");
+
+    let old_manifest = AssetPermissionManifest {
+        version: ManifestVersion::default(),
+        uaid,
+        dataspace,
+        issued_ms: 0,
+        activation_epoch: 1,
+        expiry_epoch: None,
+        entries: Vec::new(),
+    };
+    let mut old_manifest_record = SpaceDirectoryManifestRecord::new(old_manifest);
+    old_manifest_record.lifecycle.mark_activated(1);
+    let mut old_manifest_set = SpaceDirectoryManifestSet::default();
+    old_manifest_set.upsert(old_manifest_record.clone());
+    world
+        .space_directory_manifests_mut_for_testing()
+        .insert(uaid, old_manifest_set);
+    let mut old_bindings = UaidDataspaceBindings::default();
+    old_bindings.bind_account(dataspace, old_account.clone());
+    world
+        .uaid_dataspaces_mut_for_testing()
+        .insert(uaid, old_bindings);
+
+    let mut old_manifest_root = [0_u8; 32];
+    old_manifest_root.copy_from_slice(old_manifest_record.manifest_hash.as_ref());
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(3_u32),
+        vec![LaneConfig {
+            id: lane,
+            dataspace_id: dataspace,
+            alias: "axt-freeze".into(),
+            ..LaneConfig::default()
+        }],
+    )
+    .expect("AXT freeze lane catalog");
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(world, kura, query_handle);
+    install_test_nexus_lane_catalog(state.nexus.get_mut(), lane_catalog);
+    state.set_axt_policy(
+        dataspace,
+        AxtPolicyEntry {
+            manifest_root: old_manifest_root,
+            target_lane: lane,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
+
+    let network_id = state.network_id;
+    let binding = AxtBinding::new([0xA4; 32]);
+    let old_context = AxtHandleIssuerContextV1 {
+        network_id,
+        asset_dsid: dataspace,
+        issuer: uaid,
+        issuer_manifest_root: old_manifest_root,
+        code_root: [0xC1; 32],
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+    };
+    let old_handle =
+        signed_axt_handle_for_block_freeze(&old_issuer, old_context, lane, binding, 1, 1);
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let mut block = state.block(header);
+    let frozen_issuer = block
+        .axt_block_start_snapshot()
+        .issuer_binding(dataspace)
+        .expect("old issuer is resolvable at block start")
+        .clone();
+    assert_eq!(frozen_issuer.issuer, uaid);
+    assert_eq!(frozen_issuer.public_key, old_issuer.public_key().clone());
+
+    let new_manifest = AssetPermissionManifest {
+        version: ManifestVersion::default(),
+        uaid,
+        dataspace,
+        issued_ms: 1,
+        activation_epoch: 2,
+        expiry_epoch: None,
+        entries: Vec::new(),
+    };
+    let mut new_manifest_record = SpaceDirectoryManifestRecord::new(new_manifest);
+    new_manifest_record.lifecycle.mark_activated(2);
+    let mut new_manifest_root = [0_u8; 32];
+    new_manifest_root.copy_from_slice(new_manifest_record.manifest_hash.as_ref());
+    let mut new_manifest_set = SpaceDirectoryManifestSet::default();
+    new_manifest_set.upsert(new_manifest_record);
+
+    {
+        let mut rotation = block.transaction();
+        rotation.world.accounts.remove(old_account.clone());
+        let (account_id, account_value) = new_account_in_domain(&new_account, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&ALICE_ID)
+            .into_key_value();
+        rotation.world.accounts.insert(account_id, account_value);
+        rotation
+            .world
+            .uaid_accounts
+            .insert(uaid, new_account.clone());
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace, new_account.clone());
+        rotation.world.uaid_dataspaces.insert(uaid, bindings);
+        rotation
+            .world
+            .space_directory_manifests
+            .insert(uaid, new_manifest_set);
+        rotation.world.axt_policies.insert(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: new_manifest_root,
+                target_lane: lane,
+                active_handle_era: 2,
+                next_handle_counter: 1,
+                current_slot: 1,
+            },
+        );
+
+        let effective = rotation
+            .axt_execution_policy_snapshot()
+            .expect("block execution always carries its frozen AXT policy");
+        assert_eq!(effective.entries[0].policy.manifest_root, old_manifest_root);
+        assert_eq!(effective.entries[0].policy.active_handle_era, 1);
+        rotation.apply();
+    }
+
+    assert!(
+        old_handle
+            .verify_issuer_signature_v1(old_context, &frozen_issuer.public_key)
+            .is_ok(),
+        "the block-start key must continue authenticating old-policy handles"
+    );
+    let new_context = AxtHandleIssuerContextV1 {
+        issuer_manifest_root: new_manifest_root,
+        ..old_context
+    };
+    let new_handle =
+        signed_axt_handle_for_block_freeze(&new_issuer, new_context, lane, binding, 2, 1);
+    assert!(
+        new_handle
+            .verify_issuer_signature_v1(new_context, &frozen_issuer.public_key)
+            .is_err(),
+        "the rotated key must not become authoritative in its rotation block"
+    );
+
+    {
+        let mut use_old = block.transaction();
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        host.hydrate_axt_state(&use_old)
+            .expect("hydrate the immutable block-start AXT context");
+        let (host_policy, host_issuer, host_key) = host
+            .axt_hydrated_authorization_for_tests(dataspace)
+            .expect("host receives the frozen AXT authorization tuple");
+        assert_eq!(host_policy.manifest_root, old_manifest_root);
+        assert_eq!(host_policy.active_handle_era, 1);
+        assert_eq!(host_issuer, uaid);
+        assert_eq!(host_key, old_issuer.public_key().clone());
+
+        use_old
+            .record_axt_envelope(axt_envelope_for_block_freeze(
+                old_handle.clone(),
+                dataspace,
+                lane,
+                binding,
+                1,
+            ))
+            .expect("old-policy handle remains admissible for the rotation block");
+        use_old.apply();
+    }
+
+    let post_rotation = block
+        .world
+        .axt_policies
+        .get(&dataspace)
+        .copied()
+        .expect("rotated policy remains staged");
+    assert_eq!(post_rotation.manifest_root, new_manifest_root);
+    assert_eq!(post_rotation.active_handle_era, 2);
+    assert_eq!(post_rotation.next_handle_counter, 1);
+    let frozen_after_use = block.axt_execution_policy_snapshot();
+    assert_eq!(
+        frozen_after_use.entries[0].policy.manifest_root,
+        old_manifest_root
+    );
+    assert_eq!(frozen_after_use.entries[0].policy.next_handle_counter, 2);
+
+    let mut rejected_new = block.transaction();
+    assert!(
+        rejected_new
+            .record_axt_envelope(axt_envelope_for_block_freeze(
+                new_handle.clone(),
+                dataspace,
+                lane,
+                binding,
+                1,
+            ))
+            .is_err(),
+        "new policy/key material must not be usable in its rotation block"
+    );
+    drop(rejected_new);
+    block.commit().expect("commit the rotation block");
+
+    let restart_nexus = state.nexus_snapshot();
+    let restarted_world = mem::replace(&mut state.world, World::new());
+    let restarted = State::new_with_nexus_for_testing(
+        restarted_world,
+        restart_nexus,
+        LiveQueryStore::start_test(),
+    );
+    assert_eq!(restarted.network_id, network_id);
+    let next_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);
+    let mut next_block = restarted.block(next_header);
+    let next_issuer = next_block
+        .axt_block_start_snapshot()
+        .issuer_binding(dataspace)
+        .expect("rotated issuer is resolvable in the next block");
+    assert_eq!(next_issuer.public_key, new_issuer.public_key().clone());
+    let mut use_new = next_block.transaction();
+    let next_envelope =
+        axt_envelope_for_block_freeze(new_handle.clone(), dataspace, lane, binding, 2);
+    use_new
+        .record_axt_envelope(next_envelope.clone())
+        .expect("new policy/key becomes admissible at the next block boundary");
+    use_new.apply();
+    let mut replay = next_block.transaction();
+    assert!(
+        replay.record_axt_envelope(next_envelope).is_err(),
+        "restart/replay must not consume the same exact counter twice"
+    );
 }
 
 #[test]
@@ -49377,8 +49702,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
     let initial_policy = AxtPolicyEntry {
         manifest_root: [0xAA; 32],
         target_lane: lane,
-        min_handle_era: 1,
-        min_sub_nonce: 1,
+        active_handle_era: 1,
+        next_handle_counter: 1,
         current_slot: 0,
     };
     state.set_axt_policy(dsid, initial_policy);
@@ -49397,8 +49722,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
             remaining: Quantity::from(10_u64),
             per_use: Some(Quantity::from(10_u64)),
         },
-        handle_era: 4,
-        sub_nonce: 7,
+        handle_era: 1,
+        sub_nonce: 1,
         group_binding: GroupBinding {
             composability_group_id: vec![0; 32],
             epoch_id: 1,
@@ -49408,6 +49733,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         manifest_view_root: [0xAA; 32],
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let envelope = AxtEnvelopeRecord {
         binding,
@@ -49436,16 +49763,58 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         commit_height: 1,
     };
 
+    for (label, invalid_handle) in [
+        (
+            "future era",
+            iroha_data_model::nexus::AssetHandle {
+                handle_era: u64::MAX,
+                ..handle.clone()
+            },
+        ),
+        (
+            "future counter",
+            iroha_data_model::nexus::AssetHandle {
+                sub_nonce: u64::MAX,
+                ..handle.clone()
+            },
+        ),
+        (
+            "stale counter",
+            iroha_data_model::nexus::AssetHandle {
+                sub_nonce: 0,
+                ..handle.clone()
+            },
+        ),
+    ] {
+        let mut invalid_envelope = envelope.clone();
+        invalid_envelope.handles[0].handle = invalid_handle;
+        let mut rejected = block.transaction();
+        assert!(
+            rejected.record_axt_envelope(invalid_envelope).is_err(),
+            "{label} must not advance committed policy"
+        );
+    }
+    assert_eq!(
+        block.world.axt_policies.get(&dsid).copied(),
+        Some(initial_policy),
+        "invalid AXT sequences must be mutation-free"
+    );
+
     {
         let mut rejected = block.transaction();
-        rejected.record_axt_envelope(envelope.clone());
+        rejected
+            .record_axt_envelope(envelope.clone())
+            .expect("exact AXT sequence should stage");
         let staged = rejected
             .world
             .axt_policies()
             .get(&dsid)
             .expect("policy staged in transaction");
-        assert_eq!(staged.min_handle_era, handle.handle_era);
-        assert_eq!(staged.min_sub_nonce, handle.sub_nonce.saturating_add(1));
+        assert_eq!(staged.active_handle_era, handle.handle_era);
+        assert_eq!(
+            staged.next_handle_counter,
+            handle.sub_nonce.saturating_add(1)
+        );
     }
     assert_eq!(
         block.world.axt_policies.get(&dsid).copied(),
@@ -49466,7 +49835,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
     );
 
     let mut stx = block.transaction();
-    stx.record_axt_envelope(envelope);
+    stx.record_axt_envelope(envelope)
+        .expect("exact AXT sequence should stage");
     stx.apply();
 
     let updated = block
@@ -49474,14 +49844,115 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         .axt_policies
         .get(&dsid)
         .expect("policy persisted");
-    assert_eq!(updated.min_handle_era, handle.handle_era);
-    assert_eq!(updated.min_sub_nonce, handle.sub_nonce.saturating_add(1));
+    assert_eq!(updated.active_handle_era, handle.handle_era);
+    assert_eq!(
+        updated.next_handle_counter,
+        handle.sub_nonce.saturating_add(1)
+    );
     let expected_slot = block
         .axt_policy_snapshot()
         .entries
         .first()
         .map_or(0, |entry| entry.policy.current_slot);
     assert_eq!(updated.current_slot, expected_slot);
+}
+
+#[test]
+fn kura_replay_records_handle_without_ratcheting_post_state_again() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::new(), kura, query_handle);
+    let dsid = DataSpaceId::new(34);
+    let lane = LaneId::new(2);
+    let manifest_root = [0xAC; 32];
+    state.set_axt_policy(
+        dsid,
+        AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane,
+            active_handle_era: 1,
+            // This is the post-state after accepting handle counter 1.
+            next_handle_counter: 2,
+            current_slot: 1,
+        },
+    );
+
+    let binding = AxtBinding::new([0xAD; 32]);
+    let handle = iroha_data_model::nexus::AssetHandle {
+        scope: vec!["transfer".into()],
+        subject: HandleSubject {
+            account: ALICE_ID.to_string(),
+            origin_dsid: Some(dsid),
+        },
+        budget: HandleBudget {
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
+        },
+        handle_era: 1,
+        sub_nonce: 1,
+        group_binding: GroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: 1,
+        },
+        target_lane: lane,
+        axt_binding: binding,
+        manifest_view_root: manifest_root,
+        expiry_slot: 50,
+        max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+    };
+    let replay_key = AxtHandleReplayKey::from_handle(&handle);
+    let envelope = AxtEnvelopeRecord {
+        binding,
+        lane,
+        descriptor: AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        },
+        touches: Vec::new(),
+        proofs: Vec::new(),
+        handles: vec![AxtHandleFragment {
+            handle,
+            intent: RemoteSpendIntent {
+                asset_dsid: dsid,
+                op: SpendOp {
+                    kind: "transfer".into(),
+                    from: ALICE_ID.to_string(),
+                    to: BOB_ID.to_string(),
+                    amount: Some(Quantity::from(5_u64)),
+                },
+            },
+            proof: None,
+            amount: Some(Quantity::from(5_u64)),
+            amount_commitment: None,
+        }],
+        commit_height: 1,
+    };
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let mut state_block = state.block(header);
+    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
+    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
+
+    assert_eq!(
+        state_block
+            .world
+            .axt_policies
+            .get(&dsid)
+            .expect("post-state policy")
+            .next_handle_counter,
+        2,
+        "Kura replay and restart replay must not advance an advertised post-state twice"
+    );
+    assert!(
+        state_block
+            .world
+            .axt_replay_ledger
+            .get(&replay_key)
+            .is_some(),
+        "replay must still rebuild the replay ledger"
+    );
 }
 
 #[test]
@@ -49504,8 +49975,8 @@ fn axt_replay_ledger_records_and_prunes() {
         AxtPolicyEntry {
             manifest_root: [0xCC; 32],
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -49520,8 +49991,8 @@ fn axt_replay_ledger_records_and_prunes() {
             remaining: Quantity::from(10_u64),
             per_use: Some(Quantity::from(10_u64)),
         },
-        handle_era: 3,
-        sub_nonce: 7,
+        handle_era: 1,
+        sub_nonce: 1,
         group_binding: iroha_data_model::nexus::GroupBinding {
             composability_group_id: vec![0; 32],
             epoch_id: 1,
@@ -49531,6 +50002,8 @@ fn axt_replay_ledger_records_and_prunes() {
         manifest_view_root: [0xCC; 32],
         expiry_slot: 2,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let envelope = AxtEnvelopeRecord {
         binding,
@@ -49563,7 +50036,8 @@ fn axt_replay_ledger_records_and_prunes() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
-    stx.record_axt_envelope(envelope);
+    stx.record_axt_envelope(envelope)
+        .expect("first exact AXT counter should stage");
     stx.apply();
 
     let key = AxtHandleReplayKey::from_handle(&handle);
@@ -49579,7 +50053,7 @@ fn axt_replay_ledger_records_and_prunes() {
     // Advance to a far-future slot and ensure stale entries are pruned before recording.
     let new_handle = iroha_data_model::nexus::AssetHandle {
         expiry_slot: 20,
-        sub_nonce: 8,
+        sub_nonce: 2,
         ..handle
     };
     let future_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10, 0);
@@ -49611,7 +50085,8 @@ fn axt_replay_ledger_records_and_prunes() {
         touches: Vec::new(),
         proofs: Vec::new(),
         commit_height: 2,
-    });
+    })
+    .expect("next exact AXT counter should stage");
     stx.apply();
 
     assert!(
@@ -49755,8 +50230,8 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -49803,6 +50278,8 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
             manifest_view_root: manifest_root,
             expiry_slot: 5,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -49859,8 +50336,8 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -50177,7 +50654,7 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     let mut expected_root_current = [0u8; 32];
     expected_root_current.copy_from_slice(record_current.manifest_hash.as_ref());
     assert_eq!(first_entry.manifest_root, expected_root_current);
-    assert_eq!(first_entry.min_handle_era, 1);
+    assert_eq!(first_entry.active_handle_era, 1);
     assert_eq!(first_entry.target_lane, lane_id);
 
     let manifest_v2 = AssetPermissionManifest {
@@ -50218,7 +50695,7 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     let mut expected_root_v2 = [0u8; 32];
     expected_root_v2.copy_from_slice(record_v2.manifest_hash.as_ref());
     assert_eq!(rotated_entry.manifest_root, expected_root_v2);
-    assert_eq!(rotated_entry.min_handle_era, 4);
+    assert_eq!(rotated_entry.active_handle_era, 4);
     assert_eq!(rotated_entry.target_lane, lane_id);
 
     let policies_view = state.world.axt_policies.view();
@@ -50226,7 +50703,7 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
         .get(&dataspace)
         .expect("policy cached after rotation");
     assert_eq!(cached.manifest_root, expected_root_v2);
-    assert_eq!(cached.min_handle_era, 4);
+    assert_eq!(cached.active_handle_era, 4);
 }
 
 #[test]
@@ -50388,7 +50865,7 @@ fn axt_policy_map_rebuilds_from_space_directory_manifests() {
     assert_eq!(entry.dsid, dataspace);
     assert_eq!(entry.policy.target_lane, lane_id);
     assert_eq!(entry.policy.manifest_root, expected_root);
-    assert_eq!(entry.policy.min_handle_era, 0);
+    assert_eq!(entry.policy.active_handle_era, 0);
     assert_eq!(entry.policy.current_slot, stx.axt_current_slot());
     assert_eq!(stx.axt_current_slot(), creation_time_ms);
     let stored = stx
@@ -52294,7 +52771,7 @@ fn sccp_registry_local_profile_rejects_foreign_chain_and_alias_chain_ids() {
     }
     validate_sccp_registry_local_profile(
         registry.as_ref(),
-        &iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        &iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     )
     .expect("canonical Taira chain id accepts the Taira registry");
 }
@@ -52624,8 +53101,9 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
     };
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        chain_id: ChainId::from("explorer-index-test"),
-        genesis_hash: [0xA5; 32],
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xA5; 32]),
+        )),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: fee_asset,
@@ -52656,7 +53134,7 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
 
 #[allow(clippy::too_many_lines)]
 fn indexed_settled_vpn_lease(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     client: &AccountId,
     account_tag: u8,
     ordinal: u16,
@@ -52677,15 +53155,15 @@ fn indexed_settled_vpn_lease(
             .expect("fixture VPN address slot arithmetic"),
     )
     .expect("fixture VPN address slot");
-    let lease_id = derive_vpn_lease_id_v1(chain_id, quote_id, client);
-    let session_id = derive_vpn_session_id_v1(chain_id, quote_id, client, address_slot);
+    let lease_id = derive_vpn_lease_id_v1(network_id, quote_id, client);
+    let session_id = derive_vpn_session_id_v1(network_id, quote_id, client, address_slot);
     let operator_account_id = AccountId::new(operator_key.public_key().clone());
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"),
         "xor".parse().expect("XOR asset name"),
     );
     let custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
-        chain_id,
+        network_id,
         &lease_id,
         &asset_definition,
     )
@@ -52720,7 +53198,7 @@ fn indexed_settled_vpn_lease(
     };
     let signed_quote = VpnSignedQuoteV1::try_sign(
         VpnQuoteBodyV1 {
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             quote_id,
             lease_id,
             session_id,
@@ -52791,6 +53269,23 @@ fn indexed_settled_vpn_lease(
         earned_fee: Quantity::from(1_u32),
         refunded_fee: Quantity::from(9_u32),
     }
+}
+
+#[test]
+fn vpn_lease_projection_rejects_a_foreign_exact_network() {
+    let operator_key = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
+        .expect("deterministic VPN operator key");
+    let local_network = *DEFAULT_TEST_NETWORK_ID;
+    let foreign_network = NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFE; Hash::LENGTH])),
+    );
+    let local = indexed_settled_vpn_lease(&local_network, &*ALICE_ID, 1, 1, &operator_key);
+    let foreign = indexed_settled_vpn_lease(&foreign_network, &*ALICE_ID, 1, 1, &operator_key);
+
+    validate_vpn_lease_network(&local, &local_network).expect("local VPN lease network");
+    let error = validate_vpn_lease_network(&foreign, &local_network)
+        .expect_err("foreign VPN lease must fail exact-network restoration");
+    assert!(error.contains("different exact network"));
 }
 
 #[test]
@@ -52962,6 +53457,7 @@ fn governance_unlock_stats_snapshot_obeys_transaction_and_block_visibility() {
 #[allow(clippy::too_many_lines)]
 fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     let chain_id = ChainId::from("derived-index-restart");
+    let network_id = *DEFAULT_TEST_NETWORK_ID;
     let operator_key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
         .expect("deterministic VPN operator key");
     let alice_id = (*ALICE_ID).clone();
@@ -52978,7 +53474,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     ] {
         for ordinal in 0..lease_count {
             let record = indexed_settled_vpn_lease(
-                &chain_id,
+                &network_id,
                 client,
                 account_tag,
                 u16::try_from(ordinal).expect("fixture VPN ordinal"),
@@ -54095,7 +54591,7 @@ fn raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         77,
         DataSpaceId::UNIVERSAL,
@@ -54612,13 +55108,9 @@ fn contract_call_trigger_enforces_entrypoint_authorization_before_argument_decod
         .expect("bounded trigger callback arguments");
 
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        0,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive contract address");
+    let contract_address =
+        ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL)
+            .expect("derive contract address");
     let contract_subject = contract_address.subject_id();
 
     let block1 = new_dummy_block_with_payload(|header| {
@@ -54920,7 +55412,7 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        state.network_id_ref(),
         &ALICE_ID,
         95,
         DataSpaceId::UNIVERSAL,
@@ -55301,7 +55793,7 @@ fn block_rejects_failing_execute_trigger_and_rolls_back() {
         .expect("trigger action fixture satisfies validation invariants"),
     ));
     let register_tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        state.network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -55332,7 +55824,7 @@ fn block_rejects_failing_execute_trigger_and_rolls_back() {
 
     // Tx 2: attempt to execute the failing trigger by call in the next block.
     let exec_tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        state.network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -55578,7 +56070,7 @@ fn dummy_merge_qc() -> MergeQuorumCertificate {
         0,
         1,
         HashOf::from_untyped_unchecked(Hash::new(b"dummy-merge-parent")),
-        iroha_crypto::Hash::new(b"chain"),
+        *DEFAULT_TEST_NETWORK_ID,
         VALIDATOR_SET_HASH_VERSION_V1,
         HashOf::new(&validator_set),
         validator_set,
@@ -56116,7 +56608,11 @@ fn merge_carrier_finality_artifact(
         "merge-carrier finality fixtures must form a contiguous chain"
     );
     let context = HeightContext {
-        chain_id: ChainId::from("state-merge-carrier-finality-test"),
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"state-merge-carrier-finality-test",
+            )),
+        ),
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -56320,7 +56816,7 @@ fn queue_plan_entrypoint_for_state_test(state: &State, tag: u8) -> TransactionEn
             .expect("deterministic QueuePlan transaction key");
     let authority = AccountId::new(transaction_keypair.public_key().clone());
     let mut transaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -56388,7 +56884,7 @@ fn queue_plan_admission_certificate_for_state_test(
     };
     let entrypoint = queue_plan_entrypoint_for_state_test(state, tag);
     let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &entrypoint,
         &routing_plan,
         admission_context,
@@ -57897,7 +58393,7 @@ fn merge_qc_for_candidate(
         .collect::<Vec<_>>();
     let validator_set_hash = HashOf::new(&validator_set);
     let message_digest = crate::merge::merge_qc_message_digest(
-        &state.chain_id,
+        state.network_id_ref(),
         candidate,
         VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash,
@@ -57926,7 +58422,7 @@ fn merge_qc_for_candidate(
         candidate.epoch_id,
         candidate.carrier_height,
         candidate.carrier_parent_hash,
-        crate::merge::merge_chain_id_digest(&state.chain_id),
+        *state.network_id_ref(),
         VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash,
         validator_set,
@@ -59240,11 +59736,11 @@ fn commit_merge_entry_rejects_future_created_autoscale_lane_snapshot() {
     let incarnation = state
         .lane_incarnation(future_lane)
         .expect("future-created catalog lane has a committed incarnation");
-    let stale_relay = sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+    let stale_relay = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation(
         1,
         future_lane,
         DataSpaceId::UNIVERSAL,
-        &super::DEFAULT_TEST_CHAIN_ID,
+        state.network_id_ref(),
         0,
         incarnation,
         &signers,
@@ -59468,21 +59964,20 @@ fn commit_merge_entry_rejects_invalid_aggregate_signature() {
 }
 
 #[test]
-fn commit_merge_entry_rejects_qc_for_another_chain() {
+fn commit_merge_entry_rejects_qc_for_another_network() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     let keypairs = configure_commit_topology(&state, 1);
     let candidate = merge_candidate_with_lanes(1, 1);
     let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
-    qc.chain_id_digest = Hash::new(b"another-chain");
-
+    qc.network_id = crate::sumeragi::synthetic_network_id("foreign-merge-qc-genesis");
     let err = state
         .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
-        .expect_err("cross-chain QC must fail closed");
+        .expect_err("cross-network QC must fail closed");
     assert!(matches!(
         err,
-        MergeLedgerCommitError::MergeQCChainIdMismatch { .. }
+        MergeLedgerCommitError::MergeQCNetworkIdMismatch { .. }
     ));
 }
 
@@ -61343,9 +61838,15 @@ fn musubi_snapshot_rejects_dangling_reverse_index_tombstones() {
     let by_order =
         Storage::<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>::default();
     let by_provider = Storage::<MusubiProviderLocationKeyV1, ()>::default();
+    let archives = Storage::default();
+    let pin_manifests = Storage::default();
+    let replication_orders = Storage::default();
 
     let error = super::deserialize::validate_musubi_location_reverse_indices(
+        &archives,
         &locations,
+        &pin_manifests,
+        &replication_orders,
         &by_pin,
         &by_order,
         &by_provider,

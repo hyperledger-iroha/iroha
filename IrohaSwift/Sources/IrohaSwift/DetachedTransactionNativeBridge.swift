@@ -91,7 +91,7 @@ public struct DetachedTransactionScaffoldInspection: Sendable, Equatable {
 
     public let payloadSigningHash: Data
     public let authority: String
-    public let chain: String
+    public let networkId: NetworkId
     public let creationTimeMs: UInt64
     public let timeToLiveMs: UInt64?
     public let metadata: [String: NativeBridgeJSONValue]
@@ -121,7 +121,7 @@ private struct ScaffoldDTO: Decodable {
     let schema: String
     let payloadSigningHashHex: String
     let authority: String
-    let chain: String
+    let networkId: NetworkId
     let creationTimeMs: UInt64
     let timeToLiveMs: UInt64?
     let metadata: [String: NativeBridgeJSONValue]
@@ -132,7 +132,7 @@ private struct ScaffoldDTO: Decodable {
         case schema
         case payloadSigningHashHex = "payload_signing_hash_hex"
         case authority
-        case chain
+        case networkId = "network_id"
         case creationTimeMs = "creation_time_ms"
         case timeToLiveMs = "time_to_live_ms"
         case metadata
@@ -230,7 +230,6 @@ enum DetachedTransactionBridgeJSONCodec {
         let dto = try decoder.decode(ScaffoldDTO.self, from: data)
         guard dto.schema == DetachedTransactionScaffoldInspection.schema,
               !dto.authority.isEmpty,
-              !dto.chain.isEmpty,
               let timeToLiveMs = dto.timeToLiveMs,
               timeToLiveMs > 0 else {
             throw NativeBridgeError.invalidDetachedTransactionOutput
@@ -292,7 +291,7 @@ enum DetachedTransactionBridgeJSONCodec {
         return DetachedTransactionScaffoldInspection(
             payloadSigningHash: try decodeHash(dto.payloadSigningHashHex),
             authority: dto.authority,
-            chain: dto.chain,
+            networkId: dto.networkId,
             creationTimeMs: dto.creationTimeMs,
             timeToLiveMs: timeToLiveMs,
             metadata: dto.metadata,
@@ -337,7 +336,7 @@ enum DetachedTransactionBridgeJSONCodec {
     private static func validateInspectionShape(_ data: Data) throws {
         let root = try strictObject(data)
         guard Set(root.keys) == [
-            "schema", "payload_signing_hash_hex", "authority", "chain",
+            "schema", "payload_signing_hash_hex", "authority", "network_id",
             "creation_time_ms", "time_to_live_ms", "metadata",
             "entrypoint_hash_hex", "executable",
         ], root["metadata"] is [String: Any],
