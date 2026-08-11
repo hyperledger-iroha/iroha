@@ -15,7 +15,6 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
         Path("javascript/iroha_js/test/toriiClient.test.js"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         *paths,
     ]
     expanded: list[Path] = []
@@ -731,8 +730,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         / "iroha_core"
         / "src"
         / "sumeragi"
-        / "tests"
-        / "v2_runner_unsealed_01.rs"
+        / "v2_runner.rs"
     )
     source = runner_path.read_text(encoding="utf-8")
     exact_retry_split = "        if calls == 2 {"

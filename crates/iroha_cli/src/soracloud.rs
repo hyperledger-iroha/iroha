@@ -16546,134 +16546,31 @@ fn hayahi_app_root_package_json(package_name: &str) -> String {
 }
 
 fn site_tsconfig_json() -> &'static str {
-    r#"{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "module": "ESNext",
-    "moduleResolution": "Node",
-    "strict": true,
-    "jsx": "preserve",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "esModuleInterop": true,
-    "lib": [
-      "ES2020",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "types": [
-      "vite/client"
-    ]
-  },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.vue"
-  ]
-}
-"#
+    include_str!("soracloud/templates/v1/site_tsconfig.json")
 }
 
 fn site_vite_config() -> &'static str {
-    r#"import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-
-export default defineConfig({
-  plugins: [vue()],
-  server: {
-    host: "0.0.0.0",
-    port: 5173
-  }
-});
-"#
+    include_str!("soracloud/templates/v1/site_vite.config.ts")
 }
 
 fn single_api_frontend_vite_config() -> &'static str {
-    r#"import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-
-function normalizeProxyTarget(envName: string, fallback: string) {
-  const value = process.env[envName] ?? fallback;
-  return value.endsWith("/") ? value.slice(0, -1) : value;
-}
-
-const apiProxyTarget = normalizeProxyTarget(
-  "SORACLOUD_SINGLE_API_DEV_PROXY_TARGET",
-  "http://127.0.0.1:8787"
-);
-
-export default defineConfig({
-  plugins: [vue()],
-  server: {
-    host: "0.0.0.0",
-    port: 5173,
-    proxy: {
-      "/api": {
-        target: apiProxyTarget,
-        changeOrigin: true
-      }
-    }
-  }
-});
-"#
+    include_str!("soracloud/templates/v1/single_api_frontend_vite.config.ts")
 }
 
 fn webapp_frontend_vite_config() -> &'static str {
-    r#"import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-
-export default defineConfig({
-  plugins: [vue()],
-  server: {
-    host: "0.0.0.0",
-    port: 5173,
-    proxy: {
-      "/api": "http://127.0.0.1:8787"
-    }
-  }
-});
-"#
+    include_str!("soracloud/templates/v1/webapp_frontend_vite.config.ts")
 }
 
 fn pii_app_frontend_vite_config() -> &'static str {
-    r#"import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-
-export default defineConfig({
-  plugins: [vue()],
-  server: {
-    host: "0.0.0.0",
-    port: 5173,
-    proxy: {
-      "/pii/api": "http://127.0.0.1:8788"
-    }
-  }
-});
-"#
+    include_str!("soracloud/templates/v1/pii_app_frontend_vite.config.ts")
 }
 
 fn site_index_html() -> &'static str {
-    r#"<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Soracloud App</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
-</html>
-"#
+    include_str!("soracloud/templates/v1/site_index.html")
 }
 
 fn site_main_ts() -> &'static str {
-    r##"import { createApp } from "vue";
-import App from "./App.vue";
-
-createApp(App).mount("#app");
-"##
+    include_str!("soracloud/templates/v1/site_main.ts")
 }
 
 fn site_app_vue(service_name: &str) -> String {
@@ -17404,1187 +17301,30 @@ fn hayahi_app_contract_ko(service_name: &str) -> String {
 }
 
 fn soracloud_auth_core_mjs() -> &'static str {
-    r#"import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import url from "node:url";
-
-const AUTH_MESSAGE_VERSION = "soracloud.auth.challenge.v1";
-const AUTH_STATE_SCHEMA_VERSION = "soracloud.auth.state.v1";
-const AUTH_CHALLENGE_PREFIX = "/state/auth/challenges";
-const AUTH_CHALLENGE_EXPIRED_PREFIX = `${AUTH_CHALLENGE_PREFIX}/_meta/expired`;
-const AUTH_CHALLENGE_CONSUME_LOCK_PREFIX = `${AUTH_CHALLENGE_PREFIX}/_meta/consume_locks`;
-const AUTH_SESSION_PREFIX = "/state/auth/sessions";
-const AUTH_MODE = normalizeAuthMode(process.env.AUTH_MODE ?? "strict");
-const IS_PRODUCTION = (process.env.NODE_ENV ?? "development").trim() === "production";
-const AUTH_REQUIRE_EXTERNAL_SHARED_STATE = parseBooleanEnv(
-  "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
-  process.env.AUTH_REQUIRE_EXTERNAL_SHARED_STATE,
-  AUTH_MODE === "strict" || IS_PRODUCTION
-);
-const AUTH_SESSION_TTL_SECS = parsePositiveIntEnv(
-  "AUTH_SESSION_TTL_SECS",
-  process.env.AUTH_SESSION_TTL_SECS,
-  900,
-  60,
-  86400
-);
-const AUTH_CHALLENGE_TTL_SECS = parsePositiveIntEnv(
-  "AUTH_CHALLENGE_TTL_SECS",
-  process.env.AUTH_CHALLENGE_TTL_SECS,
-  120,
-  5,
-  900
-);
-const AUTH_SESSION_TTL_MS = AUTH_SESSION_TTL_SECS * 1000;
-const AUTH_CHALLENGE_TTL_MS = AUTH_CHALLENGE_TTL_SECS * 1000;
-const AUTH_CHALLENGE_EXPIRED_TTL_MS = Math.max(AUTH_CHALLENGE_TTL_MS, 30000);
-const AUTH_CHALLENGE_CONSUME_LOCK_TTL_MS = Math.max(AUTH_CHALLENGE_TTL_MS, 15000);
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "").trim();
-const PUBLIC_BASE_ORIGIN = parsePublicOrigin(PUBLIC_BASE_URL);
-const STATE_FILE_PATH = resolveStateFilePath();
-const STATE_FILE_LOCK_DIR = `${STATE_FILE_PATH}.lock`;
-const STATE_FILE_LOCK_STALE_MS = 30000;
-const STATE_FILE_LOCK_TIMEOUT_MS = 5000;
-const SESSION_HMAC_KEY = resolveSessionHmacKey();
-const SHARED_STATE_ADAPTER = resolveSharedStateAdapter();
-
-if (IS_PRODUCTION && !AUTH_REQUIRE_EXTERNAL_SHARED_STATE) {
-  throw new Error("AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled in production mode");
+    include_str!("soracloud/templates/v1/soracloud_auth_core.mjs")
 }
 
-function normalizeAuthMode(value) {
-  const normalized = String(value ?? "strict").trim().toLowerCase();
-  if (normalized !== "strict" && normalized !== "dev") {
-    throw new Error(`AUTH_MODE must be strict or dev, got: ${value}`);
-  }
-  return normalized;
-}
-
-function parsePositiveIntEnv(name, rawValue, fallbackValue, minValue, maxValue) {
-  const source = rawValue ?? String(fallbackValue);
-  const value = Number.parseInt(source, 10);
-  if (!Number.isFinite(value) || value < minValue || value > maxValue) {
-    throw new Error(`${name} must be an integer in [${minValue}, ${maxValue}]`);
-  }
-  return value;
-}
-
-function parseBooleanEnv(name, rawValue, fallbackValue) {
-  if (rawValue === undefined || rawValue === null || String(rawValue).trim().length === 0) {
-    return fallbackValue;
-  }
-  const normalized = String(rawValue).trim().toLowerCase();
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  throw new Error(`${name} must be boolean (true/false/1/0)`);
-}
-
-function parsePublicOrigin(raw) {
-  if (!raw) {
-    return "";
-  }
-  try {
-    return new URL(raw).origin;
-  } catch (error) {
-    throw new Error(`PUBLIC_BASE_URL is invalid: ${error.message}`);
-  }
-}
-
-function resolveStateFilePath() {
-  const explicitPath = (process.env.SORACLOUD_SHARED_STATE_FILE ?? "").trim();
-  if (explicitPath.length > 0) {
-    return path.resolve(explicitPath);
-  }
-  const moduleDir = path.dirname(url.fileURLToPath(import.meta.url));
-  return path.resolve(moduleDir, "..", ".soracloud-shared", "auth_state.json");
-}
-
-function resolveSessionHmacKey() {
-  const key = (process.env.SESSION_HMAC_KEY ?? "").trim();
-  if (key.length >= 32) {
-    return key;
-  }
-  if (IS_PRODUCTION || AUTH_MODE === "strict") {
-    throw new Error(
-      "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode"
-    );
-  }
-  return "dev-only-session-hmac-key-change-before-production";
-}
-
-function resolveSharedStateAdapter() {
-  const adapter = globalThis.__soracloudSharedStateAdapter;
-  if (!adapter) {
-    if (AUTH_REQUIRE_EXTERNAL_SHARED_STATE) {
-      throw new Error(
-        "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled but globalThis.__soracloudSharedStateAdapter is not configured"
-      );
-    }
-    return null;
-  }
-
-  for (const method of ["get", "put", "delete", "entries", "putIfAbsent"]) {
-    if (typeof adapter[method] !== "function") {
-      throw new Error(`globalThis.__soracloudSharedStateAdapter.${method} must be a function`);
-    }
-  }
-  return adapter;
-}
-
-function canonicalizeJsonValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => canonicalizeJsonValue(entry));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const out = {};
-  for (const key of Object.keys(value).sort()) {
-    out[key] = canonicalizeJsonValue(value[key]);
-  }
-  return out;
-}
-
-function stableJsonStringify(value) {
-  return JSON.stringify(canonicalizeJsonValue(value));
-}
-
-function sleepSync(ms) {
-  const buffer = new SharedArrayBuffer(4);
-  Atomics.wait(new Int32Array(buffer), 0, 0, ms);
-}
-
-function removeStaleAuthStateLock(nowMs) {
-  try {
-    const stats = fs.statSync(STATE_FILE_LOCK_DIR);
-    if (Number(stats.mtimeMs) + STATE_FILE_LOCK_STALE_MS <= nowMs) {
-      fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
-    }
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      return;
-    }
-    throw error;
-  }
-}
-
-function withAuthStateFileLock(operation) {
-  const directory = path.dirname(STATE_FILE_PATH);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const deadlineMs = Date.now() + STATE_FILE_LOCK_TIMEOUT_MS;
-  let locked = false;
-  while (!locked) {
-    try {
-      fs.mkdirSync(STATE_FILE_LOCK_DIR, { mode: 0o700 });
-      try {
-        fs.writeFileSync(
-          path.join(STATE_FILE_LOCK_DIR, "owner.json"),
-          stableJsonStringify({ created_at_unix_ms: Date.now(), pid: process.pid }),
-          { mode: 0o600 }
-        );
-      } catch (error) {
-        fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
-        throw error;
-      }
-      locked = true;
-    } catch (error) {
-      if (!error || error.code !== "EEXIST") {
-        throw error;
-      }
-      const nowMs = Date.now();
-      removeStaleAuthStateLock(nowMs);
-      if (nowMs >= deadlineMs) {
-        throw new Error("timed out waiting for auth state file lock");
-      }
-      sleepSync(10);
-    }
-  }
-
-  try {
-    return operation();
-  } finally {
-    fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
-  }
-}
-
-function readAuthStateSnapshot() {
-  try {
-    const raw = fs.readFileSync(STATE_FILE_PATH, "utf8");
-    if (raw.trim().length === 0) {
-      return { schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} };
-    }
-    const parsed = JSON.parse(raw);
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      parsed.schema_version !== AUTH_STATE_SCHEMA_VERSION ||
-      !parsed.records ||
-      typeof parsed.records !== "object" ||
-      Array.isArray(parsed.records)
-    ) {
-      throw new Error("invalid auth state snapshot shape");
-    }
-    return parsed;
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      return { schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} };
-    }
-    throw error;
-  }
-}
-
-function writeAuthStateSnapshot(snapshot) {
-  const directory = path.dirname(STATE_FILE_PATH);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const tmpPath = `${STATE_FILE_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, stableJsonStringify(snapshot), { mode: 0o600 });
-  fs.renameSync(tmpPath, STATE_FILE_PATH);
-}
-
-function stateGet(key) {
-  if (SHARED_STATE_ADAPTER) {
-    const value = SHARED_STATE_ADAPTER.get(key);
-    if (value === undefined || value === null) {
-      return null;
-    }
-    return canonicalizeJsonValue(value);
-  }
-  const snapshot = readAuthStateSnapshot();
-  return snapshot.records[key] ?? null;
-}
-
-function statePut(key, value) {
-  const canonical = canonicalizeJsonValue(value);
-  if (SHARED_STATE_ADAPTER) {
-    SHARED_STATE_ADAPTER.put(key, canonical);
-    return;
-  }
-  withAuthStateFileLock(() => {
-    const snapshot = readAuthStateSnapshot();
-    snapshot.records[key] = canonical;
-    writeAuthStateSnapshot(snapshot);
-  });
-}
-
-function statePutIfAbsent(key, value) {
-  const canonical = canonicalizeJsonValue(value);
-  if (SHARED_STATE_ADAPTER) {
-    const inserted = SHARED_STATE_ADAPTER.putIfAbsent(key, canonical);
-    if (typeof inserted !== "boolean") {
-      throw new Error("shared state adapter putIfAbsent(key, value) must return boolean");
-    }
-    return inserted;
-  }
-  return withAuthStateFileLock(() => {
-    const snapshot = readAuthStateSnapshot();
-    if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
-      return false;
-    }
-    snapshot.records[key] = canonical;
-    writeAuthStateSnapshot(snapshot);
-    return true;
-  });
-}
-
-function stateDelete(key) {
-  if (SHARED_STATE_ADAPTER) {
-    SHARED_STATE_ADAPTER.delete(key);
-    return;
-  }
-  withAuthStateFileLock(() => {
-    const snapshot = readAuthStateSnapshot();
-    if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
-      delete snapshot.records[key];
-      writeAuthStateSnapshot(snapshot);
-    }
-  });
-}
-
-function stateEntries(prefix) {
-  if (SHARED_STATE_ADAPTER) {
-    const rawEntries = SHARED_STATE_ADAPTER.entries(prefix);
-    if (!Array.isArray(rawEntries)) {
-      throw new Error("shared state adapter entries(prefix) must return [key, value][]");
-    }
-    const entries = [];
-    for (const entry of rawEntries) {
-      if (!Array.isArray(entry) || entry.length !== 2) {
-        throw new Error("shared state adapter entries(prefix) must return [key, value][]");
-      }
-      const key = String(entry[0] ?? "").trim();
-      if (key.length === 0) {
-        throw new Error("shared state adapter entry keys must be non-empty strings");
-      }
-      if (!key.startsWith(prefix)) {
-        continue;
-      }
-      entries.push([key, canonicalizeJsonValue(entry[1])]);
-    }
-    entries.sort((left, right) => left[0].localeCompare(right[0]));
-    return entries;
-  }
-  const snapshot = readAuthStateSnapshot();
-  const entries = [];
-  for (const key of Object.keys(snapshot.records).sort()) {
-    if (key.startsWith(prefix)) {
-      entries.push([key, snapshot.records[key]]);
-    }
-  }
-  return entries;
-}
-
-function parseCookies(headerValue = "") {
-  const cookies = Object.create(null);
-  for (const entry of headerValue.split(";")) {
-    const [rawKey, ...rest] = entry.trim().split("=");
-    if (!rawKey || rest.length === 0) {
-      continue;
-    }
-    cookies[rawKey] = decodeURIComponent(rest.join("="));
-  }
-  return cookies;
-}
-
-function timingSafeEqualText(left, right) {
-  const a = Buffer.from(String(left), "utf8");
-  const b = Buffer.from(String(right), "utf8");
-  if (a.length !== b.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(a, b);
-}
-
-function requireTrimmedString(value, fieldName) {
-  if (typeof value !== "string") {
-    throw new Error(`${fieldName} must be a string`);
-  }
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    throw new Error(`${fieldName} must not be empty`);
-  }
-  return trimmed;
-}
-
-function decodeHexStrict(value, expectedBytes, fieldName) {
-  const normalized = requireTrimmedString(value, fieldName).toLowerCase();
-  if (!/^[0-9a-f]+$/.test(normalized) || normalized.length !== expectedBytes * 2) {
-    throw new Error(`${fieldName} must be ${expectedBytes} bytes of hex`);
-  }
-  const bytes = Buffer.from(normalized, "hex");
-  if (bytes.length !== expectedBytes) {
-    throw new Error(`${fieldName} must be ${expectedBytes} bytes of hex`);
-  }
-  return { hex: normalized, bytes };
-}
-
-function normalizePublicKey(value, fieldName = "public_key") {
-  return decodeHexStrict(value, 32, fieldName).hex;
-}
-
-function parseCapabilityMap(raw, requireNonEmpty) {
-  if (!raw || raw.trim().length === 0) {
-    if (requireNonEmpty) {
-      throw new Error("AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints");
-    }
-    return new Map();
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`AUTH_CAPABILITY_MAP_JSON is invalid JSON: ${error.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("AUTH_CAPABILITY_MAP_JSON must be an object");
-  }
-  const out = new Map();
-  for (const [rawPrincipal, rawCapabilities] of Object.entries(parsed)) {
-    const principal = normalizePublicKey(rawPrincipal, "AUTH_CAPABILITY_MAP_JSON principal");
-    if (!Array.isArray(rawCapabilities) || rawCapabilities.length === 0) {
-      throw new Error("AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays");
-    }
-    const normalizedCapabilities = [];
-    for (const capability of rawCapabilities) {
-      const normalizedCapability = requireTrimmedString(
-        capability,
-        "AUTH_CAPABILITY_MAP_JSON capability"
-      );
-      normalizedCapabilities.push(normalizedCapability);
-    }
-    normalizedCapabilities.sort();
-    out.set(principal, Array.from(new Set(normalizedCapabilities)));
-  }
-  if (requireNonEmpty && out.size === 0) {
-    throw new Error("AUTH_CAPABILITY_MAP_JSON must define at least one principal");
-  }
-  return out;
-}
-
-function requestOrigin(req) {
-  if (PUBLIC_BASE_ORIGIN) {
-    return PUBLIC_BASE_ORIGIN;
-  }
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const proto =
-    typeof forwardedProto === "string" && forwardedProto.trim().length > 0
-      ? forwardedProto.split(",")[0].trim()
-      : "http";
-  const forwardedHost = req.headers["x-forwarded-host"];
-  const host =
-    typeof forwardedHost === "string" && forwardedHost.trim().length > 0
-      ? forwardedHost.split(",")[0].trim()
-      : req.headers.host ?? "";
-  if (!host) {
-    return "";
-  }
-  return `${proto}://${host}`;
-}
-
-function shouldUseSecureCookie(req) {
-  if (PUBLIC_BASE_ORIGIN.startsWith("https://")) {
-    return true;
-  }
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  return typeof forwardedProto === "string" && forwardedProto.includes("https");
-}
-
-function challengeStateKey(challengeId) {
-  return `${AUTH_CHALLENGE_PREFIX}/${challengeId}`;
-}
-
-function challengeExpiredStateKey(challengeId) {
-  return `${AUTH_CHALLENGE_EXPIRED_PREFIX}/${challengeId}`;
-}
-
-function isChallengeExpiredStateKey(key) {
-  return key.startsWith(`${AUTH_CHALLENGE_EXPIRED_PREFIX}/`);
-}
-
-function challengeConsumeLockStateKey(challengeId) {
-  return `${AUTH_CHALLENGE_CONSUME_LOCK_PREFIX}/${challengeId}`;
-}
-
-function isChallengeConsumeLockStateKey(key) {
-  return key.startsWith(`${AUTH_CHALLENGE_CONSUME_LOCK_PREFIX}/`);
-}
-
-function sessionStateKey(sessionId) {
-  return `${AUTH_SESSION_PREFIX}/${sessionId}`;
-}
-
-function canonicalChallengeMessage(challenge) {
-  return [
-    AUTH_MESSAGE_VERSION,
-    `challenge_id=${challenge.challenge_id}`,
-    `public_key=${challenge.public_key}`,
-    `nonce=${challenge.nonce}`,
-    `issued_at_unix_ms=${challenge.issued_at_unix_ms}`,
-    `expires_at_unix_ms=${challenge.expires_at_unix_ms}`,
-    `origin=${challenge.origin}`
-  ].join("\n");
-}
-
-function verifyEd25519Signature(publicKeyHex, signatureHex, message) {
-  const publicKey = decodeHexStrict(publicKeyHex, 32, "public_key");
-  const signature = decodeHexStrict(signatureHex, 64, "signature");
-  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-  const derPublicKey = Buffer.concat([spkiPrefix, publicKey.bytes]);
-  const verifierKey = crypto.createPublicKey({ key: derPublicKey, format: "der", type: "spki" });
-  return crypto.verify(null, Buffer.from(message, "utf8"), verifierKey, signature.bytes);
-}
-
-function sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs) {
-  if (!challenge || typeof challenge !== "object") {
-    const expiredMarker = stateGet(challengeExpiredStateKey(challengeId));
-    if (expiredMarker && typeof expiredMarker === "object") {
-      sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
-      return true;
-    }
-    sendAuthError(res, 401, "AUTH_CHALLENGE_NOT_FOUND", "challenge not found");
-    return true;
-  }
-
-  const expiresAt = Number(challenge.expires_at_unix_ms);
-  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-    statePut(challengeExpiredStateKey(challengeId), {
-      schema_version: AUTH_STATE_SCHEMA_VERSION,
-      challenge_id: challengeId,
-      expires_at_unix_ms: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : nowMs,
-      marked_at_unix_ms: nowMs
-    });
-    stateDelete(challengeStateKey(challengeId));
-    sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
-    return true;
-  }
-  if (challenge.used_at_unix_ms !== null && challenge.used_at_unix_ms !== undefined) {
-    sendAuthError(res, 401, "AUTH_CHALLENGE_REPLAYED", "challenge already used");
-    return true;
-  }
-  if (!timingSafeEqualText(challenge.public_key, publicKey)) {
-    sendAuthError(
-      res,
-      401,
-      "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
-      "challenge principal mismatch"
-    );
-    return true;
-  }
-
-  const currentOrigin = requestOrigin(req);
-  if (challenge.origin && !timingSafeEqualText(challenge.origin, currentOrigin)) {
-    sendAuthError(res, 401, "AUTH_ORIGIN_MISMATCH", "request origin mismatch");
-    return true;
-  }
-
-  return false;
-}
-
-function cleanupExpiredAuthRecords(nowMs = Date.now()) {
-  for (const [key, challenge] of stateEntries(AUTH_CHALLENGE_PREFIX)) {
-    if (isChallengeExpiredStateKey(key)) {
-      const markedAt = Number(challenge?.marked_at_unix_ms ?? 0);
-      if (!Number.isFinite(markedAt) || markedAt + AUTH_CHALLENGE_EXPIRED_TTL_MS <= nowMs) {
-        stateDelete(key);
-      }
-      continue;
-    }
-    if (isChallengeConsumeLockStateKey(key)) {
-      const expiresAt = Number(challenge?.expires_at_unix_ms ?? 0);
-      if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-        stateDelete(key);
-      }
-      continue;
-    }
-    const expiresAt = Number(challenge?.expires_at_unix_ms ?? 0);
-    if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-      const challengeId =
-        typeof challenge?.challenge_id === "string" ? challenge.challenge_id.trim() : "";
-      if (challengeId.length > 0) {
-        statePut(challengeExpiredStateKey(challengeId), {
-          schema_version: AUTH_STATE_SCHEMA_VERSION,
-          challenge_id: challengeId,
-          expires_at_unix_ms:
-            Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : nowMs,
-          marked_at_unix_ms: nowMs
-        });
-      }
-      stateDelete(key);
-    }
-  }
-  for (const [key, session] of stateEntries(AUTH_SESSION_PREFIX)) {
-    const expiresAt = Number(session?.expires_at_unix_ms ?? 0);
-    if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-      stateDelete(key);
-    }
-  }
-}
-
-function acquireChallengeConsumeLock(challengeId, nowMs = Date.now()) {
-  const lockKey = challengeConsumeLockStateKey(challengeId);
-  const existing = stateGet(lockKey);
-  const existingExpiresAt = Number(existing?.expires_at_unix_ms ?? 0);
-  if (existing && Number.isFinite(existingExpiresAt) && existingExpiresAt <= nowMs) {
-    stateDelete(lockKey);
-  }
-  const owner = crypto.randomUUID();
-  const inserted = statePutIfAbsent(lockKey, {
-    schema_version: AUTH_STATE_SCHEMA_VERSION,
-    challenge_id: challengeId,
-    owner,
-    created_at_unix_ms: nowMs,
-    expires_at_unix_ms: nowMs + AUTH_CHALLENGE_CONSUME_LOCK_TTL_MS
-  });
-  if (!inserted) {
-    return null;
-  }
-  return { challenge_id: challengeId, owner };
-}
-
-function releaseChallengeConsumeLock(lockHandle) {
-  if (!lockHandle || typeof lockHandle !== "object") {
-    return;
-  }
-  const challengeId =
-    typeof lockHandle.challenge_id === "string" ? lockHandle.challenge_id.trim() : "";
-  const owner = typeof lockHandle.owner === "string" ? lockHandle.owner : "";
-  if (!challengeId || !owner) {
-    return;
-  }
-  const lockKey = challengeConsumeLockStateKey(challengeId);
-  const current = stateGet(lockKey);
-  if (!current || typeof current !== "object" || typeof current.owner !== "string") {
-    return;
-  }
-  if (!timingSafeEqualText(current.owner, owner)) {
-    return;
-  }
-  stateDelete(lockKey);
-}
-
-function signSessionToken(sessionId) {
-  const mac = crypto.createHmac("sha256", SESSION_HMAC_KEY).update(sessionId).digest("hex");
-  return `${sessionId}.${mac}`;
-}
-
-function verifySessionToken(token) {
-  const [sessionId, mac] = String(token ?? "").split(".");
-  if (!sessionId || !mac || !/^[0-9a-f]+$/.test(mac)) {
-    return null;
-  }
-  const expectedMac = crypto.createHmac("sha256", SESSION_HMAC_KEY).update(sessionId).digest("hex");
-  if (!timingSafeEqualText(mac, expectedMac)) {
-    return null;
-  }
-  return sessionId;
-}
-
-function buildSetCookieHeader(req, token) {
-  let cookie = `session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Strict`;
-  if (shouldUseSecureCookie(req)) {
-    cookie += "; Secure";
-  }
-  return cookie;
-}
-
-function buildClearCookieHeader(req) {
-  let cookie = "session=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict";
-  if (shouldUseSecureCookie(req)) {
-    cookie += "; Secure";
-  }
-  return cookie;
-}
-
-function getSessionFromRequest(req) {
-  const cookies = parseCookies(req.headers.cookie ?? "");
-  const token = cookies.session;
-  if (!token) {
-    return null;
-  }
-  const sessionId = verifySessionToken(token);
-  if (!sessionId) {
-    return null;
-  }
-  const record = stateGet(sessionStateKey(sessionId));
-  if (!record || typeof record !== "object") {
-    return null;
-  }
-  const nowMs = Date.now();
-  if (Number(record.expires_at_unix_ms) <= nowMs) {
-    stateDelete(sessionStateKey(sessionId));
-    return null;
-  }
-  const currentOrigin = requestOrigin(req);
-  if (record.origin && !timingSafeEqualText(record.origin, currentOrigin)) {
-    return null;
-  }
-  return record;
-}
-
-function requireAuthenticatedSession(req, res, capabilityMap, requiredCapability) {
-  const session = getSessionFromRequest(req);
-  if (!session) {
-    sendAuthError(res, 401, "AUTH_REQUIRED", "authentication required");
-    return null;
-  }
-  if (!requiredCapability) {
-    return session;
-  }
-  if (!capabilityMap || capabilityMap.size === 0) {
-    sendAuthError(res, 403, "AUTH_CAPABILITY_MAP_REQUIRED", "capability map is required");
-    return null;
-  }
-  if (!session.capabilities.includes(requiredCapability)) {
-    sendAuthError(res, 403, "AUTH_FORBIDDEN", "missing required capability", {
-      required_capability: requiredCapability
-    });
-    return null;
-  }
-  return session;
-}
-
-async function readJson(req) {
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk.toString("utf8");
-    if (body.length > 65536) {
-      throw new Error("request body too large");
-    }
-  }
-  if (body.trim().length === 0) {
-    return {};
-  }
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("invalid JSON payload");
-  }
-}
-
-function sendJson(res, status, body, extraHeaders = {}) {
-  const headers = Object.assign(
-    {
-      "content-type": "application/json; charset=utf-8"
-    },
-    extraHeaders
-  );
-  res.writeHead(status, headers);
-  res.end(stableJsonStringify(body));
-}
-
-function sendAuthError(res, status, code, error, extra = {}) {
-  sendJson(res, status, Object.assign({ code, error }, extra));
-}
-
-function sendInternalError(res, error) {
-  // eslint-disable-next-line no-console
-  console.error(error?.stack ?? String(error));
-  if (res.headersSent) {
-    res.destroy(error);
-    return;
-  }
-  sendAuthError(res, 500, "INTERNAL_SERVER_ERROR", "internal server error");
-}
-
-async function handleAuthChallenge(req, res) {
-  try {
-    const body = await readJson(req);
-    const publicKey = normalizePublicKey(body.public_key, "public_key");
-    cleanupExpiredAuthRecords();
-    const nowMs = Date.now();
-    const challenge = {
-      schema_version: AUTH_STATE_SCHEMA_VERSION,
-      challenge_id: crypto.randomUUID(),
-      public_key: publicKey,
-      nonce: crypto.randomBytes(16).toString("hex"),
-      issued_at_unix_ms: nowMs,
-      expires_at_unix_ms: nowMs + AUTH_CHALLENGE_TTL_MS,
-      used_at_unix_ms: null,
-      origin: requestOrigin(req)
-    };
-    statePut(challengeStateKey(challenge.challenge_id), challenge);
-    sendJson(res, 200, {
-      auth_message_version: AUTH_MESSAGE_VERSION,
-      challenge_id: challenge.challenge_id,
-      expires_at_unix_ms: challenge.expires_at_unix_ms,
-      issued_at_unix_ms: challenge.issued_at_unix_ms,
-      message: canonicalChallengeMessage(challenge),
-      nonce: challenge.nonce,
-      public_key: challenge.public_key
-    });
-  } catch (error) {
-    sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-  }
-}
-
-async function handleAuthLogin(req, res, capabilityMap) {
-  try {
-    const body = await readJson(req);
-    const publicKey = normalizePublicKey(body.public_key, "public_key");
-    const challengeId = requireTrimmedString(body.challenge_id, "challenge_id");
-    const signature = requireTrimmedString(body.signature, "signature");
-    cleanupExpiredAuthRecords();
-
-    const challengeKey = challengeStateKey(challengeId);
-    let nowMs = Date.now();
-    let challenge = stateGet(challengeKey);
-    if (sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs)) {
-      return;
-    }
-
-    let canonicalMessage = canonicalChallengeMessage(challenge);
-    let signatureValid = verifyEd25519Signature(publicKey, signature, canonicalMessage);
-    if (!signatureValid) {
-      sendAuthError(res, 401, "AUTH_SIGNATURE_INVALID", "signature verification failed");
-      return;
-    }
-
-    const consumeLock = acquireChallengeConsumeLock(challengeId);
-    if (!consumeLock) {
-      sendAuthError(res, 401, "AUTH_CHALLENGE_REPLAYED", "challenge already used");
-      return;
-    }
-
-    try {
-      nowMs = Date.now();
-      challenge = stateGet(challengeKey);
-      if (sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs)) {
-        return;
-      }
-
-      canonicalMessage = canonicalChallengeMessage(challenge);
-      signatureValid = verifyEd25519Signature(publicKey, signature, canonicalMessage);
-      if (!signatureValid) {
-        sendAuthError(res, 401, "AUTH_SIGNATURE_INVALID", "signature verification failed");
-        return;
-      }
-
-      challenge.used_at_unix_ms = nowMs;
-      statePut(challengeKey, challenge);
-
-      const principal = publicKey;
-      const capabilities = (capabilityMap.get(principal) ?? []).slice().sort();
-      const sessionId = crypto.randomUUID();
-      const session = {
-        schema_version: AUTH_STATE_SCHEMA_VERSION,
-        session_id: sessionId,
-        principal,
-        capabilities,
-        issued_at_unix_ms: nowMs,
-        expires_at_unix_ms: nowMs + AUTH_SESSION_TTL_MS,
-        origin: challenge.origin
-      };
-      statePut(sessionStateKey(sessionId), session);
-
-      const token = signSessionToken(sessionId);
-      sendJson(
-        res,
-        200,
-        {
-          capabilities,
-          principal,
-          session_expires_at_unix_ms: session.expires_at_unix_ms
-        },
-        { "set-cookie": buildSetCookieHeader(req, token) }
-      );
-    } finally {
-      releaseChallengeConsumeLock(consumeLock);
-    }
-  } catch (error) {
-    sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-  }
-}
-
-function handleAuthMe(req, res, capabilityMap, requiredCapability = null) {
-  cleanupExpiredAuthRecords();
-  const session = requireAuthenticatedSession(req, res, capabilityMap, requiredCapability);
-  if (!session) {
-    return;
-  }
-  sendJson(res, 200, {
-    capabilities: session.capabilities,
-    principal: session.principal,
-    session_expires_at_unix_ms: session.expires_at_unix_ms
-  });
-}
-
-function handleAuthLogout(req, res) {
-  cleanupExpiredAuthRecords();
-  const session = getSessionFromRequest(req);
-  if (session && session.session_id) {
-    stateDelete(sessionStateKey(session.session_id));
-  }
-  res.writeHead(204, { "set-cookie": buildClearCookieHeader(req) });
-  res.end();
-}
-"#
-}
+const WEBAPP_API_TAIL_V1: &str = include_str!("soracloud/assets/v1/webapp_api_tail.mjs");
+const PII_API_TAIL_V1: &str = include_str!("soracloud/assets/v1/pii_api_tail.mjs");
 
 fn webapp_api_server_mjs() -> String {
     let mut script = String::from(soracloud_auth_core_mjs());
-    script.push_str(
-        r#"
-import http from "node:http";
-
-const portArg = process.argv.find((value) => value.startsWith("--port="));
-const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
-const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", false);
-
-async function handleWebappRequest(req, res) {
-  cleanupExpiredAuthRecords();
-
-  if (req.url === "/api/healthz") {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/api/auth/challenge") {
-    await handleAuthChallenge(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/api/auth/login") {
-    await handleAuthLogin(req, res, CAPABILITY_MAP);
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/api/auth/me") {
-    handleAuthMe(req, res, CAPABILITY_MAP);
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/api/auth/logout") {
-    handleAuthLogout(req, res);
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/api/private/state") {
-    const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "webapp.session.read");
-    if (!session) {
-      return;
-    }
-    sendJson(res, 200, {
-      capabilities: session.capabilities,
-      principal: session.principal,
-      session_id: session.session_id
-    });
-    return;
-  }
-
-  sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
-}
-
-const server = http.createServer((req, res) => {
-  handleWebappRequest(req, res).catch((error) => sendInternalError(res, error));
-});
-
-server.listen(port, "0.0.0.0", () => {
-  const address = server.address();
-  const boundPort = typeof address === "object" && address ? address.port : port;
-  // eslint-disable-next-line no-console
-  console.log(`api listening on :${boundPort}`);
-});
-"#,
-    );
+    script.push_str(WEBAPP_API_TAIL_V1);
     script
 }
 
 fn pii_app_api_server_mjs() -> String {
     let mut script = String::from(soracloud_auth_core_mjs());
-    script.push_str(
-        r#"
-import http from "node:http";
-
-const portArg = process.argv.find((value) => value.startsWith("--port="));
-const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8788");
-const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true);
-
-const consentState = new Map();
-const retentionRuns = [];
-
-async function handlePiiAppRequest(req, res) {
-  cleanupExpiredAuthRecords();
-
-  if (req.url === "/pii/api/healthz") {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/auth/challenge") {
-    await handleAuthChallenge(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/auth/login") {
-    await handleAuthLogin(req, res, CAPABILITY_MAP);
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/pii/api/auth/me") {
-    handleAuthMe(req, res, CAPABILITY_MAP);
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/auth/logout") {
-    handleAuthLogout(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/consent/grant") {
-    try {
-      const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "pii.consent.grant");
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const subjectId = requireTrimmedString(body.subject_id, "subject_id");
-      const scope = requireTrimmedString(body.scope, "scope");
-      const key = `${subjectId}:${scope}`;
-      consentState.set(key, {
-        status: "granted",
-        updated_at_unix_ms: Date.now(),
-        updated_by: session.principal
-      });
-      sendJson(res, 200, { status: "granted", scope, subject_id: subjectId });
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/consent/revoke") {
-    try {
-      const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "pii.consent.revoke");
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const subjectId = requireTrimmedString(body.subject_id, "subject_id");
-      const scope = requireTrimmedString(body.scope, "scope");
-      const key = `${subjectId}:${scope}`;
-      consentState.set(key, {
-        status: "revoked",
-        updated_at_unix_ms: Date.now(),
-        updated_by: session.principal
-      });
-      sendJson(res, 200, { status: "revoked", scope, subject_id: subjectId });
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/records/retention/sweep") {
-    try {
-      const session = requireAuthenticatedSession(
-        req,
-        res,
-        CAPABILITY_MAP,
-        "pii.records.retention.sweep"
-      );
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const jurisdiction = requireTrimmedString(body.jurisdiction, "jurisdiction");
-      const policyVersion = requireTrimmedString(body.policy_version, "policy_version");
-      const run = {
-        jurisdiction,
-        planned_actions: 0,
-        policy_version: policyVersion,
-        run_id: crypto.randomUUID(),
-        started_at_unix_ms: Date.now(),
-        started_by: session.principal
-      };
-      retentionRuns.push(run);
-      sendJson(res, 200, run);
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/pii/api/records/delete") {
-    try {
-      const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "pii.records.delete");
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const subjectId = requireTrimmedString(body.subject_id, "subject_id");
-      const reason = requireTrimmedString(body.reason, "reason");
-      sendJson(res, 202, {
-        reason,
-        status: "accepted",
-        subject_id: subjectId,
-        ticket_id: crypto.randomUUID(),
-        requested_by: session.principal
-      });
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/pii/api/consent/state") {
-    const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "pii.records.read");
-    if (!session) {
-      return;
-    }
-    sendJson(res, 200, {
-      requested_by: session.principal,
-      entries: Array.from(consentState.entries())
-    });
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/pii/api/retention/runs") {
-    const session = requireAuthenticatedSession(req, res, CAPABILITY_MAP, "pii.records.read");
-    if (!session) {
-      return;
-    }
-    sendJson(res, 200, {
-      requested_by: session.principal,
-      runs: retentionRuns
-    });
-    return;
-  }
-
-  sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
-}
-
-const server = http.createServer((req, res) => {
-  handlePiiAppRequest(req, res).catch((error) => sendInternalError(res, error));
-});
-
-server.listen(port, "0.0.0.0", () => {
-  const address = server.address();
-  const boundPort = typeof address === "object" && address ? address.port : port;
-  // eslint-disable-next-line no-console
-  console.log(`pii api listening on :${boundPort}`);
-});
-"#,
-    );
+    script.push_str(PII_API_TAIL_V1);
     script
 }
 
 fn single_api_api_build_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-OUTPUT_DIR="$SCRIPT_DIR/build"
-SOURCE_FILE="$SCRIPT_DIR/contract/api_service.ko"
-BYTECODE_FILE="$OUTPUT_DIR/api-service.to"
-CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/api-service.contract_manifest.json"
-
-mkdir -p "$OUTPUT_DIR"
-
-if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
-  KOTO=("$KOTO_BIN")
-elif command -v koto >/dev/null 2>&1; then
-  KOTO=("$(command -v koto)")
-else
-  if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
-    IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
-  elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
-    IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
-  else
-    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
-    exit 1
-  fi
-  KOTO=(
-    cargo run
-    --manifest-path "$IROHA_CARGO_MANIFEST"
-    -p ivm
-    --bin koto
-    --
-  )
-fi
-
-"${KOTO[@]}" build "$SOURCE_FILE" \
-  --out "$BYTECODE_FILE" \
-  --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --max-cycles 1000000
-
-echo "built $BYTECODE_FILE"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/single_api_api_build.sh").to_owned()
 }
 
 fn single_api_api_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-
-export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8787}}"
-exec node "$SCRIPT_DIR/dev-server.mjs"
-"#
+    include_str!("soracloud/templates/v1/single_api_api_dev.sh")
 }
 
 fn single_api_api_dev_server_mjs(app_name: &str) -> String {
@@ -18627,110 +17367,11 @@ server.listen(PORT, "0.0.0.0", () => {{
 }
 
 fn single_api_api_verify_build_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-BYTECODE_FILE="$SCRIPT_DIR/build/api-service.to"
-MANIFEST_FILE="$SCRIPT_DIR/build/api-service.contract_manifest.json"
-TMP_DIR="$(mktemp -d)"
-
-trap 'rm -rf "$TMP_DIR"' EXIT
-
-if [[ ! -f "$BYTECODE_FILE" ]]; then
-  echo "Missing $BYTECODE_FILE. Run ./build.sh first." >&2
-  exit 1
-fi
-if [[ ! -f "$MANIFEST_FILE" ]]; then
-  echo "Missing $MANIFEST_FILE. Run ./build.sh first." >&2
-  exit 1
-fi
-
-if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
-  KOTO=("$KOTO_BIN")
-elif command -v koto >/dev/null 2>&1; then
-  KOTO=("$(command -v koto)")
-else
-  if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
-    IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
-  elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
-    IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
-  else
-    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
-    exit 1
-  fi
-  KOTO=(
-    cargo run
-    --manifest-path "$IROHA_CARGO_MANIFEST"
-    -p ivm
-    --bin koto
-    --
-  )
-fi
-
-"${KOTO[@]}" build \
-  "$SCRIPT_DIR/contract/api_service.ko" \
-  --out "$TMP_DIR/api-service.to" \
-  --manifest-out "$TMP_DIR/api-service.contract_manifest.json" \
-  --max-cycles 1000000
-
-cmp -s "$BYTECODE_FILE" "$TMP_DIR/api-service.to" || {
-  echo "Compiled bytecode differs from build/api-service.to. Re-run ./build.sh." >&2
-  exit 1
-}
-
-cmp -s "$MANIFEST_FILE" "$TMP_DIR/api-service.contract_manifest.json" || {
-  echo "Compiled contract manifest differs from build/api-service.contract_manifest.json. Re-run ./build.sh." >&2
-  exit 1
-}
-
-echo "verified $BYTECODE_FILE and $MANIFEST_FILE"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/single_api_api_verify_build.sh").to_owned()
 }
 
 fn hayahi_app_build_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-OUTPUT_DIR="$SCRIPT_DIR/build"
-SOURCE_FILE="$SCRIPT_DIR/contract/hayahi_api.ko"
-BYTECODE_FILE="$OUTPUT_DIR/hayahi-app-api.to"
-CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/hayahi-app-api.contract_manifest.json"
-
-mkdir -p "$OUTPUT_DIR"
-
-if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
-  KOTO=("$KOTO_BIN")
-elif command -v koto >/dev/null 2>&1; then
-  KOTO=("$(command -v koto)")
-else
-  if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
-    IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
-  elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
-    IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
-  else
-    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
-    exit 1
-  fi
-  KOTO=(
-    cargo run
-    --manifest-path "$IROHA_CARGO_MANIFEST"
-    -p ivm
-    --bin koto
-    --
-  )
-fi
-
-"${KOTO[@]}" build "$SOURCE_FILE" \
-  --out "$BYTECODE_FILE" \
-  --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --max-cycles 1000000
-
-echo "built $BYTECODE_FILE"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/hayahi_app_build.sh").to_owned()
 }
 
 fn http_service_build_sh(bundle_name: &str) -> String {
@@ -18758,60 +17399,15 @@ echo "built $BUNDLE_PATH"
 }
 
 fn http_service_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-
-export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8787}}"
-exec node "$SCRIPT_DIR/app/server.mjs"
-"#
+    include_str!("soracloud/templates/v1/http_service_dev.sh")
 }
 
 fn http_service_local_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-
-cd "$SCRIPT_DIR/http-service"
-exec ./dev.sh
-"#
+    include_str!("soracloud/templates/v1/http_service_local_dev.sh")
 }
 
 fn iroha_shell_command_prelude() -> &'static str {
-    r#"IROHA_CARGO=(cargo)
-if [[ -n "${IROHA_CARGO_BIN:-}" ]]; then
-  IROHA_CARGO=("${IROHA_CARGO_BIN}")
-fi
-
-IROHA_CARGO_ENV=()
-if [[ -n "${IROHA_CARGO_HOME:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_HOME=${IROHA_CARGO_HOME}")
-fi
-if [[ -n "${IROHA_CARGO_TARGET_DIR:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_TARGET_DIR=${IROHA_CARGO_TARGET_DIR}")
-fi
-if [[ -n "${IROHA_CARGO_NET_OFFLINE:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_NET_OFFLINE=${IROHA_CARGO_NET_OFFLINE}")
-fi
-if [[ -n "${IROHA_CARGO_BUILD_JOBS:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_BUILD_JOBS=${IROHA_CARGO_BUILD_JOBS}")
-fi
-
-if [[ -n "${IROHA_BIN:-}" ]]; then
-  IROHA_CMD=("${IROHA_BIN}")
-elif command -v iroha >/dev/null 2>&1; then
-  IROHA_CMD=("$(command -v iroha)")
-elif [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
-  IROHA_CMD=(env "${IROHA_CARGO_ENV[@]}" "${IROHA_CARGO[@]}" run --manifest-path "${IROHA_SOURCE_DIR}/Cargo.toml" -p iroha_cli --bin iroha --)
-elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
-  IROHA_CMD=(env "${IROHA_CARGO_ENV[@]}" "${IROHA_CARGO[@]}" run --manifest-path "${IROHA_MANIFEST_PATH}" -p iroha_cli --bin iroha --)
-else
-  echo "Unable to locate iroha. Set IROHA_BIN to a packaged binary or IROHA_SOURCE_DIR to an Iroha checkout." >&2
-  exit 1
-fi
-"#
+    include_str!("soracloud/templates/v1/iroha_shell_command_prelude.sh")
 }
 
 fn http_service_build_and_sync_sh(bundle_name: &str) -> String {
@@ -19491,33 +18087,7 @@ The generated service name will resolve under `https://{package_name}.sora/api/v
 }
 
 fn http_service_inrou_assets_readme() -> String {
-    r#"# Inrou Guest Assets
-
-Place the boot assets for this hosted HTTP service here before deploy:
-
-- `x86_64/vmlinux`: Linux kernel image for native `x86_64` guests
-- `x86_64/rootfs.ext4`: Debian slim guest root filesystem image for `x86_64`
-- `aarch64/vmlinux`: Linux kernel image for native `aarch64` guests
-- `aarch64/rootfs.ext4`: Debian slim guest root filesystem image for `aarch64`
-- optional `x86_64/initrd.img` and `aarch64/initrd.img`
-
-The generated container manifest references these runtime member paths:
-
-- `/inrou/x86_64/vmlinux`
-- `/inrou/x86_64/rootfs.ext4`
-- `/inrou/aarch64/vmlinux`
-- `/inrou/aarch64/rootfs.ext4`
-
-`app release` packages this directory into an immutable SoraFS artifact,
-records the published artifact ref on each guest-image profile, and lets
-eligible hosts hydrate `/inrou/*` from SoraFS. Distribution defaults to global
-and may target explicit geography tags; unknown host geography falls back to
-lower observed latency.
-
-Replace the placeholder `ssh_authorized_keys` entry in `container_manifest.json`
-with a real public key before admission.
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/http_service_inrou_assets_readme.md").to_owned()
 }
 
 fn split_app_frontend_package_json(package_name: &str) -> String {
@@ -19546,103 +18116,11 @@ fn split_app_frontend_package_json(package_name: &str) -> String {
 }
 
 fn split_app_frontend_validate_production_env_mjs() -> &'static str {
-    r#"const apiBase = process.env.VITE_PUBLIC_API_BASE;
-const dataMode = process.env.VITE_DATA_MODE;
-
-function fail(message) {
-  console.error(`split-app frontend build validation failed: ${message}`);
-  process.exit(1);
-}
-
-if (apiBase !== "/api") {
-  fail("VITE_PUBLIC_API_BASE must be exactly '/api' for production builds.");
-}
-
-if (typeof apiBase === "string" && /^(https?:)?\/\//i.test(apiBase)) {
-  fail("VITE_PUBLIC_API_BASE must stay same-host and must not be an absolute URL.");
-}
-
-if (dataMode !== "live") {
-  fail("VITE_DATA_MODE must be exactly 'live' for production builds.");
-}
-
-if (typeof dataMode === "string" && /demo|static/i.test(dataMode)) {
-  fail("VITE_DATA_MODE must not point at demo or static data.");
-}
-"#
+    include_str!("soracloud/templates/v1/split_app_frontend_validate_production_env.mjs")
 }
 
 fn split_app_frontend_vite_config() -> &'static str {
-    r#"import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-
-function normalizeProxyTarget(envName: string, fallback: string) {
-  const value = process.env[envName] ?? fallback;
-  return value.endsWith("/") ? value.slice(0, -1) : value;
-}
-
-function rewriteApiPrefix(path: string) {
-  return path.replace(/^\/api/, "");
-}
-
-const liveProxyTarget = normalizeProxyTarget(
-  "SORACLOUD_LIVE_DEV_PROXY_TARGET",
-  "http://127.0.0.1:8787"
-);
-const vaultProxyTarget = normalizeProxyTarget(
-  "SORACLOUD_VAULT_DEV_PROXY_TARGET",
-  "http://127.0.0.1:8788"
-);
-
-export default defineConfig({
-  plugins: [vue()],
-  server: {
-    port: 5173,
-    proxy: {
-      "/api/auth": {
-        target: vaultProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/user": {
-        target: vaultProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/health": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/search": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/airports": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/filters": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/luxury": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      },
-      "/api/v1/links": {
-        target: liveProxyTarget,
-        changeOrigin: true,
-        rewrite: rewriteApiPrefix
-      }
-    }
-  }
-});
-"#
+    include_str!("soracloud/templates/v1/split_app_frontend_vite.config.ts")
 }
 
 fn split_app_frontend_app_vue(app_name: &str) -> String {
@@ -19888,100 +18366,15 @@ pre {{
 }
 
 fn split_app_vault_build_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-OUTPUT_DIR="$SCRIPT_DIR/build"
-SOURCE_FILE="$SCRIPT_DIR/contract/vault_api.ko"
-BYTECODE_FILE="$OUTPUT_DIR/vault-api.to"
-CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/vault-api.contract_manifest.json"
-
-mkdir -p "$OUTPUT_DIR"
-
-if [[ -n "${KOTO_BIN:-}" ]]; then
-  KOTO=("${KOTO_BIN}")
-elif command -v koto >/dev/null 2>&1; then
-  KOTO=("$(command -v koto)")
-elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  KOTO=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto --)
-else
-  echo "Unable to locate koto. Set KOTO_BIN or IROHA_MANIFEST_PATH." >&2
-  exit 1
-fi
-
-"${KOTO[@]}" build \
-  "$SOURCE_FILE" \
-  --out "$BYTECODE_FILE" \
-  --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --max-cycles 1000000
-
-echo "built $BYTECODE_FILE"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/split_app_vault_build.sh").to_owned()
 }
 
 fn split_app_vault_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-
-export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8788}}"
-exec node "$SCRIPT_DIR/dev-server.mjs"
-"#
+    include_str!("soracloud/templates/v1/split_app_vault_dev.sh")
 }
 
 fn split_app_vault_verify_build_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-BYTECODE_FILE="$SCRIPT_DIR/build/vault-api.to"
-MANIFEST_FILE="$SCRIPT_DIR/build/vault-api.contract_manifest.json"
-TMP_DIR="$(mktemp -d)"
-
-trap 'rm -rf "$TMP_DIR"' EXIT
-
-if [[ ! -f "$BYTECODE_FILE" ]]; then
-  echo "Missing $BYTECODE_FILE. Run ./build.sh first." >&2
-  exit 1
-fi
-if [[ ! -f "$MANIFEST_FILE" ]]; then
-  echo "Missing $MANIFEST_FILE. Run ./build.sh first." >&2
-  exit 1
-fi
-
-if [[ -n "${KOTO_BIN:-}" ]]; then
-  KOTO=("${KOTO_BIN}")
-elif command -v koto >/dev/null 2>&1; then
-  KOTO=("$(command -v koto)")
-elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  KOTO=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto --)
-else
-  echo "Unable to locate koto. Set KOTO_BIN or IROHA_MANIFEST_PATH." >&2
-  exit 1
-fi
-
-"${KOTO[@]}" build \
-  "$SCRIPT_DIR/contract/vault_api.ko" \
-  --out "$TMP_DIR/vault-api.to" \
-  --manifest-out "$TMP_DIR/vault-api.contract_manifest.json" \
-  --max-cycles 1000000
-
-cmp -s "$BYTECODE_FILE" "$TMP_DIR/vault-api.to" || {
-  echo "Compiled bytecode differs from build/vault-api.to. Re-run ./build.sh." >&2
-  exit 1
-}
-
-cmp -s "$MANIFEST_FILE" "$TMP_DIR/vault-api.contract_manifest.json" || {
-  echo "Compiled contract manifest differs from build/vault-api.contract_manifest.json. Re-run ./build.sh." >&2
-  exit 1
-}
-
-echo "verified $BYTECODE_FILE and $MANIFEST_FILE"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/split_app_vault_verify_build.sh").to_owned()
 }
 
 fn split_app_vault_dev_server_mjs(app_name: &str) -> String {
@@ -20371,51 +18764,7 @@ refresh the admitted manifest hashes in one pass.
 }
 
 fn split_app_local_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-NPM_BIN="${NPM_BIN:-npm}"
-LIVE_PORT="${SORACLOUD_LIVE_DEV_PORT:-8787}"
-VAULT_PORT="${SORACLOUD_VAULT_DEV_PORT:-8788}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-
-cleanup() {
-  if [[ -n "${LIVE_PID:-}" ]]; then
-    kill "$LIVE_PID" 2>/dev/null || true
-  fi
-  if [[ -n "${VAULT_PID:-}" ]]; then
-    kill "$VAULT_PID" 2>/dev/null || true
-  fi
-  wait "${LIVE_PID:-}" "${VAULT_PID:-}" 2>/dev/null || true
-}
-
-trap cleanup EXIT INT TERM
-
-(
-  cd "$SCRIPT_DIR/services/live"
-  PORT="$LIVE_PORT" ./dev.sh
-) &
-LIVE_PID=$!
-
-(
-  cd "$SCRIPT_DIR/services/vault"
-  PORT="$VAULT_PORT" ./dev.sh
-) &
-VAULT_PID=$!
-
-cd "$SCRIPT_DIR/frontend"
-if [[ ! -d node_modules ]]; then
-  "$NPM_BIN" install
-fi
-
-export SORACLOUD_LIVE_DEV_PROXY_TARGET="${SORACLOUD_LIVE_DEV_PROXY_TARGET:-http://127.0.0.1:$LIVE_PORT}"
-export SORACLOUD_VAULT_DEV_PROXY_TARGET="${SORACLOUD_VAULT_DEV_PROXY_TARGET:-http://127.0.0.1:$VAULT_PORT}"
-export VITE_PUBLIC_API_BASE="${VITE_PUBLIC_API_BASE:-/api}"
-export VITE_DATA_MODE="${VITE_DATA_MODE:-local}"
-
-"$NPM_BIN" run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT"
-"#
+    include_str!("soracloud/templates/v1/split_app_local_dev.sh")
 }
 
 fn split_app_build_and_sync_sh() -> String {
@@ -20512,14 +18861,7 @@ exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 }
 
 fn split_app_deploy_sh() -> String {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-
-exec "$SCRIPT_DIR/release.sh" "$@"
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/split_app_deploy.sh").to_owned()
 }
 
 fn split_app_upgrade_sh() -> String {
@@ -20758,57 +19100,15 @@ a local `iroha_cli` checkout without requiring a globally installed source wrapp
 }
 
 fn pii_app_consent_policy_template() -> String {
-    r#"{
-  "schema_version": 1,
-  "policy_name": "pii.consent.v1",
-  "jurisdiction": "us",
-  "required_capabilities": [
-    "pii.consent.grant",
-    "pii.consent.revoke"
-  ],
-  "allowed_scopes": [
-    "records.read",
-    "records.write",
-    "health.records.read"
-  ],
-  "audit_tag": "pii.consent.audit"
-}
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/pii_app_consent_policy.json").to_owned()
 }
 
 fn pii_app_retention_policy_template() -> String {
-    r#"{
-  "schema_version": 1,
-  "policy_name": "pii.retention.v1",
-  "jurisdiction": "us",
-  "default_retention_days": 2555,
-  "deletion_grace_days": 30,
-  "bindings": [
-    "pii_records",
-    "pii_consent_events"
-  ],
-  "audit_tag": "pii.retention.audit"
-}
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/pii_app_retention_policy.json").to_owned()
 }
 
 fn pii_app_deletion_workflow_template() -> String {
-    r#"{
-  "schema_version": 1,
-  "workflow_name": "pii.subject.deletion.v1",
-  "steps": [
-    "validate-subject-request",
-    "freeze-read-access",
-    "enqueue-redaction-job",
-    "emit-deletion-attestation"
-  ],
-  "requires_break_glass_approval": false,
-  "audit_tag": "pii.deletion.audit"
-}
-"#
-    .to_owned()
+    include_str!("soracloud/templates/v1/pii_app_deletion_workflow.json").to_owned()
 }
 
 fn site_readme(service_name: &str, dns_host: &str) -> String {
@@ -20910,37 +19210,7 @@ one pass before deploy.
 }
 
 fn single_api_local_dev_sh() -> &'static str {
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-NPM_BIN="${NPM_BIN:-npm}"
-API_PORT="${SORACLOUD_SINGLE_API_DEV_PORT:-8787}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-
-cleanup() {
-  if [[ -n "${API_PID:-}" ]]; then
-    kill "$API_PID" 2>/dev/null || true
-  fi
-  wait "${API_PID:-}" 2>/dev/null || true
-}
-
-trap cleanup EXIT INT TERM
-
-(
-  cd "$SCRIPT_DIR/services/api"
-  PORT="$API_PORT" ./dev.sh
-) &
-API_PID=$!
-
-cd "$SCRIPT_DIR/web"
-if [[ ! -d node_modules ]]; then
-  "$NPM_BIN" install
-fi
-
-export SORACLOUD_SINGLE_API_DEV_PROXY_TARGET="${SORACLOUD_SINGLE_API_DEV_PROXY_TARGET:-http://127.0.0.1:$API_PORT}"
-"$NPM_BIN" run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT"
-"#
+    include_str!("soracloud/templates/v1/single_api_local_dev.sh")
 }
 
 fn single_api_build_and_sync_sh() -> String {
@@ -21412,6 +19682,37 @@ mod tests {
         time::Duration,
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
+
+    const STATIC_ASSETS_V1: [&str; 22] = [
+        include_str!("soracloud/assets/v1/tests/http_local.sh"),
+        include_str!("soracloud/assets/v1/tests/exit_130.sh"),
+        include_str!("soracloud/assets/v1/tests/http_build_sync.sh"),
+        include_str!("soracloud/assets/v1/tests/http_deploy.sh"),
+        include_str!("soracloud/assets/v1/tests/http_upgrade.sh"),
+        include_str!("soracloud/assets/v1/tests/app_local.sh"),
+        include_str!("soracloud/assets/v1/tests/exit_130.sh"),
+        include_str!("soracloud/assets/v1/tests/app_build_sync.sh"),
+        include_str!("soracloud/assets/v1/tests/app_release.sh"),
+        include_str!("soracloud/assets/v1/tests/app_upgrade.sh"),
+        include_str!("soracloud/assets/v1/tests/split_release_build.sh"),
+        include_str!("soracloud/assets/v1/tests/inrou_reuse_build.sh"),
+        concat!(
+            include_str!("soracloud/assets/v1/tests/legacy_static_site.prefix.json"),
+            "            }"
+        ),
+        concat!(
+            include_str!("soracloud/assets/v1/tests/auth_success_values.prefix.mjs"),
+            "            "
+        ),
+        include_str!("soracloud/assets/v1/tests/auth_file_state.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_shared_setup.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_shared_body.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_session_cookie.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_cleanup_locks.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_login_failures.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_handlers_success.mjs"),
+        include_str!("soracloud/assets/v1/tests/auth_bad_requests.mjs"),
+    ];
 
     struct FailingSoracloudSignatureNonceRng;
 
@@ -27424,16 +25725,7 @@ main().catch((error) => {
         .expect("http-service init should succeed");
 
         let local_dev_script = dir.join("dev.sh");
-        fs::write(
-            &local_dev_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf 'ok' > "$SCRIPT_DIR/http-service-dev-ran.txt"
-"#,
-        )
-        .expect("write dev script");
+        fs::write(&local_dev_script, STATIC_ASSETS_V1[0]).expect("write dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
 
         let output = LocalDevArgs {
@@ -27480,15 +25772,7 @@ printf 'ok' > "$SCRIPT_DIR/http-service-dev-ran.txt"
         .expect("http-service init should succeed");
 
         let local_dev_script = dir.join("dev.sh");
-        fs::write(
-            &local_dev_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-exit 130
-"#,
-        )
-        .expect("write interrupting dev script");
+        fs::write(&local_dev_script, STATIC_ASSETS_V1[1]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
 
         let output = LocalDevArgs {
@@ -27535,16 +25819,8 @@ exit 130
         .expect("http-service init should succeed");
 
         let build_and_sync_script = dir.join("build-and-sync.sh");
-        fs::write(
-            &build_and_sync_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
-"#,
-        )
-        .expect("write build-and-sync script");
+        fs::write(&build_and_sync_script, STATIC_ASSETS_V1[2])
+            .expect("write build-and-sync script");
         mark_template_file_executable(&build_and_sync_script)
             .expect("mark build-and-sync executable");
 
@@ -27667,18 +25943,7 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
         let resolved_secrets = fs::canonicalize(&secrets_path).expect("canonicalize secrets");
 
         let deploy_script = dir.join("deploy.sh");
-        fs::write(
-            &deploy_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/deploy-torii.txt"
-printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/deploy-token.txt"
-printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-args.txt"
-"#,
-        )
-        .expect("write deploy script");
+        fs::write(&deploy_script, STATIC_ASSETS_V1[3]).expect("write deploy script");
         mark_template_file_executable(&deploy_script).expect("mark deploy executable");
 
         let output = WorkspaceMutationArgs {
@@ -27750,17 +26015,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-args.txt"
         .expect("http-service init should succeed");
 
         let upgrade_script = dir.join("upgrade.sh");
-        fs::write(
-            &upgrade_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/upgrade-torii.txt"
-printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-args.txt"
-"#,
-        )
-        .expect("write upgrade script");
+        fs::write(&upgrade_script, STATIC_ASSETS_V1[4]).expect("write upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark upgrade executable");
 
         let output = WorkspaceMutationArgs {
@@ -29318,16 +27573,7 @@ main().catch((error) => {
         .expect("single-api init should succeed");
 
         let local_dev_script = dir.join("dev.sh");
-        fs::write(
-            &local_dev_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf 'ok' > "$SCRIPT_DIR/dev-ran.txt"
-"#,
-        )
-        .expect("write test dev script");
+        fs::write(&local_dev_script, STATIC_ASSETS_V1[5]).expect("write test dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
 
         let output = AppLocalDevArgs {
@@ -29381,15 +27627,7 @@ printf 'ok' > "$SCRIPT_DIR/dev-ran.txt"
         .expect("single-api init should succeed");
 
         let local_dev_script = dir.join("dev.sh");
-        fs::write(
-            &local_dev_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-exit 130
-"#,
-        )
-        .expect("write interrupting dev script");
+        fs::write(&local_dev_script, STATIC_ASSETS_V1[6]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
 
         let output = AppLocalDevArgs {
@@ -29516,16 +27754,8 @@ exit 130
         .expect("single-api init should succeed");
 
         let build_and_sync_script = dir.join("build-and-sync.sh");
-        fs::write(
-            &build_and_sync_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
-"#,
-        )
-        .expect("write test build-and-sync script");
+        fs::write(&build_and_sync_script, STATIC_ASSETS_V1[7])
+            .expect("write test build-and-sync script");
         mark_template_file_executable(&build_and_sync_script)
             .expect("mark build-and-sync executable");
 
@@ -29641,18 +27871,7 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
         .expect("single-api init should succeed");
 
         let release_script = dir.join("release.sh");
-        fs::write(
-            &release_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/app-release-torii.txt"
-printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/app-release-token.txt"
-printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-args.txt"
-"#,
-        )
-        .expect("write app release script");
+        fs::write(&release_script, STATIC_ASSETS_V1[8]).expect("write app release script");
         mark_template_file_executable(&release_script).expect("mark app release executable");
 
         let output = AppReleaseWorkspaceArgs {
@@ -29811,18 +28030,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-args.txt"
         .expect("single-api init should succeed");
 
         let upgrade_script = dir.join("upgrade.sh");
-        fs::write(
-            &upgrade_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/app-upgrade-torii.txt"
-printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/app-upgrade-token.txt"
-printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
-"#,
-        )
-        .expect("write app upgrade script");
+        fs::write(&upgrade_script, STATIC_ASSETS_V1[9]).expect("write app upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark app upgrade executable");
 
         let output = AppWorkspaceMutationArgs {
@@ -30129,26 +28337,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
         .expect("split-app init should succeed");
 
         let build_script = dir.join("build-and-sync.sh");
-        fs::write(
-            &build_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p "$SCRIPT_DIR/frontend/dist" "$SCRIPT_DIR/services/live/build" "$SCRIPT_DIR/services/vault/build"
-mkdir -p "$SCRIPT_DIR/services/live/inrou/x86_64" "$SCRIPT_DIR/services/live/inrou/aarch64"
-printf '<!doctype html><title>Travel Ops</title>' > "$SCRIPT_DIR/frontend/dist/index.html"
-printf 'release-live-bundle' > "$SCRIPT_DIR/services/live/build/live-api.tgz"
-printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
-printf 'x86-kernel' > "$SCRIPT_DIR/services/live/inrou/x86_64/vmlinux"
-printf 'x86-rootfs' > "$SCRIPT_DIR/services/live/inrou/x86_64/rootfs.ext4"
-printf 'x86-initrd' > "$SCRIPT_DIR/services/live/inrou/x86_64/initrd.img"
-printf 'arm-kernel' > "$SCRIPT_DIR/services/live/inrou/aarch64/vmlinux"
-printf 'arm-rootfs' > "$SCRIPT_DIR/services/live/inrou/aarch64/rootfs.ext4"
-printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
-"#,
-        )
-        .expect("write release build script");
+        fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
 
         let status_payload =
@@ -30256,19 +28445,7 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
         .expect("split-app init should succeed");
 
         let build_script = dir.join("build-and-sync.sh");
-        fs::write(
-            &build_script,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p "$SCRIPT_DIR/frontend/dist" "$SCRIPT_DIR/services/live/build" "$SCRIPT_DIR/services/vault/build"
-printf '<!doctype html><title>Travel Ops</title>' > "$SCRIPT_DIR/frontend/dist/index.html"
-printf 'release-live-bundle' > "$SCRIPT_DIR/services/live/build/live-api.tgz"
-printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
-"#,
-        )
-        .expect("write release build script");
+        fs::write(&build_script, STATIC_ASSETS_V1[11]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
 
         let live_container_path = dir.join("services/live/container_manifest.json");
@@ -30911,26 +29088,8 @@ main().catch((error) => {
 
     #[test]
     fn app_manifest_static_site_publish_mode_defaults_to_root_binding() {
-        let manifest = json::from_str::<SoracloudAppManifestV1>(
-            r#"{
-              "schema_version": 1,
-              "app_name": "legacy_docs",
-              "public_url": "https://legacy-docs.sora",
-              "static_site": {
-                "dist_dir": "site/dist",
-                "mount_path": "/",
-                "api_base_path": "/api"
-              },
-              "services": [
-                {
-                  "service_name": "legacy_docs_api",
-                  "container_manifest": "container_manifest.json",
-                  "service_manifest": "service_manifest.json"
-                }
-              ]
-            }"#,
-        )
-        .expect("legacy manifest should parse");
+        let manifest = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[12])
+            .expect("legacy manifest should parse");
 
         assert_eq!(
             manifest
@@ -35931,46 +34090,7 @@ main().catch((error) => {
                 "parsePositiveIntEnv",
                 "parsePublicOrigin",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-const principal = "1111111111111111111111111111111111111111111111111111111111111111";
-const capabilityMap = parseCapabilityMap(JSON.stringify({
-  [principal]: [
-    "pii.records.delete",
-    " pii.records.read ",
-    "pii.consent.grant",
-    "pii.records.retention.sweep",
-    "pii.consent.revoke",
-    "pii.records.read"
-  ]
-}), true);
-
-const expectedCapabilities = [
-  "pii.consent.grant",
-  "pii.consent.revoke",
-  "pii.records.delete",
-  "pii.records.read",
-  "pii.records.retention.sweep"
-];
-assert(
-  JSON.stringify(capabilityMap.get(principal)) === JSON.stringify(expectedCapabilities),
-  `capabilities must be trimmed, sorted, and deduplicated: ${JSON.stringify([...capabilityMap])}`
-);
-
-assert(parseBooleanEnv("FLAG", "yes", false) === true, "yes should parse true");
-assert(parseBooleanEnv("FLAG", "on", false) === true, "on should parse true");
-assert(parseBooleanEnv("FLAG", "off", true) === false, "off should parse false");
-assert(parseBooleanEnv("FLAG", "", true) === true, "empty boolean should use fallback");
-assert(parsePositiveIntEnv("SESSION", "86400", 900, 60, 86400) === 86400, "max session TTL should parse");
-assert(parsePositiveIntEnv("CHALLENGE", "5", 120, 5, 900) === 5, "min challenge TTL should parse");
-assert(parsePublicOrigin("") === "", "empty PUBLIC_BASE_URL should parse to empty origin");
-assert(parsePublicOrigin("https://example.test/path?q=1") === "https://example.test", "public origin should canonicalize URL origin");
-            "#,
+            STATIC_ASSETS_V1[13],
         );
     }
 
@@ -35986,73 +34106,7 @@ assert(parsePublicOrigin("https://example.test/path?q=1") === "https://example.t
                 "statePutIfAbsent",
                 "stateEntries",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function assertThrows(fn, expectedMessage) {
-  try {
-    fn();
-  } catch (error) {
-    if (String(error?.message ?? error).includes(expectedMessage)) {
-      return;
-    }
-    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
-  }
-  throw new Error(`expected error containing: ${expectedMessage}`);
-}
-
-assert(
-  JSON.stringify(readAuthStateSnapshot()) === JSON.stringify({ schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} }),
-  "missing state file should decode as an empty auth snapshot"
-);
-
-statePut("/state/test/z", {
-  z: 1,
-  a: { d: 4, c: 3 },
-  list: [{ b: 2, a: 1 }]
-});
-const storedRaw = fs.readFileSync(STATE_FILE_PATH, "utf8");
-const stored = JSON.parse(storedRaw);
-const expectedStoredValue = { a: { c: 3, d: 4 }, list: [{ a: 1, b: 2 }], z: 1 };
-assert(
-  JSON.stringify(stored.records["/state/test/z"]) === JSON.stringify(expectedStoredValue),
-  `statePut should canonicalize nested values: ${storedRaw}`
-);
-assert(
-  JSON.stringify(stateGet("/state/test/z")) === JSON.stringify(expectedStoredValue),
-  "stateGet should return the canonicalized value"
-);
-assert(statePutIfAbsent("/state/test/z", { replaced: true }) === false, "existing key must not be replaced");
-assert(statePutIfAbsent("/state/test/a", { value: 1 }) === true, "new key must be inserted");
-assert(
-  JSON.stringify(stateEntries("/state/test/").map(([key]) => key)) === JSON.stringify(["/state/test/a", "/state/test/z"]),
-  "stateEntries should be sorted and prefix-filtered"
-);
-stateDelete("/state/test/z");
-assert(stateGet("/state/test/z") === null, "stateDelete should remove existing records");
-
-fs.mkdirSync(STATE_FILE_LOCK_DIR, { recursive: true });
-const staleLockTime = new Date(Date.now() - STATE_FILE_LOCK_STALE_MS - 1000);
-fs.utimesSync(STATE_FILE_LOCK_DIR, staleLockTime, staleLockTime);
-statePut("/state/test/stale-lock", { ok: true });
-assert(
-  stateGet("/state/test/stale-lock")?.ok === true,
-  "statePut should recover from stale file locks"
-);
-assert(!fs.existsSync(STATE_FILE_LOCK_DIR), "state lock should be released after mutation");
-
-fs.writeFileSync(STATE_FILE_PATH, "  ");
-assert(
-  JSON.stringify(readAuthStateSnapshot()) === JSON.stringify({ schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} }),
-  "empty state file should decode as an empty auth snapshot"
-);
-fs.writeFileSync(STATE_FILE_PATH, JSON.stringify({ schema_version: "wrong", records: {} }));
-assertThrows(() => readAuthStateSnapshot(), "invalid auth state snapshot shape");
-"#,
+            STATIC_ASSETS_V1[14],
         );
     }
 
@@ -36067,108 +34121,8 @@ assertThrows(() => readAuthStateSnapshot(), "invalid auth state snapshot shape")
                 "shared state adapter putIfAbsent(key, value) must return boolean",
                 "shared state adapter entries(prefix) must return [key, value][]",
             ],
-            r#"
-globalThis.__adapterRecords = new Map();
-globalThis.__adapterMode = "normal";
-globalThis.__soracloudSharedStateAdapter = {
-  get(key) {
-    return globalThis.__adapterRecords.has(key)
-      ? globalThis.__adapterRecords.get(key)
-      : null;
-  },
-  put(key, value) {
-    globalThis.__adapterRecords.set(key, value);
-  },
-  delete(key) {
-    globalThis.__adapterRecords.delete(key);
-  },
-  putIfAbsent(key, value) {
-    if (globalThis.__adapterMode === "bad-put-if-absent") {
-      return "true";
-    }
-    if (globalThis.__adapterRecords.has(key)) {
-      return false;
-    }
-    globalThis.__adapterRecords.set(key, value);
-    return true;
-  },
-  entries(prefix) {
-    if (globalThis.__adapterMode === "entries-not-array") {
-      return "not-an-array";
-    }
-    if (globalThis.__adapterMode === "bad-entry-shape") {
-      return [["/state/adapter/a"]];
-    }
-    if (globalThis.__adapterMode === "empty-entry-key") {
-      return [["   ", {}]];
-    }
-    return Array.from(globalThis.__adapterRecords.entries()).concat([
-      ["/unrelated/key", { ignored: true }]
-    ]);
-  }
-};
-"#,
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function assertThrows(fn, expectedMessage) {
-  try {
-    fn();
-  } catch (error) {
-    if (String(error?.message ?? error).includes(expectedMessage)) {
-      return;
-    }
-    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
-  }
-  throw new Error(`expected error containing: ${expectedMessage}`);
-}
-
-assert(SHARED_STATE_ADAPTER === globalThis.__soracloudSharedStateAdapter, "configured shared adapter should be used");
-assert(stateGet("/state/adapter/missing") === null, "missing adapter values should read as null");
-
-statePut("/state/adapter/b", { z: 2, a: 1 });
-assert(
-  JSON.stringify(globalThis.__adapterRecords.get("/state/adapter/b")) === JSON.stringify({ a: 1, z: 2 }),
-  "statePut should canonicalize values before calling adapter.put"
-);
-assert(statePutIfAbsent("/state/adapter/b", { replaced: true }) === false, "existing adapter key should not be replaced");
-assert(statePutIfAbsent("/state/adapter/a", { nested: { b: 2, a: 1 } }) === true, "new adapter key should be inserted");
-assert(
-  JSON.stringify(stateEntries("/state/adapter/").map(([key]) => key)) === JSON.stringify(["/state/adapter/a", "/state/adapter/b"]),
-  "adapter entries should be sorted and prefix-filtered"
-);
-assert(
-  JSON.stringify(stateGet("/state/adapter/a")) === JSON.stringify({ nested: { a: 1, b: 2 } }),
-  "stateGet should canonicalize adapter-returned values"
-);
-stateDelete("/state/adapter/b");
-assert(stateGet("/state/adapter/b") === null, "stateDelete should call adapter.delete");
-
-globalThis.__adapterMode = "bad-put-if-absent";
-assertThrows(
-  () => statePutIfAbsent("/state/adapter/bad-insert", {}),
-  "shared state adapter putIfAbsent(key, value) must return boolean"
-);
-globalThis.__adapterMode = "entries-not-array";
-assertThrows(
-  () => stateEntries("/state/adapter/"),
-  "shared state adapter entries(prefix) must return [key, value][]"
-);
-globalThis.__adapterMode = "bad-entry-shape";
-assertThrows(
-  () => stateEntries("/state/adapter/"),
-  "shared state adapter entries(prefix) must return [key, value][]"
-);
-globalThis.__adapterMode = "empty-entry-key";
-assertThrows(
-  () => stateEntries("/state/adapter/"),
-  "shared state adapter entry keys must be non-empty strings"
-);
-"#,
+            STATIC_ASSETS_V1[15],
+            STATIC_ASSETS_V1[16],
         );
     }
 
@@ -36184,84 +34138,7 @@ assertThrows(
                 "buildSetCookieHeader",
                 "getSessionFromRequest",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-const forwardedReq = {
-  headers: {
-    "x-forwarded-proto": "https,http",
-    "x-forwarded-host": "example.test, proxy.local",
-    host: "fallback.test"
-  }
-};
-assert(requestOrigin(forwardedReq) === "https://example.test", "forwarded origin should use first forwarded values");
-assert(shouldUseSecureCookie(forwardedReq) === true, "forwarded https should require secure cookies");
-
-const plainReq = { headers: { host: "fallback.test" } };
-assert(requestOrigin(plainReq) === "http://fallback.test", "plain host should fall back to http origin");
-assert(shouldUseSecureCookie(plainReq) === false, "plain http request should not require secure cookies");
-
-const parsedCookies = parseCookies("ignored; session=sess%2Etoken; theme=dark=mode; empty=");
-assert(parsedCookies.session === "sess.token", "session cookie should be decoded");
-assert(parsedCookies.theme === "dark=mode", "cookie values may contain equals signs");
-assert(parsedCookies.empty === "", "empty cookie values should be retained");
-
-const sessionId = "session-1";
-const token = signSessionToken(sessionId);
-assert(verifySessionToken(token) === sessionId, "signed session token should verify");
-assert(verifySessionToken(`${token}bad`) === null, "tampered session token should be rejected");
-assert(verifySessionToken("missing-dot") === null, "malformed session token should be rejected");
-
-const setCookie = buildSetCookieHeader(forwardedReq, token);
-assert(setCookie.includes("session="), "set-cookie should include the session token");
-assert(setCookie.includes("HttpOnly"), "set-cookie should be HttpOnly");
-assert(setCookie.includes("SameSite=Strict"), "set-cookie should be SameSite=Strict");
-assert(setCookie.includes("Secure"), "forwarded https set-cookie should be Secure");
-const clearCookie = buildClearCookieHeader(forwardedReq);
-assert(clearCookie.includes("Max-Age=0"), "clear-cookie should expire the session");
-assert(clearCookie.includes("Secure"), "forwarded https clear-cookie should be Secure");
-
-statePut(sessionStateKey(sessionId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  session_id: sessionId,
-  principal: "principal-1",
-  capabilities: ["pii.records.read"],
-  expires_at_unix_ms: Date.now() + 60000,
-  origin: "https://example.test"
-});
-const session = getSessionFromRequest({
-  headers: {
-    cookie: `session=${encodeURIComponent(token)}`,
-    "x-forwarded-proto": "https",
-    "x-forwarded-host": "example.test"
-  }
-});
-assert(session?.session_id === sessionId, "matching session cookie and origin should load the session");
-assert(
-  getSessionFromRequest({ headers: { cookie: `session=${encodeURIComponent(token)}`, host: "fallback.test" } }) === null,
-  "origin mismatch should reject an otherwise valid session token"
-);
-
-const expiredSessionId = "expired-session";
-const expiredToken = signSessionToken(expiredSessionId);
-statePut(sessionStateKey(expiredSessionId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  session_id: expiredSessionId,
-  principal: "principal-1",
-  capabilities: [],
-  expires_at_unix_ms: Date.now() - 1,
-  origin: ""
-});
-assert(
-  getSessionFromRequest({ headers: { cookie: `session=${encodeURIComponent(expiredToken)}`, host: "fallback.test" } }) === null,
-  "expired sessions should not authenticate"
-);
-assert(stateGet(sessionStateKey(expiredSessionId)) === null, "expired session lookup should delete the state record");
-"#,
+            STATIC_ASSETS_V1[17],
         );
     }
 
@@ -36277,75 +34154,7 @@ assert(stateGet(sessionStateKey(expiredSessionId)) === null, "expired session lo
                 "releaseChallengeConsumeLock",
                 "challengeExpiredStateKey",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-const now = 1_000_000;
-statePut(challengeStateKey("expired"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "expired",
-  expires_at_unix_ms: now - 1
-});
-statePut(challengeStateKey("invalid-expiry"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "",
-  expires_at_unix_ms: "not-a-number"
-});
-statePut(challengeExpiredStateKey("old-marker"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "old-marker",
-  marked_at_unix_ms: now - AUTH_CHALLENGE_EXPIRED_TTL_MS - 1
-});
-statePut(challengeExpiredStateKey("fresh-marker"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "fresh-marker",
-  marked_at_unix_ms: now
-});
-statePut(challengeConsumeLockStateKey("stale-lock"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "stale-lock",
-  owner: "owner",
-  expires_at_unix_ms: now - 1
-});
-statePut(sessionStateKey("expired-session"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  session_id: "expired-session",
-  expires_at_unix_ms: now - 1
-});
-
-cleanupExpiredAuthRecords(now);
-
-assert(stateGet(challengeStateKey("expired")) === null, "expired challenge should be removed");
-assert(stateGet(challengeExpiredStateKey("expired"))?.challenge_id === "expired", "expired challenge marker should be written");
-assert(stateGet(challengeStateKey("invalid-expiry")) === null, "invalid challenge expiry should be removed");
-assert(stateGet(challengeExpiredStateKey("old-marker")) === null, "old expired marker should be deleted");
-assert(stateGet(challengeExpiredStateKey("fresh-marker"))?.challenge_id === "fresh-marker", "fresh expired marker should remain");
-assert(stateGet(challengeConsumeLockStateKey("stale-lock")) === null, "stale consume lock should be removed");
-assert(stateGet(sessionStateKey("expired-session")) === null, "expired session should be removed");
-
-const lock = acquireChallengeConsumeLock("active-lock", now);
-assert(lock?.challenge_id === "active-lock", "first consume lock acquisition should succeed");
-assert(acquireChallengeConsumeLock("active-lock", now) === null, "second consume lock acquisition should fail closed");
-releaseChallengeConsumeLock({ challenge_id: "active-lock", owner: "wrong-owner" });
-assert(stateGet(challengeConsumeLockStateKey("active-lock")) !== null, "wrong lock owner must not release the lock");
-releaseChallengeConsumeLock(lock);
-assert(stateGet(challengeConsumeLockStateKey("active-lock")) === null, "matching lock owner should release the lock");
-
-statePut(challengeConsumeLockStateKey("reclaimed-lock"), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: "reclaimed-lock",
-  owner: "old-owner",
-  expires_at_unix_ms: now - 1
-});
-assert(
-  acquireChallengeConsumeLock("reclaimed-lock", now)?.challenge_id === "reclaimed-lock",
-  "expired consume lock should be reclaimed"
-);
-"#,
+            STATIC_ASSETS_V1[18],
         );
     }
 
@@ -36362,203 +34171,7 @@ assert(
                 "AUTH_ORIGIN_MISMATCH",
                 "AUTH_SIGNATURE_INVALID",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function publicKeyHexFromSpki(spkiDer) {
-  return Buffer.from(spkiDer).subarray(-32).toString("hex");
-}
-
-function jsonReq(body, headers = { host: "clinic.test" }) {
-  const encoded = Buffer.from(JSON.stringify(body), "utf8");
-  return {
-    headers,
-    [Symbol.asyncIterator]: async function* () {
-      yield encoded;
-    }
-  };
-}
-
-function resCapture() {
-  return {
-    status: null,
-    headers: {},
-    body: "",
-    writeHead(status, headers = {}) {
-      this.status = status;
-      this.headers = headers;
-    },
-    end(body = "") {
-      this.body += body ?? "";
-    },
-    json() {
-      return this.body.length > 0 ? JSON.parse(this.body) : null;
-    }
-  };
-}
-
-async function assertLoginError(body, expectedStatus, expectedCode, headers = { host: "clinic.test" }) {
-  const res = resCapture();
-  await handleAuthLogin(jsonReq(body, headers), res, new Map());
-  assert(res.status === expectedStatus, `expected ${expectedStatus}, got ${res.status}: ${res.body}`);
-  assert(res.json().code === expectedCode, `expected ${expectedCode}, got ${res.body}`);
-}
-
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const publicKeyHex = publicKeyHexFromSpki(publicKey.export({ format: "der", type: "spki" }));
-const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
-const otherPublicKeyHex = publicKeyHexFromSpki(otherPublicKey.export({ format: "der", type: "spki" }));
-const signaturePlaceholder = "00".repeat(64);
-
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: crypto.randomUUID(),
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_CHALLENGE_NOT_FOUND"
-);
-
-const expiredId = crypto.randomUUID();
-statePut(challengeExpiredStateKey(expiredId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: expiredId,
-  marked_at_unix_ms: Date.now()
-});
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: expiredId,
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_CHALLENGE_EXPIRED"
-);
-
-const mismatchId = crypto.randomUUID();
-statePut(challengeStateKey(mismatchId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: mismatchId,
-  public_key: otherPublicKeyHex,
-  expires_at_unix_ms: Date.now() + 60000,
-  used_at_unix_ms: null,
-  origin: "http://clinic.test"
-});
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: mismatchId,
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_CHALLENGE_PRINCIPAL_MISMATCH"
-);
-
-const replayedId = crypto.randomUUID();
-statePut(challengeStateKey(replayedId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: replayedId,
-  public_key: publicKeyHex,
-  expires_at_unix_ms: Date.now() + 60000,
-  used_at_unix_ms: Date.now(),
-  origin: "http://clinic.test"
-});
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: replayedId,
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_CHALLENGE_REPLAYED"
-);
-
-const originMismatchId = crypto.randomUUID();
-statePut(challengeStateKey(originMismatchId), {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: originMismatchId,
-  public_key: publicKeyHex,
-  expires_at_unix_ms: Date.now() + 60000,
-  used_at_unix_ms: null,
-  origin: "https://clinic.test"
-});
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: originMismatchId,
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_ORIGIN_MISMATCH",
-  { host: "clinic.test" }
-);
-
-const invalidSignatureId = crypto.randomUUID();
-const challenge = {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: invalidSignatureId,
-  public_key: publicKeyHex,
-  nonce: "nonce",
-  issued_at_unix_ms: Date.now(),
-  expires_at_unix_ms: Date.now() + 60000,
-  used_at_unix_ms: null,
-  origin: "http://clinic.test"
-};
-statePut(challengeStateKey(invalidSignatureId), challenge);
-await assertLoginError(
-  {
-    public_key: publicKeyHex,
-    challenge_id: invalidSignatureId,
-    signature: signaturePlaceholder
-  },
-  401,
-  "AUTH_SIGNATURE_INVALID"
-);
-
-const validButNoCapabilitiesId = crypto.randomUUID();
-const validChallenge = {
-  schema_version: AUTH_STATE_SCHEMA_VERSION,
-  challenge_id: validButNoCapabilitiesId,
-  public_key: publicKeyHex,
-  nonce: "nonce-2",
-  issued_at_unix_ms: Date.now(),
-  expires_at_unix_ms: Date.now() + 60000,
-  used_at_unix_ms: null,
-  origin: "http://clinic.test"
-};
-statePut(challengeStateKey(validButNoCapabilitiesId), validChallenge);
-const validSignature = crypto
-  .sign(null, Buffer.from(canonicalChallengeMessage(validChallenge), "utf8"), privateKey)
-  .toString("hex");
-const loginRes = resCapture();
-await handleAuthLogin(
-  jsonReq({
-    public_key: publicKeyHex,
-    challenge_id: validButNoCapabilitiesId,
-    signature: validSignature
-  }),
-  loginRes,
-  new Map()
-);
-assert(loginRes.status === 200, `login without mapped capabilities should still mint a session: ${loginRes.body}`);
-assert(JSON.stringify(loginRes.json().capabilities) === "[]", "unmapped principals should receive no capabilities");
-
-const sessionCookie = loginRes.headers["set-cookie"].split(";")[0];
-const capabilityMapRequired = resCapture();
-handleAuthMe(
-  { headers: { cookie: sessionCookie, host: "clinic.test" } },
-  capabilityMapRequired,
-  new Map(),
-  "pii.records.read"
-);
-assert(capabilityMapRequired.status === 403, `empty capability map should fail: ${capabilityMapRequired.body}`);
-assert(capabilityMapRequired.json().code === "AUTH_CAPABILITY_MAP_REQUIRED", "empty capability map should return AUTH_CAPABILITY_MAP_REQUIRED");
-"#,
+            STATIC_ASSETS_V1[19],
         );
     }
 
@@ -36574,118 +34187,7 @@ assert(capabilityMapRequired.json().code === "AUTH_CAPABILITY_MAP_REQUIRED", "em
                 "handleAuthMe",
                 "handleAuthLogout",
             ],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function publicKeyHexFromSpki(spkiDer) {
-  return Buffer.from(spkiDer).subarray(-32).toString("hex");
-}
-
-function jsonReq(body, headers = { host: "clinic.test" }) {
-  const encoded = Buffer.from(JSON.stringify(body), "utf8");
-  return {
-    headers,
-    [Symbol.asyncIterator]: async function* () {
-      yield encoded;
-    }
-  };
-}
-
-function emptyReq(headers = { host: "clinic.test" }) {
-  return {
-    headers,
-    [Symbol.asyncIterator]: async function* () {}
-  };
-}
-
-function resCapture() {
-  return {
-    status: null,
-    headers: {},
-    body: "",
-    writeHead(status, headers = {}) {
-      this.status = status;
-      this.headers = headers;
-    },
-    end(body = "") {
-      this.body += body ?? "";
-    },
-    json() {
-      return this.body.length > 0 ? JSON.parse(this.body) : null;
-    }
-  };
-}
-
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const publicKeyHex = publicKeyHexFromSpki(publicKey.export({ format: "der", type: "spki" }));
-const capabilityMap = parseCapabilityMap(JSON.stringify({
-  [publicKeyHex]: ["pii.records.read", "pii.consent.grant"]
-}), true);
-
-const challengeRes = resCapture();
-await handleAuthChallenge(jsonReq({ public_key: publicKeyHex }), challengeRes);
-assert(challengeRes.status === 200, `challenge should succeed: ${challengeRes.body}`);
-const challenge = challengeRes.json();
-assert(challenge.public_key === publicKeyHex, "challenge principal mismatch");
-assert(challenge.message.includes(`challenge_id=${challenge.challenge_id}`), "challenge message should include challenge id");
-assert(stateGet(challengeStateKey(challenge.challenge_id))?.public_key === publicKeyHex, "challenge state should be persisted");
-
-const signature = crypto
-  .sign(null, Buffer.from(challenge.message, "utf8"), privateKey)
-  .toString("hex");
-const loginRes = resCapture();
-await handleAuthLogin(
-  jsonReq({
-    public_key: publicKeyHex,
-    challenge_id: challenge.challenge_id,
-    signature
-  }),
-  loginRes,
-  capabilityMap
-);
-assert(loginRes.status === 200, `login should succeed: ${loginRes.body}`);
-const login = loginRes.json();
-assert(
-  JSON.stringify(login.capabilities) === JSON.stringify(["pii.consent.grant", "pii.records.read"]),
-  `login capabilities should be sorted: ${loginRes.body}`
-);
-assert(loginRes.headers["set-cookie"]?.includes("session="), "login should set a session cookie");
-assert(stateGet(challengeConsumeLockStateKey(challenge.challenge_id)) === null, "login should release consume lock");
-
-const sessionCookie = loginRes.headers["set-cookie"].split(";")[0];
-const sessionToken = sessionCookie.slice("session=".length);
-const sessionId = verifySessionToken(decodeURIComponent(sessionToken));
-assert(sessionId, "login cookie should contain a valid signed session token");
-assert(stateGet(sessionStateKey(sessionId))?.principal === publicKeyHex, "login should persist session state");
-
-const meRes = resCapture();
-handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, meRes, capabilityMap, "pii.records.read");
-assert(meRes.status === 200, `auth me should succeed: ${meRes.body}`);
-assert(meRes.json().principal === publicKeyHex, "auth me principal mismatch");
-
-const forbiddenRes = resCapture();
-handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, forbiddenRes, capabilityMap, "pii.records.delete");
-assert(forbiddenRes.status === 403, `missing capability should be forbidden: ${forbiddenRes.body}`);
-assert(forbiddenRes.json().code === "AUTH_FORBIDDEN", "missing capability should return AUTH_FORBIDDEN");
-
-const logoutRes = resCapture();
-handleAuthLogout({ headers: { cookie: sessionCookie, host: "clinic.test" } }, logoutRes);
-assert(logoutRes.status === 204, "logout should return no-content");
-assert(logoutRes.headers["set-cookie"]?.includes("Max-Age=0"), "logout should clear the session cookie");
-assert(stateGet(sessionStateKey(sessionId)) === null, "logout should delete session state");
-
-const afterLogoutRes = resCapture();
-handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, afterLogoutRes, capabilityMap);
-assert(afterLogoutRes.status === 401, `logged out session should not authenticate: ${afterLogoutRes.body}`);
-assert(afterLogoutRes.json().code === "AUTH_REQUIRED", "logged out session should return AUTH_REQUIRED");
-
-const emptyBody = await readJson(emptyReq());
-assert(JSON.stringify(emptyBody) === "{}", "empty JSON request body should decode as an object");
-"#,
+            STATIC_ASSETS_V1[20],
         );
     }
 
@@ -36696,87 +34198,34 @@ assert(JSON.stringify(emptyBody) === "{}", "empty JSON request body should decod
             "pii_auth_core_handlers_bad_requests.mjs",
             &[],
             &["readJson", "sendAuthError", "INVALID_REQUEST"],
-            r#"
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-async function assertRejects(promiseFactory, expectedMessage) {
-  try {
-    await promiseFactory();
-  } catch (error) {
-    if (String(error?.message ?? error).includes(expectedMessage)) {
-      return;
+            STATIC_ASSETS_V1[21],
+        );
     }
-    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
-  }
-  throw new Error(`expected rejection containing: ${expectedMessage}`);
-}
 
-function reqFromChunks(chunks, headers = { host: "clinic.test" }) {
-  return {
-    headers,
-    [Symbol.asyncIterator]: async function* () {
-      for (const chunk of chunks) {
-        yield Buffer.from(chunk, "utf8");
-      }
-    }
-  };
-}
+    #[test]
+    fn static_asset_bytes_order_and_reconstruction_are_stable() {
+        use sha2::Digest as _;
 
-function resCapture() {
-  return {
-    status: null,
-    headers: {},
-    body: "",
-    writeHead(status, headers = {}) {
-      this.status = status;
-      this.headers = headers;
-    },
-    end(body = "") {
-      this.body += body ?? "";
-    },
-    json() {
-      return this.body.length > 0 ? JSON.parse(this.body) : null;
-    }
-  };
-}
-
-await assertRejects(
-  () => readJson(reqFromChunks(["{not-json"])),
-  "invalid JSON payload"
-);
-await assertRejects(
-  () => readJson(reqFromChunks(["x".repeat(65537)])),
-  "request body too large"
-);
-
-const badChallengeJson = resCapture();
-await handleAuthChallenge(reqFromChunks(["{not-json"]), badChallengeJson);
-assert(badChallengeJson.status === 400, `invalid challenge JSON should fail: ${badChallengeJson.body}`);
-assert(badChallengeJson.json().code === "INVALID_REQUEST", "invalid challenge JSON should return INVALID_REQUEST");
-
-const missingPublicKey = resCapture();
-await handleAuthChallenge(reqFromChunks([JSON.stringify({})]), missingPublicKey);
-assert(missingPublicKey.status === 400, `missing public key should fail: ${missingPublicKey.body}`);
-assert(missingPublicKey.json().error === "public_key must be a string", "missing public key error mismatch");
-
-const badLoginJson = resCapture();
-await handleAuthLogin(reqFromChunks(["{not-json"]), badLoginJson, new Map());
-assert(badLoginJson.status === 400, `invalid login JSON should fail: ${badLoginJson.body}`);
-assert(badLoginJson.json().code === "INVALID_REQUEST", "invalid login JSON should return INVALID_REQUEST");
-
-const missingChallengeId = resCapture();
-await handleAuthLogin(
-  reqFromChunks([JSON.stringify({ public_key: "11".repeat(32), signature: "00".repeat(64) })]),
-  missingChallengeId,
-  new Map()
-);
-assert(missingChallengeId.status === 400, `missing challenge id should fail: ${missingChallengeId.body}`);
-assert(missingChallengeId.json().error === "challenge_id must be a string", "missing challenge id error mismatch");
-"#,
+        let mut digest = Sha256::new();
+        for asset in [WEBAPP_API_TAIL_V1, PII_API_TAIL_V1] {
+            digest.update(Sha256::digest(asset.as_bytes()));
+            digest.update([u8::from(asset.ends_with('\n'))]);
+        }
+        for asset in STATIC_ASSETS_V1 {
+            digest.update(Sha256::digest(asset.as_bytes()));
+            digest.update([u8::from(asset.ends_with('\n'))]);
+        }
+        assert_eq!(
+            hex::encode(digest.finalize()),
+            "e15d4b220d7d7aef0d9d3671ca479ea2befad798e6d040a0b1c7d65683c0c8d3"
+        );
+        assert_eq!(
+            webapp_api_server_mjs().strip_prefix(soracloud_auth_core_mjs()),
+            Some(WEBAPP_API_TAIL_V1)
+        );
+        assert_eq!(
+            pii_app_api_server_mjs().strip_prefix(soracloud_auth_core_mjs()),
+            Some(PII_API_TAIL_V1)
         );
     }
 

@@ -5564,6 +5564,54 @@ mod tests {
     };
 
     #[test]
+    fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
+        let need = |height: u64| {
+            let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
+            CanonicalExecutedBlockNeedV1 {
+                height,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"block".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    &[b"finality".as_slice(), &height.to_le_bytes()].concat(),
+                )),
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                    Hash::new(b"parent state"),
+                    Hash::new(b"post state"),
+                    Hash::new(b"writes"),
+                    1,
+                    executed_block_wire_hash,
+                ),
+                executed_block_wire_len: 1,
+                executed_block_wire_hash,
+            }
+        };
+        let needs = (1..=8).map(need).collect::<Vec<_>>();
+        let mut startup_gate_pending = true;
+        let mut observed_heights = Vec::new();
+        let batches = canonical_executed_block_recovery_batches(&needs, 3)
+            .expect("ordered distinct recovery plan is batchable");
+        for batch in batches {
+            assert!(
+                startup_gate_pending,
+                "the Queue startup gate remains closed for every recovery batch"
+            );
+            assert!(batch.len() <= 3);
+            observed_heights.extend(batch.iter().map(|need| need.height));
+        }
+        assert_eq!(observed_heights, (1..=8).collect::<Vec<_>>());
+        startup_gate_pending = false;
+        assert!(
+            !startup_gate_pending,
+            "the gate opens only after all batches"
+        );
+
+        let mut duplicated = needs;
+        duplicated[4] = duplicated[3];
+        assert!(canonical_executed_block_recovery_batches(&duplicated, 3).is_err());
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn complete_certified_serve_episode_cannot_veto_pacemaker() {
         let calls = Cell::new(0_u8);
@@ -6203,6 +6251,23 @@ mod tests {
             ["bind-leader-wire"],
             "a failed bind cannot publish VolatileTerminal"
         );
+    }
+
+    #[test]
+    fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims() {
+        assert!(matches!(
+            classify_kura_replica_advert_admission_error(
+                crate::kura::Error::InvalidKuraReplicaAdvert("forged advert".to_owned())
+            ),
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason)
+                if reason == "forged advert"
+        ));
+        assert!(matches!(
+            classify_kura_replica_advert_admission_error(
+                crate::kura::Error::CanonicalStoragePoisoned
+            ),
+            KuraReplicaAdvertAdmissionError::Fatal(crate::kura::Error::CanonicalStoragePoisoned)
+        ));
     }
 
     #[test]

@@ -204,6 +204,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/irohad/src/main.rs"): (
         Path("main/runtime_deps.rs"),
+        Path("main_tests/governance_dag_publisher_binding_signer.rs"),
         Path("main/governance_dag_launcher_tests.rs"),
         Path("main/runtime_budget_and_config_tests.rs"),
         Path("main/startup_tail_tests.rs"),
@@ -251,13 +252,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("v2_runner/canonical_recovery_ingress.rs"),
         Path("v2_runner/reply_route_retention.rs"),
         Path("v2_runner/merge_sidecar_recovery.rs"),
-    ),
-    Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"): (
-        Path("tests/v2_runner_unsealed_00.rs"),
-        Path("tests/v2_runner_unsealed_01.rs"),
-        Path("tests/v2_runner_unsealed_02.rs"),
-        Path("tests/v2_runner_upstream_recovery.rs"),
-        Path("tests/v2_runner_lifecycle_startup_order.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
         Path("v2_apply/autonomous_recovery_types.rs"),
@@ -4032,3 +4026,59 @@ def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
     assert any(
         f"{prefix}{symbol} must equal only" in error for error in errors
     ), errors
+
+
+def _assert_commit_import_release_or_stale_artifact(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
+        tmp_path, module
+    )
+    path = repo_root / artifact_name if "/" in artifact_name else formal_dir / artifact_name
+    release_mutations = {
+        "SumeragiV2AsyncNetwork.tla": (
+            "DirectCommitQcCandidateHasExactImportLineage",
+            "    /\\ item.envelope.qc.context = context\n",
+            "    /\\ TRUE\n",
+        ),
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
+            "IndexedChainSpecClosesHistoricalCertificateLocalImportCandidateEntry",
+            "  IndexedChainSpec\n"
+            "    => IndexedHistoricalCertificateLocalImportCandidateEntryProperty\n",
+            "  IndexedChainSpec\n    => TRUE\n",
+        ),
+    }
+    release_mutation = release_mutations.get(artifact_name)
+    if release_mutation is None:
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
+            encoding="utf-8",
+        )
+    else:
+        symbol, old, new = release_mutation
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            mutate_tla_theorem(source, symbol, old, new), encoding="utf-8"
+        )
+        module.COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256[path.name] = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+        )
+
+    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    if release_mutation is None:
+        assert any(
+            str(path) in error
+            and (
+                "must match exact reviewed SHA-256" in error
+                or "must match frozen SHA-256" in error
+            )
+            for error in errors
+        ), errors
+    else:
+        assert any(
+            f"Commit-import release theorem {symbol} must state only" in error
+            for error in errors
+        ), errors

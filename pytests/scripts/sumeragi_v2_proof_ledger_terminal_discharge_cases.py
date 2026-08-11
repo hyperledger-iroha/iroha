@@ -1783,7 +1783,7 @@ def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
     invocation = (
-        "bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
+        "run_formal_script scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
     )
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(invocation) == 1

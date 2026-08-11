@@ -132,7 +132,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
         "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80"
     ),
     "PendingExactOutput::drive_with_budget_ack": (
-        "a4453951bf9775ad83b603cfe9b5f5849cc6251904602cbf76438c6140703bfa"
+        "675d0e99a923f9b8cc96d725458584f4ea762cd4fd69fd9f8e7e76b158c82d52"
     ),
     "PendingExactOutput::poll_reply_flushes": (
         "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749"
@@ -350,8 +350,8 @@ reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion
     require(
         network_path,
         """
-pub async fn start_with_crypto(
-    key_pair: KeyPair,
+pub async fn start_with_crypto_and_initial_authorities(
+    identity_keys: P2pIdentityKeys,
     Config {
         address: listen_addr,
         public_address,

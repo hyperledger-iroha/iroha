@@ -9221,6 +9221,34 @@
         ],
         "type": "object"
       },
+      "MusubiExactReleaseSnapshotV1": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_id": {
+            "$ref": "#/components/schemas/MusubiChainIdV1"
+          },
+          "genesis_hash": {
+            "$ref": "#/components/schemas/MusubiFixed32BytesV1"
+          },
+          "home_release": {
+            "$ref": "#/components/schemas/MusubiReleaseRecordV1"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/MusubiRegistrySnapshotV1"
+          },
+          "universal_release": {
+            "$ref": "#/components/schemas/MusubiResolverReleaseRowV1"
+          }
+        },
+        "required": [
+          "chain_id",
+          "genesis_hash",
+          "snapshot",
+          "home_release",
+          "universal_release"
+        ],
+        "type": "object"
+      },
       "MusubiFinalizedCursorV1": {
         "additionalProperties": false,
         "properties": {
@@ -9320,6 +9348,7 @@
             "enum": [
               "iroha.musubi.v1.namespace_binding.register",
               "iroha.musubi.v1.archive.register",
+              "iroha.musubi.v1.provider_bundle_attestation.register",
               "iroha.musubi.v1.archive_location.add",
               "iroha.musubi.v1.archive_location.retire",
               "iroha.musubi.v1.release.publish",
@@ -9377,6 +9406,23 @@
               },
               "wire_id": {
                 "const": "iroha.musubi.v1.archive.register",
+                "type": "string"
+              }
+            },
+            "required": [
+              "wire_id",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/RegisterMusubiProviderBundleAttestationV1"
+              },
+              "wire_id": {
+                "const": "iroha.musubi.v1.provider_bundle_attestation.register",
                 "type": "string"
               }
             },
@@ -10442,6 +10488,54 @@
             "type": "object"
           }
         ]
+      },
+      "MusubiProviderBundleAttestationKeyV1": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_id": {
+            "$ref": "#/components/schemas/MusubiDigest32V1"
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/MusubiProviderIdV1"
+          },
+          "replication_order": {
+            "$ref": "#/components/schemas/MusubiDigest32V1"
+          }
+        },
+        "required": [
+          "archive_id",
+          "replication_order",
+          "provider_id"
+        ],
+        "type": "object"
+      },
+      "MusubiProviderBundleAttestationRecordV1": {
+        "additionalProperties": false,
+        "properties": {
+          "attestation": {
+            "$ref": "#/components/schemas/MusubiProviderBundleVerificationAttestationV1"
+          },
+          "attestation_digest": {
+            "$ref": "#/components/schemas/MusubiDigest32V1"
+          },
+          "key": {
+            "$ref": "#/components/schemas/MusubiProviderBundleAttestationKeyV1"
+          },
+          "registered_at_height": {
+            "$ref": "#/components/schemas/MusubiPositiveU64V1"
+          },
+          "registered_by": {
+            "$ref": "#/components/schemas/MusubiAccountIdV1"
+          }
+        },
+        "required": [
+          "key",
+          "attestation_digest",
+          "attestation",
+          "registered_by",
+          "registered_at_height"
+        ],
+        "type": "object"
       },
       "MusubiProviderBundleVerificationAttestationV1": {
         "additionalProperties": false,
@@ -18560,6 +18654,22 @@
         "required": [
           "binding",
           "expected_policy_revision"
+        ],
+        "type": "object"
+      },
+      "RegisterMusubiProviderBundleAttestationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "attestation": {
+            "$ref": "#/components/schemas/MusubiProviderBundleVerificationAttestationV1"
+          },
+          "expected_location_revision": {
+            "$ref": "#/components/schemas/MusubiPositiveU64V1"
+          }
+        },
+        "required": [
+          "attestation",
+          "expected_location_revision"
         ],
         "type": "object"
       },
@@ -43470,6 +43580,40 @@
         "x-iroha-tool-effect": "build_instruction"
       }
     },
+    "/v1/musubi/instructions/provider-bundle-attestation-register": {
+      "post": {
+        "description": "Return one deterministic unsigned, versioned instruction envelope for local signing; Torii never accepts private keys.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterMusubiProviderBundleAttestationV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MusubiInstructionEnvelopeV1"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build an immutable Musubi V1 provider bundle-attestation registration.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-norito-request-type": "RegisterMusubiProviderBundleAttestationV1",
+        "x-iroha-norito-response-type": "MusubiInstructionEnvelopeV1",
+        "x-iroha-tool-effect": "build_instruction"
+      }
+    },
     "/v1/musubi/instructions/registry-policy-set": {
       "post": {
         "description": "Return one deterministic unsigned, versioned instruction envelope for local signing; Torii never accepts private keys.",
@@ -43778,7 +43922,7 @@
     },
     "/v1/musubi/queries/exact-release": {
       "post": {
-        "description": "Execute a bounded exact structural release query.",
+        "description": "Execute one bounded exact query that returns coherent home and universal release projections from the same finalized state view.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -43794,7 +43938,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MusubiReleaseRecordV1"
+                  "$ref": "#/components/schemas/MusubiExactReleaseSnapshotV1"
                 }
               }
             },
@@ -43806,7 +43950,7 @@
           "Musubi"
         ],
         "x-iroha-norito-request-type": "MusubiExactReleaseQueryV1",
-        "x-iroha-norito-response-type": "MusubiReleaseRecordV1",
+        "x-iroha-norito-response-type": "MusubiExactReleaseSnapshotV1",
         "x-iroha-tool-effect": "read"
       }
     },
@@ -43875,6 +44019,40 @@
         ],
         "x-iroha-norito-request-type": "MusubiOrderedPrefixQueryV1",
         "x-iroha-norito-response-type": "MusubiOrderedPackagePageV1",
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/musubi/queries/provider-bundle-attestation": {
+      "post": {
+        "description": "Return one immutable full provider proof by its exact archive, replication-order, and provider key.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MusubiProviderBundleAttestationKeyV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MusubiProviderBundleAttestationRecordV1"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Audit an exact Musubi V1 provider bundle attestation.",
+        "tags": [
+          "Musubi"
+        ],
+        "x-iroha-norito-request-type": "MusubiProviderBundleAttestationKeyV1",
+        "x-iroha-norito-response-type": "MusubiProviderBundleAttestationRecordV1",
         "x-iroha-tool-effect": "read"
       }
     },

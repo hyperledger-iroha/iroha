@@ -88,7 +88,7 @@ fn unshield_consumes_nullifiers_without_guest_supplied_outputs() {
     assert_eq!(latest_root, empty_root);
     assert_eq!(
         hex::encode(latest_root),
-        "ce4066b230f348190183f90dd35871c13823a358bb37c2ce8b43526ae7197c3c"
+        "ea060f4e4be3781328092c94bca4268e6e9b246b0ec6ea339adc766a2b9b9201"
     );
     assert_eq!(roots, vec![empty_root]);
 

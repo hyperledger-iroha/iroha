@@ -577,16 +577,3 @@ inputs = [
   "defaults/*.toml",
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
-
-# TODO: Restore scripts/etenraku_analysis.py and the licensed reference
-# recording so this historical trace can be reproduced inside the repository.
-[[generated]]
-name = "iroha-monitor-etenraku-reference-trace"
-kind = "file"
-outputs = ["crates/iroha_monitor/src/etenraku_trace.rs"]
-generator = "historical scripts/etenraku_analysis.py reference-recording analysis"
-generator_sources = []
-inputs = []
-check = "cargo test --locked -p iroha_monitor"
-external = true
-provenance = "historical reference trace; the original generator and recording are not tracked"

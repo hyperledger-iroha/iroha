@@ -25,7 +25,6 @@ where
     input.is_empty() && norito::codec::Encode::encode(&query) == payload
 }
 
-#[cfg(feature = "fast_dsl")]
 fn decode_exact<T>(payload: &[u8]) -> Option<T>
 where
     T: norito::codec::Decode + norito::codec::Encode,
@@ -176,80 +175,13 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
     handle_unvisited_singular_query(visited);
 }
 
-#[cfg(not(feature = "fast_dsl"))]
-/// Dispatch an iterable query payload (type-erased) to the matching visitor method.
-pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
-    let any = query_with_params.query.erased_as_any();
-
-    // Some iterable queries intentionally return the same item type. Their
-    // erased wrapper therefore cannot be dispatched by `TypeId` alone. Use the
-    // preserved, canonical concrete-query payload before falling back to the
-    // unparameterized query for that result type.
-    if let Some(query) = any.downcast_ref::<query_mod::ErasedIterQuery<crate::account::Account>>() {
-        if payload_is_exact_query::<query_mod::account::FindAccountsWithAsset>(query.payload()) {
-            return visitor.visit_find_accounts_with_asset(query);
-        }
-        if payload_is_exact_query::<query_mod::account::FindAccounts>(query.payload()) {
-            return visitor.visit_find_accounts(query);
-        }
-        return;
-    }
-    if let Some(query) = any.downcast_ref::<query_mod::ErasedIterQuery<crate::role::RoleId>>() {
-        if payload_is_exact_query::<query_mod::role::FindRolesByAccountId>(query.payload()) {
-            return visitor.visit_find_roles_by_account_id(query);
-        }
-        if payload_is_exact_query::<query_mod::role::FindRoleIds>(query.payload()) {
-            return visitor.visit_find_role_ids(query);
-        }
-        return;
-    }
-
-    macro_rules! try_visit_erased {
-        ($($item:ty => $method:ident),+ $(,)?) => {
-            $(
-                if let Some(q) = any.downcast_ref::<query_mod::ErasedIterQuery<$item>>() {
-                    return visitor.$method(q);
-                }
-            )+
-        };
-    }
-
-    try_visit_erased! {
-        crate::domain::Domain => visit_find_domains,
-        crate::asset::value::Asset => visit_find_assets,
-        crate::asset::definition::AssetDefinition => visit_find_assets_definitions,
-        crate::nft::Nft => visit_find_nfts,
-        crate::role::Role => visit_find_roles,
-        crate::permission::Permission => visit_find_permissions_by_account_id,
-        crate::peer::PeerId => visit_find_peers,
-        crate::trigger::TriggerId => visit_find_active_trigger_ids,
-        crate::trigger::Trigger => visit_find_triggers,
-        crate::oracle::FeedConfig => visit_find_oracle_feeds,
-        crate::events::data::oracle::FeedEventRecord => visit_find_oracle_history_by_feed_id,
-        crate::oracle::OracleProviderStatsRecord => visit_find_oracle_provider_stats_by_feed_id,
-        crate::oracle::OracleDispute => visit_find_oracle_disputes,
-        crate::oracle::OracleChangeProposal => visit_find_oracle_changes,
-        crate::oracle::TwitterBindingRecord => visit_find_twitter_bindings_by_uaid,
-        crate::query::CommittedTransaction => visit_find_transactions,
-        crate::block::BlockHeader => visit_find_block_headers,
-        crate::block::SignedBlock => visit_find_blocks,
-        crate::nexus::FeeSponsorProgram => visit_find_fee_sponsor_programs,
-        crate::nexus::FeeSponsorProgramId => visit_find_fee_sponsor_program_ids,
-    }
-}
-
-#[cfg(feature = "fast_dsl")]
-/// Reconstruct and dispatch an iterable query from its fast-DSL components.
+/// Reconstruct and dispatch an iterable query from its canonical components.
 #[allow(
     clippy::too_many_lines,
-    reason = "the exhaustive fast-DSL query inventory stays together so new item kinds cannot silently restore no-op dispatch"
+    reason = "the exhaustive canonical query inventory stays together so new item kinds cannot silently restore no-op dispatch"
 )]
 pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
-    let Some((item, predicate_bytes, selector_bytes, query_payload)) =
-        query_with_params.fast_dsl_parts()
-    else {
-        return;
-    };
+    let (item, predicate_bytes, selector_bytes, query_payload) = query_with_params.parts();
 
     macro_rules! visit_erased {
         ($item:ty, $method:ident) => {{
@@ -353,13 +285,16 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         ),
         // These item kinds have no visitor hook in `Visit`. Keep this match
         // exhaustive so adding a new query item cannot silently restore the
-        // former fast-DSL no-op behavior.
+        // former erased-query no-op behavior.
         query_mod::QueryItemKind::AccountId
         | query_mod::QueryItemKind::RepoAgreement
         | query_mod::QueryItemKind::Rwa
         | query_mod::QueryItemKind::ProofRecord
         | query_mod::QueryItemKind::DefiOracleAttestation
-        | query_mod::QueryItemKind::AssetEscrowRecord => {}
+        | query_mod::QueryItemKind::AssetEscrowRecord
+        | query_mod::QueryItemKind::AssetEscrowsBySeller
+        | query_mod::QueryItemKind::AssetEscrowsByBuyer
+        | query_mod::QueryItemKind::AssetEscrowsByStatus => {}
     }
 }
 
@@ -998,14 +933,7 @@ mod tests {
     fn query_with_default_params(
         query: QueryBox<query_mod::QueryOutputBatchBox>,
     ) -> QueryWithParams {
-        #[cfg(feature = "fast_dsl")]
-        {
-            QueryWithParams::new(&query, QueryParams::default())
-        }
-        #[cfg(not(feature = "fast_dsl"))]
-        {
-            QueryWithParams::new(query, QueryParams::default())
-        }
+        QueryWithParams::new(&query, QueryParams::default())
     }
 
     #[test]
@@ -1098,9 +1026,8 @@ mod tests {
         assert_eq!(visitor.accounts_with_asset, 1);
     }
 
-    #[cfg(feature = "fast_dsl")]
     #[test]
-    fn fast_dsl_iterable_visitor_rejects_noncanonical_components() {
+    fn iterable_visitor_rejects_noncanonical_components() {
         let query = AnyQueryBox::Iterable(QueryWithParams {
             query: (),
             query_payload: norito::codec::Encode::encode(&query_mod::domain::FindDomains),

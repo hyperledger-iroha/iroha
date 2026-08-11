@@ -493,9 +493,9 @@ expected_changed_module_counts = {
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
-    "sumeragi::v2_lane_work::tests": 60,
+    "sumeragi::v2_lane_work::tests": 61,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
-    "sumeragi::v2_runner::tests": 37,
+    "sumeragi::v2_runner::tests": 34,
     "sumeragi::v2_worker::tests": 132,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
@@ -523,8 +523,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "15f837d911644b557c5a36064a1cff9c"
-    "512f0cf2b120f5cc6fb21e7cfa530d83"
+    "a776dbab60a1b4c9fec7cdc048d094f5"
+    "09ce60b8c0d8ddebbacc38da5642f4ec"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

@@ -613,6 +613,10 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
     echo "public Taira rollout requires --require-all-validators; use --skip-public for local diagnostics" >&2
     exit 1
   fi
+  if [[ $MIN_VALIDATOR_SET_LEN -ne $TAIRA_RELEASE_VALIDATOR_COUNT ]]; then
+    echo "public Taira rollout requires MIN_VALIDATOR_SET_LEN=${TAIRA_RELEASE_VALIDATOR_COUNT}" >&2
+    exit 1
+  fi
   if [[ $VALIDATOR_ROOT_COUNT -ne $TAIRA_RELEASE_VALIDATOR_COUNT ]]; then
     echo "public Taira rollout requires exactly ${TAIRA_RELEASE_VALIDATOR_COUNT} distinct --validator-root LABEL=URL arguments; received ${VALIDATOR_ROOT_COUNT}" >&2
     exit 1
@@ -1279,10 +1283,10 @@ if not isinstance(seed, str) or re.fullmatch(r"[0-9A-F]{64}", seed) is None:
 validator_count = require_uint(
     context.get("validator_count"), "height_context.validator_count", positive=True
 )
-if validator_count < minimum_validators:
+if validator_count != minimum_validators:
     fail(
-        f"v2 height context froze only {validator_count} validators; "
-        f"Taira requires at least {minimum_validators}"
+        f"v2 height context froze {validator_count} validators; "
+        f"Taira requires exactly {minimum_validators}"
     )
 if leader >= validator_count:
     fail(f"v2 leader {leader} is outside frozen validator roster {validator_count}")
@@ -1339,7 +1343,7 @@ else:
     )
     expected_commit_min = commit_validators * 2 // 3 + 1
     if (
-        commit_validators < minimum_validators
+        commit_validators != minimum_validators
         or commit_signers > commit_validators
         or commit_min != expected_commit_min
         or commit_signers < commit_min

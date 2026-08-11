@@ -155,7 +155,6 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::secret_string"))]
             #[skip_from]
             #[skip_try_from]
             String,

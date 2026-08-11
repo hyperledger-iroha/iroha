@@ -1109,6 +1109,96 @@ fn peer_inventory_scope_requires_exact_canonical_payload() {
     );
 }
 
+#[test]
+fn signed_query_scope_uses_escrow_party_discriminants() {
+    use iroha_data_model::{
+        escrow::AssetEscrowStatus,
+        query::{
+            QueryItemKind, QueryWithParams,
+            escrow::prelude::{
+                FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+            },
+            parameters::QueryParams,
+        },
+    };
+
+    let authority =
+        checked_torii_test_account_id(0xfa, "derive escrow query routing authority fixture key");
+    let target = checked_torii_test_account_id(0xfb, "derive escrow query target fixture key");
+
+    let seller_query = QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
+            seller: target.clone(),
+        }),
+        item: QueryItemKind::AssetEscrowsBySeller,
+        predicate_bytes: Vec::new(),
+        selector_bytes: Vec::new(),
+        params: QueryParams::default(),
+    };
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(seller_query),
+        )),
+        super::SignedQueryScope::TargetAccount(target.clone())
+    );
+
+    let buyer_query = QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByBuyer {
+            buyer: target.clone(),
+        }),
+        item: QueryItemKind::AssetEscrowsByBuyer,
+        predicate_bytes: Vec::new(),
+        selector_bytes: Vec::new(),
+        params: QueryParams::default(),
+    };
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(buyer_query),
+        )),
+        super::SignedQueryScope::TargetAccount(target.clone())
+    );
+
+    let legacy_item_tag = QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
+            seller: target.clone(),
+        }),
+        item: QueryItemKind::AssetEscrowRecord,
+        predicate_bytes: Vec::new(),
+        selector_bytes: Vec::new(),
+        params: QueryParams::default(),
+    };
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(legacy_item_tag),
+        )),
+        super::SignedQueryScope::CrossDataspaceFanout
+    );
+
+    let status_query = QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByStatus {
+            status: AssetEscrowStatus::PaymentSent,
+        }),
+        item: QueryItemKind::AssetEscrowsByStatus,
+        predicate_bytes: Vec::new(),
+        selector_bytes: Vec::new(),
+        params: QueryParams::default(),
+    };
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(status_query),
+        )),
+        super::SignedQueryScope::CrossDataspaceFanout
+    );
+}
+
 #[tokio::test]
 async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() {
     let key_pair = checked_torii_test_ed25519_keypair(

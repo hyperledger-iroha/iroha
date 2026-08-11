@@ -6351,7 +6351,7 @@ BY IsaT(600)
        AsyncCommitCertificateResponseEnvelopeTyped,
        AsyncCertifiedRequestItems, AsyncCertifiedRequestHashes,
        AsyncCommitCertificateRequestItems,
-       AsyncUntrustedTransportCompletionItem,
+       AsyncUntrustedCertifiedResponseItem,
        AsyncUntrustedCompletionRequestWitness,
        AsyncUntrustedCompletionQcWitness,
        AsyncCertifiedRequestEnvelope,

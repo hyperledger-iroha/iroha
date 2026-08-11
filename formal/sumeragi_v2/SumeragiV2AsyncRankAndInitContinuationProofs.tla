@@ -44,7 +44,8 @@ THEOREM AsyncInitEstablishesProducerTypeInvariant ==
     AsyncInitAt(initialContext) => AsyncProducerTypeInvariant
 BY FS_EmptySet, Zenon
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncProducerInit,
-       AsyncProducerTypeInvariant, AsyncProducerJournalClosed
+       AsyncProducerTypeInvariant, AsyncProducerTypeInvariantAt,
+       AsyncProducerJournalClosed, AsyncProducerJournalClosedAt
 
 THEOREM AsyncInitEstablishesServeProducerEpisodeTypeInvariant ==
   \A initialContext:

@@ -347,16 +347,7 @@ fn native_iterable_query_access(
     query: &QueryWithParams,
 ) -> Result<NativeQueryAccess, ValidationFail> {
     macro_rules! payload_for {
-        ($item:ty, $kind:ident) => {{
-            if let Some(query_box) = query.query_box() {
-                data_model_query::iter_query_inner::<$item>(query_box)
-                    .map(|erased| erased.payload())
-            } else {
-                query.fast_dsl_parts().and_then(|(kind, _, _, payload)| {
-                    (kind == QueryItemKind::$kind).then_some(payload)
-                })
-            }
-        }};
+        ($item:ty, $kind:ident) => {{ (query.item == QueryItemKind::$kind).then_some(query.query_payload.as_slice()) }};
     }
     macro_rules! any_exact {
         ($payload:expr; $($query_ty:path),+ $(,)?) => {
@@ -605,24 +596,41 @@ fn native_iterable_query_access(
         iroha_data_model::escrow::AssetEscrowRecord,
         AssetEscrowRecord
     ) {
-        if any_exact!(
-            payload;
-            data_model_query::escrow::prelude::FindAssetEscrows,
-            data_model_query::escrow::prelude::FindAssetEscrowsByStatus,
-        ) {
+        if any_exact!(payload; data_model_query::escrow::prelude::FindAssetEscrows) {
             return Ok(NativeQueryAccess::AllLedger);
         }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsBySeller
+    ) {
         if let Some(query) = decode_native_iterable_payload_exact::<
             data_model_query::escrow::prelude::FindAssetEscrowsBySeller,
         >(payload)
         {
             return Ok(NativeQueryAccess::Account(query.seller.clone()));
         }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsByBuyer
+    ) {
         if let Some(query) = decode_native_iterable_payload_exact::<
             data_model_query::escrow::prelude::FindAssetEscrowsByBuyer,
         >(payload)
         {
             return Ok(NativeQueryAccess::Account(query.buyer.clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsByStatus
+    ) {
+        if any_exact!(payload; data_model_query::escrow::prelude::FindAssetEscrowsByStatus) {
+            return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
@@ -11691,6 +11699,110 @@ mod tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn native_escrow_query_authorization_uses_query_specific_tags() {
+        use iroha_data_model::{
+            escrow::AssetEscrowStatus,
+            query::{
+                escrow::prelude::{
+                    FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+                },
+                parameters::QueryParams,
+            },
+        };
+
+        let seller = checked_account_id();
+        let buyer = checked_account_id();
+        let seller_query = FindAssetEscrowsBySeller {
+            seller: seller.clone(),
+        };
+        let buyer_query = FindAssetEscrowsByBuyer {
+            buyer: buyer.clone(),
+        };
+        let status_query = FindAssetEscrowsByStatus {
+            status: AssetEscrowStatus::Accepted,
+        };
+
+        let seller_envelope = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowsBySeller,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&seller_envelope).expect("authorize seller query"),
+            NativeQueryAccess::Account(seller)
+        );
+
+        let buyer_envelope = QueryWithParams {
+            query: (),
+            query_payload: buyer_query.encode(),
+            item: QueryItemKind::AssetEscrowsByBuyer,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&buyer_envelope).expect("authorize buyer query"),
+            NativeQueryAccess::Account(buyer)
+        );
+
+        let status_envelope = QueryWithParams {
+            query: (),
+            query_payload: status_query.encode(),
+            item: QueryItemKind::AssetEscrowsByStatus,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&status_envelope).expect("authorize status query"),
+            NativeQueryAccess::AllLedger
+        );
+    }
+
+    #[test]
+    fn native_escrow_query_authorization_rejects_wrong_or_malformed_tags() {
+        use iroha_data_model::query::{
+            escrow::prelude::FindAssetEscrowsBySeller, parameters::QueryParams,
+        };
+
+        let seller_query = FindAssetEscrowsBySeller {
+            seller: checked_account_id(),
+        };
+        let legacy_item_tag = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowRecord,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&legacy_item_tag).is_err());
+
+        let status_tag_with_account_payload = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowsByStatus,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&status_tag_with_account_payload).is_err());
+
+        let malformed_seller = QueryWithParams {
+            query: (),
+            query_payload: vec![0xff],
+            item: QueryItemKind::AssetEscrowsBySeller,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&malformed_seller).is_err());
     }
 
     #[test]

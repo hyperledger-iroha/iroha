@@ -36,13 +36,6 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, HashOf, streaming::TransportCapabilityResolutionSnapshot};
-#[cfg(not(feature = "fast_dsl"))]
-use iroha_data_model::query::{
-    account::prelude::FindAccounts,
-    asset::prelude::{FindAssets, FindAssetsDefinitions},
-    domain::prelude::FindDomains,
-    nft::prelude::FindNfts,
-};
 #[cfg(test)]
 use iroha_data_model::soracloud::{
     SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
@@ -81,8 +74,8 @@ use iroha_data_model::{
     prelude::{AccountId, *},
     proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{
-        QueryBox, QueryOutputBatchBox, QueryRequest, QueryResponse, QueryWithFilter,
-        QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
+        QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryResponse, QueryWithParams,
+        SingularQueryBox, SingularQueryOutputBox,
         account::prelude::FindAccountById,
         asset::prelude::{FindAssetById, FindAssetDefinitionById},
         domain::prelude::FindDomainById,
@@ -8595,48 +8588,46 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
 
         macro_rules! request_for {
-            ($item:ty, $query:expr) => {{
-                let query_box = {
-                    #[cfg(not(feature = "fast_dsl"))]
-                    {
-                        let query = QueryWithFilter::<$item>::new_with_query(
-                            Box::new($query),
-                            CompoundPredicate::PASS,
-                            SelectorTuple::default(),
-                        );
-                        QueryBox::from(query)
-                    }
-                    #[cfg(feature = "fast_dsl")]
-                    {
-                        let query = QueryWithFilter::<$item>::new_with_query(
-                            (),
-                            CompoundPredicate::PASS,
-                            SelectorTuple::default(),
-                        );
-                        QueryBox::from(query)
-                    }
-                };
-                QueryRequest::Start({
-                    #[cfg(feature = "fast_dsl")]
-                    {
-                        QueryWithParams::new(&query_box, params)
-                    }
-                    #[cfg(not(feature = "fast_dsl"))]
-                    {
-                        QueryWithParams::new(query_box, params)
-                    }
+            ($item:ty, $query:expr, $kind:ident) => {{
+                QueryRequest::Start(QueryWithParams {
+                    query: (),
+                    query_payload: norito::codec::Encode::encode(&$query),
+                    item: QueryItemKind::$kind,
+                    predicate_bytes: norito::codec::Encode::encode(
+                        &CompoundPredicate::<$item>::PASS,
+                    ),
+                    selector_bytes: norito::codec::Encode::encode(
+                        &SelectorTuple::<$item>::default(),
+                    ),
+                    params,
                 })
             }};
         }
 
         Ok(match tag {
-            CoreQueryEntityTagV1::Account => request_for!(Account, FindAccounts),
-            CoreQueryEntityTagV1::Asset => request_for!(Asset, FindAssets),
-            CoreQueryEntityTagV1::AssetDefinition => {
-                request_for!(AssetDefinition, FindAssetsDefinitions)
+            CoreQueryEntityTagV1::Account => request_for!(
+                Account,
+                iroha_data_model::query::account::prelude::FindAccounts,
+                Account
+            ),
+            CoreQueryEntityTagV1::Asset => request_for!(
+                Asset,
+                iroha_data_model::query::asset::prelude::FindAssets,
+                Asset
+            ),
+            CoreQueryEntityTagV1::AssetDefinition => request_for!(
+                AssetDefinition,
+                iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+                AssetDefinition
+            ),
+            CoreQueryEntityTagV1::Domain => request_for!(
+                Domain,
+                iroha_data_model::query::domain::prelude::FindDomains,
+                Domain
+            ),
+            CoreQueryEntityTagV1::Nft => {
+                request_for!(Nft, iroha_data_model::query::nft::prelude::FindNfts, Nft)
             }
-            CoreQueryEntityTagV1::Domain => request_for!(Domain, FindDomains),
-            CoreQueryEntityTagV1::Nft => request_for!(Nft, FindNfts),
         })
     }
 
@@ -16678,8 +16669,6 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    #[cfg(not(feature = "fast_dsl"))]
-    use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
@@ -16690,7 +16679,8 @@ mod tests {
     use iroha_data_model::{
         prelude::*,
         query::{
-            QueryBox, QueryWithFilter, QueryWithParams,
+            QueryWithParams,
+            account::prelude::FindAccounts,
             dsl::prelude::{CompoundPredicate, SelectorTuple},
             parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         },
@@ -18178,6 +18168,35 @@ seiyaku DedicatedQueryContract {
     }
 
     #[test]
+    fn core_query_page_request_encodes_canonical_account_components() {
+        let QueryRequest::Start(query) =
+            CoreHost::core_query_page_request(CoreQueryEntityTagV1::Account, 3, 2)
+                .expect("build account page request")
+        else {
+            panic!("typed account page must use an iterable start request");
+        };
+
+        assert_eq!(query.item, QueryItemKind::Account);
+        assert_eq!(
+            query.query_payload,
+            norito::codec::Encode::encode(&FindAccounts)
+        );
+        assert_eq!(
+            query.predicate_bytes,
+            norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS)
+        );
+        assert_eq!(
+            query.selector_bytes,
+            norito::codec::Encode::encode(&SelectorTuple::<Account>::default())
+        );
+        assert_eq!(query.params.pagination.offset_value(), 3);
+        assert_eq!(
+            query.params.fetch_size.fetch_size.map(NonZeroU64::get),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn core_query_page_respects_user_executor_denial_for_every_entity() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -18614,35 +18633,13 @@ seiyaku DedicatedQueryContract {
             sorting: Sorting::by_metadata_key(sort_key),
             fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
         };
-        let query_box = {
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                let query = QueryWithFilter::<Account>::new_with_query(
-                    Box::new(FindAccounts),
-                    CompoundPredicate::PASS,
-                    SelectorTuple::default(),
-                );
-                QueryBox::from(query)
-            }
-            #[cfg(feature = "fast_dsl")]
-            {
-                let query = QueryWithFilter::<Account>::new_with_query(
-                    (),
-                    CompoundPredicate::PASS,
-                    SelectorTuple::default(),
-                );
-                QueryBox::from(query)
-            }
-        };
-        let request = QueryRequest::Start({
-            #[cfg(feature = "fast_dsl")]
-            {
-                QueryWithParams::new(&query_box, params)
-            }
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                QueryWithParams::new(query_box, params)
-            }
+        let request = QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(&FindAccounts),
+            item: QueryItemKind::Account,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::default()),
+            params,
         });
         let gas_ctx = QueryGasContext::from_request(&request);
         let request_bytes = norito::to_bytes(&request).expect("encode query request");
@@ -18706,35 +18703,13 @@ seiyaku DedicatedQueryContract {
             sorting: Sorting::by_metadata_key(sort_key),
             fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
         };
-        let query_box = {
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                let query = QueryWithFilter::<Account>::new_with_query(
-                    Box::new(FindAccounts),
-                    CompoundPredicate::PASS,
-                    SelectorTuple::default(),
-                );
-                QueryBox::from(query)
-            }
-            #[cfg(feature = "fast_dsl")]
-            {
-                let query = QueryWithFilter::<Account>::new_with_query(
-                    (),
-                    CompoundPredicate::PASS,
-                    SelectorTuple::default(),
-                );
-                QueryBox::from(query)
-            }
-        };
-        let request = QueryRequest::Start({
-            #[cfg(feature = "fast_dsl")]
-            {
-                QueryWithParams::new(&query_box, params)
-            }
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                QueryWithParams::new(query_box, params)
-            }
+        let request = QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(&FindAccounts),
+            item: QueryItemKind::Account,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::default()),
+            params,
         });
         let gas_ctx = QueryGasContext::from_request(&request);
         let request_bytes = norito::to_bytes(&request).expect("encode query request");

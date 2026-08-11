@@ -112,15 +112,6 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
                 .is_err(),
             "ephemeral execution accepted {case} as a global domain query"
         );
-        assert!(
-            <QueryBox<QueryOutputBatchBox> as ExecuteQueryBox>::execute(
-                erased_domain_query(payload),
-                &state_view,
-                &QueryParams::default(),
-            )
-            .is_err(),
-            "direct QueryBox execution accepted {case} as a global domain query"
-        );
     }
 
     let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
@@ -129,46 +120,41 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
             "rose".parse().expect("valid asset name"),
         ),
     });
-    let unit_query_cases: [(&str, fn(Vec<u8>) -> ValidQueryRequest); 3] = [
-        ("transaction history", transaction_request_with_payload),
-        ("signed blocks", block_request_with_payload),
-        ("roles", role_request_with_payload),
-    ];
-    for (item, make_request) in unit_query_cases {
-        assert!(
-            make_request(cross_variant.clone())
-                .execute(&query_handle, &state_view, &ALICE_ID)
-                .is_err(),
-            "stored execution treated FindAccountsWithAsset bytes as global {item}"
-        );
-        assert!(
-            make_request(cross_variant.clone())
-                .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
-                .is_err(),
-            "ephemeral execution treated FindAccountsWithAsset bytes as global {item}"
-        );
-    }
-
-    let unsupported_request = || {
-        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
-            QueryOutputBatchBox,
-        >::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            Vec::new(),
-        )))
-    };
     assert!(
-        unsupported_request()
+        transaction_request_with_payload(cross_variant.clone())
             .execute(&query_handle, &state_view, &ALICE_ID)
             .is_err(),
-        "the fast-DSL unknown-type carrier must not execute as a stored domain query"
+        "stored execution treated FindAccountsWithAsset bytes as global transaction history"
     );
     assert!(
-        unsupported_request()
+        transaction_request_with_payload(cross_variant.clone())
             .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
             .is_err(),
-        "the fast-DSL unknown-type carrier must not execute as an ephemeral domain query"
+        "ephemeral execution treated FindAccountsWithAsset bytes as global transaction history"
+    );
+    assert!(
+        block_request_with_payload(cross_variant.clone())
+            .execute(&query_handle, &state_view, &ALICE_ID)
+            .is_err(),
+        "stored execution treated FindAccountsWithAsset bytes as global signed blocks"
+    );
+    assert!(
+        block_request_with_payload(cross_variant.clone())
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .is_err(),
+        "ephemeral execution treated FindAccountsWithAsset bytes as global signed blocks"
+    );
+    assert!(
+        role_request_with_payload(cross_variant.clone())
+            .execute(&query_handle, &state_view, &ALICE_ID)
+            .is_err(),
+        "stored execution treated FindAccountsWithAsset bytes as global roles"
+    );
+    assert!(
+        role_request_with_payload(cross_variant)
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .is_err(),
+        "ephemeral execution treated FindAccountsWithAsset bytes as global roles"
     );
 
     Ok(())

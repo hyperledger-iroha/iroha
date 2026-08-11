@@ -49,7 +49,7 @@ All counts and static pass statements in this document describe the mutable
 development checkout. They are inventories and source-consistency observations,
 not immutable-candidate execution or release receipts.
 
-## 2026-08-09 mutable-development closure snapshot
+## 2026-08-11 mutable-development closure snapshot
 
 - The bound inventory contains exactly 849 production tests across 40 modules,
   including 431 source-sealed ownership/regression names, plus 524 G-UNIT
@@ -67,20 +67,22 @@ not immutable-candidate execution or release receipts.
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
 - Mutable source-budget checks report within their configured bounds. The
-  reviewed Rust include topology contains 33 parents and 208 direct entries;
+  reviewed Rust include topology contains 32 parents and 204 direct entries;
   its canonical payload SHA-256 is
-  `0aa6f7a8d02884a297ce55b0503e39eaeff430ca901b9658411c7d3b608d2cc4`.
+  `91b0135673b9e36ffe7965d16cc9213e6a9edc48cd9d3e1f56e02d9b36a173fc`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. Some reviewed sources remain untracked, and checked-in
-  JavaScript/OpenAPI generated artifacts are stale, so SDK and wire closure is
-  still Open.
+  the development tree. Every reviewed SDK closure input is tracked, both
+  mutable source-closure checks pass, and the browser JavaScript source and
+  distribution trees match. The five checked-in OpenAPI artifacts and
+  immutable-candidate execution evidence remain Open, so SDK and wire closure
+  is not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
-remains Open. Neither `status.md` nor `roadmap.md` is updated by this mutable-
-development reconciliation.
+remains Open. These source-consistency documentation updates do not promote the
+mutable development checkout or replace immutable-candidate evidence.
 
 ## Non-negotiable invariants
 
@@ -1231,10 +1233,11 @@ cases, first-merge crash-window repair, Native post-WSV retention, and
 authenticated geometry refresh. These 12 mapped source tests are not claimed
 as executed, so this row's evidence remains Open.
 
-The source-bound focused inventory also includes
-`startup_reconciles_lifecycle_before_lane_work_activation` and
-`terminal_sweep_source_binds_chain_route_and_empty_post_readback` in
-`crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs`,
+The source-bound focused inventory binds the runner startup order directly and
+includes `production_adapter_stays_carrier_silent_until_exact_queue_activation`
+in `crates/iroha_core/src/sumeragi/v2_lane_work.rs`, the positive and
+fail-closed deferred-carrier completion regressions in
+`crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01.rs`,
 `generation_takeover_runs_crash_recover_and_rehydrate_then_stutters` and
 `prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side` plus
 `empty_queue_reconciliation_returns_the_same_checked_receipt` in
@@ -1596,11 +1599,12 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies, but those closure files and 14 SDK
-candidates remain untracked. The two specialized static Python modules are
-canonically runner-bound but remain untracked, and the browser distribution is
-not yet freshly regenerated. The resolver
-therefore fails closed and no current suite-source digest is release-eligible.
+and Kotlin/Java Native model dependencies. Every declared candidate is tracked,
+the two specialized static Python modules are canonically runner-bound, and the
+browser distribution matches its source. Both mutable resolver checks pass.
+These are development-tree consistency observations only; stale OpenAPI
+manifests and missing immutable-candidate source-seal and execution evidence
+keep the suite digest and `G-SDK` release claim ineligible.
 
 **Differential release invariant and negative control.**
 `MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an
@@ -1746,9 +1750,10 @@ schemas, but the five checked-in OpenAPI artifacts are stale:
 `artifacts/openapi/torii.json`,
 `artifacts/openapi/versions/current/torii.json`, the corresponding root and
 current-version manifests, and `artifacts/openapi/versions.json` still require
-deterministic regeneration. The runtime
-consumer is implemented, while wire/OpenAPI generation, cross-SDK parity, and
-execution evidence remain Open.
+deterministic regeneration from a clean exact candidate. The dirty unsigned
+development checkout cannot furnish release provenance for that refresh. The
+runtime consumer is implemented, while wire/OpenAPI generation, cross-SDK
+parity, and execution evidence remain Open.
 
 **Closure condition.** Version every new persistence and wire layout. Reject
 unknown and legacy versions unless an explicitly authenticated migration
@@ -1938,10 +1943,11 @@ The grouped and diagnostics suite-source SHA-256 values are
 and
 `692afb544ed061201d5f31d48d3ff3738d2127aa61e7351d6454c11dca8e646f`.
 
-Those are development-source inventories, not SDK results. The JavaScript and
-OpenAPI generated artifacts require fresh deterministic regeneration. No
-complete immutable-candidate grouped or diagnostics harness execution, parity
-hash, or archived result is claimed, so `G-SDK` remains Open.
+Those are development-source inventories, not SDK results. The JavaScript
+source and distribution trees match in this mutable checkout. The five OpenAPI
+artifacts require fresh deterministic regeneration from a clean exact
+candidate. No complete immutable-candidate grouped or diagnostics harness
+execution, parity hash, or archived result is claimed, so `G-SDK` remains Open.
 
 ### G-FINAL — clean release validation
 

@@ -41,6 +41,9 @@ body_source_bytes = 34603008
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:172.28.0.10:1337#0D24"
+max_frame_bytes = 23068700
+max_frame_bytes_block_sync = 23068672
+max_frame_bytes_tx_gossip = 11534336
 
 [torii]
 address = "addr:0.0.0.0:8080#B922"
@@ -69,9 +72,15 @@ lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
+fee_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
 [nexus.staking]
 stake_asset_id = "xor#universal"
+stake_escrow_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+slash_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+
+[pipeline.gas]
+tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
 
 [gov]
@@ -88,4 +97,4 @@ submitters = []
 [genesis]
 public_key = "ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8"
 file = "genesis.signed.nrt"
-expected_hash = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+expected_hash = "hash:E8675D512C2BD7E3F99707CBA5A75DA80AC3DAF92BBDBBC3B199855CB20930BF#79B9"

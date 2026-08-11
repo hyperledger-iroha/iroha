@@ -551,9 +551,9 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/render_taira_validator_bundle.py"),
-        Path("scripts/verify_sumeragi_v2.sh"),
-        Path("defaults/kagami/iroha3-taira/config.toml"),
-        Path("configs/soranexus/taira/config.toml"),
+        Path("scripts/verify_sumeragi_v2.sh"), Path("xtask/src/kagami_profiles.rs"),
+        Path("defaults/kagami/iroha3-taira/config.toml"), Path("defaults/kagami/iroha3-taira/genesis.json"),
+        Path("configs/soranexus/taira/config.toml"), Path("configs/soranexus/taira/genesis.json"),
         Path("configs/soranexus/taira/README.md"),
     ):
         destination = tmp_path / relative
@@ -9498,7 +9498,7 @@ def test_reply_route_ownership_mutation_runner_fails_closed(
 
 
 def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
-    """Copy the exact 40-file effect-capacity corpus and production seam."""
+    """Copy the effect-capacity corpus and its persistent recovery seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -9508,22 +9508,18 @@ def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path,
     runner = repo_root / module.EFFECT_CAPACITY_MUTATION_RUNNER
     runner.parent.mkdir(parents=True)
     shutil.copy2(ROOT_DIR / module.EFFECT_CAPACITY_MUTATION_RUNNER, runner)
-    effects = repo_root / "crates/iroha_core/src/sumeragi/v2_effects.rs"
-    effects.parent.mkdir(parents=True)
-    shutil.copy2(
-        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        effects,
-    )
-    runtime = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    shutil.copy2(
-        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-        runtime,
-    )
-    adapter = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
-    shutil.copy2(
-        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2.rs",
-        adapter,
-    )
+    for relative in (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+    ):
+        target = repo_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, target)
+    shutil.copy2(module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla", formal_dir)
     return repo_root, formal_dir
 
 
@@ -11999,7 +11995,7 @@ def test_liveness_ownership_runner_rejects_shared_fixed_success_weakening(
             "same-source/context/height/control-kind predecessor identity",
         ),
         (
-            "try_recv_if_at_checked",
+            "try_recv_if_at_checked_classified",
             "!has_live_control_predecessor",
             "true",
             "live control predecessor blocks strict-newer dequeue bypass",
@@ -12037,7 +12033,7 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
         ),
         (
             "accept_driver_dispatch",
-            "retained.insert(ordinal, parent.clone());",
+            "retained.insert(ordinal, ownership);",
             "retained.remove(&ordinal);",
             "Busy deferral transfers rather than replaces the predecessor owner",
         ),
@@ -12049,8 +12045,8 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
         ),
         (
             "scheduler_arbitration_inputs",
-            "let fifo_ready = fifo_minimum.is_some();",
-            "let fifo_ready = false;",
+            "let mut fifo_ready = fifo_minimum.is_some();",
+            "let mut fifo_ready = false;",
             "passive lifecycle capabilities cannot suppress runnable FIFO classes",
         ),
     ),
@@ -12961,7 +12957,7 @@ def test_serve_scheduler_ordinal_ci_registration_fails_closed(
         tmp_path, module
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
-    invocation = f"bash {module.SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER}"
+    invocation = f"run_formal_script {module.SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER}"
     line = invocation + "\n"
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(line) == 1
@@ -12974,7 +12970,7 @@ def test_serve_scheduler_ordinal_ci_registration_fails_closed(
     else:
         source = source.replace(line, "", 1)
         successor = (
-            "bash scripts/formal/"
+            "run_formal_script scripts/formal/"
             "run_sumeragi_v2_indexed_service_activation_mutations.sh\n"
         )
         assert source.count(successor) == 1
@@ -13036,32 +13032,7 @@ def test_commit_import_provenance_source_seal_rejects_stale_artifact(
     tmp_path: Path,
     artifact_name: str,
 ) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
-        tmp_path, module
-    )
-    path = (
-        repo_root / artifact_name
-        if "/" in artifact_name
-        else formal_dir / artifact_name
-    )
-    path.write_text(
-        path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
-        encoding="utf-8",
-    )
-
-    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(
-        str(path) in error
-        and (
-            "must match exact reviewed SHA-256" in error
-            or "must match frozen SHA-256" in error
-        )
-        for error in errors
-    ), errors
+    _assert_commit_import_release_or_stale_artifact(tmp_path, artifact_name)
 
 
 @pytest.mark.parametrize(
@@ -13230,7 +13201,7 @@ def test_commit_import_provenance_source_seal_rejects_skipped_ci_invocation(
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
     invocation = (
-        "bash scripts/formal/"
+        "run_formal_script scripts/formal/"
         "run_sumeragi_v2_commit_import_provenance_mutations.sh\n"
     )
     source = ci_gate.read_text(encoding="utf-8")
@@ -13575,14 +13546,14 @@ def test_indexed_service_activation_runner_rejects_failure_class_weakening(
             "commit-import",
             "COMMIT_IMPORT_PROVENANCE_MUTATION_RUNNER",
             "_commit_import_provenance_mutation_source_fidelity_errors",
-            "bash scripts/formal/"
+            "run_formal_script scripts/formal/"
             "run_sumeragi_v2_restart_locked_fetch_order_mutation.sh",
         ),
         (
             "indexed-activation",
             "INDEXED_SERVICE_ACTIVATION_MUTATION_RUNNER",
             "_indexed_service_activation_mutation_source_fidelity_errors",
-            "bash scripts/formal/"
+            "run_formal_script scripts/formal/"
             "run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
         ),
     ),
@@ -13605,7 +13576,7 @@ def test_source_sealed_mutation_runner_ci_registration_fails_closed(
             tmp_path, module
         )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
-    invocation = f"bash {getattr(module, runner_attr)}"
+    invocation = f"run_formal_script {getattr(module, runner_attr)}"
     line = invocation + "\n"
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(line) == 1
@@ -13633,16 +13604,15 @@ def test_source_sealed_mutation_runner_ci_registration_fails_closed(
     else:
         assert any("formal release must invoke" in error for error in errors), errors
 
-
 @pytest.mark.parametrize("mutation", ("missing", "guarded"))
 @pytest.mark.parametrize(
     "invocation",
     (
-        "bash scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh",
-        "bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
-        "bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
-        "bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
-        "bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+        "run_formal_script scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh",
+        "run_formal_script scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+        "run_formal_script scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
+        "run_formal_script scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+        "run_formal_script scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
     ),
 )
 def test_formal_ci_new_mutation_runner_seal_rejects_weakening(
@@ -13658,7 +13628,7 @@ def test_formal_ci_new_mutation_runner_seal_rejects_weakening(
     source = ci_gate.read_text(encoding="utf-8")
     line = invocation + "\n"
     assert source.count(line) == 1
-    replacement = "" if mutation == "missing" else invocation + " || true\n"
+    replacement = {"missing": "", "guarded": invocation + " || true\n"}[mutation]
     ci_gate.write_text(source.replace(line, replacement, 1), encoding="utf-8")
 
     errors = module._formal_ci_new_mutation_runner_invocation_errors(repo_root)
@@ -13668,6 +13638,15 @@ def test_formal_ci_new_mutation_runner_seal_rejects_weakening(
         and "exactly once as an unguarded fail-closed command" in error
         for error in errors
     ), errors
+    if mutation == "guarded":
+        raw_bash = invocation.replace("run_formal_script ", "bash ", 1) + "\n"
+        ci_gate.write_text(source.replace(line, raw_bash, 1), encoding="utf-8")
+        raw_errors = module._formal_ci_new_mutation_runner_invocation_errors(repo_root)
+        assert any(
+            invocation in error
+            and "exactly once as an unguarded fail-closed command" in error
+            for error in raw_errors
+        ), raw_errors
 
 
 def test_adequate_leader_readiness_runner_registers_dormant_mutations() -> None:
@@ -13999,14 +13978,14 @@ def test_historical_discovery_occurrence_rank_seal_rejects_ci_weakening(
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
     invocation = (
-        "bash scripts/formal/"
+        "run_formal_script scripts/formal/"
         "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh\n"
     )
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(invocation) == 1
     source = source.replace(invocation, "", 1)
     if mutation == "after-aggregate-tlc":
-        aggregate = "bash scripts/formal/run_sumeragi_v2_tlc.sh ci\n"
+        aggregate = "run_formal_script scripts/formal/run_sumeragi_v2_tlc.sh ci\n"
         assert source.count(aggregate) == 1
         source = source.replace(aggregate, aggregate + invocation, 1)
     ci_gate.write_text(source, encoding="utf-8")
@@ -15643,24 +15622,24 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/mod.rs",
             "try_incoming_lane_relay_owned",
-            "requester != sender || !self.block.frozen_roster_contains(sender)",
+            "route.is_active() && route.semantic_target() == sender",
             "false",
-            "bind their semantic requester to the frozen roster before shared lane-queue admission",
+            "bind their semantic requester to an active authenticated reply route before shared lane-queue admission",
         ),
         (
             "crates/iroha_core/src/sumeragi/mod.rs",
             "try_incoming_lane_relay_owned",
             'iroha_logger::debug!(\n'
             "                    %sender,\n"
-            '                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"\n'
+            '                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"\n'
             "                );\n"
             "                return SumeragiIngressDisposition::Rejected(message);",
             'iroha_logger::debug!(\n'
             "                    %sender,\n"
-            '                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"\n'
+            '                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"\n'
             "                );\n"
             "                let _ = &message;",
-            "frozen semantic Request/Close admission must precede the shared lane queue",
+            "authenticated semantic Request/Close admission must precede the shared lane queue",
         ),
         (
             "crates/irohad/src/main.rs",
@@ -21103,25 +21082,27 @@ def test_async_candidate_producer_continuation_owner_rejects_target_only_narrowi
         == []
     )
 
-    target_path.write_text(
-        mutate_tla_operator(
-            source,
-            "AsyncCandidateProducerContinuationExactOwner",
-            "record.node \\in {target, leader}",
-            "record.node = target",
+    for old, new in (
+        ("record.node \\in {target, leader}", "record.node = target"),
+        (
+            "record.identity = AsyncCandidateServiceIdentity(record.candidate)",
+            "record.identity.leader = record.candidate.leader",
         ),
-        encoding="utf-8",
-    )
-    errors = module._async_candidate_producer_continuation_contract_errors(
-        tmp_path
-    )
-    assert any(
-        "AsyncCandidateProducerContinuationExactOwner" in error
-        and "target/leader role" in error
-        or "AsyncCandidateProducerContinuationExactOwner" in error
-        and "finite producer-continuation contract" in error
-        for error in errors
-    ), errors
+    ):
+        target_path.write_text(
+            mutate_tla_operator(
+                source, "AsyncCandidateProducerContinuationExactOwner", old, new
+            ),
+            encoding="utf-8",
+        )
+        errors = module._async_candidate_producer_continuation_contract_errors(
+            tmp_path
+        )
+        assert any(
+            "AsyncCandidateProducerContinuationExactOwner" in error
+            and "finite producer-continuation contract" in error
+            for error in errors
+        ), errors
 
 
 def test_async_candidate_producer_continuation_physical_cut_source_pair(
@@ -21588,13 +21569,13 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
 
     mutations = (
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "u128::from(source_physical_ordinal) >= physical_cut",
             "u128::from(source_physical_ordinal) < physical_cut",
             "post-cut replay reservation predicate declaration",
         ),
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "lifecycle_ordinal <= owner.lifecycle_ordinal()",
             "lifecycle_ordinal > owner.lifecycle_ordinal()",
             "post-cut replay reservation predicate declaration",
@@ -24870,8 +24851,8 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         ),
         (
             "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-            "record.schedulerOrdinal < targetOrdinal",
-            "record.schedulerOrdinal <= targetOrdinal",
+            "owned.schedulerOrdinal < targetOrdinal",
+            "owned.schedulerOrdinal <= targetOrdinal",
         ),
         (
             "AsyncCandidateProducerContinuationFrozenCandidateTokens",
@@ -24916,8 +24897,8 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         ),
         (
             "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
-            "\\/ (AsyncCandidateProducerContinuationPrefixDescentGoal",
-            "\\/ TRUE \\/ (AsyncCandidateProducerContinuationPrefixDescentGoal",
+            "identity \\in AsyncCandidateServiceIdentities,",
+            "identity,",
         ),
     )
     for symbol, old, new in proof_theorem_mutations:
@@ -25002,11 +24983,16 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "",
             "producer-continuation dependencies",
         ),
-        (
-            "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish",
-            "   AsyncFrozenServeSourceCannotResurrectAtGst,\n",
-            "",
-            "producer-continuation dependencies",
+        *(
+            (
+                "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish",
+                f"   {dependency},\n", "", "producer-continuation dependencies",
+            )
+            for dependency in (
+                "MatchingClaimedCertifiedResponseIsAuthorized",
+                "FirstDrainableIngressIndexIsDrainable",
+                "FirstDrainableIngressLaneIndexIsDrainable",
+            )
         ),
     )
     for symbol, old, new, expected_error in leader_wire_theorem_mutations:
@@ -25103,8 +25089,8 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         mutate_tla_operator(
             proof_source,
             "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty",
-            "AsyncVotersAt(initialContext)",
-            "ValidatorIds",
+            "identity \\in AsyncCandidateServiceIdentities,",
+            "identity,",
         ),
         encoding="utf-8",
     )
@@ -25118,28 +25104,21 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         for error in errors
     ), errors
 
-    declaration = (
-        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(\n"
-        "    specification, initialContext) =="
-    )
-    weakened_declaration = (
-        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(\n"
-        "    specification) =="
-    )
-    assert proof_source.count(declaration) == 1
-    proof_path.write_text(
-        proof_source.replace(declaration, weakened_declaration, 1),
-        encoding="utf-8",
-    )
-    errors = module._async_candidate_producer_continuation_contract_errors(
-        tmp_path
-    )
-    assert any(
-        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty"
-        in error
-        and "two-argument" in error
-        for error in errors
-    ), errors
+    closure_symbol = "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty"
+    for weakened in (
+        proof_source.replace(
+            f"{closure_symbol}(\n    specification, initialContext) ==",
+            f"{closure_symbol}(\n    specification) ==",
+            1,
+        ),
+        mutate_tla_operator(
+            proof_source, closure_symbol,
+            "identity \\in AsyncCandidateServiceIdentities,", "identity,",
+        ),
+    ):
+        proof_path.write_text(weakened, encoding="utf-8")
+        errors = module._async_candidate_producer_continuation_contract_errors(tmp_path)
+        assert any(closure_symbol in error for error in errors), errors
 
     weakened_theorem = proof_source.replace(
         "THEOREM AsyncCandidateProducerContinuationMaterializedIsOneStep ==",
@@ -25949,21 +25928,21 @@ def test_adequate_leader_producer_origin_contract_rejects_weakening(
         ),
         (
             "AdequateLeaderTargetProducerOriginExposureProperty",
-            "AdequateLeaderTargetConcreteProducerTransportOwner",
-            "AdequateLeaderTargetOccurrenceRankServiceProperty",
-            "may not assume occurrence service",
+            "AdequateLeaderTargetOccurrenceRankCarrier:",
+            "AdequateLeaderTargetOccurrenceRankCarrier,",
+            "exact producer-origin contract",
         ),
         (
             "AdequateLeaderTargetProducerOriginExposureOrGoalProperty",
-            "AdequateLeaderTargetProducerTransportOccurrenceGoal",
-            "AdequateLeaderTargetCountIncreasingReplenishmentAction",
-            "may not assume occurrence service",
+            "AdequateLeaderTargetOccurrenceRankCarrier:",
+            "AdequateLeaderTargetOccurrenceRankCarrier,",
+            "exact producer-origin contract",
         ),
         (
             "AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty",
-            "AdequateLeaderTargetProducerTransportOccurrenceGoal",
-            "AdequateLeaderTargetCountIncreasingReplenishmentAction",
-            "may not assume occurrence service",
+            "AdequateLeaderTargetOccurrenceRankCarrier:",
+            "AdequateLeaderTargetOccurrenceRankCarrier,",
+            "exact producer-origin contract",
         ),
     )
     for operator, old, new, expected in mutations:
@@ -37543,13 +37522,13 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "deferred eligibility must globally remove post-cut occurrences before choosing the logical minimum",
         ),
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "u128::from(source_physical_ordinal) >= physical_cut",
             "u128::from(source_physical_ordinal) < physical_cut",
             "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
         ),
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "lifecycle_ordinal <= owner.lifecycle_ordinal()",
             "lifecycle_ordinal > owner.lifecycle_ordinal()",
             "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
@@ -39050,14 +39029,14 @@ del _proof_ledger_test_component
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             ".project_retained_reply_routes(prune_receipt)",
             ".project_retained_reply_routes(prune_receipt.clone())",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             ".merge_with_receipt(&candidate_routes)",
             ".merge(&candidate_routes)",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -39129,7 +39108,7 @@ del _proof_ledger_test_component
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "let retained_routes = self.reply_routes.clone().ok_or_else",
             "let retained_routes = candidate.reply_routes.clone().ok_or_else",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -39283,14 +39262,14 @@ del _proof_ledger_test_component
             "pub(crate) fn covered_source_hash(",
             "self.finality_artifact_hash != HashOf::new(finality_artifact)",
             "false && self.finality_artifact_hash != HashOf::new(finality_artifact)",
-            "lane rollover authority must bind the exact finality artifact and height",
+            "lane rollover authority must bind the exact finality artifact and consult its proposal-keyed durable source before height supersession",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn covered_source_hash(",
             "self.durable_sessions.get(&proposal_hash)",
             "self.durable_sessions.values().next()",
-            "winning lane output must use its proposal-keyed durable session witness",
+            "lane rollover authority must bind the exact finality artifact and consult its proposal-keyed durable source before height supersession",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -39652,9 +39631,9 @@ del _proof_ledger_test_component
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(",
-            ".checked_mul(2)",
-            ".checked_mul(1)",
-            "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
+            ".checked_add(MAX_CERTIFIED_MERGE_SERVER_STREAMS)",
+            ".checked_add(0)",
+            "lifecycle byte geometry must reserve the distinct requester and bounded responder stream records",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -40411,14 +40390,14 @@ del _proof_ledger_test_component
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "after_candidate_prune(merge_attempt);",
             "let _ = merge_attempt;",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "if candidate_routes.len() >= live_before_merge {",
             "if false && candidate_routes.len() >= live_before_merge {",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_config/src/parameters/defaults.rs",
@@ -40553,7 +40532,7 @@ del _proof_ledger_test_component
             "let _ = reply_routes.clone().merge_observed_with_receipt(&reply_routes);\n"
             "        self.queue\n"
             "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "the exact Serve retry must be the sole worker-side observed-history reconciliation seam",
+            "the exact Serve retry and reply-target plan must be the worker-side observed-history reconciliation seams",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -40725,9 +40704,9 @@ del _proof_ledger_test_component
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)",
-            "retained.merge_downstream(candidate)",
-            "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
+            "if !self.rollover_claim.accepts_superseded_reply_delivery() {",
+            "if false {",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -40782,6 +40761,7 @@ del _proof_ledger_test_component
 )
 def test_exact_output_production_source_mutations_fail_closed(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     relative_path: str,
     region_marker: str,
     old: str,
@@ -40814,8 +40794,16 @@ def test_exact_output_production_source_mutations_fail_closed(
         encoding="utf-8",
     )
 
+    expected_errors = [error_fragment]
+    if region_marker == "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(":
+        expected_errors.extend(
+            _apply_exact_output_non_runtime_extended_mutations(
+                tmp_path, module, monkeypatch
+            )
+        )
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
-    assert any(error_fragment in error for error in errors), errors
+    for expected_error in expected_errors:
+        assert any(expected_error in error for error in errors), errors
 
 def test_async_source_fidelity_pins_validator_progress_capacity(
     tmp_path: Path,
@@ -42725,10 +42713,8 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "worker",
             "method",
             "service_exact_serve_runtime_prefix",
-            "                    older_predecessor_remains,\n"
-            "                )?;\n",
-            "                    false,\n"
-            "                )?;\n",
+            "                .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;\n",
+            "                .finish_certified_serve_runtime_episode_turn(barrier, false)?;\n",
             "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
         ),
         (

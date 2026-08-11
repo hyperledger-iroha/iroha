@@ -54,15 +54,12 @@ ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_expo
 transparent_api = ["iroha_data_model_derive/transparent_api"]
 # Enable fault injection to simulate malicious data tampering during testing.
 fault_injection = []
-fast_dsl = []
 trybuild-tests = ["dep:trybuild"]
 bench = []
 ids_projection = []
 # Authenticate governed registries against complete Parliament proposal preimages.
 governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
-
-## The lightweight query DSL is now the default and unconditional.
 
 [dependencies]
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }

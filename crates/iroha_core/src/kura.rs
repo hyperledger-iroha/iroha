@@ -35063,9 +35063,8 @@ impl Kura {
                 "Native AMX application block lacks durable v2 finality",
             ));
         };
-        let native_manifest = self.native_amx_manifest_for_committed_block(
-            block, merge_association, &finality,
-        )?;
+        let native_manifest =
+            self.native_amx_manifest_for_committed_block(block, merge_association, &finality)?;
         if finality.block_hash != application_block_hash
             || finality
                 .commit_qc
@@ -35206,7 +35205,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false, NativeAmxMergeAssociation::Live(staged_merge_entry),
+                block,
+                false,
+                NativeAmxMergeAssociation::Live(staged_merge_entry),
             )?;
         self.persist_native_amx_participant_application_evidence_under_publication_guard(
             block,
@@ -35303,7 +35304,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::Startup(planned_merge_entry),
+                block,
+                true,
+                NativeAmxMergeAssociation::Startup(planned_merge_entry),
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -35329,7 +35332,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::CommittedOnly,
+                block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let repaired = plan.artifacts.len();
         let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
@@ -35354,7 +35359,9 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true, NativeAmxMergeAssociation::CommittedOnly,
+                block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -43846,7 +43853,6 @@ impl BlockStore {
         }
 
         self.recover_canonical_storage_stages()?;
-
         self.invalidate_data_mmap();
         debug!(
             start_height,
@@ -43878,12 +43884,10 @@ impl BlockStore {
             start_height,
             start_location_in_data_file, "append_block_batch computed start location"
         );
-
         let mut frames = Vec::with_capacity(blocks.len());
         let mut lengths = Vec::with_capacity(blocks.len());
         let mut offsets = Vec::with_capacity(blocks.len());
         let mut hashes = Vec::with_capacity(blocks.len());
-
         for (idx, block) in blocks.iter().enumerate() {
             debug!(
                 start_height,
@@ -43904,7 +43908,6 @@ impl BlockStore {
                 "append_block_batch encoded block"
             );
         }
-
         debug!(
             start_height,
             frames = frames.len(),
@@ -43955,7 +43958,6 @@ impl BlockStore {
             &lengths,
             &hashes,
         )?;
-
         let journal_result = (|| -> Result<()> {
             let data_file = self.ensure_data_file()?;
             data_file.try_io(|file| {
@@ -43985,7 +43987,6 @@ impl BlockStore {
                 file.seek(SeekFrom::Start(end_pos))?;
                 file.set_len(end_pos)
             })?;
-
             let hashes_file = self.ensure_hashes_file()?;
             let start_location = start_height * SIZE_OF_BLOCK_HASH;
             let new_hashes_len = start_location + SIZE_OF_BLOCK_HASH * u64::try_from(blocks.len())?;
@@ -44002,7 +44003,6 @@ impl BlockStore {
                 start_height,
                 new_hashes_len, "append_block_batch wrote hashes"
             );
-
             // Write the index after data + hashes so the commit marker can safely advance.
             let index_file = self.ensure_index_file()?;
             let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;

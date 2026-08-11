@@ -3002,7 +3002,7 @@ THEOREM OldestDueSourcePacketFacts ==
        IN /\ packet \in DueSourcePackets(recipient, source)
           /\ AsyncPacketTyped(packet)
           /\ packet.item.envelope.recipient = recipient
-          /\ packet.item.source = source
+          /\ packet.authenticatedSource = source
 PROOF
   <1>1. ASSUME NEW recipient \in ValidatorIds,
                 NEW source \in AsyncIngressSources,
@@ -3012,29 +3012,29 @@ PROOF
                IN /\ packet \in DueSourcePackets(recipient, source)
                   /\ AsyncPacketTyped(packet)
                   /\ packet.item.envelope.recipient = recipient
-                  /\ packet.item.source = source
+                  /\ packet.authenticatedSource = source
     <2>1. DueSourcePackets(recipient, source) \subseteq asyncTransport
       BY Isa DEF DueSourcePackets
     <2>2. IsFiniteSet(asyncTransport)
       BY <1>1 DEF AsyncPacketContentTypeInvariant
     <2>3. IsFiniteSet(DueSourcePackets(recipient, source))
       BY <2>1, <2>2, FS_Subset
-    <2>4. \A packet \in DueSourcePackets(recipient, source):
-             /\ AsyncPacketTyped(packet)
-             /\ packet.sentAt \in Nat
-             /\ packet.item.envelope.recipient = recipient
-             /\ packet.item.source = source
-      BY <1>1, <2>1, SMT
-         DEF AsyncPacketContentTypeInvariant, AsyncPacketTyped,
-             DueSourcePackets
+    <2>4. \A packet \in DueSourcePackets(recipient, source): AsyncPacketTyped(packet)
+      BY <1>1, <2>1, Isa DEF AsyncPacketContentTypeInvariant
+    <2>4a. \A packet \in DueSourcePackets(recipient, source): packet.sentAt \in Nat
+      BY <2>4, Isa DEF AsyncPacketTyped
+    <2>4b. \A packet \in DueSourcePackets(recipient, source):
+              /\ packet.item.envelope.recipient = recipient
+              /\ packet.authenticatedSource = source
+      BY Isa DEF DueSourcePackets
     <2>5. \E packet \in DueSourcePackets(recipient, source):
              \A other \in DueSourcePackets(recipient, source):
                packet.sentAt <= other.sentAt
-      BY <1>1, <2>3, <2>4, FinitePacketSetHasOldestSentAt
+      BY <1>1, <2>3, <2>4a, FinitePacketSetHasOldestSentAt
     <2>6. OldestDueSourcePacket(recipient, source)
              \in DueSourcePackets(recipient, source)
       BY <2>5, Zenon DEF OldestDueSourcePacket
-    <2> QED BY <2>4, <2>6
+    <2> QED BY <2>4, <2>4b, <2>6
   <1> QED BY <1>1
 
 THEOREM TypedIngressAppendPreservesSequence ==
@@ -3099,25 +3099,25 @@ THEOREM IngressOwnerBindingsAppendPreserved ==
     /\ sequence \in Seq(Range(sequence))
     /\ \A index \in 1..Len(sequence):
          /\ sequence[index].envelope.recipient = recipient
-         /\ IngressResourceSource(sequence[index]) = source
+         /\ AsyncIngressItemSourceBinding(sequence[index], source)
     /\ item.envelope.recipient = recipient
-    /\ IngressResourceSource(item) = source
+    /\ AsyncIngressItemSourceBinding(item, source)
     => \A index \in 1..Len(Append(sequence, item)):
          /\ Append(sequence, item)[index].envelope.recipient = recipient
-         /\ IngressResourceSource(Append(sequence, item)[index]) = source
+         /\ AsyncIngressItemSourceBinding(Append(sequence, item)[index], source)
 PROOF
   <1>1. ASSUME NEW sequence, NEW item, NEW recipient, NEW source,
                 sequence \in Seq(Range(sequence)),
                 \A index \in 1..Len(sequence):
                   /\ sequence[index].envelope.recipient = recipient
-                  /\ IngressResourceSource(sequence[index]) = source,
+                  /\ AsyncIngressItemSourceBinding(sequence[index], source),
                 item.envelope.recipient = recipient,
-                IngressResourceSource(item) = source
+                AsyncIngressItemSourceBinding(item, source)
          PROVE \A index \in 1..Len(Append(sequence, item)):
                  /\ Append(sequence, item)[index].envelope.recipient =
                       recipient
-                 /\ IngressResourceSource(
-                      Append(sequence, item)[index]) = source
+                 /\ AsyncIngressItemSourceBinding(
+                      Append(sequence, item)[index], source)
     <2>1. /\ Len(Append(sequence, item)) = Len(sequence) + 1
            /\ \A index \in 1..Len(sequence):
                 Append(sequence, item)[index] = sequence[index]
@@ -3126,16 +3126,16 @@ PROOF
     <2>2. ASSUME NEW index \in 1..Len(Append(sequence, item))
            PROVE /\ Append(sequence, item)[index].envelope.recipient =
                       recipient
-                 /\ IngressResourceSource(
-                      Append(sequence, item)[index]) = source
-      <3>1. Len(sequence) \in Nat
-        BY <1>1, LenProperties
+                 /\ AsyncIngressItemSourceBinding(
+                      Append(sequence, item)[index], source)
+      <3>1. Len(sequence) \in Nat BY <1>1, LenProperties
       <3>2. CASE index \in 1..Len(sequence)
         BY <1>1, <2>1, <3>2
       <3>3. CASE index \notin 1..Len(sequence)
-        <4>1. index = Len(sequence) + 1
-          BY <2>1, <2>2, <3>1, <3>3, SMT
-        <4> QED BY <1>1, <2>1, <4>1
+        <4>1. 1..Len(Append(sequence, item)) = 1..Len(sequence) \union {Len(sequence) + 1}
+          BY ONLY <2>1, <3>1, Isa
+        <4>2. index = Len(sequence) + 1 BY ONLY <3>3, <4>1, Zenon
+        <4> QED BY <1>1, <2>1, <4>2
       <3> QED BY <3>2, <3>3
     <2> QED BY <2>2
   <1> QED BY <1>1
@@ -3424,7 +3424,7 @@ PROOF
          PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
     <2> DEFINE Item ==
           OldestDueSourcePacket(recipient, source).item
-    <2> DEFINE ResourceSource == IngressResourceSource(Item)
+    <2> DEFINE ResourceSource == IngressResourceSourceVia(Item, source)
     <2>1. /\ AsyncIngressTypeInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ DueSourcePackets(recipient, source) # {}
@@ -3435,30 +3435,30 @@ PROOF
              AdmitHiddenPacket
     <2>2. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = recipient
-           /\ ResourceSource \in AsyncIngressSources
-      BY <2>1, OldestDueSourcePacketFacts, SMT
-         DEF AsyncPacketContentTypeInvariant, AsyncPacketTyped,
-             Item, ResourceSource, IngressResourceSource,
-             AsyncItemTyped, AsyncIngressSources
+      BY <1>1, <2>1, OldestDueSourcePacketFacts, Zenon DEF AsyncPacketTyped, Item
+    <2>2a. Item.source \in AsyncIngressSources BY <2>2, Zenon DEF AsyncItemTyped
+    <2>2b. ResourceSource \in AsyncIngressSources
+      BY <1>1, <2>2a, Isa
+         DEF ResourceSource, IngressResourceSourceVia, IngressResourceSource, AsyncIngressSources
     <2>3. asyncIngressLanes' =
              [asyncIngressLanes EXCEPT
                 ![recipient][ResourceSource] =
                   Append(@, Item)]
       BY <1>1 DEF AdmitHiddenPacket, Item, ResourceSource
     <2>4. CASE Item.kind = "CertifiedResponse"
-      <3>1. /\ ResourceSource = AsyncUntrustedSource
-             /\ asyncCertifiedResponseClaim' =
-                  asyncCertifiedResponseClaim
-                    \cup {AsyncCertifiedResponseCanonicalWireIdentity(Item)}
-        BY <1>1, <2>4
-           DEF AdmitHiddenPacket, Item, ResourceSource,
-               IngressResourceSource
-      <3> QED BY <2>1, <2>2, <2>3, <2>4, <3>1,
+      <3>1. /\ IngressResourceSource(Item) = AsyncUntrustedSource
+             /\ asyncIngressLanes' = [asyncIngressLanes EXCEPT
+                  ![recipient][AsyncUntrustedSource] = Append(@, Item)]
+        BY <1>1, <2>1, <2>4, AdmitCertifiedResponseNormalizesPhysicalResourceSource DEF Item
+      <3>2. asyncCertifiedResponseClaim' = asyncCertifiedResponseClaim
+               \cup {AsyncCertifiedResponseCanonicalWireIdentity(Item)}
+        BY <1>1, <2>4 DEF AdmitHiddenPacket, Item
+      <3> QED BY <1>1, <2>1, <2>2, <2>4, <3>1, <3>2,
            AppendCertifiedResponseEstablishesClaimIngressOwnership
     <2>5. CASE Item.kind # "CertifiedResponse"
       <3>1. UNCHANGED asyncCertifiedResponseClaim
         BY <1>1, <2>5 DEF AdmitHiddenPacket, Item
-      <3> QED BY <1>1, <2>1, <2>2, <2>3, <3>1,
+      <3> QED BY <1>1, <2>1, <2>2, <2>2b, <2>3, <3>1,
            AppendIngressLanePreservesCertifiedResponseClaimIngressOwnership
     <2> QED BY <2>4, <2>5
   <1> QED BY <1>1
@@ -3503,7 +3503,7 @@ PROOF
          PROVE AsyncIngressContentTypeInvariant'
     <2> DEFINE Item ==
            OldestDueSourcePacket(recipient, source).item
-    <2> DEFINE ResourceSource == IngressResourceSource(Item)
+    <2> DEFINE ResourceSource == IngressResourceSourceVia(Item, source)
     <2>1. /\ AsyncPacketContentTypeInvariant
            /\ AsyncIngressTopologyTypeInvariant
            /\ AsyncIngressContentTypeInvariant
@@ -3519,9 +3519,10 @@ PROOF
          DEF AsyncPacketTyped, Item
     <2>2a. /\ Item.envelope.recipient = recipient
             /\ ResourceSource \in AsyncIngressSources
+            /\ AsyncIngressItemSourceBinding(Item, ResourceSource)
       BY <2>1, <2>2, OldestDueSourcePacketFacts, SMT
-         DEF Item, ResourceSource, IngressResourceSource,
-             AsyncItemTyped, AsyncIngressSources
+         DEF Item, ResourceSource, IngressResourceSourceVia, IngressResourceSource,
+             AsyncIngressItemSourceBinding, AsyncItemTyped, AsyncPacketTyped, AsyncIngressSources
     <2>3. ASSUME NEW otherRecipient \in ValidatorIds
            PROVE \A otherSource \in AsyncIngressSources:
                    /\ asyncIngressLanes'[otherRecipient][otherSource]
@@ -3537,9 +3538,9 @@ PROOF
                                [index])
                         /\ asyncIngressLanes'[otherRecipient][otherSource]
                              [index].envelope.recipient = otherRecipient
-                        /\ IngressResourceSource(
+                        /\ AsyncIngressItemSourceBinding(
                              asyncIngressLanes'[otherRecipient][otherSource]
-                               [index]) = otherSource
+                               [index], otherSource)
       <3>1. ASSUME NEW otherSource \in AsyncIngressSources
              PROVE /\ asyncIngressLanes'[otherRecipient][otherSource]
                           \in Seq(Range(
@@ -3555,9 +3556,9 @@ PROOF
                                  [index])
                           /\ asyncIngressLanes'[otherRecipient][otherSource]
                                [index].envelope.recipient = otherRecipient
-                          /\ IngressResourceSource(
+                          /\ AsyncIngressItemSourceBinding(
                                asyncIngressLanes'[otherRecipient][otherSource]
-                                 [index]) = otherSource
+                                 [index], otherSource)
         <4>1. CASE otherRecipient = recipient
                      /\ otherSource = ResourceSource
           <5>1. asyncIngressLanes'[otherRecipient][otherSource] =
@@ -3577,15 +3578,15 @@ PROOF
                            IngressLane(otherRecipient, otherSource)[index])
                       /\ IngressLane(otherRecipient, otherSource)
                            [index].envelope.recipient = otherRecipient
-                      /\ IngressResourceSource(
-                           IngressLane(otherRecipient, otherSource)[index])
-                           = otherSource
+                      /\ AsyncIngressItemSourceBinding(
+                           IngressLane(otherRecipient, otherSource)[index],
+                           otherSource)
             BY <2>1, <3>1
                DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
           <5>3. /\ AsyncItemTyped(Item)
                  /\ Item.envelope.recipient = otherRecipient
-                 /\ IngressResourceSource(Item) = otherSource
-            BY <2>2, <2>2a, <4>1 DEF ResourceSource
+                 /\ AsyncIngressItemSourceBinding(Item, otherSource)
+            BY <2>2, <2>2a, <4>1
           <5>4. /\ Append(IngressLane(otherRecipient, otherSource),
                               Item)
                            \in Seq(Range(
@@ -3605,9 +3606,9 @@ PROOF
                              Item)[index])
                       /\ Append(IngressLane(otherRecipient, otherSource),
                            Item)[index].envelope.recipient = otherRecipient
-                      /\ IngressResourceSource(
+                      /\ AsyncIngressItemSourceBinding(
                            Append(IngressLane(otherRecipient, otherSource),
-                             Item)[index]) = otherSource
+                             Item)[index], otherSource)
             BY <5>2, <5>3, TypedIngressAppendPreservesSequence,
                IngressOwnerBindingsAppendPreserved
           <5> QED BY <5>1, <5>4 DEF IngressLaneDepth
@@ -3927,7 +3928,7 @@ PROOF
          PROVE AsyncIngressTopologyTypeInvariant'
     <2> DEFINE Item ==
            OldestDueSourcePacket(recipient, source).item
-    <2> DEFINE ResourceSource == IngressResourceSource(Item)
+    <2> DEFINE ResourceSource == IngressResourceSourceVia(Item, source)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
            /\ AsyncIngressTopologyTypeInvariant
@@ -3942,7 +3943,7 @@ PROOF
       BY <1>1, <2>1, OldestDueSourcePacketFacts, SMT
          DEF AdmitHiddenPacket, AsyncPacketContentTypeInvariant,
              AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
-             Item, ResourceSource, IngressResourceSource,
+             Item, ResourceSource, IngressResourceSourceVia,
              AsyncItemTyped, AsyncIngressSources
     <2>2. /\ DOMAIN asyncIngressLanes' = ValidatorIds
            /\ \A otherRecipient \in ValidatorIds:
@@ -4283,8 +4284,8 @@ PROOF
          PROVE AsyncIngressCapacityTypeInvariant'
     <2> DEFINE Item ==
            OldestDueSourcePacket(recipient, source).item
-    <2> DEFINE ResourceSource == IngressResourceSource(Item)
-    <2> DEFINE NextLanes == IngressLanesAfterAdmission(Item)
+    <2> DEFINE ResourceSource == IngressResourceSourceVia(Item, source)
+    <2> DEFINE NextLanes == IngressLanesAfterAdmissionVia(Item, source)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
            /\ AsyncIngressTopologyTypeInvariant
@@ -4300,26 +4301,25 @@ PROOF
              AsyncIngressTypeInvariant, AdmitHiddenPacket
     <2>2. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = recipient
-           /\ Item.source = source
            /\ ResourceSource \in AsyncIngressSources
       BY <2>1, OldestDueSourcePacketFacts, SMT
-         DEF Item, ResourceSource, IngressResourceSource,
-             AsyncPacketContentTypeInvariant, AsyncItemTyped,
-             AsyncIngressSources
+         DEF Item, ResourceSource, IngressResourceSourceVia,
+             AsyncPacketContentTypeInvariant, AsyncPacketTyped,
+             AsyncItemTyped, AsyncIngressSources
     <2>3. /\ NextLanes =
                   [asyncIngressLanes EXCEPT
                      ![recipient][ResourceSource] = Append(@, Item)]
            /\ asyncIngressLanes' = NextLanes
       BY <1>1, <2>2
          DEF AdmitHiddenPacket, NextLanes,
-             IngressLanesAfterAdmission, Item, ResourceSource
+             IngressLanesAfterAdmissionVia, Item, ResourceSource
     <2>4. IngressDepth(recipient) <
              AsyncIngressCapacity -
                IngressProtectedSlotCountFor(NextLanes, recipient)
       BY <1>1, <2>2, <2>3
-         DEF AdmitHiddenPacket, CanAdmitIngressItem,
-             IngressUsableCapacityAfterAdmission,
-             IngressProtectedSlotCountAfterAdmission,
+         DEF AdmitHiddenPacket, CanAdmitIngressItemVia,
+             IngressUsableCapacityAfterAdmissionVia,
+             IngressProtectedSlotCountAfterAdmissionVia,
              NextLanes, Item
     <2>5. /\ IsFiniteSet(AsyncIngressSources)
            /\ AsyncIngressCapacity \in Nat \ {0}

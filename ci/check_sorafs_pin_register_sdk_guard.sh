@@ -5,6 +5,7 @@ ROOT_DIR="${SORAFS_PIN_REGISTER_SDK_GUARD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0
 MODE="${1:-}"
 
 python3 - "${ROOT_DIR}" "${MODE}" <<'PY'
+import json
 import os
 import re
 import stat
@@ -53,7 +54,10 @@ required_paths = (
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+    "artifacts/openapi/torii.json",
+    "artifacts/openapi/versions/current/torii.json",
     "crates/iroha/src/client.rs",
+    "crates/iroha_torii/assets/openapi/torii.json",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs",
     "crates/iroha_torii/src/routing.rs",
@@ -598,16 +602,30 @@ def check_rust_wire_contract():
     ):
         require(needle in route_tests, f"Torii route tests missing {label}")
 
-    openapi = read("crates/iroha_torii/src/openapi.rs")
+    openapi_source = read("crates/iroha_torii/src/openapi.rs")
+    openapi = read("crates/iroha_torii/assets/openapi/torii.json")
+    canonical_openapi = read("artifacts/openapi/torii.json")
+    current_openapi = read("artifacts/openapi/versions/current/torii.json")
+    require(
+        canonical_openapi == current_openapi == openapi,
+        "Torii latest/current/package OpenAPI authorities must be byte-identical",
+    )
     for needle, label in (
         ("#/components/schemas/VersionedSignedTransactionJson", "signed request schema"),
         ("#/components/schemas/SorafsPinRegisterResponseV1", "admission response schema"),
-        ('"enum": ["submitted"]', "submitted-only status"),
         ("Submitted never means committed or finalized", "admission semantics"),
     ):
         require(needle in openapi, f"Torii pin-register OpenAPI missing {label}")
+    openapi_document = json.loads(openapi)
+    status_schema = openapi_document["components"]["schemas"][
+        "SorafsPinRegisterResponseV1"
+    ]["properties"]["status"]
     require(
-        'include!("openapi/tests/sorafs_contracts.rs");' in openapi,
+        status_schema.get("enum") == ["submitted"],
+        "Torii pin-register OpenAPI missing submitted-only status",
+    )
+    require(
+        'include!("openapi/tests/sorafs_contracts.rs");' in openapi_source,
         "Torii pin-register OpenAPI missing its identity-preserving contract-test include",
     )
     openapi_contract_tests = read(
@@ -619,7 +637,7 @@ def check_rust_wire_contract():
         "Torii pin-register OpenAPI missing OpenAPI guard",
     )
     require(
-        '"SorafsPinRegisterRequestV1".to_owned()' not in openapi,
+        '"SorafsPinRegisterRequestV1"' not in openapi,
         "OpenAPI must not retain the secret-bearing request schema",
     )
 

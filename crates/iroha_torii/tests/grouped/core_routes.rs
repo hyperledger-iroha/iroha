@@ -2,8 +2,6 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-#[path = "../account_address_vectors.rs"]
-mod account_address_vectors;
 #[path = "../account_query_subrouter_smoke.rs"]
 mod account_query_subrouter_smoke;
 #[path = "../accounts_endpoints.rs"]

@@ -171,7 +171,7 @@ use iroha_data_model::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
-        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+        signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
         Trigger, TriggerId,
@@ -206,8 +206,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core, DecodeFromSlice},
-    decode_from_bytes,
+    core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
 use rand_core_06::OsRng;

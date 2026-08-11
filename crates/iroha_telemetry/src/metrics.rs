@@ -8506,6 +8506,102 @@ pub struct Metrics {
     registry: Registry,
 }
 
+const METRIC_CATALOG_V1: &str = include_str!("metrics/catalog_v1.tsv");
+const METRIC_CATALOG_V1_HEADER: &str = "# iroha-telemetry-metric-catalog-v1";
+const METRIC_CATALOG_V1_ROWS: usize = 868;
+
+struct MetricSpecCursor {
+    lines: std::str::Lines<'static>,
+    row: usize,
+}
+
+impl MetricSpecCursor {
+    fn v1() -> Self {
+        let mut lines = METRIC_CATALOG_V1.lines();
+        assert_eq!(
+            lines.next(),
+            Some(METRIC_CATALOG_V1_HEADER),
+            "unexpected metric catalog header"
+        );
+        Self { lines, row: 0 }
+    }
+
+    fn spec(&mut self, expected_key: &str) -> (&'static str, &'static str) {
+        let row = self.row + 1;
+        let line = self
+            .lines
+            .next()
+            .unwrap_or_else(|| panic!("metric catalog ended before `{expected_key}` at row {row}"));
+        let mut fields = line.split('\t');
+        let key = fields.next().expect("metric catalog row has a key");
+        let name = fields.next().expect("metric catalog row has a name");
+        let help = fields.next().expect("metric catalog row has help text");
+        assert!(
+            fields.next().is_none(),
+            "metric catalog row {row} has extra fields"
+        );
+        assert_eq!(
+            key, expected_key,
+            "metric catalog row {row} is out of construction order"
+        );
+        self.row = row;
+        (name, help)
+    }
+
+    fn opts(&mut self, expected_key: &str) -> Opts {
+        let (name, help) = self.spec(expected_key);
+        Opts::new(name, help)
+    }
+
+    fn histogram_opts(&mut self, expected_key: &str) -> HistogramOpts {
+        let (name, help) = self.spec(expected_key);
+        HistogramOpts::new(name, help)
+    }
+
+    fn finish(mut self) {
+        assert_eq!(
+            self.row, METRIC_CATALOG_V1_ROWS,
+            "metric catalog construction count changed"
+        );
+        assert!(
+            self.lines.next().is_none(),
+            "metric catalog has unconsumed rows after row {}",
+            self.row
+        );
+    }
+}
+
+#[cfg(test)]
+mod metric_catalog_tests {
+    use std::collections::BTreeSet;
+
+    use super::{METRIC_CATALOG_V1, METRIC_CATALOG_V1_HEADER, METRIC_CATALOG_V1_ROWS, Metrics};
+
+    #[test]
+    fn v1_catalog_is_complete_and_unique() {
+        let mut lines = METRIC_CATALOG_V1.lines();
+        assert_eq!(lines.next(), Some(METRIC_CATALOG_V1_HEADER));
+        let mut keys = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        for (index, line) in lines.enumerate() {
+            let row = index + 1;
+            let mut fields = line.split('\t');
+            let key = fields.next().expect("metric catalog row has a key");
+            let name = fields.next().expect("metric catalog row has a name");
+            let help = fields.next().expect("metric catalog row has help text");
+            assert!(
+                fields.next().is_none(),
+                "catalog row {row} has extra fields"
+            );
+            assert!(!key.is_empty() && !name.is_empty() && !help.is_empty());
+            assert!(keys.insert(key), "duplicate metric key `{key}`");
+            assert!(names.insert(name), "duplicate metric name `{name}`");
+        }
+        assert_eq!(keys.len(), METRIC_CATALOG_V1_ROWS);
+        let _ = Metrics::default();
+    }
+}
+
 impl Default for Metrics {
     #[allow(
         clippy::too_many_lines,
@@ -8543,99 +8639,65 @@ impl Default for Metrics {
         // NOTE(telemetry): Metric registration below is guarded via `register_guarded`,
         // which panics in debug builds on duplicate/invalid metric names. This catches
         // collisions early during development and keeps release builds lean.
-        let txs = IntCounterVec::new(Opts::new("txs", "Transactions committed"), &["type"])
+        let mut metric_specs = MetricSpecCursor::v1();
+        let txs = IntCounterVec::new(metric_specs.opts("txs"), &["type"]).expect("Infallible");
+        let isi = IntCounterVec::new(metric_specs.opts("isi"), &["type", "success_status"])
             .expect("Infallible");
-        let isi = IntCounterVec::new(
-            Opts::new("isi", "Iroha special instructions handled by this peer"),
-            &["type", "success_status"],
-        )
-        .expect("Infallible");
-        let isi_times = HistogramVec::new(
-            HistogramOpts::new("isi_times", "Time to handle isi in this peer"),
-            &["type"],
-        )
-        .expect("Infallible");
-        let tx_amounts = Histogram::with_opts(
-            HistogramOpts::new(
-                "tx_amount",
-                "average amount involved in a transaction on this peer",
-            )
-            .buckets(
-                // Amounts can vary wildly.
-                // Capturing range
-                //   from -10^10 to 10^10
-                //   with the step of 2 decimal points (10 steps)
-                vec![
-                    -10_00_00_00_00.0,
-                    -10_00_00_00.0,
-                    -10_00_00.0,
-                    -10_00.0,
-                    -10.0,
-                    0.0,
-                    10.0,
-                    10_00.0,
-                    10_00_00.0,
-                    10_00_00_00.0,
-                    10_00_00_00_00.0,
-                ],
-            ),
-        )
+        let isi_times = HistogramVec::new(metric_specs.histogram_opts("isi_times"), &["type"])
+            .expect("Infallible");
+        let tx_amounts = Histogram::with_opts(metric_specs.histogram_opts("tx_amounts").buckets(
+            // Amounts can vary wildly.
+            // Capturing range
+            //   from -10^10 to 10^10
+            //   with the step of 2 decimal points (10 steps)
+            vec![
+                -10_00_00_00_00.0,
+                -10_00_00_00.0,
+                -10_00_00.0,
+                -10_00.0,
+                -10.0,
+                0.0,
+                10.0,
+                10_00.0,
+                10_00_00.0,
+                10_00_00_00.0,
+                10_00_00_00_00.0,
+            ],
+        ))
         .expect("Infallible");
         let block_height =
-            IntCounter::new("block_height", "Current block height").expect("Infallible");
-        let block_height_non_empty = IntCounter::new(
-            "block_height_non_empty",
-            "Current count of non-empty blocks",
-        )
-        .expect("Infallible");
-        let last_commit_time_ms = GenericGauge::new(
-            "last_commit_time_ms",
-            "Time (since block creation) it took for the latest block to be committed by this peer",
-        )
-        .expect("Infallible");
-        let last_block_committed_at_ms = GenericGauge::new(
-            "last_block_committed_at_ms",
-            "Millisecond UNIX timestamp when this peer last processed a committed block",
-        )
-        .expect("Infallible");
-        let last_non_empty_block_committed_at_ms = GenericGauge::new(
-            "last_non_empty_block_committed_at_ms",
-            "Millisecond UNIX timestamp when this peer last processed a committed non-empty block",
-        )
-        .expect("Infallible");
-        let commit_time_ms = Histogram::with_opts(
-            HistogramOpts::new("commit_time_ms", "Average block commit time on this peer")
-                .buckets(prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid")),
-        )
-        .expect("Infallible");
+            IntCounter::with_opts(metric_specs.opts("block_height")).expect("Infallible");
+        let block_height_non_empty =
+            IntCounter::with_opts(metric_specs.opts("block_height_non_empty")).expect("Infallible");
+        let last_commit_time_ms =
+            GenericGauge::with_opts(metric_specs.opts("last_commit_time_ms")).expect("Infallible");
+        let last_block_committed_at_ms =
+            GenericGauge::with_opts(metric_specs.opts("last_block_committed_at_ms"))
+                .expect("Infallible");
+        let last_non_empty_block_committed_at_ms =
+            GenericGauge::with_opts(metric_specs.opts("last_non_empty_block_committed_at_ms"))
+                .expect("Infallible");
+        let commit_time_ms =
+            Histogram::with_opts(metric_specs.histogram_opts("commit_time_ms").buckets(
+                prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid"),
+            ))
+            .expect("Infallible");
         let slot_duration_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "iroha_slot_duration_ms",
-                "Slot duration distribution in milliseconds (NX-18 finality SLO).",
-            )
-            .buckets(vec![
-                250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 3_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("slot_duration_ms")
+                .buckets(vec![
+                    250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 3_000.0,
+                ]),
         )
         .expect("Infallible");
-        let slot_duration_ms_latest = GenericGauge::new(
-            "iroha_slot_duration_ms_latest",
-            "Latest observed slot duration (ms) for NX-18 finality tracking.",
-        )
-        .expect("Infallible");
-        let da_quorum_ratio = Gauge::new(
-            "iroha_da_quorum_ratio",
-            "Rolling fraction of slots that satisfied the DA quorum (0-1).",
-        )
-        .expect("Infallible");
-        let sm_syscall_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_sm_syscall_total",
-                "SM helper syscalls observed (labels: kind, mode)",
-            ),
-            &["kind", "mode"],
-        )
-        .expect("Infallible");
+        let slot_duration_ms_latest =
+            GenericGauge::with_opts(metric_specs.opts("slot_duration_ms_latest"))
+                .expect("Infallible");
+        let da_quorum_ratio =
+            Gauge::with_opts(metric_specs.opts("da_quorum_ratio")).expect("Infallible");
+        let sm_syscall_total =
+            IntCounterVec::new(metric_specs.opts("sm_syscall_total"), &["kind", "mode"])
+                .expect("Infallible");
         for (kind, mode) in [
             ("hash", "-"),
             ("verify", "-"),
@@ -8646,284 +8708,158 @@ impl Default for Metrics {
         ] {
             let _ = sm_syscall_total.with_label_values(&[kind, mode]);
         }
-        let sm_openssl_preview = GenericGauge::new(
-            "iroha_sm_openssl_preview",
-            "Whether the OpenSSL-backed SM preview helpers are enabled (0/1).",
-        )
-        .expect("Infallible");
-        let zk_halo2_enabled = GenericGauge::new(
-            "iroha_zk_halo2_enabled",
-            "Whether Halo2 verification is enabled for the host (0/1).",
-        )
-        .expect("Infallible");
-        let zk_halo2_curve_id = GenericGauge::new(
-            "iroha_zk_halo2_curve_id",
-            "Active Halo2 curve identifier (0=Pallas, 1=Pasta, 2=Goldilocks, 3=Bn254).",
-        )
-        .expect("Infallible");
-        let zk_halo2_backend_id = GenericGauge::new(
-            "iroha_zk_halo2_backend_id",
-            "Active Halo2 backend identifier (0=IPA, 1=Unsupported).",
-        )
-        .expect("Infallible");
-        let zk_halo2_max_k = GenericGauge::new(
-            "iroha_zk_halo2_max_k",
-            "Maximum supported Halo2 circuit exponent (k).",
-        )
-        .expect("Infallible");
-        let zk_halo2_verifier_budget_ms = GenericGauge::new(
-            "iroha_zk_halo2_verifier_budget_ms",
-            "Halo2 verifier soft budget in milliseconds.",
-        )
-        .expect("Infallible");
-        let zk_halo2_verifier_max_batch = GenericGauge::new(
-            "iroha_zk_halo2_verifier_max_batch",
-            "Maximum proofs allowed in a Halo2 batch verification.",
-        )
-        .expect("Infallible");
-        let zk_halo2_verifier_worker_threads = GenericGauge::new(
-            "iroha_zk_halo2_verifier_worker_threads",
-            "Number of worker threads serving ZK lane verification.",
-        )
-        .expect("Infallible");
-        let zk_halo2_verifier_queue_cap = GenericGauge::new(
-            "iroha_zk_halo2_verifier_queue_cap",
-            "Effective ZK lane queue capacity.",
-        )
-        .expect("Infallible");
-        let zk_lane_enqueue_wait_total = IntCounter::new(
-            "iroha_zk_lane_enqueue_wait_total",
-            "Count of ZK lane admissions that required a bounded wait.",
-        )
-        .expect("Infallible");
-        let zk_lane_enqueue_timeout_total = IntCounter::new(
-            "iroha_zk_lane_enqueue_timeout_total",
-            "Count of ZK lane admissions that timed out under saturation.",
-        )
-        .expect("Infallible");
-        let zk_lane_drop_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_zk_lane_drop_total",
-                "Terminal ZK lane drops grouped by reason.",
-            ),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let zk_lane_retry_enqueued_total = IntCounter::new(
-            "iroha_zk_lane_retry_enqueued_total",
-            "Count of important tasks enqueued into the ZK lane retry ring.",
-        )
-        .expect("Infallible");
-        let zk_lane_retry_replayed_total = IntCounter::new(
-            "iroha_zk_lane_retry_replayed_total",
-            "Count of tasks replayed from the ZK lane retry ring.",
-        )
-        .expect("Infallible");
-        let zk_lane_retry_exhausted_total = IntCounter::new(
-            "iroha_zk_lane_retry_exhausted_total",
-            "Count of tasks dropped after exhausting ZK lane retry attempts.",
-        )
-        .expect("Infallible");
-        let zk_lane_pending_depth = GenericGauge::new(
-            "iroha_zk_lane_pending_depth",
-            "Current number of tasks buffered in ZK lane dispatch backlog.",
-        )
-        .expect("Infallible");
-        let zk_lane_retry_ring_depth = GenericGauge::new(
-            "iroha_zk_lane_retry_ring_depth",
-            "Current number of tasks buffered in the ZK lane retry ring.",
-        )
-        .expect("Infallible");
+        let sm_openssl_preview =
+            GenericGauge::with_opts(metric_specs.opts("sm_openssl_preview")).expect("Infallible");
+        let zk_halo2_enabled =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_enabled")).expect("Infallible");
+        let zk_halo2_curve_id =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_curve_id")).expect("Infallible");
+        let zk_halo2_backend_id =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_backend_id")).expect("Infallible");
+        let zk_halo2_max_k =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_max_k")).expect("Infallible");
+        let zk_halo2_verifier_budget_ms =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_budget_ms"))
+                .expect("Infallible");
+        let zk_halo2_verifier_max_batch =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_max_batch"))
+                .expect("Infallible");
+        let zk_halo2_verifier_worker_threads =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_worker_threads"))
+                .expect("Infallible");
+        let zk_halo2_verifier_queue_cap =
+            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_queue_cap"))
+                .expect("Infallible");
+        let zk_lane_enqueue_wait_total =
+            IntCounter::with_opts(metric_specs.opts("zk_lane_enqueue_wait_total"))
+                .expect("Infallible");
+        let zk_lane_enqueue_timeout_total =
+            IntCounter::with_opts(metric_specs.opts("zk_lane_enqueue_timeout_total"))
+                .expect("Infallible");
+        let zk_lane_drop_total =
+            IntCounterVec::new(metric_specs.opts("zk_lane_drop_total"), &["reason"])
+                .expect("Infallible");
+        let zk_lane_retry_enqueued_total =
+            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_enqueued_total"))
+                .expect("Infallible");
+        let zk_lane_retry_replayed_total =
+            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_replayed_total"))
+                .expect("Infallible");
+        let zk_lane_retry_exhausted_total =
+            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_exhausted_total"))
+                .expect("Infallible");
+        let zk_lane_pending_depth =
+            GenericGauge::with_opts(metric_specs.opts("zk_lane_pending_depth"))
+                .expect("Infallible");
+        let zk_lane_retry_ring_depth =
+            GenericGauge::with_opts(metric_specs.opts("zk_lane_retry_ring_depth"))
+                .expect("Infallible");
         let zk_verifier_cache_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_zk_verifier_cache_events_total",
-                "Verifier cache events grouped by cache name and event (hit|miss|insert|evict).",
-            ),
+            metric_specs.opts("zk_verifier_cache_events_total"),
             &["cache", "event"],
         )
         .expect("Infallible");
-        let confidential_gas_base_verify = GenericGauge::new(
-            "iroha_confidential_gas_base_verify",
-            "Base gas charged when verifying a confidential proof.",
-        )
-        .expect("Infallible");
-        let confidential_gas_per_public_input = GenericGauge::new(
-            "iroha_confidential_gas_per_public_input",
-            "Gas multiplier per confidential proof public input.",
-        )
-        .expect("Infallible");
-        let confidential_gas_per_proof_byte = GenericGauge::new(
-            "iroha_confidential_gas_per_proof_byte",
-            "Gas multiplier per confidential proof byte.",
-        )
-        .expect("Infallible");
-        let confidential_gas_per_nullifier = GenericGauge::new(
-            "iroha_confidential_gas_per_nullifier",
-            "Gas multiplier per confidential nullifier.",
-        )
-        .expect("Infallible");
-        let confidential_gas_per_commitment = GenericGauge::new(
-            "iroha_confidential_gas_per_commitment",
-            "Gas multiplier per confidential commitment.",
-        )
-        .expect("Infallible");
-        let ivm_gas_schedule_hash_lo = GenericGauge::new(
-            "iroha_ivm_gas_schedule_hash_lo",
-            "Lower 64 bits of the canonical IVM gas schedule hash.",
-        )
-        .expect("Infallible");
-        let ivm_gas_schedule_hash_hi = GenericGauge::new(
-            "iroha_ivm_gas_schedule_hash_hi",
-            "Upper 64 bits of the canonical IVM gas schedule hash.",
-        )
-        .expect("Infallible");
+        let confidential_gas_base_verify =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_base_verify"))
+                .expect("Infallible");
+        let confidential_gas_per_public_input =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_public_input"))
+                .expect("Infallible");
+        let confidential_gas_per_proof_byte =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_proof_byte"))
+                .expect("Infallible");
+        let confidential_gas_per_nullifier =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_nullifier"))
+                .expect("Infallible");
+        let confidential_gas_per_commitment =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_commitment"))
+                .expect("Infallible");
+        let ivm_gas_schedule_hash_lo =
+            GenericGauge::with_opts(metric_specs.opts("ivm_gas_schedule_hash_lo"))
+                .expect("Infallible");
+        let ivm_gas_schedule_hash_hi =
+            GenericGauge::with_opts(metric_specs.opts("ivm_gas_schedule_hash_hi"))
+                .expect("Infallible");
         let confidential_tree_commitments = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_tree_commitments",
-                "Current number of confidential commitments per asset.",
-            ),
+            metric_specs.opts("confidential_tree_commitments"),
             &["asset_id"],
         )
         .expect("Infallible");
-        let confidential_tree_depth = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_tree_depth",
-                "Current Merkle depth for the confidential tree per asset.",
-            ),
-            &["asset_id"],
-        )
-        .expect("Infallible");
+        let confidential_tree_depth =
+            GenericGaugeVec::new(metric_specs.opts("confidential_tree_depth"), &["asset_id"])
+                .expect("Infallible");
         let confidential_root_history_entries = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_root_history_entries",
-                "Root history entries retained for the confidential tree per asset.",
-            ),
+            metric_specs.opts("confidential_root_history_entries"),
             &["asset_id"],
         )
         .expect("Infallible");
         let confidential_frontier_checkpoints = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_frontier_checkpoints",
-                "Frontier checkpoints tracked for the confidential tree per asset.",
-            ),
+            metric_specs.opts("confidential_frontier_checkpoints"),
             &["asset_id"],
         )
         .expect("Infallible");
         let confidential_frontier_last_height = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_frontier_last_checkpoint_height",
-                "Height of the most recent frontier checkpoint per asset.",
-            ),
+            metric_specs.opts("confidential_frontier_last_height"),
             &["asset_id"],
         )
         .expect("Infallible");
         let confidential_frontier_last_commitments = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_confidential_frontier_last_checkpoint_commitments",
-                "Commitment count captured at the latest frontier checkpoint per asset.",
-            ),
+            metric_specs.opts("confidential_frontier_last_commitments"),
             &["asset_id"],
         )
         .expect("Infallible");
         let confidential_root_evictions_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_confidential_root_evictions_total",
-                "Confidential root history eviction counter per asset.",
-            ),
+            metric_specs.opts("confidential_root_evictions_total"),
             &["asset_id"],
         )
         .expect("Infallible");
         let confidential_frontier_evictions_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_confidential_frontier_evictions_total",
-                "Confidential frontier eviction counter per asset.",
-            ),
+            metric_specs.opts("confidential_frontier_evictions_total"),
             &["asset_id"],
         )
         .expect("Infallible");
-        let oracle_price_local_per_xor = Gauge::new(
-            "iroha_oracle_price_local_per_xor",
-            "Latest oracle TWAP quoted as local tokens per XOR.",
-        )
-        .expect("Infallible");
-        let oracle_twap_window_seconds = GenericGauge::new(
-            "iroha_oracle_twap_window_seconds",
-            "TWAP window length used by the oracle in seconds.",
-        )
-        .expect("Infallible");
-        let oracle_haircut_basis_points = GenericGauge::new(
-            "iroha_oracle_haircut_basis_points",
-            "Effective haircut applied by the oracle (basis points).",
-        )
-        .expect("Infallible");
-        let oracle_staleness_seconds = Gauge::new(
-            "iroha_oracle_staleness_seconds",
-            "Oracle staleness in seconds at the time of the last settlement.",
-        )
-        .expect("Infallible");
-        let oracle_observations_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_observations_total",
-                "Number of oracle observations aggregated per feed slot.",
-            ),
-            &["feed_id"],
-        )
-        .expect("Infallible");
+        let oracle_price_local_per_xor =
+            Gauge::with_opts(metric_specs.opts("oracle_price_local_per_xor")).expect("Infallible");
+        let oracle_twap_window_seconds =
+            GenericGauge::with_opts(metric_specs.opts("oracle_twap_window_seconds"))
+                .expect("Infallible");
+        let oracle_haircut_basis_points =
+            GenericGauge::with_opts(metric_specs.opts("oracle_haircut_basis_points"))
+                .expect("Infallible");
+        let oracle_staleness_seconds =
+            Gauge::with_opts(metric_specs.opts("oracle_staleness_seconds")).expect("Infallible");
+        let oracle_observations_total =
+            IntCounterVec::new(metric_specs.opts("oracle_observations_total"), &["feed_id"])
+                .expect("Infallible");
         let oracle_aggregation_duration_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "iroha_oracle_aggregation_duration_ms",
-                "Oracle aggregation wall-clock duration in milliseconds.",
-            )
-            .buckets(vec![1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
+            metric_specs
+                .histogram_opts("oracle_aggregation_duration_ms")
+                .buckets(vec![1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
             &["feed_id"],
         )
         .expect("Infallible");
-        let oracle_rewards_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_rewards_total",
-                "Total mantissa units rewarded to oracle providers per feed.",
-            ),
-            &["feed_id"],
-        )
-        .expect("Infallible");
-        let oracle_penalties_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_penalties_total",
-                "Total mantissa units slashed from oracle providers per feed.",
-            ),
-            &["feed_id"],
-        )
-        .expect("Infallible");
-        let oracle_feed_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_feed_events_total",
-                "Total oracle feed events aggregated per feed.",
-            ),
-            &["feed_id"],
-        )
-        .expect("Infallible");
+        let oracle_rewards_total =
+            IntCounterVec::new(metric_specs.opts("oracle_rewards_total"), &["feed_id"])
+                .expect("Infallible");
+        let oracle_penalties_total =
+            IntCounterVec::new(metric_specs.opts("oracle_penalties_total"), &["feed_id"])
+                .expect("Infallible");
+        let oracle_feed_events_total =
+            IntCounterVec::new(metric_specs.opts("oracle_feed_events_total"), &["feed_id"])
+                .expect("Infallible");
         let oracle_feed_events_with_evidence_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_feed_events_with_evidence_total",
-                "Oracle feed events that carried at least one evidence hash.",
-            ),
+            metric_specs.opts("oracle_feed_events_with_evidence_total"),
             &["feed_id"],
         )
         .expect("Infallible");
         let oracle_evidence_hashes_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_oracle_evidence_hashes_total",
-                "Total oracle evidence hashes attached to feed events per feed.",
-            ),
+            metric_specs.opts("oracle_evidence_hashes_total"),
             &["feed_id"],
         )
         .expect("Infallible");
 
         let fastpq_execution_mode_total = IntCounterVec::new(
-            Opts::new(
-                "fastpq_execution_mode_total",
-                "FASTPQ execution mode resolutions grouped by requested/resolved/backend and per-device labels.",
-            ),
+            metric_specs.opts("fastpq_execution_mode_total"),
             &[
                 "requested",
                 "resolved",
@@ -8935,10 +8871,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let fastpq_poseidon_pipeline_total = IntCounterVec::new(
-            Opts::new(
-                "fastpq_poseidon_pipeline_total",
-                "FASTPQ Poseidon pipeline resolutions grouped by requested/resolved/path and per-device labels.",
-            ),
+            metric_specs.opts("fastpq_poseidon_pipeline_total"),
             &[
                 "requested",
                 "resolved",
@@ -8950,10 +8883,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let fastpq_gpu_disable_total = IntCounterVec::new(
-            Opts::new(
-                "fastpq_gpu_disable_total",
-                "FASTPQ GPU accelerator disable events grouped by accelerator/reason and per-device labels.",
-            ),
+            metric_specs.opts("fastpq_gpu_disable_total"),
             &[
                 "accelerator",
                 "reason",
@@ -8964,10 +8894,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let fastpq_gpu_parity_failure_total = IntCounterVec::new(
-            Opts::new(
-                "fastpq_gpu_parity_failure_total",
-                "FASTPQ sampled GPU parity failures grouped by accelerator/reason and per-device labels.",
-            ),
+            metric_specs.opts("fastpq_gpu_parity_failure_total"),
             &[
                 "accelerator",
                 "reason",
@@ -8977,65 +8904,42 @@ impl Default for Metrics {
             ],
         )
         .expect("Infallible");
-        let fastpq_proof_sidecar_queue_depth = GenericGauge::new(
-            "fastpq_proof_sidecar_queue_depth",
-            "FASTPQ proof sidecar queue depth.",
-        )
-        .expect("Infallible");
+        let fastpq_proof_sidecar_queue_depth =
+            GenericGauge::with_opts(metric_specs.opts("fastpq_proof_sidecar_queue_depth"))
+                .expect("Infallible");
         let fastpq_proof_sidecar_events_total = IntCounterVec::new(
-            Opts::new(
-                "fastpq_proof_sidecar_events_total",
-                "FASTPQ proof sidecar persistence events grouped by event.",
-            ),
+            metric_specs.opts("fastpq_proof_sidecar_events_total"),
             &["event"],
         )
         .expect("Infallible");
         let fastpq_metal_queue_ratio = GaugeVec::new(
-            Opts::new(
-                "fastpq_metal_queue_ratio",
-                "FASTPQ Metal queue duty-cycle ratios (labels: device_class, chip_family, gpu_kind, queue, metric=busy|overlap).",
-            ),
+            metric_specs.opts("fastpq_metal_queue_ratio"),
             &["device_class", "chip_family", "gpu_kind", "queue", "metric"],
         )
         .expect("Infallible");
         let fastpq_metal_queue_depth = GaugeVec::new(
-            Opts::new(
-                "fastpq_metal_queue_depth",
-                "FASTPQ Metal queue depth snapshot (labels: device_class, chip_family, gpu_kind, metric=limit|max_in_flight|dispatch_count|window_seconds).",
-            ),
+            metric_specs.opts("fastpq_metal_queue_depth"),
             &["device_class", "chip_family", "gpu_kind", "metric"],
         )
         .expect("Infallible");
         let fastpq_zero_fill_duration_ms = GaugeVec::new(
-            Opts::new(
-                "fastpq_zero_fill_duration_ms",
-                "FASTPQ host zero-fill duration samples in milliseconds (labels: device_class, chip_family, gpu_kind).",
-            ),
+            metric_specs.opts("fastpq_zero_fill_duration_ms"),
             &["device_class", "chip_family", "gpu_kind"],
         )
         .expect("Infallible");
         let fastpq_zero_fill_bandwidth_gbps = GaugeVec::new(
-            Opts::new(
-                "fastpq_zero_fill_bandwidth_gbps",
-                "FASTPQ host zero-fill bandwidth derived from runtime telemetry (labels: device_class, chip_family, gpu_kind).",
-            ),
+            metric_specs.opts("fastpq_zero_fill_bandwidth_gbps"),
             &["device_class", "chip_family", "gpu_kind"],
         )
         .expect("Infallible");
 
         let sm_syscall_failures_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_sm_syscall_failures_total",
-                "SM helper syscall failures (labels: kind, mode, reason)",
-            ),
+            metric_specs.opts("sm_syscall_failures_total"),
             &["kind", "mode", "reason"],
         )
         .expect("Infallible");
         let settlement_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_settlement_events_total",
-                "Settlement events grouped by kind/outcome/reason",
-            ),
+            metric_specs.opts("settlement_events_total"),
             &["kind", "outcome", "reason"],
         )
         .expect("Infallible");
@@ -9054,10 +8958,7 @@ impl Default for Metrics {
             }
         }
         let settlement_finality_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_settlement_finality_events_total",
-                "Settlement finality outcomes grouped by kind/outcome/final_state",
-            ),
+            metric_specs.opts("settlement_finality_events_total"),
             &["kind", "outcome", "final_state"],
         )
         .expect("Infallible");
@@ -9073,10 +8974,7 @@ impl Default for Metrics {
             }
         }
         let settlement_fx_window_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "iroha_settlement_fx_window_ms",
-                "PvP FX window observations (milliseconds between committed legs)",
-            ),
+            metric_specs.histogram_opts("settlement_fx_window_ms"),
             &["kind", "order", "atomicity"],
         )
         .expect("Infallible");
@@ -9088,82 +8986,52 @@ impl Default for Metrics {
             }
         }
         let settlement_buffer_xor = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_buffer_xor",
-                "Per-lane/dataspace settlement buffer debits recorded in micro XOR.",
-            ),
+            metric_specs.opts("settlement_buffer_xor"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let settlement_buffer_capacity_xor = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_buffer_capacity_xor",
-                "Configured settlement buffer capacity in micro XOR per lane/dataspace.",
-            ),
+            metric_specs.opts("settlement_buffer_capacity_xor"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let settlement_buffer_status = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_buffer_status",
-                "Settlement buffer status code per lane/dataspace (0 = normal, 1 = alert, 2 = throttle, 3 = XOR-only, 4 = halt).",
-            ),
+            metric_specs.opts("settlement_buffer_status"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let settlement_pnl_xor = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_pnl_xor",
-                "Per-lane/dataspace realised haircut variance recorded in micro XOR.",
-            ),
+            metric_specs.opts("settlement_pnl_xor"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let settlement_haircut_bp = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_haircut_bp",
-                "Effective haircut basis points applied per lane/dataspace for the latest block.",
-            ),
+            metric_specs.opts("settlement_haircut_bp"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let settlement_swapline_utilisation = GaugeVec::new(
-            Opts::new(
-                "iroha_settlement_swapline_utilisation",
-                "Swap-line utilisation snapshots (micro XOR) grouped by lane, dataspace, and liquidity profile.",
-            ),
+            metric_specs.opts("settlement_swapline_utilisation"),
             &["lane_id", "dataspace_id", "profile"],
         )
         .expect("Infallible");
         let settlement_conversion_total = IntCounterVec::new(
-            Opts::new(
-                "settlement_router_conversion_total",
-                "Settlement conversion counter grouped by lane, dataspace, and source token.",
-            ),
+            metric_specs.opts("settlement_conversion_total"),
             &["lane_id", "dataspace_id", "source_token"],
         )
         .expect("Infallible");
         let settlement_haircut_total = CounterVec::new(
-            Opts::new(
-                "settlement_router_haircut_total",
-                "Cumulative settlement haircut totals (in XOR units) grouped by lane and dataspace.",
-            ),
+            metric_specs.opts("settlement_haircut_total"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let subscription_billing_attempts_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_subscription_billing_attempts_total",
-                "Subscription billing attempts grouped by pricing kind.",
-            ),
+            metric_specs.opts("subscription_billing_attempts_total"),
             &["pricing"],
         )
         .expect("Infallible");
         let subscription_billing_outcomes_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_subscription_billing_outcomes_total",
-                "Subscription billing outcomes grouped by pricing kind and result.",
-            ),
+            metric_specs.opts("subscription_billing_outcomes_total"),
             &["pricing", "result"],
         )
         .expect("Infallible");
@@ -9173,14 +9041,9 @@ impl Default for Metrics {
                 let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
             }
         }
-        let social_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_social_events_total",
-                "Viral incentive lifecycle events grouped by event kind",
-            ),
-            &["event"],
-        )
-        .expect("Infallible");
+        let social_events_total =
+            IntCounterVec::new(metric_specs.opts("social_events_total"), &["event"])
+                .expect("Infallible");
         for event in [
             "reward_paid",
             "escrow_created",
@@ -9189,44 +9052,21 @@ impl Default for Metrics {
         ] {
             let _ = social_events_total.with_label_values(&[event]);
         }
-        let social_budget_spent = Gauge::with_opts(Opts::new(
-            "iroha_social_budget_spent",
-            "Latest viral reward budget spend for the active day",
-        ))
-        .expect("Infallible");
-        let social_campaign_spent = Gauge::with_opts(Opts::new(
-            "iroha_social_campaign_spent",
-            "Cumulative viral promotion spend across the full campaign window",
-        ))
-        .expect("Infallible");
-        let social_campaign_cap = Gauge::with_opts(Opts::new(
-            "iroha_social_campaign_cap",
-            "Configured viral campaign cap (0 = unlimited)",
-        ))
-        .expect("Infallible");
-        let social_campaign_remaining = Gauge::with_opts(Opts::new(
-            "iroha_social_campaign_remaining",
-            "Remaining viral campaign budget (0 when cap is unlimited)",
-        ))
-        .expect("Infallible");
-        let social_campaign_active = Gauge::with_opts(Opts::new(
-            "iroha_social_campaign_active",
-            "Whether the viral promotion window is active (1 = active, 0 = inactive)",
-        ))
-        .expect("Infallible");
-        let social_halted = Gauge::with_opts(Opts::new(
-            "iroha_social_halted",
-            "Whether viral incentives are currently halted (1 = halted, 0 = flowing)",
-        ))
-        .expect("Infallible");
-        let social_rejections_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_social_rejections_total",
-                "Viral incentive rejections grouped by reason",
-            ),
-            &["reason"],
-        )
-        .expect("Infallible");
+        let social_budget_spent =
+            Gauge::with_opts(metric_specs.opts("social_budget_spent")).expect("Infallible");
+        let social_campaign_spent =
+            Gauge::with_opts(metric_specs.opts("social_campaign_spent")).expect("Infallible");
+        let social_campaign_cap =
+            Gauge::with_opts(metric_specs.opts("social_campaign_cap")).expect("Infallible");
+        let social_campaign_remaining =
+            Gauge::with_opts(metric_specs.opts("social_campaign_remaining")).expect("Infallible");
+        let social_campaign_active =
+            Gauge::with_opts(metric_specs.opts("social_campaign_active")).expect("Infallible");
+        let social_halted =
+            Gauge::with_opts(metric_specs.opts("social_halted")).expect("Infallible");
+        let social_rejections_total =
+            IntCounterVec::new(metric_specs.opts("social_rejections_total"), &["reason"])
+                .expect("Infallible");
         for reason in [
             "halted",
             "promo_window",
@@ -9246,389 +9086,234 @@ impl Default for Metrics {
         ] {
             let _ = social_rejections_total.with_label_values(&[reason]);
         }
-        let multisig_direct_sign_reject_total = IntCounter::new(
-            "multisig_direct_sign_reject_total",
-            "Transactions rejected for direct multisig signatures",
-        )
-        .expect("Infallible");
-        let social_open_escrows = GenericGauge::new(
-            "iroha_social_open_escrows",
-            "Open viral escrows currently tracked on-ledger",
-        )
-        .expect("Infallible");
-        let connected_peers = GenericGauge::new(
-            "connected_peers",
-            "Total number of currently connected peers",
-        )
-        .expect("Infallible");
-        let p2p_peer_churn_total = IntCounterVec::new(
-            Opts::new(
-                "p2p_peer_churn_total",
-                "Peer churn events observed by this node",
-            ),
-            &["event"],
-        )
-        .expect("Infallible");
+        let multisig_direct_sign_reject_total =
+            IntCounter::with_opts(metric_specs.opts("multisig_direct_sign_reject_total"))
+                .expect("Infallible");
+        let social_open_escrows =
+            GenericGauge::with_opts(metric_specs.opts("social_open_escrows")).expect("Infallible");
+        let connected_peers =
+            GenericGauge::with_opts(metric_specs.opts("connected_peers")).expect("Infallible");
+        let p2p_peer_churn_total =
+            IntCounterVec::new(metric_specs.opts("p2p_peer_churn_total"), &["event"])
+                .expect("Infallible");
         for event in ["connected", "disconnected"] {
             let _ = p2p_peer_churn_total.with_label_values(&[event]);
         }
-        let uptime_since_genesis_ms = GenericGauge::new(
-            "uptime_since_genesis_ms",
-            "Network up-time, from creation of the genesis block",
-        )
-        .expect("Infallible");
-        let domains = GenericGauge::new("domains", "Total number of domains").expect("Infallible");
-        let accounts = GenericGaugeVec::new(
-            Opts::new("accounts", "User accounts registered at this time"),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let view_changes = GenericGauge::new(
-            "view_changes",
-            "Number of view changes in the current round",
-        )
-        .expect("Infallible");
-        let queue_size = GenericGauge::new(
-            "queue_size",
-            "Transactions tracked by the queue (queued + in-flight)",
-        )
-        .expect("Infallible");
+        let uptime_since_genesis_ms =
+            GenericGauge::with_opts(metric_specs.opts("uptime_since_genesis_ms"))
+                .expect("Infallible");
+        let domains = GenericGauge::with_opts(metric_specs.opts("domains")).expect("Infallible");
+        let accounts =
+            GenericGaugeVec::new(metric_specs.opts("accounts"), &["domain"]).expect("Infallible");
+        let view_changes =
+            GenericGauge::with_opts(metric_specs.opts("view_changes")).expect("Infallible");
+        let queue_size =
+            GenericGauge::with_opts(metric_specs.opts("queue_size")).expect("Infallible");
         let queue_queued =
-            GenericGauge::new("queue_queued", "Transactions still queued for selection")
-                .expect("Infallible");
+            GenericGauge::with_opts(metric_specs.opts("queue_queued")).expect("Infallible");
         let queue_inflight =
-            GenericGauge::new("queue_inflight", "Transactions in-flight after selection")
+            GenericGauge::with_opts(metric_specs.opts("queue_inflight")).expect("Infallible");
+        let kura_fsync_enabled =
+            GenericGauge::with_opts(metric_specs.opts("kura_fsync_enabled")).expect("Infallible");
+        let kura_fsync_failures_total =
+            IntCounterVec::new(metric_specs.opts("kura_fsync_failures_total"), &["target"])
                 .expect("Infallible");
-        let kura_fsync_enabled = GenericGauge::new(
-            "kura_fsync_enabled",
-            "Kura fsync policy state (1=always, 2=batched).",
-        )
-        .expect("Infallible");
-        let kura_fsync_failures_total = IntCounterVec::new(
-            Opts::new(
-                "kura_fsync_failures_total",
-                "Kura fsync failures grouped by target (data/index/hashes).",
-            ),
-            &["target"],
-        )
-        .expect("Infallible");
         let kura_fsync_latency_buckets =
             prometheus::exponential_buckets(1.0, 2.0, 12).expect("valid fsync latency buckets");
         let kura_fsync_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "kura_fsync_latency_ms",
-                "Kura fsync latency (milliseconds) grouped by target.",
-            )
-            .buckets(kura_fsync_latency_buckets.clone()),
+            metric_specs
+                .histogram_opts("kura_fsync_latency_ms")
+                .buckets(kura_fsync_latency_buckets.clone()),
             &["target"],
         )
         .expect("Infallible");
         let amx_latency_buckets =
             prometheus::exponential_buckets(1.0, 2.0, 12).expect("valid AMX latency buckets");
         let amx_prepare_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "iroha_amx_prepare_ms",
-                "AMX prepare phase latency in milliseconds grouped by lane id.",
-            )
-            .buckets(amx_latency_buckets.clone()),
+            metric_specs
+                .histogram_opts("amx_prepare_ms")
+                .buckets(amx_latency_buckets.clone()),
             &["lane"],
         )
         .expect("Infallible");
         let amx_commit_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "iroha_amx_commit_ms",
-                "AMX commit/merge phase latency in milliseconds grouped by lane id.",
-            )
-            .buckets(amx_latency_buckets.clone()),
+            metric_specs
+                .histogram_opts("amx_commit_ms")
+                .buckets(amx_latency_buckets.clone()),
             &["lane"],
         )
         .expect("Infallible");
-        let amx_abort_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_amx_abort_total",
-                "AMX abort counter grouped by lane id and abort stage.",
-            ),
-            &["lane", "stage"],
-        )
-        .expect("Infallible");
+        let amx_abort_total =
+            IntCounterVec::new(metric_specs.opts("amx_abort_total"), &["lane", "stage"])
+                .expect("Infallible");
         let axt_policy_reject_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_axt_policy_reject_total",
-                "AXT policy validation failures grouped by lane id and reason.",
-            ),
+            metric_specs.opts("axt_policy_reject_total"),
             &["lane", "reason"],
         )
         .expect("Infallible");
-        let axt_policy_snapshot_version = GenericGauge::new(
-            "iroha_axt_policy_snapshot_version",
-            "Stable hash-derived version of the active AXT policy snapshot (u64 truncated).",
-        )
-        .expect("Infallible");
+        let axt_policy_snapshot_version =
+            GenericGauge::with_opts(metric_specs.opts("axt_policy_snapshot_version"))
+                .expect("Infallible");
         let axt_policy_snapshot_cache_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_axt_policy_snapshot_cache_events_total",
-                "AXT policy snapshot hydration events grouped by cache outcome.",
-            ),
+            metric_specs.opts("axt_policy_snapshot_cache_events_total"),
             &["event"],
         )
         .expect("Infallible");
         let axt_proof_cache_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_axt_proof_cache_events_total",
-                "Dataspace proof cache events grouped by event label.",
-            ),
+            metric_specs.opts("axt_proof_cache_events_total"),
             &["event"],
         )
         .expect("Infallible");
         let axt_proof_cache_state = IntGaugeVec::new(
-            Opts::new(
-                "iroha_axt_proof_cache_state",
-                "Dataspace proof cache state (value=expiry_slot_with_skew) grouped by dsid/status/manifest_root_hex/verified_slot.",
-            ),
+            metric_specs.opts("axt_proof_cache_state"),
             &["dsid", "status", "manifest_root_hex", "verified_slot"],
         )
         .expect("Infallible");
         let ivm_exec_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "iroha_ivm_exec_ms",
-                "IVM execution latency in milliseconds grouped by lane id.",
-            )
-            .buckets(amx_latency_buckets.clone()),
+            metric_specs
+                .histogram_opts("ivm_exec_ms")
+                .buckets(amx_latency_buckets.clone()),
             &["lane"],
         )
         .expect("Infallible");
-        let ivm_stack_bytes = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_ivm_stack_bytes",
-                "Requested/applied stack sizes for scheduler/prover/guest (bytes).",
-            ),
-            &["kind", "state"],
-        )
-        .expect("Infallible");
-        let ivm_stack_clamped = GenericGaugeVec::new(
-            Opts::new(
-                "iroha_ivm_stack_clamped",
-                "Stack clamp flags for scheduler/prover/guest (0 = no clamp, 1 = clamped).",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let ivm_stack_gas_multiplier = GenericGauge::new(
-            "iroha_ivm_stack_gas_multiplier",
-            "Gas→stack multiplier currently in effect for guest stack limits.",
-        )
-        .expect("Infallible");
-        let ivm_stack_pool_fallback_total = IntCounter::new(
-            "iroha_ivm_stack_pool_fallback_total",
-            "Number of times a pre-existing global Rayon pool forced a stack-size fallback.",
-        )
-        .expect("Infallible");
-        let ivm_stack_budget_hit_total = IntCounter::new(
-            "iroha_ivm_stack_budget_hit_total",
-            "VM constructions that hit the guest stack budget clamp.",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_depth = GenericGauge::new(
-            "sumeragi_tx_queue_depth",
-            "Transactions currently queued as observed by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_capacity = GenericGauge::new(
-            "sumeragi_tx_queue_capacity",
-            "Transaction queue capacity observed by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_retained_bytes = GenericGauge::new(
-            "sumeragi_tx_queue_retained_bytes",
-            "Estimated retained transaction queue bytes observed by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_max_retained_bytes = GenericGauge::new(
-            "sumeragi_tx_queue_max_retained_bytes",
-            "Retained transaction queue byte budget observed by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_saturated = GenericGauge::new(
-            "sumeragi_tx_queue_saturated",
-            "Transaction queue saturation flag observed by consensus (0 = healthy, 1 = saturated)",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_count = GenericGauge::new(
-            "sumeragi_tx_queue_saturated_by_count",
-            "Transaction count saturation flag observed by consensus (0 = inactive, 1 = active)",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_bytes = GenericGauge::new(
-            "sumeragi_tx_queue_saturated_by_bytes",
-            "Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active)",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_age = GenericGauge::new(
-            "sumeragi_tx_queue_saturated_by_age",
-            "Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active)",
-        )
-        .expect("Infallible");
-        let sumeragi_tx_queue_oldest_queued_age_ms = GenericGauge::new(
-            "sumeragi_tx_queue_oldest_queued_age_ms",
-            "Oldest queued transaction age in milliseconds observed by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_pending_blocks_total = GenericGauge::new(
-            "sumeragi_pending_blocks_total",
-            "Total pending blocks tracked by consensus",
-        )
-        .expect("Infallible");
-        let sumeragi_pending_blocks_blocking = GenericGauge::new(
-            "sumeragi_pending_blocks_blocking",
-            "Pending blocks currently gating proposals/view changes",
-        )
-        .expect("Infallible");
-        let sumeragi_commit_inflight_queue_depth = GenericGauge::new(
-            "sumeragi_commit_inflight_queue_depth",
-            "Commit inflight queue depth (inflight + queued commit work)",
-        )
-        .expect("Infallible");
+        let ivm_stack_bytes =
+            GenericGaugeVec::new(metric_specs.opts("ivm_stack_bytes"), &["kind", "state"])
+                .expect("Infallible");
+        let ivm_stack_clamped =
+            GenericGaugeVec::new(metric_specs.opts("ivm_stack_clamped"), &["kind"])
+                .expect("Infallible");
+        let ivm_stack_gas_multiplier =
+            GenericGauge::with_opts(metric_specs.opts("ivm_stack_gas_multiplier"))
+                .expect("Infallible");
+        let ivm_stack_pool_fallback_total =
+            IntCounter::with_opts(metric_specs.opts("ivm_stack_pool_fallback_total"))
+                .expect("Infallible");
+        let ivm_stack_budget_hit_total =
+            IntCounter::with_opts(metric_specs.opts("ivm_stack_budget_hit_total"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_depth =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_depth"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_capacity =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_capacity"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_retained_bytes =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_retained_bytes"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_max_retained_bytes =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_max_retained_bytes"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_saturated =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_count =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_count"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_bytes =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_bytes"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_age =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_age"))
+                .expect("Infallible");
+        let sumeragi_tx_queue_oldest_queued_age_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_oldest_queued_age_ms"))
+                .expect("Infallible");
+        let sumeragi_pending_blocks_total =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pending_blocks_total"))
+                .expect("Infallible");
+        let sumeragi_pending_blocks_blocking =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pending_blocks_blocking"))
+                .expect("Infallible");
+        let sumeragi_commit_inflight_queue_depth =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_commit_inflight_queue_depth"))
+                .expect("Infallible");
         let missing_block_dwell_buckets = vec![
             50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 20_000.0, 60_000.0,
         ];
-        let sumeragi_missing_block_requests = GenericGauge::new(
-            "sumeragi_missing_block_requests",
-            "Outstanding missing-block requests observed locally",
-        )
-        .expect("Infallible");
-        let sumeragi_missing_block_oldest_ms = GenericGauge::new(
-            "sumeragi_missing_block_oldest_ms",
-            "Age in milliseconds of the oldest missing-block request",
-        )
-        .expect("Infallible");
-        let sumeragi_missing_block_retry_window_ms = GenericGauge::new(
-            "sumeragi_missing_block_retry_window_ms",
-            "Retry window for missing-block fetches in milliseconds",
-        )
-        .expect("Infallible");
+        let sumeragi_missing_block_requests =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_requests"))
+                .expect("Infallible");
+        let sumeragi_missing_block_oldest_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_oldest_ms"))
+                .expect("Infallible");
+        let sumeragi_missing_block_retry_window_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_retry_window_ms"))
+                .expect("Infallible");
         let sumeragi_missing_block_dwell_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_missing_block_dwell_ms",
-                "Dwell time from first QC arrival until block payload observation (milliseconds)",
-            )
-            .buckets(missing_block_dwell_buckets),
+            metric_specs
+                .histogram_opts("sumeragi_missing_block_dwell_ms")
+                .buckets(missing_block_dwell_buckets),
         )
         .expect("Infallible");
-        let sumeragi_epoch_length_blocks = GenericGauge::new(
-            "sumeragi_epoch_length_blocks",
-            "Epoch length in blocks for NPoS scheduling (0 when not applicable)",
-        )
-        .expect("Infallible");
-        let sumeragi_epoch_commit_deadline_offset = GenericGauge::new(
-            "sumeragi_epoch_commit_deadline_offset",
-            "Commit window deadline offset from epoch start (blocks)",
-        )
-        .expect("Infallible");
-        let sumeragi_epoch_reveal_deadline_offset = GenericGauge::new(
-            "sumeragi_epoch_reveal_deadline_offset",
-            "Reveal window deadline offset from epoch start (blocks)",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_entries = GenericGauge::new(
-            "state_tiered_hot_entries",
-            "Entries retained in the tiered-state hot tier after the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_bytes = GenericGauge::new(
-            "state_tiered_hot_bytes",
-            "Bytes retained in the tiered-state hot tier after the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_cold_entries = GenericGauge::new(
-            "state_tiered_cold_entries",
-            "Entries spilled to the tiered-state cold tier after the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_cold_bytes = GenericGauge::new(
-            "state_tiered_cold_bytes",
-            "Total bytes written to the tiered-state cold tier in the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_cold_reused_entries = GenericGauge::new(
-            "state_tiered_cold_reused_entries",
-            "Cold entries reused without re-encoding in the latest tiered-state snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_cold_reused_bytes = GenericGauge::new(
-            "state_tiered_cold_reused_bytes",
-            "Total bytes reused from cold payloads in the latest tiered-state snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_promotions = GenericGauge::new(
-            "state_tiered_hot_promotions",
-            "Entries promoted into the tiered-state hot tier in the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_demotions = GenericGauge::new(
-            "state_tiered_hot_demotions",
-            "Entries demoted into the tiered-state cold tier in the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_grace_overflow_keys = GenericGauge::new(
-            "state_tiered_hot_grace_overflow_keys",
-            "Hot-tier key budget overflow caused by grace retention in the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_hot_grace_overflow_bytes = GenericGauge::new(
-            "state_tiered_hot_grace_overflow_bytes",
-            "Hot-tier byte budget overflow caused by grace retention in the latest snapshot",
-        )
-        .expect("Infallible");
-        let state_tiered_last_snapshot_index = GenericGauge::new(
-            "state_tiered_last_snapshot_index",
-            "Latest tiered-state snapshot index recorded by this peer",
-        )
-        .expect("Infallible");
+        let sumeragi_epoch_length_blocks =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_length_blocks"))
+                .expect("Infallible");
+        let sumeragi_epoch_commit_deadline_offset =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_commit_deadline_offset"))
+                .expect("Infallible");
+        let sumeragi_epoch_reveal_deadline_offset =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_reveal_deadline_offset"))
+                .expect("Infallible");
+        let state_tiered_hot_entries =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_entries"))
+                .expect("Infallible");
+        let state_tiered_hot_bytes =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_bytes"))
+                .expect("Infallible");
+        let state_tiered_cold_entries =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_entries"))
+                .expect("Infallible");
+        let state_tiered_cold_bytes =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_bytes"))
+                .expect("Infallible");
+        let state_tiered_cold_reused_entries =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_reused_entries"))
+                .expect("Infallible");
+        let state_tiered_cold_reused_bytes =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_reused_bytes"))
+                .expect("Infallible");
+        let state_tiered_hot_promotions =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_promotions"))
+                .expect("Infallible");
+        let state_tiered_hot_demotions =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_demotions"))
+                .expect("Infallible");
+        let state_tiered_hot_grace_overflow_keys =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_grace_overflow_keys"))
+                .expect("Infallible");
+        let state_tiered_hot_grace_overflow_bytes =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_grace_overflow_bytes"))
+                .expect("Infallible");
+        let state_tiered_last_snapshot_index =
+            GenericGauge::with_opts(metric_specs.opts("state_tiered_last_snapshot_index"))
+                .expect("Infallible");
         let storage_budget_bytes_used = GenericGaugeVec::new(
-            Opts::new(
-                "storage_budget_bytes_used",
-                "Storage budget bytes used per component",
-            ),
+            metric_specs.opts("storage_budget_bytes_used"),
             &["component"],
         )
         .expect("Infallible");
         let storage_budget_bytes_limit = GenericGaugeVec::new(
-            Opts::new(
-                "storage_budget_bytes_limit",
-                "Storage budget limit bytes per component",
-            ),
+            metric_specs.opts("storage_budget_bytes_limit"),
             &["component"],
         )
         .expect("Infallible");
         let storage_budget_exceeded_total = IntCounterVec::new(
-            Opts::new(
-                "storage_budget_exceeded_total",
-                "Storage budget exceed events per component",
-            ),
+            metric_specs.opts("storage_budget_exceeded_total"),
             &["component"],
         )
         .expect("Infallible");
         let storage_da_cache_total = IntCounterVec::new(
-            Opts::new(
-                "storage_da_cache_total",
-                "DA storage cache outcomes per component",
-            ),
+            metric_specs.opts("storage_da_cache_total"),
             &["component", "result"],
         )
         .expect("Infallible");
         let storage_da_churn_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "storage_da_churn_bytes_total",
-                "DA storage churn bytes per component and direction",
-            ),
+            metric_specs.opts("storage_da_churn_bytes_total"),
             &["component", "direction"],
         )
         .expect("Infallible");
         let governance_proposals_status = GenericGaugeVec::new(
-            Opts::new(
-                "governance_proposals_status",
-                "Governance proposals grouped by status",
-            ),
+            metric_specs.opts("governance_proposals_status"),
             &["status"],
         )
         .expect("Infallible");
@@ -9637,36 +9322,23 @@ impl Default for Metrics {
                 .with_label_values(&[status])
                 .set(0);
         }
-        let governance_council_members = GenericGauge::new(
-            "governance_council_members",
-            "Latest persisted council member count",
-        )
-        .expect("Infallible");
-        let governance_council_alternates = GenericGauge::new(
-            "governance_council_alternates",
-            "Latest persisted council alternate count",
-        )
-        .expect("Infallible");
-        let governance_council_candidates = GenericGauge::new(
-            "governance_council_candidates",
-            "Total candidates considered in the latest council draw",
-        )
-        .expect("Infallible");
-        let governance_council_epoch = GenericGauge::new(
-            "governance_council_epoch",
-            "Epoch index for the latest persisted council draw",
-        )
-        .expect("Infallible");
-        let governance_citizens_total = GenericGauge::new(
-            "governance_citizens_total",
-            "Total registered citizens bonded for governance",
-        )
-        .expect("Infallible");
+        let governance_council_members =
+            GenericGauge::with_opts(metric_specs.opts("governance_council_members"))
+                .expect("Infallible");
+        let governance_council_alternates =
+            GenericGauge::with_opts(metric_specs.opts("governance_council_alternates"))
+                .expect("Infallible");
+        let governance_council_candidates =
+            GenericGauge::with_opts(metric_specs.opts("governance_council_candidates"))
+                .expect("Infallible");
+        let governance_council_epoch =
+            GenericGauge::with_opts(metric_specs.opts("governance_council_epoch"))
+                .expect("Infallible");
+        let governance_citizens_total =
+            GenericGauge::with_opts(metric_specs.opts("governance_citizens_total"))
+                .expect("Infallible");
         let governance_citizen_service_events_total = IntCounterVec::new(
-            Opts::new(
-                "governance_citizen_service_events_total",
-                "Citizen service discipline events grouped by outcome",
-            ),
+            metric_specs.opts("governance_citizen_service_events_total"),
             &["event"],
         )
         .expect("Infallible");
@@ -9674,10 +9346,7 @@ impl Default for Metrics {
             let _ = governance_citizen_service_events_total.with_label_values(&[event]);
         }
         let governance_protected_namespace_total = IntCounterVec::new(
-            Opts::new(
-                "governance_protected_namespace_total",
-                "Protected namespace enforcement outcomes",
-            ),
+            metric_specs.opts("governance_protected_namespace_total"),
             &["outcome"],
         )
         .expect("Infallible");
@@ -9685,10 +9354,7 @@ impl Default for Metrics {
             let _ = governance_protected_namespace_total.with_label_values(&[outcome]);
         }
         let governance_manifest_admission_total = IntCounterVec::new(
-            Opts::new(
-                "governance_manifest_admission_total",
-                "Governance manifest admission outcomes (allowed, rejected by reason)",
-            ),
+            metric_specs.opts("governance_manifest_admission_total"),
             &["result"],
         )
         .expect("Infallible");
@@ -9703,10 +9369,7 @@ impl Default for Metrics {
             let _ = governance_manifest_admission_total.with_label_values(&[result]);
         }
         let governance_manifest_quorum_total = IntCounterVec::new(
-            Opts::new(
-                "governance_manifest_quorum_total",
-                "Manifest validator quorum enforcement outcomes",
-            ),
+            metric_specs.opts("governance_manifest_quorum_total"),
             &["outcome"],
         )
         .expect("Infallible");
@@ -9714,10 +9377,7 @@ impl Default for Metrics {
             let _ = governance_manifest_quorum_total.with_label_values(&[outcome]);
         }
         let governance_manifest_hook_total = IntCounterVec::new(
-            Opts::new(
-                "governance_manifest_hook_total",
-                "Governance manifest hook enforcement outcomes",
-            ),
+            metric_specs.opts("governance_manifest_hook_total"),
             &["hook", "outcome"],
         )
         .expect("Infallible");
@@ -9727,10 +9387,7 @@ impl Default for Metrics {
             }
         }
         let governance_manifest_activations_total = IntCounterVec::new(
-            Opts::new(
-                "governance_manifest_activations_total",
-                "Manifest activation events emitted by governance enactment",
-            ),
+            metric_specs.opts("governance_manifest_activations_total"),
             &["event"],
         )
         .expect("Infallible");
@@ -9738,10 +9395,7 @@ impl Default for Metrics {
             let _ = governance_manifest_activations_total.with_label_values(&[event]);
         }
         let governance_bond_events_total = IntCounterVec::new(
-            Opts::new(
-                "governance_bond_events_total",
-                "Governance bond lifecycle events (lock_created|lock_extended|lock_unlocked)",
-            ),
+            metric_specs.opts("governance_bond_events_total"),
             &["event"],
         )
         .expect("Infallible");
@@ -9765,43 +9419,20 @@ impl Default for Metrics {
         let recent_rejection_events =
             Mutex::new(VecDeque::with_capacity(REJECTION_RECENT_EVENT_CAP));
         let last_rejection_at_ms = StdAtomicU64::new(0);
-        let alias_usage_total = IntCounterVec::new(
-            Opts::new(
-                "alias_usage_total",
-                "Alias service events grouped by lane and event kind",
-            ),
-            &["lane", "event"],
-        )
-        .expect("Infallible");
-        let iso_reference_status = IntGaugeVec::new(
-            Opts::new(
-                "iso_reference_status",
-                "ISO bridge reference-data status (-1 failed, 0 missing, 1 loaded)",
-            ),
-            &["dataset"],
-        )
-        .expect("Infallible");
-        let iso_reference_age_seconds = IntGaugeVec::new(
-            Opts::new(
-                "iso_reference_age_seconds",
-                "ISO bridge reference-data age (seconds)",
-            ),
-            &["dataset"],
-        )
-        .expect("Infallible");
-        let iso_reference_records = IntGaugeVec::new(
-            Opts::new(
-                "iso_reference_records",
-                "ISO bridge reference-data record counts",
-            ),
-            &["dataset"],
-        )
-        .expect("Infallible");
+        let alias_usage_total =
+            IntCounterVec::new(metric_specs.opts("alias_usage_total"), &["lane", "event"])
+                .expect("Infallible");
+        let iso_reference_status =
+            IntGaugeVec::new(metric_specs.opts("iso_reference_status"), &["dataset"])
+                .expect("Infallible");
+        let iso_reference_age_seconds =
+            IntGaugeVec::new(metric_specs.opts("iso_reference_age_seconds"), &["dataset"])
+                .expect("Infallible");
+        let iso_reference_records =
+            IntGaugeVec::new(metric_specs.opts("iso_reference_records"), &["dataset"])
+                .expect("Infallible");
         let iso_reference_refresh_interval_secs = IntGaugeVec::new(
-            Opts::new(
-                "iso_reference_refresh_interval_secs",
-                "ISO bridge reference-data refresh interval (seconds)",
-            ),
+            metric_specs.opts("iso_reference_refresh_interval_secs"),
             &["dataset"],
         )
         .expect("Infallible");
@@ -9812,94 +9443,61 @@ impl Default for Metrics {
             let _ = iso_reference_refresh_interval_secs.with_label_values(&[dataset]);
         }
         let fraud_psp_assessments_total = IntCounterVec::new(
-            Opts::new(
-                "fraud_psp_assessments_total",
-                "PSP fraud assessments accepted by the host",
-            ),
+            metric_specs.opts("fraud_psp_assessments_total"),
             &["tenant", "band", "lane", "subnet"],
         )
         .expect("Infallible");
         let fraud_psp_missing_assessment_total = IntCounterVec::new(
-            Opts::new(
-                "fraud_psp_missing_assessment_total",
-                "Transactions missing PSP fraud assessment metadata",
-            ),
+            metric_specs.opts("fraud_psp_missing_assessment_total"),
             &["tenant", "lane", "subnet", "cause"],
         )
         .expect("Infallible");
         let fraud_psp_invalid_metadata_total = IntCounterVec::new(
-            Opts::new(
-                "fraud_psp_invalid_metadata_total",
-                "Invalid PSP fraud assessment metadata fields",
-            ),
+            metric_specs.opts("fraud_psp_invalid_metadata_total"),
             &["tenant", "field", "lane", "subnet"],
         )
         .expect("Infallible");
         let fraud_psp_attestation_total = IntCounterVec::new(
-            Opts::new(
-                "fraud_psp_attestation_total",
-                "Fraud assessment attestation verification outcomes",
-            ),
+            metric_specs.opts("fraud_psp_attestation_total"),
             &["tenant", "engine", "lane", "subnet", "status"],
         )
         .expect("Infallible");
         let fraud_psp_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "fraud_psp_latency_ms",
-                "Latency reported by PSP fraud scoring (milliseconds)",
-            )
-            .buckets(prometheus::exponential_buckets(5.0, 1.8, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("fraud_psp_latency_ms")
+                .buckets(prometheus::exponential_buckets(5.0, 1.8, 12).expect("inputs are valid")),
             &["tenant", "lane", "subnet"],
         )
         .expect("Infallible");
         let fraud_psp_score_bps = HistogramVec::new(
-            HistogramOpts::new(
-                "fraud_psp_score_bps",
-                "Fraud risk score distribution (basis points)",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 500.0, 21).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("fraud_psp_score_bps")
+                .buckets(prometheus::linear_buckets(0.0, 500.0, 21).expect("inputs are valid")),
             &["tenant", "band", "lane", "subnet"],
         )
         .expect("Infallible");
         let fraud_psp_outcome_mismatch_total = IntCounterVec::new(
-            Opts::new(
-                "fraud_psp_outcome_mismatch_total",
-                "Mismatch between PSP disposition and fraud scoring",
-            ),
+            metric_specs.opts("fraud_psp_outcome_mismatch_total"),
             &["tenant", "direction", "lane", "subnet"],
         )
         .expect("Infallible");
-        let streaming_hpke_rekeys_total = IntCounterVec::new(
-            Opts::new(
-                "streaming_hpke_rekeys_total",
-                "Streaming HPKE rekeys accepted grouped by suite",
-            ),
-            &["suite"],
-        )
-        .expect("Infallible");
+        let streaming_hpke_rekeys_total =
+            IntCounterVec::new(metric_specs.opts("streaming_hpke_rekeys_total"), &["suite"])
+                .expect("Infallible");
         for suite in ["x25519", "kyber768"] {
             let _ = streaming_hpke_rekeys_total.with_label_values(&[suite]);
         }
-        let streaming_gck_rotations_total = IntCounter::new(
-            "streaming_gck_rotations_total",
-            "Streaming content key rotations processed",
-        )
-        .expect("Infallible");
-        let streaming_quic_datagrams_sent_total = IntCounter::new(
-            "streaming_quic_datagrams_sent_total",
-            "Streaming QUIC datagrams sent",
-        )
-        .expect("Infallible");
-        let streaming_quic_datagrams_dropped_total = IntCounter::new(
-            "streaming_quic_datagrams_dropped_total",
-            "Streaming QUIC datagrams dropped",
-        )
-        .expect("Infallible");
+        let streaming_gck_rotations_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_gck_rotations_total"))
+                .expect("Infallible");
+        let streaming_quic_datagrams_sent_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_quic_datagrams_sent_total"))
+                .expect("Infallible");
+        let streaming_quic_datagrams_dropped_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_quic_datagrams_dropped_total"))
+                .expect("Infallible");
         let streaming_fec_parity_current = GenericGaugeVec::new(
-            Opts::new(
-                "streaming_fec_parity_current",
-                "Streaming parity bucket occupancy (active sessions per bucket)",
-            ),
+            metric_specs.opts("streaming_fec_parity_current"),
             &["bucket"],
         )
         .expect("Infallible");
@@ -9908,43 +9506,28 @@ impl Default for Metrics {
                 .with_label_values(&[bucket])
                 .set(0);
         }
-        let streaming_feedback_timeout_total = IntCounter::new(
-            "streaming_feedback_timeout_total",
-            "Streaming feedback timeout events",
-        )
-        .expect("Infallible");
-        let streaming_soranet_provision_fail_total = IntCounter::new(
-            "streaming_soranet_provision_fail_total",
-            "Streaming SoraNet privacy-route provisioning failures",
-        )
-        .expect("Infallible");
+        let streaming_feedback_timeout_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_feedback_timeout_total"))
+                .expect("Infallible");
+        let streaming_soranet_provision_fail_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_soranet_provision_fail_total"))
+                .expect("Infallible");
         let streaming_soranet_provision_queue_drop_total = IntCounterVec::new(
-            Opts::new(
-                "streaming_soranet_provision_queue_drop_total",
-                "Streaming SoraNet provisioning queue drops grouped by reason",
-            ),
+            metric_specs.opts("streaming_soranet_provision_queue_drop_total"),
             &["reason"],
         )
         .expect("Infallible");
         for reason in ["full", "disconnected"] {
             let _ = streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]);
         }
-        let telemetry_redaction_total = IntCounterVec::new(
-            Opts::new(
-                "telemetry_redaction_total",
-                "Telemetry redaction events grouped by reason",
-            ),
-            &["reason"],
-        )
-        .expect("Infallible");
+        let telemetry_redaction_total =
+            IntCounterVec::new(metric_specs.opts("telemetry_redaction_total"), &["reason"])
+                .expect("Infallible");
         for reason in ["keyword", "explicit"] {
             let _ = telemetry_redaction_total.with_label_values(&[reason]);
         }
         let telemetry_redaction_skipped_total = IntCounterVec::new(
-            Opts::new(
-                "telemetry_redaction_skipped_total",
-                "Telemetry redaction skips grouped by reason",
-            ),
+            metric_specs.opts("telemetry_redaction_skipped_total"),
             &["reason"],
         )
         .expect("Infallible");
@@ -9952,286 +9535,198 @@ impl Default for Metrics {
             let _ = telemetry_redaction_skipped_total.with_label_values(&[reason]);
         }
         let telemetry_truncation_total =
-            IntCounter::new("telemetry_truncation_total", "Telemetry field truncations")
+            IntCounter::with_opts(metric_specs.opts("telemetry_truncation_total"))
                 .expect("Infallible");
-        let streaming_privacy_redaction_fail_total = IntCounter::new(
-            "streaming_privacy_redaction_fail_total",
-            "Streaming telemetry redaction failures",
-        )
-        .expect("Infallible");
+        let streaming_privacy_redaction_fail_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_privacy_redaction_fail_total"))
+                .expect("Infallible");
         let streaming_encode_latency_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_encode_latency_ms",
-                "Streaming encode latency in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_encode_latency_ms")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
         let streaming_encode_audio_jitter_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_encode_audio_jitter_ms",
-                "Streaming audio jitter (EWMA) in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_encode_audio_jitter_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_encode_audio_max_jitter_ms = GenericGauge::new(
-            "streaming_encode_audio_max_jitter_ms",
-            "Streaming maximum audio jitter observed in milliseconds",
-        )
-        .expect("Infallible");
+        let streaming_encode_audio_max_jitter_ms =
+            GenericGauge::with_opts(metric_specs.opts("streaming_encode_audio_max_jitter_ms"))
+                .expect("Infallible");
         streaming_encode_audio_max_jitter_ms.set(0);
-        let streaming_encode_dropped_layers_total = IntCounter::new(
-            "streaming_encode_dropped_layers_total",
-            "Streaming encode dropped layers",
-        )
-        .expect("Infallible");
+        let streaming_encode_dropped_layers_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_encode_dropped_layers_total"))
+                .expect("Infallible");
         let streaming_decode_buffer_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_decode_buffer_ms",
-                "Streaming decode buffer depth in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_decode_buffer_ms")
+                .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_decode_dropped_frames_total = IntCounter::new(
-            "streaming_decode_dropped_frames_total",
-            "Streaming decode dropped frames",
-        )
-        .expect("Infallible");
+        let streaming_decode_dropped_frames_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_decode_dropped_frames_total"))
+                .expect("Infallible");
         let streaming_decode_max_queue_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_decode_max_queue_ms",
-                "Maximum streaming decode queue depth in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_decode_max_queue_ms")
+                .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
         let streaming_decode_av_drift_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_decode_av_drift_ms",
-                "Streaming audio/video drift (absolute average, milliseconds)",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_decode_av_drift_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_decode_max_drift_ms = GenericGauge::new(
-            "streaming_decode_max_drift_ms",
-            "Streaming maximum audio/video drift observed in milliseconds",
-        )
-        .expect("Infallible");
+        let streaming_decode_max_drift_ms =
+            GenericGauge::with_opts(metric_specs.opts("streaming_decode_max_drift_ms"))
+                .expect("Infallible");
         streaming_decode_max_drift_ms.set(0);
         let streaming_audio_jitter_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_audio_jitter_ms",
-                "Viewer-reported audio jitter in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_audio_jitter_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_audio_max_jitter_ms = GenericGauge::new(
-            "streaming_audio_max_jitter_ms",
-            "Viewer maximum audio jitter observed in milliseconds",
-        )
-        .expect("Infallible");
+        let streaming_audio_max_jitter_ms =
+            GenericGauge::with_opts(metric_specs.opts("streaming_audio_max_jitter_ms"))
+                .expect("Infallible");
         streaming_audio_max_jitter_ms.set(0);
         let streaming_av_drift_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_av_drift_ms",
-                "Viewer-reported audio/video drift (absolute average, milliseconds)",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_av_drift_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_av_max_drift_ms = GenericGauge::new(
-            "streaming_av_max_drift_ms",
-            "Viewer maximum audio/video drift observed in milliseconds",
-        )
-        .expect("Infallible");
+        let streaming_av_max_drift_ms =
+            GenericGauge::with_opts(metric_specs.opts("streaming_av_max_drift_ms"))
+                .expect("Infallible");
         streaming_av_max_drift_ms.set(0);
-        let streaming_av_drift_ewma_ms = IntGauge::new(
-            "streaming_av_drift_ewma_ms",
-            "Viewer-reported EWMA audio/video drift in milliseconds (signed)",
-        )
-        .expect("Infallible");
+        let streaming_av_drift_ewma_ms =
+            IntGauge::with_opts(metric_specs.opts("streaming_av_drift_ewma_ms"))
+                .expect("Infallible");
         streaming_av_drift_ewma_ms.set(0);
-        let streaming_av_sync_window_ms = GenericGauge::new(
-            "streaming_av_sync_window_ms",
-            "Viewer sync diagnostics aggregation window in milliseconds",
-        )
-        .expect("Infallible");
+        let streaming_av_sync_window_ms =
+            GenericGauge::with_opts(metric_specs.opts("streaming_av_sync_window_ms"))
+                .expect("Infallible");
         streaming_av_sync_window_ms.set(0);
-        let streaming_av_sync_violation_total = IntCounter::new(
-            "streaming_av_sync_violation_total",
-            "Viewer sync violations observed",
-        )
-        .expect("Infallible");
+        let streaming_av_sync_violation_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_av_sync_violation_total"))
+                .expect("Infallible");
         let streaming_network_rtt_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_network_rtt_ms",
-                "Streaming network RTT in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 1.8, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_network_rtt_ms")
+                .buckets(prometheus::exponential_buckets(1.0, 1.8, 12).expect("inputs are valid")),
         )
         .expect("Infallible");
         let streaming_network_loss_percent_x100 = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_network_loss_percent_x100",
-                "Streaming network packet loss (basis points)",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 50.0, 21).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_network_loss_percent_x100")
+                .buckets(prometheus::linear_buckets(0.0, 50.0, 21).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let streaming_network_fec_repairs_total = IntCounter::new(
-            "streaming_network_fec_repairs_total",
-            "Streaming network FEC repairs performed",
-        )
-        .expect("Infallible");
-        let streaming_network_fec_failures_total = IntCounter::new(
-            "streaming_network_fec_failures_total",
-            "Streaming network FEC failures encountered",
-        )
-        .expect("Infallible");
-        let streaming_network_datagram_reinjects_total = IntCounter::new(
-            "streaming_network_datagram_reinjects_total",
-            "Streaming network datagram reinjects issued",
-        )
-        .expect("Infallible");
+        let streaming_network_fec_repairs_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_network_fec_repairs_total"))
+                .expect("Infallible");
+        let streaming_network_fec_failures_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_network_fec_failures_total"))
+                .expect("Infallible");
+        let streaming_network_datagram_reinjects_total =
+            IntCounter::with_opts(metric_specs.opts("streaming_network_datagram_reinjects_total"))
+                .expect("Infallible");
         let streaming_energy_encoder_mw = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_energy_encoder_mw",
-                "Streaming encoder energy consumption (milliwatts)",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_energy_encoder_mw")
+                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
         )
         .expect("Infallible");
         let streaming_energy_decoder_mw = Histogram::with_opts(
-            HistogramOpts::new(
-                "streaming_energy_decoder_mw",
-                "Streaming decoder energy consumption (milliwatts)",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("streaming_energy_decoder_mw")
+                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
         )
         .expect("Infallible");
         let nexus_audit_outcome_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_audit_outcome_total",
-                "Routed-trace audit outcomes grouped by trace identifier and status",
-            ),
+            metric_specs.opts("nexus_audit_outcome_total"),
             &["trace_id", "status"],
         )
         .expect("Infallible");
         let nexus_audit_outcome_last_timestamp = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_audit_outcome_last_timestamp_seconds",
-                "Unix timestamp of the most recent routed-trace audit outcome per trace",
-            ),
+            metric_specs.opts("nexus_audit_outcome_last_timestamp"),
             &["trace_id"],
         )
         .expect("Infallible");
         let nexus_space_directory_revision_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_space_directory_revision_total",
-                "Space Directory manifest revisions observed per dataspace",
-            ),
+            metric_specs.opts("nexus_space_directory_revision_total"),
             &["dataspace", "dataspace_id"],
         )
         .expect("Infallible");
         let nexus_space_directory_active_manifests = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_space_directory_active_manifests",
-                "Active UAID capability manifests per dataspace/profile",
-            ),
+            metric_specs.opts("nexus_space_directory_active_manifests"),
             &["dataspace", "dataspace_id", "profile"],
         )
         .expect("Infallible");
         let nexus_space_directory_revocations_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_space_directory_revocations_total",
-                "Capability manifest revocations grouped by dataspace and reason",
-            ),
+            metric_specs.opts("nexus_space_directory_revocations_total"),
             &["dataspace", "dataspace_id", "reason"],
         )
         .expect("Infallible");
         let kaigi_relay_registered_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_registered_total",
-                "Kaigi relay registrations grouped by domain",
-            ),
+            metric_specs.opts("kaigi_relay_registered_total"),
             &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_registration_bandwidth = HistogramVec::new(
-            HistogramOpts::new(
-                "kaigi_relay_registration_bandwidth_class",
-                "Kaigi relay registration bandwidth class distribution",
-            )
-            .buckets(prometheus::linear_buckets(1.0, 1.0, 8).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("kaigi_relay_registration_bandwidth")
+                .buckets(prometheus::linear_buckets(1.0, 1.0, 8).expect("inputs are valid")),
             &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_manifest_updates_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_manifest_updates_total",
-                "Kaigi relay manifest updates grouped by domain and action",
-            ),
+            metric_specs.opts("kaigi_relay_manifest_updates_total"),
             &["domain", "action"],
         )
         .expect("Infallible");
         let kaigi_relay_manifest_hop_count = HistogramVec::new(
-            HistogramOpts::new(
-                "kaigi_relay_manifest_hop_count",
-                "Kaigi relay manifest hop-count distribution",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("kaigi_relay_manifest_hop_count")
+                .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
             &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_failover_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_failover_total",
-                "Kaigi relay failovers grouped by domain and call",
-            ),
+            metric_specs.opts("kaigi_relay_failover_total"),
             &["domain", "call"],
         )
         .expect("Infallible");
         let kaigi_relay_failover_hop_count = HistogramVec::new(
-            HistogramOpts::new(
-                "kaigi_relay_failover_hop_count",
-                "Kaigi relay failover hop-count distribution",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("kaigi_relay_failover_hop_count")
+                .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
             &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_health_reports_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_health_reports_total",
-                "Kaigi relay health reports grouped by domain and status",
-            ),
+            metric_specs.opts("kaigi_relay_health_reports_total"),
             &["domain", "status"],
         )
         .expect("Infallible");
         let kaigi_relay_health_state = IntGaugeVec::new(
-            Opts::new(
-                "kaigi_relay_health_state",
-                "Kaigi relay health status (0=healthy,1=degraded,2=unavailable)",
-            ),
+            metric_specs.opts("kaigi_relay_health_state"),
             &["domain", "relay"],
         )
         .expect("Infallible");
         let dropped_messages =
-            IntCounter::new("dropped_messages", "Sumeragi dropped messages").expect("Infallible");
-        let sumeragi_dropped_block_messages_total = IntCounter::new(
-            "sumeragi_dropped_block_messages_total",
-            "Dropped Sumeragi block messages due to full channel",
-        )
-        .expect("Infallible");
-        let sumeragi_dropped_control_messages_total = IntCounter::new(
-            "sumeragi_dropped_control_messages_total",
-            "Dropped Sumeragi control messages due to full channel",
-        )
-        .expect("Infallible");
+            IntCounter::with_opts(metric_specs.opts("dropped_messages")).expect("Infallible");
+        let sumeragi_dropped_block_messages_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_dropped_block_messages_total"))
+                .expect("Infallible");
+        let sumeragi_dropped_control_messages_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_dropped_control_messages_total"))
+                .expect("Infallible");
         let registry = Registry::new();
         let musubi = musubi::MusubiMetrics::new(&registry);
         register_guarded(&registry, &streaming_hpke_rekeys_total);
@@ -10277,240 +9772,143 @@ impl Default for Metrics {
             streaming_network_fec_failures_total,
             streaming_network_datagram_reinjects_total
         );
-        let sumeragi_vrf_commits_emitted_total = IntCounter::new(
-            "sumeragi_vrf_commits_emitted_total",
-            "VRF commit messages broadcast by this validator",
-        )
-        .expect("Infallible");
-        let sumeragi_vrf_reveals_emitted_total = IntCounter::new(
-            "sumeragi_vrf_reveals_emitted_total",
-            "VRF reveal messages broadcast by this validator",
-        )
-        .expect("Infallible");
-        let sumeragi_vrf_reveals_late_total = IntCounter::new(
-            "sumeragi_vrf_reveals_late_total",
-            "VRF reveals accepted after the reveal window",
-        )
-        .expect("Infallible");
-        let sumeragi_vrf_non_reveal_penalties_total = IntCounter::new(
-            "sumeragi_vrf_non_reveal_penalties_total",
-            "VRF non-reveal penalties applied",
-        )
-        .expect("Infallible");
+        let sumeragi_vrf_commits_emitted_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_commits_emitted_total"))
+                .expect("Infallible");
+        let sumeragi_vrf_reveals_emitted_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_reveals_emitted_total"))
+                .expect("Infallible");
+        let sumeragi_vrf_reveals_late_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_reveals_late_total"))
+                .expect("Infallible");
+        let sumeragi_vrf_non_reveal_penalties_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_non_reveal_penalties_total"))
+                .expect("Infallible");
         let sumeragi_vrf_non_reveal_by_signer = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_vrf_non_reveal_by_signer",
-                "VRF non-reveal penalties by signer index",
-            ),
+            metric_specs.opts("sumeragi_vrf_non_reveal_by_signer"),
             &["idx"],
         )
         .expect("Infallible");
-        let sumeragi_vrf_no_participation_total = IntCounter::new(
-            "sumeragi_vrf_no_participation_total",
-            "VRF no-participation penalties applied",
-        )
-        .expect("Infallible");
+        let sumeragi_vrf_no_participation_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_no_participation_total"))
+                .expect("Infallible");
         let sumeragi_vrf_no_participation_by_signer = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_vrf_no_participation_by_signer",
-                "VRF no-participation penalties by signer index",
-            ),
+            metric_specs.opts("sumeragi_vrf_no_participation_by_signer"),
             &["idx"],
         )
         .expect("Infallible");
         let sumeragi_vrf_rejects_total_by_reason = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_vrf_rejects_total_by_reason",
-                "VRF commit/reveal rejects by reason",
-            ),
+            metric_specs.opts("sumeragi_vrf_rejects_total_by_reason"),
             &["reason"],
         )
         .expect("Infallible");
-        let p2p_dropped_posts = GenericGauge::new(
-            "p2p_dropped_posts",
-            "Number of p2p post messages dropped due to backpressure",
-        )
-        .expect("Infallible");
-        let p2p_dropped_broadcasts = GenericGauge::new(
-            "p2p_dropped_broadcasts",
-            "Number of p2p broadcast messages dropped due to backpressure",
-        )
-        .expect("Infallible");
-        let p2p_subscriber_queue_full_total = GenericGauge::new(
-            "p2p_subscriber_queue_full_total",
-            "Number of inbound messages dropped because subscriber queues were full",
-        )
-        .expect("Infallible");
+        let p2p_dropped_posts =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dropped_posts")).expect("Infallible");
+        let p2p_dropped_broadcasts =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dropped_broadcasts"))
+                .expect("Infallible");
+        let p2p_subscriber_queue_full_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_subscriber_queue_full_total"))
+                .expect("Infallible");
         let p2p_subscriber_queue_full_by_topic_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_subscriber_queue_full_by_topic_total",
-                "Per-topic inbound drops caused by full subscriber queues",
-            ),
+            metric_specs.opts("p2p_subscriber_queue_full_by_topic_total"),
             &["topic"],
         )
         .expect("Infallible");
-        let p2p_subscriber_unrouted_total = GenericGauge::new(
-            "p2p_subscriber_unrouted_total",
-            "Number of inbound messages dropped because no subscriber matches the topic",
-        )
-        .expect("Infallible");
+        let p2p_subscriber_unrouted_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_subscriber_unrouted_total"))
+                .expect("Infallible");
         let p2p_subscriber_unrouted_by_topic_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_subscriber_unrouted_by_topic_total",
-                "Per-topic inbound drops caused by no matching subscriber",
-            ),
+            metric_specs.opts("p2p_subscriber_unrouted_by_topic_total"),
             &["topic"],
         )
         .expect("Infallible");
         let p2p_handshake_failures =
-            GenericGauge::new("p2p_handshake_failures", "Number of p2p handshake failures")
+            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_failures"))
                 .expect("Infallible");
-        let p2p_low_post_throttled_total = GenericGauge::new(
-            "p2p_low_post_throttled_total",
-            "Number of low-priority post messages throttled",
-        )
-        .expect("Infallible");
-        let p2p_low_broadcast_throttled_total = GenericGauge::new(
-            "p2p_low_broadcast_throttled_total",
-            "Number of low-priority broadcast deliveries throttled",
-        )
-        .expect("Infallible");
-        let p2p_post_overflow_total = GenericGauge::new(
-            "p2p_post_overflow_total",
-            "Number of per-peer post channel overflows (bounded per-topic)",
-        )
-        .expect("Infallible");
+        let p2p_low_post_throttled_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_low_post_throttled_total"))
+                .expect("Infallible");
+        let p2p_low_broadcast_throttled_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_low_broadcast_throttled_total"))
+                .expect("Infallible");
+        let p2p_post_overflow_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_post_overflow_total"))
+                .expect("Infallible");
         let p2p_post_overflow_by_topic = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_post_overflow_by_topic",
-                "Per-topic per-peer post channel overflows (bounded per-topic)",
-            ),
+            metric_specs.opts("p2p_post_overflow_by_topic"),
             &["priority", "topic"],
         )
         .expect("Infallible");
         let consensus_ingress_drop_total = IntCounterVec::new(
-            Opts::new(
-                "consensus_ingress_drop_total",
-                "Consensus ingress drops grouped by topic and reason",
-            ),
+            metric_specs.opts("consensus_ingress_drop_total"),
             &["topic", "reason"],
         )
         .expect("Infallible");
-        let p2p_dns_refresh_total = GenericGauge::new(
-            "p2p_dns_refresh_total",
-            "Number of DNS interval-based refresh cycles performed",
-        )
-        .expect("Infallible");
-        let p2p_dns_ttl_refresh_total = GenericGauge::new(
-            "p2p_dns_ttl_refresh_total",
-            "Number of DNS TTL-based refresh cycles performed",
-        )
-        .expect("Infallible");
-        let p2p_dns_resolution_fail_total = GenericGauge::new(
-            "p2p_dns_resolution_fail_total",
-            "Number of DNS resolution/connection failures for hostname peers",
-        )
-        .expect("Infallible");
-        let p2p_dns_reconnect_success_total = GenericGauge::new(
-            "p2p_dns_reconnect_success_total",
-            "Number of DNS reconnect successes after refresh cycles",
-        )
-        .expect("Infallible");
-        let p2p_backoff_scheduled_total = GenericGauge::new(
-            "p2p_backoff_scheduled_total",
-            "Number of per-address connect backoffs scheduled",
-        )
-        .expect("Infallible");
-        let p2p_deferred_send_enqueued_total = GenericGauge::new(
-            "p2p_deferred_send_enqueued_total",
-            "Number of deferred outbound frames enqueued while peer sessions were unavailable",
-        )
-        .expect("Infallible");
-        let p2p_deferred_send_dropped_total = GenericGauge::new(
-            "p2p_deferred_send_dropped_total",
-            "Number of deferred outbound frames dropped (expiry, overflow, stale generation)",
-        )
-        .expect("Infallible");
-        let p2p_session_reconnect_total = GenericGauge::new(
-            "p2p_session_reconnect_total",
-            "Number of reconnect attempts triggered while deferring outbound frames",
-        )
-        .expect("Infallible");
-        let p2p_connect_retry_seconds = GenericGauge::new(
-            "p2p_connect_retry_seconds",
-            "Cumulative reconnect retry delay in seconds (rounded up from milliseconds)",
-        )
-        .expect("Infallible");
-        let p2p_accept_throttled_total = GenericGauge::new(
-            "p2p_accept_throttled_total",
-            "Number of incoming connections rejected by per-IP throttle",
-        )
-        .expect("Infallible");
-        let p2p_accept_bucket_evictions_total = GenericGauge::new(
-            "p2p_accept_bucket_evictions_total",
-            "Number of accept throttle bucket evictions (idle or capacity)",
-        )
-        .expect("Infallible");
-        let p2p_accept_buckets_current = GenericGauge::new(
-            "p2p_accept_buckets_current",
-            "Current number of active accept throttle buckets (prefix + per-IP)",
-        )
-        .expect("Infallible");
+        let p2p_dns_refresh_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dns_refresh_total"))
+                .expect("Infallible");
+        let p2p_dns_ttl_refresh_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dns_ttl_refresh_total"))
+                .expect("Infallible");
+        let p2p_dns_resolution_fail_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dns_resolution_fail_total"))
+                .expect("Infallible");
+        let p2p_dns_reconnect_success_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_dns_reconnect_success_total"))
+                .expect("Infallible");
+        let p2p_backoff_scheduled_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_backoff_scheduled_total"))
+                .expect("Infallible");
+        let p2p_deferred_send_enqueued_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_deferred_send_enqueued_total"))
+                .expect("Infallible");
+        let p2p_deferred_send_dropped_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_deferred_send_dropped_total"))
+                .expect("Infallible");
+        let p2p_session_reconnect_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_session_reconnect_total"))
+                .expect("Infallible");
+        let p2p_connect_retry_seconds =
+            GenericGauge::with_opts(metric_specs.opts("p2p_connect_retry_seconds"))
+                .expect("Infallible");
+        let p2p_accept_throttled_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_accept_throttled_total"))
+                .expect("Infallible");
+        let p2p_accept_bucket_evictions_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_accept_bucket_evictions_total"))
+                .expect("Infallible");
+        let p2p_accept_buckets_current =
+            GenericGauge::with_opts(metric_specs.opts("p2p_accept_buckets_current"))
+                .expect("Infallible");
         let p2p_accept_prefix_cache_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_accept_prefix_cache_total",
-                "Prefix bucket cache hits/misses for accept throttle (label `result` = hit|miss)",
-            ),
+            metric_specs.opts("p2p_accept_prefix_cache_total"),
             &["result"],
         )
         .expect("Infallible");
         let p2p_accept_throttle_decisions_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_accept_throttle_decisions_total",
-                "Accept throttle decisions (label `scope` = prefix|ip, `decision` = allowed|throttled)",
-            ),
+            metric_specs.opts("p2p_accept_throttle_decisions_total"),
             &["scope", "decision"],
         )
         .expect("Infallible");
-        let p2p_incoming_cap_reject_total = GenericGauge::new(
-            "p2p_incoming_cap_reject_total",
-            "Number of incoming connections rejected due to incoming cap",
-        )
-        .expect("Infallible");
-        let p2p_total_cap_reject_total = GenericGauge::new(
-            "p2p_total_cap_reject_total",
-            "Number of incoming connections rejected due to total cap",
-        )
-        .expect("Infallible");
-        let p2p_trust_score = IntGaugeVec::new(
-            Opts::new(
-                "p2p_trust_score",
-                "Per-peer trust score maintained by the gossip layer (decays toward zero)",
-            ),
-            &["peer_id"],
-        )
-        .expect("Infallible");
-        let p2p_trust_penalties_total = IntCounterVec::new(
-            Opts::new(
-                "p2p_trust_penalties_total",
-                "Applied trust penalties labeled by reason",
-            ),
-            &["reason"],
-        )
-        .expect("Infallible");
+        let p2p_incoming_cap_reject_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_incoming_cap_reject_total"))
+                .expect("Infallible");
+        let p2p_total_cap_reject_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_total_cap_reject_total"))
+                .expect("Infallible");
+        let p2p_trust_score = IntGaugeVec::new(metric_specs.opts("p2p_trust_score"), &["peer_id"])
+            .expect("Infallible");
+        let p2p_trust_penalties_total =
+            IntCounterVec::new(metric_specs.opts("p2p_trust_penalties_total"), &["reason"])
+                .expect("Infallible");
         let p2p_trust_decay_ticks_total = IntCounterVec::new(
-            Opts::new(
-                "p2p_trust_decay_ticks_total",
-                "Half-life decay ticks applied to peer trust scores (label `peer_id`)",
-            ),
+            metric_specs.opts("p2p_trust_decay_ticks_total"),
             &["peer_id"],
         )
         .expect("Infallible");
         let p2p_trust_gossip_skipped_total = IntCounterVec::new(
-            Opts::new(
-                "p2p_trust_gossip_skipped_total",
-                "Trust gossip frames skipped grouped by direction and reason",
-            ),
+            metric_specs.opts("p2p_trust_gossip_skipped_total"),
             &["direction", "reason"],
         )
         .expect("Infallible");
@@ -10519,1040 +9917,657 @@ impl Default for Metrics {
                 let _ = p2p_trust_gossip_skipped_total.with_label_values(&[direction, reason]);
             }
         }
-        let p2p_ws_inbound_total = GenericGauge::new(
-            "p2p_ws_inbound_total",
-            "Accepted inbound WebSocket P2P connections",
-        )
-        .expect("Infallible");
-        let p2p_ws_outbound_total = GenericGauge::new(
-            "p2p_ws_outbound_total",
-            "Successful outbound WebSocket P2P connections",
-        )
-        .expect("Infallible");
-        let p2p_scion_inbound_total = GenericGauge::new(
-            "p2p_scion_inbound_total",
-            "Accepted inbound SCION P2P connections",
-        )
-        .expect("Infallible");
-        let p2p_scion_outbound_total = GenericGauge::new(
-            "p2p_scion_outbound_total",
-            "Successful outbound SCION P2P connections",
-        )
-        .expect("Infallible");
+        let p2p_ws_inbound_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_ws_inbound_total")).expect("Infallible");
+        let p2p_ws_outbound_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_ws_outbound_total"))
+                .expect("Infallible");
+        let p2p_scion_inbound_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_scion_inbound_total"))
+                .expect("Infallible");
+        let p2p_scion_outbound_total =
+            GenericGauge::with_opts(metric_specs.opts("p2p_scion_outbound_total"))
+                .expect("Infallible");
         let tx_gossip_sent_total = IntCounterVec::new(
-            Opts::new(
-                "tx_gossip_sent_total",
-                "Transaction gossip batches sent grouped by plane and dataspace",
-            ),
+            metric_specs.opts("tx_gossip_sent_total"),
             &["plane", "dataspace"],
         )
         .expect("Infallible");
         let tx_gossip_dropped_total = IntCounterVec::new(
-            Opts::new(
-                "tx_gossip_dropped_total",
-                "Transaction gossip batches dropped grouped by plane, dataspace, and reason",
-            ),
+            metric_specs.opts("tx_gossip_dropped_total"),
             &["plane", "dataspace", "reason"],
         )
         .expect("Infallible");
         let tx_gossip_targets = GenericGaugeVec::new(
-            Opts::new(
-                "tx_gossip_targets",
-                "Latest transaction gossip target count grouped by plane and dataspace",
-            ),
+            metric_specs.opts("tx_gossip_targets"),
             &["plane", "dataspace"],
         )
         .expect("Infallible");
         let tx_gossip_fallback_total = IntCounterVec::new(
-            Opts::new(
-                "tx_gossip_fallback_total",
-                "Restricted transaction gossip fallback attempts grouped by plane, dataspace, and surface",
-            ),
+            metric_specs.opts("tx_gossip_fallback_total"),
             &["plane", "dataspace", "surface"],
         )
         .expect("Infallible");
-        let tx_gossip_frame_cap_bytes = GenericGauge::new(
-            "tx_gossip_frame_cap_bytes",
-            "Configured maximum frame size for transaction gossip payloads (bytes)",
-        )
-        .expect("Infallible");
-        let tx_gossip_public_target_cap = GenericGauge::new(
-            "tx_gossip_public_target_cap",
-            "Configured cap on public transaction gossip targets (0 = broadcast)",
-        )
-        .expect("Infallible");
-        let tx_gossip_restricted_target_cap = GenericGauge::new(
-            "tx_gossip_restricted_target_cap",
-            "Configured cap on restricted transaction gossip targets (0 = commit topology)",
-        )
-        .expect("Infallible");
-        let tx_gossip_public_target_reshuffle_ms = GenericGauge::new(
-            "tx_gossip_public_target_reshuffle_ms",
-            "Public-plane target reshuffle interval in milliseconds",
-        )
-        .expect("Infallible");
-        let tx_gossip_restricted_target_reshuffle_ms = GenericGauge::new(
-            "tx_gossip_restricted_target_reshuffle_ms",
-            "Restricted-plane target reshuffle interval in milliseconds",
-        )
-        .expect("Infallible");
-        let tx_gossip_drop_unknown_dataspace = GenericGauge::new(
-            "tx_gossip_drop_unknown_dataspace",
-            "Whether transaction gossip drops unknown dataspaces (1 = drop, 0 = route via restricted plane)",
-        )
-        .expect("Infallible");
-        let tx_gossip_restricted_fallback = GenericGauge::new(
-            "tx_gossip_restricted_fallback",
-            "Restricted gossip fallback policy (0 = drop, 1 = public overlay)",
-        )
-        .expect("Infallible");
-        let tx_gossip_restricted_public_policy = GenericGauge::new(
-            "tx_gossip_restricted_public_policy",
-            "Policy for restricted gossip when only the public overlay is available (0 = refuse, 1 = forward)",
-        )
-        .expect("Infallible");
+        let tx_gossip_frame_cap_bytes =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_frame_cap_bytes"))
+                .expect("Infallible");
+        let tx_gossip_public_target_cap =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_public_target_cap"))
+                .expect("Infallible");
+        let tx_gossip_restricted_target_cap =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_target_cap"))
+                .expect("Infallible");
+        let tx_gossip_public_target_reshuffle_ms =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_public_target_reshuffle_ms"))
+                .expect("Infallible");
+        let tx_gossip_restricted_target_reshuffle_ms =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_target_reshuffle_ms"))
+                .expect("Infallible");
+        let tx_gossip_drop_unknown_dataspace =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_drop_unknown_dataspace"))
+                .expect("Infallible");
+        let tx_gossip_restricted_fallback =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_fallback"))
+                .expect("Infallible");
+        let tx_gossip_restricted_public_policy =
+            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_public_policy"))
+                .expect("Infallible");
         let tx_gossip_status = Arc::new(RwLock::new(Vec::new()));
         let tx_gossip_caps = Arc::new(RwLock::new(TxGossipCaps::default()));
         let sumeragi_new_view_receipts_by_hv = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_new_view_receipts_by_hv",
-                "NEW_VIEW receipt counts labeled by (height, view)",
-            ),
+            metric_specs.opts("sumeragi_new_view_receipts_by_hv"),
             &["height", "view"],
         )
         .expect("Infallible");
-        let sumeragi_post_to_peer_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_post_to_peer_total",
-                "Sumeragi post attempts to peers (collector routing; cumulative)",
-            ),
-            &["peer"],
-        )
-        .expect("Infallible");
+        let sumeragi_post_to_peer_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_post_to_peer_total"), &["peer"])
+                .expect("Infallible");
         let sumeragi_bg_post_enqueued_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_bg_post_enqueued_total",
-                "Sumeragi background-post enqueued tasks (cumulative)",
-            ),
+            metric_specs.opts("sumeragi_bg_post_enqueued_total"),
             &["kind"],
         )
         .expect("Infallible");
         let sumeragi_bg_post_overflow_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_bg_post_overflow_total",
-                "Sumeragi background-post queue full events (backpressure applied)",
-            ),
+            metric_specs.opts("sumeragi_bg_post_overflow_total"),
             &["kind"],
         )
         .expect("Infallible");
-        let sumeragi_bg_post_drop_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_bg_post_drop_total",
-                "Sumeragi background-post drops when the worker queue is unavailable",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_bg_post_queue_depth = GenericGauge::new(
-            "sumeragi_bg_post_queue_depth",
-            "Sumeragi background-post queue depth (global)",
-        )
-        .expect("Infallible");
+        let sumeragi_bg_post_drop_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_bg_post_drop_total"), &["kind"])
+                .expect("Infallible");
+        let sumeragi_bg_post_queue_depth =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_bg_post_queue_depth"))
+                .expect("Infallible");
         let sumeragi_bg_post_queue_depth_by_peer = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_bg_post_queue_depth_by_peer",
-                "Sumeragi background-post queue depth by peer id",
-            ),
+            metric_specs.opts("sumeragi_bg_post_queue_depth_by_peer"),
             &["peer"],
         )
         .expect("Infallible");
         let sumeragi_bg_post_age_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_bg_post_age_ms",
-                "Sumeragi background-post age in milliseconds by kind",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("sumeragi_bg_post_age_ms")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
             &["kind"],
         )
         .expect("Infallible");
-        let sumeragi_new_view_publish_total = IntCounter::new(
-            "sumeragi_new_view_publish_total",
-            "Sumeragi NEW_VIEW messages published (cumulative)",
-        )
-        .expect("Infallible");
-        let sumeragi_new_view_recv_total = IntCounter::new(
-            "sumeragi_new_view_recv_total",
-            "Sumeragi NEW_VIEW messages received and accepted (cumulative)",
-        )
-        .expect("Infallible");
-        let sumeragi_new_view_dropped_by_lock_total = IntCounter::new(
-            "sumeragi_new_view_dropped_by_lock_total",
-            "Sumeragi NEW_VIEW messages rejected because HighestQC is behind the locked QC",
-        )
-        .expect("Infallible");
-        let sumeragi_commit_conflict_detected_total = IntCounter::new(
-            "sumeragi_commit_conflict_detected_total",
-            "Sumeragi commit-conflict detections (cumulative)",
-        )
-        .expect("Infallible");
+        let sumeragi_new_view_publish_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_publish_total"))
+                .expect("Infallible");
+        let sumeragi_new_view_recv_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_recv_total"))
+                .expect("Infallible");
+        let sumeragi_new_view_dropped_by_lock_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_dropped_by_lock_total"))
+                .expect("Infallible");
+        let sumeragi_commit_conflict_detected_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_commit_conflict_detected_total"))
+                .expect("Infallible");
         let sumeragi_missing_block_fetch_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_missing_block_fetch_total",
-                "Sumeragi missing-block fetch planning outcomes (requested|backoff|no_targets)",
-            ),
+            metric_specs.opts("sumeragi_missing_block_fetch_total"),
             &["outcome"],
         )
         .expect("Infallible");
         let sumeragi_missing_block_fetch_target_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_missing_block_fetch_target_total",
-                "Sumeragi missing-block fetch target kind (signers|topology|none)",
-            ),
+            metric_specs.opts("sumeragi_missing_block_fetch_target_total"),
             &["target"],
         )
         .expect("Infallible");
         let sumeragi_missing_block_fetch_dwell_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_missing_block_fetch_dwell_ms",
-                "Elapsed milliseconds between first-seen certificate and missing-block fetch request",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("sumeragi_missing_block_fetch_dwell_ms")
+                .buckets(prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid")),
         )
         .expect("Infallible");
         let sumeragi_missing_block_fetch_targets = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_missing_block_fetch_targets",
-                "Target peers selected when requesting a missing block payload",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("sumeragi_missing_block_fetch_targets")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid")),
         )
         .expect("Infallible");
-        let blocksync_qc_quarantine_total = IntCounter::new(
-            "blocksync_qc_quarantine_total",
-            "Block-sync QCs quarantined while missing context is unresolved (cumulative)",
-        )
-        .expect("Infallible");
-        let blocksync_qc_revalidated_total = IntCounter::new(
-            "blocksync_qc_revalidated_total",
-            "Quarantined block-sync QCs revalidated successfully (cumulative)",
-        )
-        .expect("Infallible");
+        let blocksync_qc_quarantine_total =
+            IntCounter::with_opts(metric_specs.opts("blocksync_qc_quarantine_total"))
+                .expect("Infallible");
+        let blocksync_qc_revalidated_total =
+            IntCounter::with_opts(metric_specs.opts("blocksync_qc_revalidated_total"))
+                .expect("Infallible");
         let blocksync_qc_final_drop_total = IntCounterVec::new(
-            Opts::new(
-                "blocksync_qc_final_drop_total",
-                "Block-sync QCs dropped permanently after bounded quarantine (labeled by reason)",
-            ),
+            metric_specs.opts("blocksync_qc_final_drop_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let qc_deferred_missing_payload_total = IntCounter::new(
-            "qc_deferred_missing_payload_total",
-            "QCs deferred because payload was not available locally (cumulative)",
-        )
-        .expect("Infallible");
-        let qc_deferred_resolved_total = IntCounter::new(
-            "qc_deferred_resolved_total",
-            "Deferred QCs resolved after payload arrival (cumulative)",
-        )
-        .expect("Infallible");
-        let qc_deferred_expired_total = IntCounter::new(
-            "qc_deferred_expired_total",
-            "Deferred QCs expired after bounded retries/escalation (cumulative)",
-        )
-        .expect("Infallible");
-        let consensus_empty_commit_topology_defer_total = IntCounter::new(
-            "consensus_empty_commit_topology_defer_total",
-            "Consensus deferrals caused by empty commit topology (cumulative)",
-        )
-        .expect("Infallible");
-        let consensus_empty_commit_topology_escalation_total = IntCounter::new(
-            "consensus_empty_commit_topology_escalation_total",
-            "Empty-topology recoveries escalated to forced view changes (cumulative)",
+        let qc_deferred_missing_payload_total =
+            IntCounter::with_opts(metric_specs.opts("qc_deferred_missing_payload_total"))
+                .expect("Infallible");
+        let qc_deferred_resolved_total =
+            IntCounter::with_opts(metric_specs.opts("qc_deferred_resolved_total"))
+                .expect("Infallible");
+        let qc_deferred_expired_total =
+            IntCounter::with_opts(metric_specs.opts("qc_deferred_expired_total"))
+                .expect("Infallible");
+        let consensus_empty_commit_topology_defer_total =
+            IntCounter::with_opts(metric_specs.opts("consensus_empty_commit_topology_defer_total"))
+                .expect("Infallible");
+        let consensus_empty_commit_topology_escalation_total = IntCounter::with_opts(
+            metric_specs.opts("consensus_empty_commit_topology_escalation_total"),
         )
         .expect("Infallible");
         let consensus_recovery_state_transitions_total = IntCounterVec::new(
-            Opts::new(
-                "consensus_recovery_state_transitions_total",
-                "Consensus recovery state transitions (labeled by state)",
-            ),
+            metric_specs.opts("consensus_recovery_state_transitions_total"),
             &["state"],
         )
         .expect("Infallible");
-        let consensus_missing_block_height_escalation_total = IntCounter::new(
-            "consensus_missing_block_height_escalation_total",
-            "Height-scoped missing-block recoveries escalated via deterministic hard cap (cumulative)",
+        let consensus_missing_block_height_escalation_total = IntCounter::with_opts(
+            metric_specs.opts("consensus_missing_block_height_escalation_total"),
         )
         .expect("Infallible");
-        let consensus_sidecar_quarantine_total = IntCounter::new(
-            "consensus_sidecar_quarantine_total",
-            "Sidecar mismatches quarantined in fail-closed mode (cumulative)",
-        )
-        .expect("Infallible");
-        let consensus_sidecar_final_drop_total = IntCounter::new(
-            "consensus_sidecar_final_drop_total",
-            "Sidecar mismatch entries final-dropped after retry/TTL bounds (cumulative)",
-        )
-        .expect("Infallible");
-        let blocksync_range_pull_escalation_total = IntCounter::new(
-            "blocksync_range_pull_escalation_total",
-            "Block-sync range-pull escalations requested by recovery logic (cumulative)",
-        )
-        .expect("Infallible");
-        let blocksync_range_pull_success_total = IntCounter::new(
-            "blocksync_range_pull_success_total",
-            "Block-sync range-pull recoveries that succeeded (cumulative)",
-        )
-        .expect("Infallible");
-        let blocksync_range_pull_failure_total = IntCounter::new(
-            "blocksync_range_pull_failure_total",
-            "Block-sync range-pull recoveries that expired without progress (cumulative)",
-        )
-        .expect("Infallible");
+        let consensus_sidecar_quarantine_total =
+            IntCounter::with_opts(metric_specs.opts("consensus_sidecar_quarantine_total"))
+                .expect("Infallible");
+        let consensus_sidecar_final_drop_total =
+            IntCounter::with_opts(metric_specs.opts("consensus_sidecar_final_drop_total"))
+                .expect("Infallible");
+        let blocksync_range_pull_escalation_total =
+            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_escalation_total"))
+                .expect("Infallible");
+        let blocksync_range_pull_success_total =
+            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_success_total"))
+                .expect("Infallible");
+        let blocksync_range_pull_failure_total =
+            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_failure_total"))
+                .expect("Infallible");
         let consensus_recovery_stuck_round_seconds = Histogram::with_opts(
-            HistogramOpts::new(
-                "consensus_recovery_stuck_round_seconds",
-                "Observed seconds spent in empty-topology/missing-dependency recovery rounds",
-            )
-            .buckets(prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("consensus_recovery_stuck_round_seconds")
+                .buckets(prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid")),
         )
         .expect("Infallible");
         let sumeragi_da_gate_block_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_gate_block_total",
-                "Sumeragi commits gated by missing data-availability artifacts (missing_local_data|manifest_*)",
-            ),
+            metric_specs.opts("sumeragi_da_gate_block_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let sumeragi_da_gate_last_reason = GenericGauge::new(
-            "sumeragi_da_gate_last_reason",
-            "Sumeragi DA availability last reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)",
-        )
-        .expect("Infallible");
-        let sumeragi_da_gate_last_satisfied = GenericGauge::new(
-            "sumeragi_da_gate_last_satisfied",
-            "Sumeragi DA availability last satisfaction code (0=none,1=missing_data_recovered)",
-        )
-        .expect("Infallible");
+        let sumeragi_da_gate_last_reason =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_da_gate_last_reason"))
+                .expect("Infallible");
+        let sumeragi_da_gate_last_satisfied =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_da_gate_last_satisfied"))
+                .expect("Infallible");
         let sumeragi_da_gate_satisfied_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_gate_satisfied_total",
-                "Sumeragi DA availability satisfactions (missing_data_recovered)",
-            ),
+            metric_specs.opts("sumeragi_da_gate_satisfied_total"),
             &["gate"],
         )
         .expect("Infallible");
         let sumeragi_da_manifest_guard_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_manifest_guard_total",
-                "Sumeragi DA manifest guard outcomes (allowed|rejected by reason)",
-            ),
+            metric_specs.opts("sumeragi_da_manifest_guard_total"),
             &["result", "reason"],
         )
         .expect("Infallible");
         let sumeragi_da_manifest_cache_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_manifest_cache_total",
-                "Sumeragi DA manifest cache outcomes (hit|miss)",
-            ),
+            metric_specs.opts("sumeragi_da_manifest_cache_total"),
             &["result"],
         )
         .expect("Infallible");
         let sumeragi_da_spool_cache_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_spool_cache_total",
-                "Sumeragi DA spool cache outcomes (hit|miss by kind)",
-            ),
+            metric_specs.opts("sumeragi_da_spool_cache_total"),
             &["kind", "result"],
         )
         .expect("Infallible");
         let sumeragi_da_pin_intent_spool_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_pin_intent_spool_total",
-                "Sumeragi DA pin intent spool handling outcomes (kept|dropped by reason)",
-            ),
+            metric_specs.opts("sumeragi_da_pin_intent_spool_total"),
             &["result", "reason"],
         )
         .expect("Infallible");
         // RBC metrics
-        let sumeragi_rbc_sessions_active = GenericGauge::new(
-            "sumeragi_rbc_sessions_active",
-            "Sumeragi RBC active sessions (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_sessions_pruned_total = IntCounter::new(
-            "sumeragi_rbc_sessions_pruned_total",
-            "Sumeragi RBC sessions pruned due to TTL",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_init_requests_total = IntCounter::new(
-            "sumeragi_rbc_init_requests_total",
-            "Sumeragi RBC targeted INIT repair requests sent",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_chunk_requests_total = IntCounter::new(
-            "sumeragi_rbc_chunk_requests_total",
-            "Sumeragi RBC targeted chunk repair requests sent",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_requested_chunks_total = IntCounter::new(
-            "sumeragi_rbc_requested_chunks_total",
-            "Sumeragi RBC encoded chunk indices requested via targeted repair",
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_sessions_active =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_sessions_active"))
+                .expect("Infallible");
+        let sumeragi_rbc_sessions_pruned_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_sessions_pruned_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_init_requests_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_init_requests_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_chunk_requests_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_chunk_requests_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_requested_chunks_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_requested_chunks_total"))
+                .expect("Infallible");
         let sumeragi_rbc_initial_chunk_targets_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_initial_chunk_targets_total",
-                "Sumeragi RBC initial chunk target outcomes by encoding and fanout policy",
-            ),
+            metric_specs.opts("sumeragi_rbc_initial_chunk_targets_total"),
             &["encoding", "fanout", "outcome"],
         )
         .expect("Infallible");
         let sumeragi_rbc_repair_fallback_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_repair_fallback_total",
-                "Sumeragi RBC targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)",
-            ),
+            metric_specs.opts("sumeragi_rbc_repair_fallback_total"),
             &["kind"],
         )
         .expect("Infallible");
-        let sumeragi_rbc_ready_broadcasts_total = IntCounter::new(
-            "sumeragi_rbc_ready_broadcasts_total",
-            "Sumeragi RBC READY broadcasts sent",
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_ready_broadcasts_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_ready_broadcasts_total"))
+                .expect("Infallible");
         let sumeragi_rbc_rebroadcast_skipped_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_rebroadcast_skipped_total",
-                "Sumeragi RBC rebroadcasts skipped (kind=payload|ready)",
-            ),
+            metric_specs.opts("sumeragi_rbc_rebroadcast_skipped_total"),
             &["kind"],
         )
         .expect("Infallible");
-        let sumeragi_rbc_deliver_broadcasts_total = IntCounter::new(
-            "sumeragi_rbc_deliver_broadcasts_total",
-            "Sumeragi RBC DELIVER broadcasts sent",
+        let sumeragi_rbc_deliver_broadcasts_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_broadcasts_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_payload_bytes_delivered_total = GenericGauge::with_opts(
+            metric_specs.opts("sumeragi_rbc_payload_bytes_delivered_total"),
         )
         .expect("Infallible");
-        let sumeragi_rbc_payload_bytes_delivered_total = GenericGauge::new(
-            "sumeragi_rbc_payload_bytes_delivered_total",
-            "Sumeragi RBC payload bytes delivered and cached (cumulative)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_reconstructed_stripes_total = IntCounter::new(
-            "sumeragi_rbc_reconstructed_stripes_total",
-            "Sumeragi RBC RS16 stripes reconstructed from parity",
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_reconstructed_stripes_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_reconstructed_stripes_total"))
+                .expect("Infallible");
         let sumeragi_rbc_seed_latency_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_rbc_seed_latency_ms",
-                "Sumeragi RBC seed/preprocessing latency in milliseconds",
-            )
-            .buckets(vec![
-                0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_rbc_seed_latency_ms")
+                .buckets(vec![
+                    0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                ]),
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_tx_count = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_lane_tx_count",
-                "Sumeragi RBC backlog transactions served per lane",
-            ),
+            metric_specs.opts("sumeragi_rbc_lane_tx_count"),
             &["lane_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_total_chunks = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_lane_total_chunks",
-                "Sumeragi RBC total chunks attributed to a lane",
-            ),
+            metric_specs.opts("sumeragi_rbc_lane_total_chunks"),
             &["lane_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_pending_chunks = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_lane_pending_chunks",
-                "Sumeragi RBC pending chunks attributed to a lane",
-            ),
+            metric_specs.opts("sumeragi_rbc_lane_pending_chunks"),
             &["lane_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_bytes_total = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_lane_bytes_total",
-                "Sumeragi RBC payload bytes attributed to a lane",
-            ),
+            metric_specs.opts("sumeragi_rbc_lane_bytes_total"),
             &["lane_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_dataspace_tx_count = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_dataspace_tx_count",
-                "Sumeragi RBC backlog transactions served per dataspace",
-            ),
+            metric_specs.opts("sumeragi_rbc_dataspace_tx_count"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_dataspace_total_chunks = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_dataspace_total_chunks",
-                "Sumeragi RBC total chunks attributed to a dataspace",
-            ),
+            metric_specs.opts("sumeragi_rbc_dataspace_total_chunks"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_dataspace_pending_chunks = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_dataspace_pending_chunks",
-                "Sumeragi RBC pending chunks attributed to a dataspace",
-            ),
+            metric_specs.opts("sumeragi_rbc_dataspace_pending_chunks"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
         let sumeragi_rbc_dataspace_bytes_total = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_rbc_dataspace_bytes_total",
-                "Sumeragi RBC payload bytes attributed to a dataspace",
-            ),
+            metric_specs.opts("sumeragi_rbc_dataspace_bytes_total"),
             &["lane_id", "dataspace_id"],
         )
         .expect("Infallible");
-        let sumeragi_da_votes_ingested_total = IntCounter::new(
-            "sumeragi_da_votes_ingested_total",
-            "Availability votes ingested by this validator (cumulative)",
-        )
-        .expect("Infallible");
+        let sumeragi_da_votes_ingested_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_da_votes_ingested_total"))
+                .expect("Infallible");
         let sumeragi_qc_assembly_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_qc_assembly_latency_ms",
-                "Latency from first vote to QC assembly (ms) labeled by kind",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_qc_assembly_latency_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                ]),
             &["kind"],
         )
         .expect("Infallible");
-        let sumeragi_qc_last_latency_ms = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_qc_last_latency_ms",
-                "Last observed QC assembly latency (ms) labeled by kind",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_store_sessions = GenericGauge::new(
-            "sumeragi_rbc_store_sessions",
-            "Sumeragi RBC persisted store sessions (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_store_bytes = GenericGauge::new(
-            "sumeragi_rbc_store_bytes",
-            "Sumeragi RBC persisted store payload bytes (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_store_pressure = GenericGauge::new(
-            "sumeragi_rbc_store_pressure",
-            "Sumeragi RBC store pressure level (0=normal,1=soft,2=hard)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_store_evictions_total = IntCounter::new(
-            "sumeragi_rbc_store_evictions_total",
-            "Sumeragi RBC persisted sessions evicted due to TTL or capacity limits",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_persist_drops_total = IntCounter::new(
-            "sumeragi_rbc_persist_drops_total",
-            "Sumeragi RBC persist requests dropped due to full async queue",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_status_persistence_disabled = GenericGauge::new(
-            "sumeragi_rbc_status_persistence_disabled",
-            "Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_status_persist_failures_total = IntCounter::new(
-            "sumeragi_rbc_status_persist_failures_total",
-            "Sumeragi RBC status snapshot fatal persist failures",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_backpressure_deferrals_total = IntCounter::new(
-            "sumeragi_rbc_backpressure_deferrals_total",
-            "Sumeragi RBC proposal deferrals due to store back-pressure",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_deliver_defer_ready_total = IntCounter::new(
-            "sumeragi_rbc_deliver_defer_ready_total",
-            "Sumeragi RBC DELIVER deferrals waiting on READY quorum",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_deliver_defer_chunks_total = IntCounter::new(
-            "sumeragi_rbc_deliver_defer_chunks_total",
-            "Sumeragi RBC DELIVER deferrals waiting on missing chunks",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_da_reschedule_total = IntCounter::new(
-            "sumeragi_rbc_da_reschedule_total",
-            "Sumeragi RBC DA deadline reschedules triggered",
-        )
-        .expect("Infallible");
+        let sumeragi_qc_last_latency_ms =
+            GenericGaugeVec::new(metric_specs.opts("sumeragi_qc_last_latency_ms"), &["kind"])
+                .expect("Infallible");
+        let sumeragi_rbc_store_sessions =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_sessions"))
+                .expect("Infallible");
+        let sumeragi_rbc_store_bytes =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_bytes"))
+                .expect("Infallible");
+        let sumeragi_rbc_store_pressure =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_pressure"))
+                .expect("Infallible");
+        let sumeragi_rbc_store_evictions_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_store_evictions_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_persist_drops_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_persist_drops_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_status_persistence_disabled =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_status_persistence_disabled"))
+                .expect("Infallible");
+        let sumeragi_rbc_status_persist_failures_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_status_persist_failures_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_backpressure_deferrals_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_backpressure_deferrals_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_deliver_defer_ready_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_defer_ready_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_deliver_defer_chunks_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_defer_chunks_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_da_reschedule_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_da_reschedule_total"))
+                .expect("Infallible");
         let sumeragi_rbc_da_reschedule_by_mode_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_da_reschedule_by_mode_total",
-                "Sumeragi RBC DA deadline reschedules triggered (labeled by consensus mode)",
-            ),
+            metric_specs.opts("sumeragi_rbc_da_reschedule_by_mode_total"),
             &["mode"],
         )
         .expect("Infallible");
-        let sumeragi_rbc_abort_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_abort_total",
-                "Sumeragi pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)",
-            ),
-            &["mode"],
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_abort_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_rbc_abort_total"), &["mode"])
+                .expect("Infallible");
         let sumeragi_rbc_mismatch_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_mismatch_total",
-                "Sumeragi RBC payload mismatches attributed to peers (labeled by peer, kind)",
-            ),
+            metric_specs.opts("sumeragi_rbc_mismatch_total"),
             &["peer", "kind"],
         )
         .expect("Infallible");
         let sumeragi_kura_store_failures_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_kura_store_failures_total",
-                "Sumeragi kura persistence failures (outcome=retry|abort)",
-            ),
+            metric_specs.opts("sumeragi_kura_store_failures_total"),
             &["outcome"],
         )
         .expect("Infallible");
-        let sumeragi_kura_store_last_retry_attempt = GenericGauge::new(
-            "sumeragi_kura_store_last_retry_attempt",
-            "Most recent kura persistence retry attempt (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_kura_store_last_retry_backoff_ms = GenericGauge::new(
-            "sumeragi_kura_store_last_retry_backoff_ms",
-            "Most recent kura persistence retry backoff in milliseconds (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferrals_total = IntCounter::new(
-            "sumeragi_pacemaker_backpressure_deferrals_total",
-            "Sumeragi pacemaker proposal deferrals due to transaction-queue back-pressure",
+        let sumeragi_kura_store_last_retry_attempt =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_kura_store_last_retry_attempt"))
+                .expect("Infallible");
+        let sumeragi_kura_store_last_retry_backoff_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_kura_store_last_retry_backoff_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_backpressure_deferrals_total = IntCounter::with_opts(
+            metric_specs.opts("sumeragi_pacemaker_backpressure_deferrals_total"),
         )
         .expect("Infallible");
         let sumeragi_pacemaker_backpressure_deferrals_by_reason_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_pacemaker_backpressure_deferrals_by_reason_total",
-                "Sumeragi pacemaker backpressure deferrals grouped by reason",
-            ),
+            metric_specs.opts("sumeragi_pacemaker_backpressure_deferrals_by_reason_total"),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_pacemaker_backpressure_deferral_duration_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_pacemaker_backpressure_deferral_duration_ms",
-                "Sumeragi pacemaker backpressure deferral duration histogram (ms) grouped by reason",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
-                20000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_pacemaker_backpressure_deferral_duration_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
+                    20000.0,
+                ]),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_pacemaker_backpressure_deferral_active = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_pacemaker_backpressure_deferral_active",
-                "Sumeragi pacemaker backpressure deferral active state (0/1) grouped by reason",
-            ),
+            metric_specs.opts("sumeragi_pacemaker_backpressure_deferral_active"),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_pacemaker_backpressure_deferral_age_ms = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_pacemaker_backpressure_deferral_age_ms",
-                "Sumeragi pacemaker backpressure deferral age in milliseconds grouped by reason",
-            ),
+            metric_specs.opts("sumeragi_pacemaker_backpressure_deferral_age_ms"),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_pacemaker_eval_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_pacemaker_eval_ms",
-                "Sumeragi pacemaker evaluation duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_pacemaker_eval_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+                ]),
         )
         .expect("Infallible");
         let sumeragi_pacemaker_propose_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_pacemaker_propose_ms",
-                "Sumeragi pacemaker proposal attempt duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_pacemaker_propose_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+                ]),
         )
         .expect("Infallible");
         let sumeragi_commit_stage_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_commit_stage_ms",
-                "Sumeragi commit pipeline stage duration histogram (ms) labeled by stage",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                10000.0, 20000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_commit_stage_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                    10000.0, 20000.0,
+                ]),
             &["stage"],
         )
         .expect("Infallible");
         let state_commit_view_lock_wait_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "state_commit_view_lock_wait_ms",
-                "Legacy state commit view_lock wait duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                10000.0,
-            ]),
+            metric_specs
+                .histogram_opts("state_commit_view_lock_wait_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    10000.0,
+                ]),
         )
         .expect("Infallible");
         let state_commit_view_lock_hold_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "state_commit_view_lock_hold_ms",
-                "Legacy state commit view_lock hold duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                10000.0,
-            ]),
+            metric_specs
+                .histogram_opts("state_commit_view_lock_hold_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    10000.0,
+                ]),
         )
         .expect("Infallible");
         let state_commit_write_lock_wait_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "state_commit_write_lock_wait_ms",
-                "State commit state_write_lock wait duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                10000.0,
-            ]),
+            metric_specs
+                .histogram_opts("state_commit_write_lock_wait_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    10000.0,
+                ]),
         )
         .expect("Infallible");
         let state_commit_write_lock_hold_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "state_commit_write_lock_hold_ms",
-                "State commit state_write_lock hold duration histogram (ms)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                10000.0,
-            ]),
+            metric_specs
+                .histogram_opts("state_commit_write_lock_hold_ms")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    10000.0,
+                ]),
         )
         .expect("Infallible");
         let sumeragi_commit_pipeline_tick_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_commit_pipeline_tick_total",
-                "Sumeragi commit pipeline executions triggered by the pacemaker tick loop",
-            ),
+            metric_specs.opts("sumeragi_commit_pipeline_tick_total"),
             &["mode", "outcome"],
         )
         .expect("Infallible");
         let sumeragi_prevote_timeout_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_prevote_timeout_total",
-                "Sumeragi prevote-quorum timeouts that triggered rebroadcast + view change",
-            ),
+            metric_specs.opts("sumeragi_prevote_timeout_total"),
             &["mode"],
         )
         .expect("Infallible");
-        let sumeragi_rbc_backlog_chunks_total = GenericGauge::new(
-            "sumeragi_rbc_backlog_chunks_total",
-            "Total missing RBC chunks across active sessions",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_backlog_chunks_max = GenericGauge::new(
-            "sumeragi_rbc_backlog_chunks_max",
-            "Maximum missing RBC chunks within a single session",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_backlog_sessions_pending = GenericGauge::new(
-            "sumeragi_rbc_backlog_sessions_pending",
-            "Number of RBC sessions pending delivery",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_pending_sessions: GenericGauge<AtomicU64> = GenericGauge::new(
-            "sumeragi_rbc_pending_sessions",
-            "Pending RBC stashes awaiting INIT (count)",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_pending_chunks: GenericGauge<AtomicU64> = GenericGauge::new(
-            "sumeragi_rbc_pending_chunks",
-            "Pending RBC chunk frames buffered before INIT",
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_pending_bytes: GenericGauge<AtomicU64> = GenericGauge::new(
-            "sumeragi_rbc_pending_bytes",
-            "Pending RBC payload/signature bytes buffered before INIT",
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_backlog_chunks_total =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_chunks_total"))
+                .expect("Infallible");
+        let sumeragi_rbc_backlog_chunks_max =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_chunks_max"))
+                .expect("Infallible");
+        let sumeragi_rbc_backlog_sessions_pending =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_sessions_pending"))
+                .expect("Infallible");
+        let sumeragi_rbc_pending_sessions: GenericGauge<AtomicU64> =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_sessions"))
+                .expect("Infallible");
+        let sumeragi_rbc_pending_chunks: GenericGauge<AtomicU64> =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_chunks"))
+                .expect("Infallible");
+        let sumeragi_rbc_pending_bytes: GenericGauge<AtomicU64> =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_bytes"))
+                .expect("Infallible");
         let sumeragi_rbc_pending_drops_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_pending_drops_total",
-                "Pending RBC frames dropped before INIT (labeled by reason)",
-            ),
+            metric_specs.opts("sumeragi_rbc_pending_drops_total"),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_rbc_pending_dropped_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_rbc_pending_dropped_bytes_total",
-                "Pending RBC bytes dropped before INIT (labeled by reason)",
-            ),
+            metric_specs.opts("sumeragi_rbc_pending_dropped_bytes_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let sumeragi_rbc_pending_evicted_total = IntCounter::new(
-            "sumeragi_rbc_pending_evicted_total",
-            "Pending RBC stashes evicted due to TTL or stash cap (sessions)",
-        )
-        .expect("Infallible");
+        let sumeragi_rbc_pending_evicted_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_pending_evicted_total"))
+                .expect("Infallible");
         let sumeragi_membership_mismatch_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_membership_mismatch_total",
-                "Sumeragi consensus membership mismatches detected",
-            ),
+            metric_specs.opts("sumeragi_membership_mismatch_total"),
             &["peer", "height", "view"],
         )
         .expect("Infallible");
         let sumeragi_membership_mismatch_active = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_membership_mismatch_active",
-                "Peers currently flagged for consensus membership mismatches",
-            ),
+            metric_specs.opts("sumeragi_membership_mismatch_active"),
             &["peer"],
         )
         .expect("Infallible");
-        let sumeragi_highest_qc_height = GenericGauge::new(
-            "sumeragi_highest_qc_height",
-            "Sumeragi highest QC height (gauge)",
-        )
-        .expect("Infallible");
-        let sumeragi_locked_qc_height = GenericGauge::new(
-            "sumeragi_locked_qc_height",
-            "Sumeragi locked QC height (gauge)",
-        )
-        .expect("Infallible");
+        let sumeragi_highest_qc_height =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_highest_qc_height"))
+                .expect("Infallible");
+        let sumeragi_locked_qc_height =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_locked_qc_height"))
+                .expect("Infallible");
         let sumeragi_locked_qc_view =
-            GenericGauge::new("sumeragi_locked_qc_view", "Sumeragi locked QC view (gauge)")
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_locked_qc_view"))
                 .expect("Infallible");
         // Sumeragi pacemaker gauges
-        let sumeragi_pacemaker_backoff_ms = GenericGauge::new(
-            "sumeragi_pacemaker_backoff_ms",
-            "Pacemaker current backoff window (ms) for view-change timeout",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_rtt_floor_ms = GenericGauge::new(
-            "sumeragi_pacemaker_rtt_floor_ms",
-            "Pacemaker RTT-based floor (ms) for backoff window",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backoff_multiplier = GenericGauge::new(
-            "sumeragi_pacemaker_backoff_multiplier",
-            "Pacemaker backoff multiplier (dimensionless)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_rtt_floor_multiplier = GenericGauge::new(
-            "sumeragi_pacemaker_rtt_floor_multiplier",
-            "Pacemaker RTT floor multiplier (dimensionless)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_max_backoff_ms = GenericGauge::new(
-            "sumeragi_pacemaker_max_backoff_ms",
-            "Pacemaker maximum backoff cap (ms)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_jitter_ms = GenericGauge::new(
-            "sumeragi_pacemaker_jitter_ms",
-            "Pacemaker jitter offset magnitude (ms) applied to window",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_jitter_frac_permille = GenericGauge::new(
-            "sumeragi_pacemaker_jitter_frac_permille",
-            "Pacemaker jitter band config (permille of window)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_round_elapsed_ms = GenericGauge::new(
-            "sumeragi_pacemaker_round_elapsed_ms",
-            "Elapsed time in the current consensus round (ms)",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_view_timeout_target_ms = GenericGauge::new(
-            "sumeragi_pacemaker_view_timeout_target_ms",
-            "Current view timeout target window (ms) before backoff/jitter adjustments",
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_view_timeout_remaining_ms = GenericGauge::new(
-            "sumeragi_pacemaker_view_timeout_remaining_ms",
-            "Remaining time until current view timeout elapses (ms)",
+        let sumeragi_pacemaker_backoff_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_backoff_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_rtt_floor_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_rtt_floor_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_backoff_multiplier =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_backoff_multiplier"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_rtt_floor_multiplier =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_rtt_floor_multiplier"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_max_backoff_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_max_backoff_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_jitter_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_jitter_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_jitter_frac_permille =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_jitter_frac_permille"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_round_elapsed_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_round_elapsed_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_view_timeout_target_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_view_timeout_target_ms"))
+                .expect("Infallible");
+        let sumeragi_pacemaker_view_timeout_remaining_ms = GenericGauge::with_opts(
+            metric_specs.opts("sumeragi_pacemaker_view_timeout_remaining_ms"),
         )
         .expect("Infallible");
         let sumeragi_phase_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_phase_latency_ms",
-                "Sumeragi per-phase latency histogram (ms) labeled by phase",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sumeragi_phase_latency_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                ]),
             &["phase"],
         )
         .expect("Infallible");
         let sumeragi_phase_latency_ema_ms = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_phase_latency_ema_ms",
-                "Sumeragi per-phase EMA latency (ms) labeled by phase",
-            ),
+            metric_specs.opts("sumeragi_phase_latency_ema_ms"),
             &["phase"],
         )
         .expect("Infallible");
-        let sumeragi_phase_total_ema_ms = GenericGauge::new(
-            "sumeragi_phase_total_ema_ms",
-            "Sumeragi aggregate pipeline EMA latency (ms) across pacemaker-controlled phases",
-        )
-        .expect("Infallible");
-        let p2p_queue_depth = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_queue_depth",
-                "Network message queue depth by priority (High/Low)",
-            ),
-            &["priority"],
-        )
-        .expect("Infallible");
+        let sumeragi_phase_total_ema_ms =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_phase_total_ema_ms"))
+                .expect("Infallible");
+        let p2p_queue_depth =
+            GenericGaugeVec::new(metric_specs.opts("p2p_queue_depth"), &["priority"])
+                .expect("Infallible");
         let p2p_queue_dropped_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_queue_dropped_total",
-                "Network message queue drops by priority (High/Low) and kind (Post/Broadcast)",
-            ),
+            metric_specs.opts("p2p_queue_dropped_total"),
             &["priority", "kind"],
         )
         .expect("Infallible");
-        let p2p_handshake_ms_bucket = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_handshake_ms_bucket",
-                "P2P handshake latency histogram buckets (ms)",
-            ),
-            &["le"],
-        )
-        .expect("Infallible");
-        let p2p_handshake_ms_sum = GenericGauge::new(
-            "p2p_handshake_ms_sum",
-            "Sum of handshake latencies in milliseconds",
-        )
-        .expect("Infallible");
-        let p2p_handshake_ms_count =
-            GenericGauge::new("p2p_handshake_ms_count", "Count of observed handshakes")
+        let p2p_handshake_ms_bucket =
+            GenericGaugeVec::new(metric_specs.opts("p2p_handshake_ms_bucket"), &["le"])
                 .expect("Infallible");
-        let p2p_handshake_error_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_handshake_error_total",
-                "Handshake error counts by kind",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
+        let p2p_handshake_ms_sum =
+            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_ms_sum")).expect("Infallible");
+        let p2p_handshake_ms_count =
+            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_ms_count"))
+                .expect("Infallible");
+        let p2p_handshake_error_total =
+            GenericGaugeVec::new(metric_specs.opts("p2p_handshake_error_total"), &["kind"])
+                .expect("Infallible");
         let p2p_frame_cap_violations_total = GenericGaugeVec::new(
-            Opts::new(
-                "p2p_frame_cap_violations_total",
-                "Inbound per-topic frame-cap violations (dropped oversized messages)",
-            ),
+            metric_specs.opts("p2p_frame_cap_violations_total"),
             &["topic"],
         )
         .expect("Infallible");
         // Runtime upgrade metrics
-        let runtime_upgrade_events_total = IntCounterVec::new(
-            Opts::new(
-                "runtime_upgrade_events_total",
-                "Runtime upgrade lifecycle events total labeled by kind",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
+        let runtime_upgrade_events_total =
+            IntCounterVec::new(metric_specs.opts("runtime_upgrade_events_total"), &["kind"])
+                .expect("Infallible");
         let runtime_upgrade_provenance_rejections_total = IntCounterVec::new(
-            Opts::new(
-                "runtime_upgrade_provenance_rejections_total",
-                "Runtime upgrade provenance rejections total labeled by reason",
-            ),
+            metric_specs.opts("runtime_upgrade_provenance_rejections_total"),
             &["reason"],
         )
         .expect("Infallible");
         let runtime_abi_version =
-            GenericGauge::new("runtime_abi_version", "ABI version allowed by runtime")
-                .expect("Infallible");
+            GenericGauge::with_opts(metric_specs.opts("runtime_abi_version")).expect("Infallible");
         // Sumeragi consensus counters/histogram
         let sumeragi_tail_votes_total =
-            IntCounter::new("sumeragi_tail_votes_total", "Votes accepted at proxy tail")
+            IntCounter::with_opts(metric_specs.opts("sumeragi_tail_votes_total"))
                 .expect("Infallible");
-        let sumeragi_votes_sent_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_votes_sent_total",
-                "Consensus votes sent grouped by phase",
-            ),
-            &["phase"],
-        )
-        .expect("Infallible");
+        let sumeragi_votes_sent_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_votes_sent_total"), &["phase"])
+                .expect("Infallible");
         let sumeragi_votes_received_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_votes_received_total",
-                "Consensus votes received grouped by phase",
-            ),
+            metric_specs.opts("sumeragi_votes_received_total"),
             &["phase"],
         )
         .expect("Infallible");
-        let sumeragi_qc_sent_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_qc_sent_total",
-                "Quorum certificates sent grouped by kind",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_qc_received_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_qc_received_total",
-                "Quorum certificates received grouped by kind",
-            ),
-            &["kind"],
-        )
-        .expect("Infallible");
+        let sumeragi_qc_sent_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_qc_sent_total"), &["kind"])
+                .expect("Infallible");
+        let sumeragi_qc_received_total =
+            IntCounterVec::new(metric_specs.opts("sumeragi_qc_received_total"), &["kind"])
+                .expect("Infallible");
         let sumeragi_qc_validation_errors_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_qc_validation_errors_total",
-                "QC validation errors grouped by reason",
-            ),
+            metric_specs.opts("sumeragi_qc_validation_errors_total"),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_qc_signer_counts = HistogramVec::new(
-            HistogramOpts::new(
-                "sumeragi_qc_signer_counts",
-                "QC signer tallies grouped by phase (prevote/precommit/available) and kind (present|counted)",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 1.0, 64).expect("valid signer buckets")),
+            metric_specs
+                .histogram_opts("sumeragi_qc_signer_counts")
+                .buckets(prometheus::linear_buckets(0.0, 1.0, 64).expect("valid signer buckets")),
             &["phase", "kind"],
         )
         .expect("Infallible");
         let sumeragi_invalid_signature_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_invalid_signature_total",
-                "Invalid signatures dropped grouped by message kind and throttle outcome",
-            ),
+            metric_specs.opts("sumeragi_invalid_signature_total"),
             &["kind", "outcome"],
         )
         .expect("Infallible");
@@ -11575,10 +10590,7 @@ impl Default for Metrics {
             let _ = sumeragi_qc_validation_errors_total.with_label_values(&[label]);
         }
         let sumeragi_validation_reject_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_validation_reject_total",
-                "Blocks rejected by validation gate before voting, grouped by reason",
-            ),
+            metric_specs.opts("sumeragi_validation_reject_total"),
             &["reason"],
         )
         .expect("Infallible");
@@ -11591,31 +10603,21 @@ impl Default for Metrics {
         ] {
             let _ = sumeragi_validation_reject_total.with_label_values(&[label]);
         }
-        let sumeragi_validation_reject_last_reason = GenericGauge::new(
-            "sumeragi_validation_reject_last_reason",
-            "Sumeragi validation gate last reject reason code (0=none,1=stateless,2=execution,3=prev_hash,4=prev_height,5=topology)",
-        )
-        .expect("Infallible");
-        let sumeragi_validation_reject_last_height = GenericGauge::new(
-            "sumeragi_validation_reject_last_height",
-            "Sumeragi validation gate last reject block height (0 when unset)",
-        )
-        .expect("Infallible");
-        let sumeragi_validation_reject_last_view = GenericGauge::new(
-            "sumeragi_validation_reject_last_view",
-            "Sumeragi validation gate last reject block view (0 when unset)",
-        )
-        .expect("Infallible");
-        let sumeragi_validation_reject_last_timestamp_ms = GenericGauge::new(
-            "sumeragi_validation_reject_last_timestamp_ms",
-            "Sumeragi validation gate last reject timestamp in milliseconds since unix epoch (0 when unset)",
+        let sumeragi_validation_reject_last_reason =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_reason"))
+                .expect("Infallible");
+        let sumeragi_validation_reject_last_height =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_height"))
+                .expect("Infallible");
+        let sumeragi_validation_reject_last_view =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_view"))
+                .expect("Infallible");
+        let sumeragi_validation_reject_last_timestamp_ms = GenericGauge::with_opts(
+            metric_specs.opts("sumeragi_validation_reject_last_timestamp_ms"),
         )
         .expect("Infallible");
         let sumeragi_block_sync_roster_source_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_block_sync_roster_source_total",
-                "Block-sync roster selection grouped by source",
-            ),
+            metric_specs.opts("sumeragi_block_sync_roster_source_total"),
             &["source"],
         )
         .expect("Infallible");
@@ -11631,40 +10633,27 @@ impl Default for Metrics {
             let _ = sumeragi_block_sync_roster_source_total.with_label_values(&[label]);
         }
         let sumeragi_block_sync_roster_drop_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_block_sync_roster_drop_total",
-                "Block-sync drops grouped by roster validation reason",
-            ),
+            metric_specs.opts("sumeragi_block_sync_roster_drop_total"),
             &["reason"],
         )
         .expect("Infallible");
         let _ = sumeragi_block_sync_roster_drop_total.with_label_values(&["missing"]);
-        let sumeragi_block_sync_share_blocks_unsolicited_total = IntCounter::new(
-            "sumeragi_block_sync_share_blocks_unsolicited_total",
-            "Block-sync ShareBlocks dropped because no matching request was tracked",
+        let sumeragi_block_sync_share_blocks_unsolicited_total = IntCounter::with_opts(
+            metric_specs.opts("sumeragi_block_sync_share_blocks_unsolicited_total"),
         )
         .expect("Infallible");
         let sumeragi_consensus_message_handling_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_consensus_message_handling_total",
-                "Consensus message drops/deferrals grouped by kind, outcome, and reason",
-            ),
+            metric_specs.opts("sumeragi_consensus_message_handling_total"),
             &["kind", "outcome", "reason"],
         )
         .expect("Infallible");
         let sumeragi_view_change_cause_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_view_change_cause_total",
-                "View-change triggers grouped by cause",
-            ),
+            metric_specs.opts("sumeragi_view_change_cause_total"),
             &["cause"],
         )
         .expect("Infallible");
         let sumeragi_view_change_cause_last_timestamp_ms = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_view_change_cause_last_timestamp_ms",
-                "Unix timestamp (ms) of the last view-change trigger grouped by cause",
-            ),
+            metric_specs.opts("sumeragi_view_change_cause_last_timestamp_ms"),
             &["cause"],
         )
         .expect("Infallible");
@@ -11691,128 +10680,87 @@ impl Default for Metrics {
                 let _ = sumeragi_invalid_signature_total.with_label_values(&[kind, outcome]);
             }
         }
-        let sumeragi_widen_before_rotate_total = IntCounter::new(
-            "sumeragi_widen_before_rotate_total",
-            "Widen-before-rotate events",
-        )
-        .expect("Infallible");
-        let sumeragi_view_change_suggest_total = IntCounter::new(
-            "sumeragi_view_change_suggest_total",
-            "View-change suggestions emitted",
-        )
-        .expect("Infallible");
-        let sumeragi_view_change_install_total = IntCounter::new(
-            "sumeragi_view_change_install_total",
-            "View-change installs observed",
-        )
-        .expect("Infallible");
-        let sumeragi_proposal_gap_total = IntCounter::new(
-            "sumeragi_proposal_gap_total",
-            "View-change rotations after no proposal observed before cutoff",
-        )
-        .expect("Infallible");
+        let sumeragi_widen_before_rotate_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_widen_before_rotate_total"))
+                .expect("Infallible");
+        let sumeragi_view_change_suggest_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_view_change_suggest_total"))
+                .expect("Infallible");
+        let sumeragi_view_change_install_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_view_change_install_total"))
+                .expect("Infallible");
+        let sumeragi_proposal_gap_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_proposal_gap_total"))
+                .expect("Infallible");
         let sumeragi_view_change_proof_total = GenericGaugeVec::new(
-            Opts::new(
-                "sumeragi_view_change_proof_total",
-                "View-change proof outcomes observed locally",
-            ),
+            metric_specs.opts("sumeragi_view_change_proof_total"),
             &["outcome"],
         )
         .expect("Infallible");
         for label in ["accepted", "stale", "rejected"] {
             let _ = sumeragi_view_change_proof_total.with_label_values(&[label]);
         }
-        let sumeragi_wa_qc_assembled_total = IntCounter::new(
-            "sumeragi_wa_qc_assembled_total",
-            "Witness-availability QC assembled (cumulative)",
-        )
-        .expect("Infallible");
+        let sumeragi_wa_qc_assembled_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_wa_qc_assembled_total"))
+                .expect("Infallible");
         let sumeragi_cert_size = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_cert_size",
-                "Certificate size (signatures) per committed block",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 1.8, 10).expect("valid")),
+            metric_specs
+                .histogram_opts("sumeragi_cert_size")
+                .buckets(prometheus::exponential_buckets(1.0, 1.8, 10).expect("valid")),
         )
         .expect("Infallible");
-        let sumeragi_commit_signatures_present = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_signatures_present",
-            "Block signatures observed during commit validation (all roles)",
+        let sumeragi_commit_signatures_present = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_signatures_present"),
         )
         .expect("Infallible");
-        let sumeragi_commit_signatures_counted = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_signatures_counted",
-            "Commit-quorum signatures counted toward the threshold",
+        let sumeragi_commit_signatures_counted = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_signatures_counted"),
         )
         .expect("Infallible");
-        let sumeragi_commit_signatures_set_b = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_signatures_set_b",
-            "Set B validator signatures present during commit validation",
+        let sumeragi_commit_signatures_set_b = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_signatures_set_b"),
         )
         .expect("Infallible");
-        let sumeragi_commit_signatures_required = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_signatures_required",
-            "Commit-quorum size required by the active topology",
+        let sumeragi_commit_signatures_required = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_signatures_required"),
         )
         .expect("Infallible");
-        let sumeragi_commit_qc_height = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_qc_height",
-            "Latest commit certificate height (best-effort)",
+        let sumeragi_commit_qc_height =
+            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_height"))
+                .expect("Infallible");
+        let sumeragi_commit_qc_view =
+            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_view"))
+                .expect("Infallible");
+        let sumeragi_commit_qc_epoch =
+            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_epoch"))
+                .expect("Infallible");
+        let sumeragi_commit_qc_signatures_total = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_qc_signatures_total"),
         )
         .expect("Infallible");
-        let sumeragi_commit_qc_view = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_qc_view",
-            "Latest commit certificate view (best-effort)",
+        let sumeragi_commit_qc_validator_set_len = GenericGauge::<AtomicU64>::with_opts(
+            metric_specs.opts("sumeragi_commit_qc_validator_set_len"),
         )
         .expect("Infallible");
-        let sumeragi_commit_qc_epoch = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_qc_epoch",
-            "Latest commit certificate epoch (best-effort)",
+        let sumeragi_gossip_fallback_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_gossip_fallback_total"))
+                .expect("Infallible");
+        let sumeragi_block_created_dropped_by_lock_total = IntCounter::with_opts(
+            metric_specs.opts("sumeragi_block_created_dropped_by_lock_total"),
         )
         .expect("Infallible");
-        let sumeragi_commit_qc_signatures_total = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_qc_signatures_total",
-            "Signatures attached to the latest commit certificate",
+        let sumeragi_block_created_hint_mismatch_total =
+            IntCounter::with_opts(metric_specs.opts("sumeragi_block_created_hint_mismatch_total"))
+                .expect("Infallible");
+        let sumeragi_block_created_proposal_mismatch_total = IntCounter::with_opts(
+            metric_specs.opts("sumeragi_block_created_proposal_mismatch_total"),
         )
         .expect("Infallible");
-        let sumeragi_commit_qc_validator_set_len = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_qc_validator_set_len",
-            "Validator-set size for the latest commit certificate",
-        )
-        .expect("Infallible");
-        let sumeragi_gossip_fallback_total = IntCounter::new(
-            "sumeragi_gossip_fallback_total",
-            "Gossip fallback broadcasts triggered after redundant collectors exhausted",
-        )
-        .expect("Infallible");
-        let sumeragi_block_created_dropped_by_lock_total = IntCounter::new(
-            "sumeragi_block_created_dropped_by_lock_total",
-            "BlockCreated messages dropped because they violate the locked QC gate",
-        )
-        .expect("Infallible");
-        let sumeragi_block_created_hint_mismatch_total = IntCounter::new(
-            "sumeragi_block_created_hint_mismatch_total",
-            "BlockCreated messages rejected due to hint mismatch (height/view/parent)",
-        )
-        .expect("Infallible");
-        let sumeragi_block_created_proposal_mismatch_total = IntCounter::new(
-            "sumeragi_block_created_proposal_mismatch_total",
-            "BlockCreated messages rejected due to proposal mismatch (header/payload)",
-        )
-        .expect("Infallible");
-        let lane_relay_invalid_total = IntCounterVec::new(
-            Opts::new(
-                "lane_relay_invalid_total",
-                "Lane relay envelopes rejected during validation (labeled by error kind)",
-            ),
-            &["error"],
-        )
-        .expect("Infallible");
+        let lane_relay_invalid_total =
+            IntCounterVec::new(metric_specs.opts("lane_relay_invalid_total"), &["error"])
+                .expect("Infallible");
         let lane_relay_emergency_override_total = IntCounterVec::new(
-            Opts::new(
-                "lane_relay_emergency_override_total",
-                "Lane relay emergency validator override usage (labeled by lane, dataspace, outcome)",
-            ),
+            metric_specs.opts("lane_relay_emergency_override_total"),
             &["lane", "dataspace", "outcome"],
         )
         .expect("Infallible");
@@ -11825,395 +10773,242 @@ impl Default for Metrics {
         let sumeragi_mode_tag: Arc<RwLock<String>> =
             Arc::new(RwLock::new(PERMISSIONED_TAG.to_string()));
         let halo2_status: Arc<RwLock<Halo2Status>> = Arc::new(RwLock::new(Halo2Status::default()));
-        let sumeragi_prf_height = GenericGauge::new(
-            "sumeragi_prf_height",
-            "Height associated with the PRF context",
-        )
-        .expect("Infallible");
+        let sumeragi_prf_height =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_prf_height")).expect("Infallible");
         let sumeragi_prf_view =
-            GenericGauge::new("sumeragi_prf_view", "View associated with the PRF context")
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_prf_view")).expect("Infallible");
+        let sumeragi_membership_view_hash =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_view_hash"))
                 .expect("Infallible");
-        let sumeragi_membership_view_hash = GenericGauge::new(
-            "sumeragi_membership_view_hash",
-            "Deterministic membership view hash (truncated to u64)",
-        )
-        .expect("Infallible");
-        let sumeragi_membership_height = GenericGauge::new(
-            "sumeragi_membership_height",
-            "Height associated with the latest membership view hash snapshot",
-        )
-        .expect("Infallible");
-        let sumeragi_membership_view = GenericGauge::new(
-            "sumeragi_membership_view",
-            "View associated with the latest membership view hash snapshot",
-        )
-        .expect("Infallible");
-        let sumeragi_membership_epoch = GenericGauge::new(
-            "sumeragi_membership_epoch",
-            "Epoch associated with the latest membership view hash snapshot",
-        )
-        .expect("Infallible");
+        let sumeragi_membership_height =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_height"))
+                .expect("Infallible");
+        let sumeragi_membership_view =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_view"))
+                .expect("Infallible");
+        let sumeragi_membership_epoch =
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_epoch"))
+                .expect("Infallible");
         let sumeragi_leader_index =
-            GenericGauge::new("sumeragi_leader_index", "Current leader index").expect("Infallible");
-        let ivm_cache_hits = GenericGauge::new(
-            "ivm_cache_hits",
-            "IVM opcode pre-decode cache hits (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_misses = GenericGauge::new(
-            "ivm_cache_misses",
-            "IVM opcode pre-decode cache misses (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_evictions = GenericGauge::new(
-            "ivm_cache_evictions",
-            "IVM opcode pre-decode cache evictions (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_decoded_streams = GenericGauge::new(
-            "ivm_cache_decoded_streams",
-            "IVM opcode pre-decode decoded streams (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_decoded_ops_total = GenericGauge::new(
-            "ivm_cache_decoded_ops_total",
-            "IVM opcode pre-decode decoded operations (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_decode_failures = GenericGauge::new(
-            "ivm_cache_decode_failures",
-            "IVM opcode pre-decode decode failures (cumulative)",
-        )
-        .expect("Infallible");
-        let ivm_cache_decode_time_ns_total = GenericGauge::new(
-            "ivm_cache_decode_time_ns_total",
-            "IVM opcode pre-decode total decode time in nanoseconds (cumulative)",
-        )
-        .expect("Infallible");
+            GenericGauge::with_opts(metric_specs.opts("sumeragi_leader_index"))
+                .expect("Infallible");
+        let ivm_cache_hits =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_hits")).expect("Infallible");
+        let ivm_cache_misses =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_misses")).expect("Infallible");
+        let ivm_cache_evictions =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_evictions")).expect("Infallible");
+        let ivm_cache_decoded_streams =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decoded_streams"))
+                .expect("Infallible");
+        let ivm_cache_decoded_ops_total =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decoded_ops_total"))
+                .expect("Infallible");
+        let ivm_cache_decode_failures =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decode_failures"))
+                .expect("Infallible");
+        let ivm_cache_decode_time_ns_total =
+            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decode_time_ns_total"))
+                .expect("Infallible");
         let ivm_register_max_index = Histogram::with_opts(
-            HistogramOpts::new(
-                "ivm_register_max_index",
-                "Maximum general-purpose register index touched per VM execution",
-            )
-            .buckets(vec![
-                16.0, 32.0, 48.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
-                448.0, 512.0,
-            ]),
+            metric_specs
+                .histogram_opts("ivm_register_max_index")
+                .buckets(vec![
+                    16.0, 32.0, 48.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
+                    448.0, 512.0,
+                ]),
         )
         .expect("Infallible");
         let ivm_register_unique_count = Histogram::with_opts(
-            HistogramOpts::new(
-                "ivm_register_unique_count",
-                "Unique general-purpose registers touched per VM execution",
-            )
-            .buckets(vec![
-                8.0, 16.0, 24.0, 32.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
-                448.0, 512.0,
-            ]),
+            metric_specs
+                .histogram_opts("ivm_register_unique_count")
+                .buckets(vec![
+                    8.0, 16.0, 24.0, 32.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0,
+                    384.0, 448.0, 512.0,
+                ]),
         )
         .expect("Infallible");
-        let merkle_root_gpu_total = IntCounter::new(
-            "merkle_root_gpu_total",
-            "Merkle root computations using GPU acceleration (cumulative)",
-        )
-        .expect("Infallible");
-        let merkle_root_cpu_total = IntCounter::new(
-            "merkle_root_cpu_total",
-            "Merkle root computations using CPU (cumulative)",
-        )
-        .expect("Infallible");
+        let merkle_root_gpu_total =
+            IntCounter::with_opts(metric_specs.opts("merkle_root_gpu_total")).expect("Infallible");
+        let merkle_root_cpu_total =
+            IntCounter::with_opts(metric_specs.opts("merkle_root_cpu_total")).expect("Infallible");
         let ivm_memory_commit_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "ivm_memory_commit_ms",
-                "IVM memory commit duration in milliseconds by commit path",
-            )
-            .buckets(prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("ivm_memory_commit_ms")
+                .buckets(prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid")),
             &["path"],
         )
         .expect("Infallible");
         let ivm_memory_commit_dirty_chunks = HistogramVec::new(
-            HistogramOpts::new(
-                "ivm_memory_commit_dirty_chunks",
-                "IVM memory commit dirty chunk count by commit path",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("ivm_memory_commit_dirty_chunks")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid")),
             &["path"],
         )
         .expect("Infallible");
         let ivm_merkle_rebuild_total =
-            IntCounter::new("ivm_merkle_rebuild_total", "IVM Merkle cache full rebuilds")
+            IntCounter::with_opts(metric_specs.opts("ivm_merkle_rebuild_total"))
                 .expect("Infallible");
-        let ivm_merkle_incremental_leaf_updates_total = IntCounter::new(
-            "ivm_merkle_incremental_leaf_updates_total",
-            "IVM Merkle cache incremental leaf updates",
-        )
-        .expect("Infallible");
-        let pipeline_dag_vertices = GenericGauge::new(
-            "pipeline_dag_vertices",
-            "DAG vertices (transactions) in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_dag_edges = GenericGauge::new(
-            "pipeline_dag_edges",
-            "DAG edges (conflicts) in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_conflict_rate_bps = GenericGauge::new(
-            "pipeline_conflict_rate_bps",
-            "DAG conflict rate (basis points) for the latest validated block",
-        )
-        .expect("Infallible");
+        let ivm_merkle_incremental_leaf_updates_total =
+            IntCounter::with_opts(metric_specs.opts("ivm_merkle_incremental_leaf_updates_total"))
+                .expect("Infallible");
+        let pipeline_dag_vertices =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_dag_vertices"))
+                .expect("Infallible");
+        let pipeline_dag_edges =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_dag_edges")).expect("Infallible");
+        let pipeline_conflict_rate_bps =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_conflict_rate_bps"))
+                .expect("Infallible");
         let pipeline_access_set_source_total = IntCounterVec::new(
-            Opts::new(
-                "pipeline_access_set_source_total",
-                "Cumulative access-set source counts used by the scheduler",
-            ),
+            metric_specs.opts("pipeline_access_set_source_total"),
             &["source"],
         )
         .expect("Infallible");
-        let pipeline_comp_count = GenericGauge::new(
-            "pipeline_comp_count",
-            "Number of independent components (DSF partitions) in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_comp_max = GenericGauge::new(
-            "pipeline_comp_max",
-            "Size of the largest independent component in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_comp_hist_bucket = GenericGaugeVec::new(
-            Opts::new(
-                "pipeline_comp_hist_bucket",
-                "Component-size histogram buckets (component count per bucket)",
-            ),
-            &["le"],
-        )
-        .expect("Infallible");
-        let pipeline_peak_layer_width = GenericGauge::new(
-            "pipeline_peak_layer_width",
-            "Peak layer width (max txs in any layer) for the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_layer_avg_width = GenericGauge::new(
-            "pipeline_layer_avg_width",
-            "Average layer width (rounded) for the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_layer_median_width = GenericGauge::new(
-            "pipeline_layer_median_width",
-            "Median layer width for the latest validated block",
-        )
-        .expect("Infallible");
-        let nexus_lane_id_placeholder = GenericGauge::new(
-            "nexus_lane_id_placeholder",
-            "Latest Nexus lane identifier recorded for legacy lane-context gauges",
-        )
-        .expect("Infallible");
-        let nexus_dataspace_id_placeholder = GenericGauge::new(
-            "nexus_dataspace_id_placeholder",
-            "Latest Nexus dataspace identifier recorded for legacy lane-context gauges",
-        )
-        .expect("Infallible");
+        let pipeline_comp_count =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_comp_count")).expect("Infallible");
+        let pipeline_comp_max =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_comp_max")).expect("Infallible");
+        let pipeline_comp_hist_bucket =
+            GenericGaugeVec::new(metric_specs.opts("pipeline_comp_hist_bucket"), &["le"])
+                .expect("Infallible");
+        let pipeline_peak_layer_width =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_peak_layer_width"))
+                .expect("Infallible");
+        let pipeline_layer_avg_width =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_avg_width"))
+                .expect("Infallible");
+        let pipeline_layer_median_width =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_median_width"))
+                .expect("Infallible");
+        let nexus_lane_id_placeholder =
+            GenericGauge::with_opts(metric_specs.opts("nexus_lane_id_placeholder"))
+                .expect("Infallible");
+        let nexus_dataspace_id_placeholder =
+            GenericGauge::with_opts(metric_specs.opts("nexus_dataspace_id_placeholder"))
+                .expect("Infallible");
         let nexus_config_diff_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_config_diff_total",
-                "Cumulative count of Nexus config diffs applied, grouped by knob/profile",
-            ),
+            metric_specs.opts("nexus_config_diff_total"),
             &["knob", "profile"],
         )
         .expect("Infallible");
-        let nexus_lane_configured_total = GenericGauge::new(
-            "nexus_lane_configured_total",
-            "Number of Nexus lane catalog entries configured on this node",
-        )
-        .expect("Infallible");
-        let nexus_lane_governance_sealed = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_lane_governance_sealed",
-                "Per-lane governance seal status (1 = sealed, 0 = ready)",
-            ),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_lane_governance_sealed_total = GenericGauge::new(
-            "nexus_lane_governance_sealed_total",
-            "Total number of lanes still sealed (missing manifest)",
-        )
-        .expect("Infallible");
+        let nexus_lane_configured_total =
+            GenericGauge::with_opts(metric_specs.opts("nexus_lane_configured_total"))
+                .expect("Infallible");
+        let nexus_lane_governance_sealed =
+            GenericGaugeVec::new(metric_specs.opts("nexus_lane_governance_sealed"), &["lane"])
+                .expect("Infallible");
+        let nexus_lane_governance_sealed_total =
+            GenericGauge::with_opts(metric_specs.opts("nexus_lane_governance_sealed_total"))
+                .expect("Infallible");
         let nexus_lane_lifecycle_applied_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_lane_lifecycle_applied_total",
-                "Lifecycle plan applications grouped by outcome",
-            ),
+            metric_specs.opts("nexus_lane_lifecycle_applied_total"),
             &["result"],
         )
         .expect("Infallible");
         let nexus_lane_governance_sealed_aliases = Arc::new(RwLock::new(Vec::new()));
         let nexus_lane_block_height = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_lane_block_height",
-                "Latest block height recorded per lane/dataspace pair",
-            ),
+            metric_specs.opts("nexus_lane_block_height"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
         let nexus_lane_finality_lag_slots = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_lane_finality_lag_slots",
-                "Finality lag (in slots) between the global head height and each lane",
-            ),
+            metric_specs.opts("nexus_lane_finality_lag_slots"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
         let nexus_lane_settlement_backlog_xor = GaugeVec::new(
-            Opts::new(
-                "nexus_lane_settlement_backlog_xor",
-                "Settlement backlog per lane/dataspace pair expressed in XOR",
-            ),
+            metric_specs.opts("nexus_lane_settlement_backlog_xor"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
         let nexus_public_lane_validator_total = IntGaugeVec::new(
-            Opts::new(
-                "nexus_public_lane_validator_total",
-                "Public-lane validator counts grouped by lifecycle status",
-            ),
+            metric_specs.opts("nexus_public_lane_validator_total"),
             &["lane", "status"],
         )
         .expect("Infallible");
         let nexus_public_lane_validator_activation_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_public_lane_validator_activation_total",
-                "Public-lane validator activations grouped by lane",
-            ),
+            metric_specs.opts("nexus_public_lane_validator_activation_total"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_public_lane_validator_reject_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_public_lane_validator_reject_total",
-                "Rejected public-lane validator registrations grouped by reason",
-            ),
+            metric_specs.opts("nexus_public_lane_validator_reject_total"),
             &["reason"],
         )
         .expect("Infallible");
         let nexus_public_lane_stake_bonded = GaugeVec::new(
-            Opts::new(
-                "nexus_public_lane_stake_bonded",
-                "Total bonded stake per public lane (Quantity rendered as float)",
-            ),
+            metric_specs.opts("nexus_public_lane_stake_bonded"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_public_lane_unbond_pending = GaugeVec::new(
-            Opts::new(
-                "nexus_public_lane_unbond_pending",
-                "Pending unbond amount per public lane",
-            ),
+            metric_specs.opts("nexus_public_lane_unbond_pending"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_public_lane_reward_total = GaugeVec::new(
-            Opts::new(
-                "nexus_public_lane_reward_total",
-                "Cumulative rewards recorded per public lane",
-            ),
+            metric_specs.opts("nexus_public_lane_reward_total"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_public_lane_slash_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_public_lane_slash_total",
-                "Slash events recorded per public lane",
-            ),
+            metric_specs.opts("nexus_public_lane_slash_total"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_teu_capacity = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_teu_capacity",
-                "Configured TEU capacity for the current slot per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_teu_capacity"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_teu_slot_committed = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_teu_slot_committed",
-                "TEU committed in the current slot per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_teu_slot_committed"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_trigger_level = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_trigger_level",
-                "Active circuit-breaker trigger level (0 = normal) per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_trigger_level"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_starvation_bound_slots = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_starvation_bound_slots",
-                "Starvation bound in slots per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_starvation_bound_slots"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_teu_slot_breakdown = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_teu_slot_breakdown",
-                "Committed TEU bucket breakdown per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_teu_slot_breakdown"),
             &["lane", "bucket"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_teu_deferral_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_teu_deferral_total",
-                "Cumulative TEU deferrals by reason per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_teu_deferral_total"),
             &["lane", "reason"],
         )
         .expect("Infallible");
         let nexus_scheduler_lane_headroom_events_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_scheduler_lane_headroom_events_total",
-                "Structured headroom telemetry events per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_lane_headroom_events_total"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_must_serve_truncations_total = IntCounterVec::new(
-            Opts::new(
-                "nexus_scheduler_must_serve_truncations_total",
-                "Cumulative must-serve truncations per lane",
-            ),
+            metric_specs.opts("nexus_scheduler_must_serve_truncations_total"),
             &["lane"],
         )
         .expect("Infallible");
         let nexus_scheduler_dataspace_teu_backlog = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_dataspace_teu_backlog",
-                "Pending TEU backlog per dataspace (labeled by lane)",
-            ),
+            metric_specs.opts("nexus_scheduler_dataspace_teu_backlog"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
         let nexus_scheduler_dataspace_age_slots = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_dataspace_age_slots",
-                "Slots since dataspace was last served (labeled by lane)",
-            ),
+            metric_specs.opts("nexus_scheduler_dataspace_age_slots"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
         let nexus_scheduler_dataspace_virtual_finish = GenericGaugeVec::new(
-            Opts::new(
-                "nexus_scheduler_dataspace_virtual_finish",
-                "SFQ virtual finish tag per dataspace (labeled by lane)",
-            ),
+            metric_specs.opts("nexus_scheduler_dataspace_virtual_finish"),
             &["lane", "dataspace"],
         )
         .expect("Infallible");
@@ -12223,549 +11018,375 @@ impl Default for Metrics {
             (u32, u64),
             NexusDataspaceTeuStatus,
         >::new()));
-        let pipeline_layer_count = GenericGauge::new(
-            "pipeline_layer_count",
-            "Number of scheduler layers in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_scheduler_utilization_pct = GenericGauge::new(
-            "pipeline_scheduler_utilization_pct",
-            "Average parallelism utilization in percent (0..100) for the latest validated block",
-        )
-        .expect("Infallible");
+        let pipeline_layer_count =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_count")).expect("Infallible");
+        let pipeline_scheduler_utilization_pct =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_scheduler_utilization_pct"))
+                .expect("Infallible");
         let pipeline_layer_width_hist_bucket = GenericGaugeVec::new(
-            Opts::new(
-                "pipeline_layer_width_hist_bucket",
-                "Layer-width histogram buckets (layer count per bucket)",
-            ),
+            metric_specs.opts("pipeline_layer_width_hist_bucket"),
             &["le"],
         )
         .expect("Infallible");
-        let pipeline_overlay_count = GenericGauge::new(
-            "pipeline_overlay_count",
-            "Number of overlays built in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_overlay_instructions = GenericGauge::new(
-            "pipeline_overlay_instructions",
-            "Total instruction count across overlays in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_overlay_bytes = GenericGauge::new(
-            "pipeline_overlay_bytes",
-            "Total Norito-encoded byte size across overlays in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_quarantine_classified = GenericGauge::new(
-            "pipeline_quarantine_classified",
-            "Transactions classified into quarantine lane in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_quarantine_overflow = GenericGauge::new(
-            "pipeline_quarantine_overflow",
-            "Transactions rejected due to quarantine overflow in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_quarantine_executed = GenericGauge::new(
-            "pipeline_quarantine_executed",
-            "Transactions successfully executed in quarantine lane in the latest validated block",
-        )
-        .expect("Infallible");
+        let pipeline_overlay_count =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_count"))
+                .expect("Infallible");
+        let pipeline_overlay_instructions =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_instructions"))
+                .expect("Infallible");
+        let pipeline_overlay_bytes =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_bytes"))
+                .expect("Infallible");
+        let pipeline_quarantine_classified =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_classified"))
+                .expect("Infallible");
+        let pipeline_quarantine_overflow =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_overflow"))
+                .expect("Infallible");
+        let pipeline_quarantine_executed =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_executed"))
+                .expect("Infallible");
         let pipeline_stage_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "pipeline_stage_ms",
-                "Pipeline stage duration (milliseconds) by lane and stage",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("pipeline_stage_ms")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
             &["lane", "stage"],
         )
         .expect("Infallible");
-        let pipeline_detached_prepared = GenericGauge::new(
-            "pipeline_detached_prepared",
-            "Detached pipeline: prepared tx deltas in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_detached_merged = GenericGauge::new(
-            "pipeline_detached_merged",
-            "Detached pipeline: successfully merged tx deltas in the latest validated block",
-        )
-        .expect("Infallible");
-        let pipeline_detached_fallback = GenericGauge::new(
-            "pipeline_detached_fallback",
-            "Detached pipeline: txs that fell back to direct apply in the latest validated block",
-        )
-        .expect("Infallible");
+        let pipeline_detached_prepared =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_prepared"))
+                .expect("Infallible");
+        let pipeline_detached_merged =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_merged"))
+                .expect("Infallible");
+        let pipeline_detached_fallback =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_fallback"))
+                .expect("Infallible");
         let pipeline_detached_fallback_reason = GenericGaugeVec::new(
-            Opts::new(
-                "pipeline_detached_fallback_reason",
-                "Detached pipeline: fallback count by reason in the latest validated block",
-            ),
+            metric_specs.opts("pipeline_detached_fallback_reason"),
             &["reason"],
         )
         .expect("Infallible");
-        let merge_ledger_entries_total = IntCounter::new(
-            "merge_ledger_entries_total",
-            "Total merge-ledger entries appended on this node",
-        )
-        .expect("Infallible");
-        let merge_ledger_latest_epoch = GenericGauge::new(
-            "merge_ledger_latest_epoch",
-            "Latest merge-ledger epoch committed on this node",
-        )
-        .expect("Infallible");
+        let merge_ledger_entries_total =
+            IntCounter::with_opts(metric_specs.opts("merge_ledger_entries_total"))
+                .expect("Infallible");
+        let merge_ledger_latest_epoch =
+            GenericGauge::with_opts(metric_specs.opts("merge_ledger_latest_epoch"))
+                .expect("Infallible");
         let merge_ledger_latest_root_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
 
         // Torii metrics (app-facing): record filter complexity, match counts,
         // scan latencies, and approximate stream sizes. Labeled by endpoint.
         let torii_filter_depth = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_filter_depth",
-                "Torii filter expression depth by endpoint",
-            )
-            .buckets(vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0]),
+            metric_specs
+                .histogram_opts("torii_filter_depth")
+                .buckets(vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0]),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_filter_match_count = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_filter_match_count",
-                "Torii filter match count (items) by endpoint",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_filter_match_count")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_scan_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_scan_ms",
-                "Torii scan time in milliseconds by endpoint",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_scan_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_stream_rows = HistogramVec::new(
-            HistogramOpts::new("torii_stream_rows", "Torii stream row count by endpoint")
+            metric_specs
+                .histogram_opts("torii_stream_rows")
                 .buckets(prometheus::exponential_buckets(1.0, 2.0, 16).expect("inputs are valid")),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_lane_admission_latency_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_lane_admission_latency_seconds",
-                "Torii transaction admission latency (seconds) by lane and endpoint",
-            )
-            .buckets(prometheus::exponential_buckets(0.001, 2.0, 16).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_lane_admission_latency_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.001, 2.0, 16).expect("inputs are valid"),
+                ),
             &["lane_id", "endpoint"],
         )
         .expect("Infallible");
         let torii_route_stage_latency_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_route_stage_latency_seconds",
-                "Torii route-stage latency (seconds) by route kind, stage, and outcome",
-            )
-            .buckets(
-                prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
-            ),
+            metric_specs
+                .histogram_opts("torii_route_stage_latency_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
+                ),
             &["route_kind", "stage", "outcome"],
         )
         .expect("Infallible");
         let torii_attachment_reject_total = IntCounterVec::new(
-            Opts::new(
-                "torii_attachment_reject_total",
-                "Torii attachment rejects grouped by reason",
-            ),
+            metric_specs.opts("torii_attachment_reject_total"),
             &["reason"],
         )
         .expect("Infallible");
         let torii_attachment_sanitize_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_attachment_sanitize_ms",
-                "Torii attachment sanitization latency in milliseconds",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_attachment_sanitize_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
             &[],
         )
         .expect("Infallible");
         let torii_zk_prover_attachment_bytes = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_zk_prover_attachment_bytes",
-                "Background prover attachment size (bytes) grouped by status and content type",
-            )
-            .buckets(prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_zk_prover_attachment_bytes")
+                .buckets(
+                    prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
+                ),
             &["status", "content_type"],
         )
         .expect("Infallible");
         let torii_zk_prover_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_zk_prover_latency_ms",
-                "Background prover processing latency (milliseconds) grouped by status",
-            )
-            .buckets(prometheus::exponential_buckets(5.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_zk_prover_latency_ms")
+                .buckets(prometheus::exponential_buckets(5.0, 2.0, 12).expect("inputs are valid")),
             &["status"],
         )
         .expect("Infallible");
-        let torii_zk_prover_gc_total = IntCounter::new(
-            "torii_zk_prover_gc_total",
-            "Background prover reports deleted by TTL",
-        )
-        .expect("Infallible");
-        let torii_zk_prover_inflight = GenericGauge::new(
-            "torii_zk_prover_inflight",
-            "Background prover attachments currently being processed",
-        )
-        .expect("Infallible");
-        let torii_zk_prover_pending = GenericGauge::new(
-            "torii_zk_prover_pending",
-            "Background prover attachments pending processing",
-        )
-        .expect("Infallible");
-        let torii_zk_ivm_prove_inflight = GenericGauge::new(
-            "torii_zk_ivm_prove_inflight",
-            "Torii IVM prove helper jobs currently proving",
-        )
-        .expect("Infallible");
-        let torii_zk_ivm_prove_queued = GenericGauge::new(
-            "torii_zk_ivm_prove_queued",
-            "Torii IVM prove helper jobs queued (waiting for inflight slot)",
-        )
-        .expect("Infallible");
-        let torii_zk_prover_last_scan_bytes = GenericGauge::new(
-            "torii_zk_prover_last_scan_bytes",
-            "Background prover bytes processed during the most recent scan",
-        )
-        .expect("Infallible");
-        let torii_zk_prover_last_scan_ms = GenericGauge::new(
-            "torii_zk_prover_last_scan_ms",
-            "Background prover wall-clock duration (ms) of the most recent scan",
-        )
-        .expect("Infallible");
+        let torii_zk_prover_gc_total =
+            IntCounter::with_opts(metric_specs.opts("torii_zk_prover_gc_total"))
+                .expect("Infallible");
+        let torii_zk_prover_inflight =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_inflight"))
+                .expect("Infallible");
+        let torii_zk_prover_pending =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_pending"))
+                .expect("Infallible");
+        let torii_zk_ivm_prove_inflight =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_ivm_prove_inflight"))
+                .expect("Infallible");
+        let torii_zk_ivm_prove_queued =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_ivm_prove_queued"))
+                .expect("Infallible");
+        let torii_zk_prover_last_scan_bytes =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_last_scan_bytes"))
+                .expect("Infallible");
+        let torii_zk_prover_last_scan_ms =
+            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_last_scan_ms"))
+                .expect("Infallible");
         let torii_zk_prover_budget_exhausted_total = IntCounterVec::new(
-            Opts::new(
-                "torii_zk_prover_budget_exhausted_total",
-                "Background prover budget exhaustion events, labelled by reason",
-            ),
+            metric_specs.opts("torii_zk_prover_budget_exhausted_total"),
             &["reason"],
         )
         .expect("Infallible");
 
         // Snapshot-lane counters
         let torii_query_snapshot_requests = IntCounterVec::new(
-            Opts::new(
-                "torii_query_snapshot_requests_total",
-                "Torii snapshot-lane query requests total by mode",
-            ),
+            metric_specs.opts("torii_query_snapshot_requests"),
             &["mode"],
         )
         .expect("Infallible");
         let torii_query_snapshot_first_batch_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_query_snapshot_first_batch_ms",
-                "Torii snapshot-lane first-batch latency in milliseconds by mode",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_query_snapshot_first_batch_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
             &["mode"],
         )
         .expect("Infallible");
         let torii_query_snapshot_gas_consumed_units_total = IntCounterVec::new(
-            Opts::new(
-                "torii_query_snapshot_gas_consumed_units_total",
-                "Torii snapshot-lane gas units consumed by mode",
-            ),
+            metric_specs.opts("torii_query_snapshot_gas_consumed_units_total"),
             &["mode"],
         )
         .expect("Infallible");
         let query_snapshot_lane_first_batch_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "query_snapshot_lane_first_batch_ms",
-                "Snapshot query lane first-batch latency in milliseconds by mode",
-            )
-            .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("query_snapshot_lane_first_batch_ms")
+                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
             &["mode"],
         )
         .expect("Infallible");
         let query_snapshot_lane_first_batch_items = HistogramVec::new(
-            HistogramOpts::new(
-                "query_snapshot_lane_first_batch_items",
-                "Snapshot query lane first-batch item count by mode",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("query_snapshot_lane_first_batch_items")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                ]),
             &["mode"],
         )
         .expect("Infallible");
         let query_snapshot_lane_remaining_items = GenericGaugeVec::new(
-            Opts::new(
-                "query_snapshot_lane_remaining_items",
-                "Snapshot query lane remaining items by mode",
-            ),
+            metric_specs.opts("query_snapshot_lane_remaining_items"),
             &["mode"],
         )
         .expect("Infallible");
         let query_snapshot_lane_cursors_total = IntCounterVec::new(
-            Opts::new(
-                "query_snapshot_lane_cursors_total",
-                "Snapshot query lane cursors emitted by mode",
-            ),
+            metric_specs.opts("query_snapshot_lane_cursors_total"),
             &["mode"],
         )
         .expect("Infallible");
 
         // Torii Connect (Iroha Connect) metrics
-        let torii_connect_sessions_total = GenericGauge::new(
-            "torii_connect_sessions_total",
-            "Torii Connect total WS sessions",
-        )
-        .expect("Infallible");
-        let torii_connect_sessions_active = GenericGauge::new(
-            "torii_connect_sessions_active",
-            "Torii Connect active session objects",
-        )
-        .expect("Infallible");
+        let torii_connect_sessions_total =
+            GenericGauge::with_opts(metric_specs.opts("torii_connect_sessions_total"))
+                .expect("Infallible");
+        let torii_connect_sessions_active =
+            GenericGauge::with_opts(metric_specs.opts("torii_connect_sessions_active"))
+                .expect("Infallible");
         let torii_pre_auth_reject_total = IntCounterVec::new(
-            Opts::new(
-                "torii_pre_auth_reject_total",
-                "Torii pre-auth rejected connections",
-            ),
+            metric_specs.opts("torii_pre_auth_reject_total"),
             &["reason"],
         )
         .expect("Infallible");
         let torii_operator_auth_total = IntCounterVec::new(
-            Opts::new(
-                "torii_operator_auth_total",
-                "Torii operator auth events by action, result, and reason",
-            ),
+            metric_specs.opts("torii_operator_auth_total"),
             &["action", "result", "reason"],
         )
         .expect("Infallible");
         let torii_operator_auth_lockout_total = IntCounterVec::new(
-            Opts::new(
-                "torii_operator_auth_lockout_total",
-                "Torii operator auth lockouts by action and reason",
-            ),
+            metric_specs.opts("torii_operator_auth_lockout_total"),
             &["action", "reason"],
         )
         .expect("Infallible");
-        let torii_signature_limit_total = IntCounter::new(
-            "torii_signature_limit_total",
-            "Transactions rejected during admission for exceeding the configured signature limit",
-        )
-        .expect("Infallible");
+        let torii_signature_limit_total =
+            IntCounter::with_opts(metric_specs.opts("torii_signature_limit_total"))
+                .expect("Infallible");
         let torii_signature_limit_by_authority_total = IntCounterVec::new(
-            Opts::new(
-                "torii_signature_limit_by_authority_total",
-                "Transactions rejected during admission for exceeding the signature limit, labeled by authority type",
-            ),
+            metric_specs.opts("torii_signature_limit_by_authority_total"),
             &["authority"],
         )
         .expect("Infallible");
-        let torii_signature_limit_last_count = GenericGauge::new(
-            "torii_signature_limit_last_count",
-            "Last observed transaction signature count during signature-limit enforcement",
-        )
-        .expect("Infallible");
-        let torii_signature_limit_max = GenericGauge::new(
-            "torii_signature_limit_max",
-            "Configured transaction signature cap recorded during signature-limit enforcement",
-        )
-        .expect("Infallible");
-        let torii_nts_unhealthy_reject_total = IntCounter::new(
-            "torii_nts_unhealthy_reject_total",
-            "Transactions rejected during admission due to unhealthy network time service",
-        )
-        .expect("Infallible");
-        let torii_multisig_direct_sign_reject_total = IntCounter::new(
-            "torii_multisig_direct_sign_reject_total",
-            "Transactions rejected during admission for being signed directly by a multisig account",
-        )
-        .expect("Infallible");
+        let torii_signature_limit_last_count =
+            GenericGauge::with_opts(metric_specs.opts("torii_signature_limit_last_count"))
+                .expect("Infallible");
+        let torii_signature_limit_max =
+            GenericGauge::with_opts(metric_specs.opts("torii_signature_limit_max"))
+                .expect("Infallible");
+        let torii_nts_unhealthy_reject_total =
+            IntCounter::with_opts(metric_specs.opts("torii_nts_unhealthy_reject_total"))
+                .expect("Infallible");
+        let torii_multisig_direct_sign_reject_total =
+            IntCounter::with_opts(metric_specs.opts("torii_multisig_direct_sign_reject_total"))
+                .expect("Infallible");
         let torii_sorafs_admission_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_admission_total",
-                "Torii SoraFS provider admission results by outcome and reason",
-            ),
+            metric_specs.opts("torii_sorafs_admission_total"),
             &["result", "reason"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_telemetry_rejections_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_telemetry_rejections_total",
-                "Rejected SoraFS capacity telemetry windows grouped by provider and reason",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_telemetry_rejections_total"),
             &["provider", "reason"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_declared_gib = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_declared_gib",
-                "Declared SoraFS capacity (GiB) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_declared_gib"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_effective_gib = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_effective_gib",
-                "Effective SoraFS capacity (GiB) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_effective_gib"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_utilised_gib = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_utilised_gib",
-                "Utilised SoraFS capacity (GiB) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_utilised_gib"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_outstanding_gib = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_outstanding_gib",
-                "Outstanding SoraFS capacity reservations (GiB) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_outstanding_gib"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_capacity_gibhours_total = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_capacity_gibhours_total",
-                "Accumulated SoraFS provider GiB-hours",
-            ),
+            metric_specs.opts("torii_sorafs_capacity_gibhours_total"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_egress_bytes = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_egress_bytes",
-                "SoraFS egress bytes reported per provider and source",
-            ),
+            metric_specs.opts("torii_sorafs_egress_bytes"),
             &["provider", "source"],
         )
         .expect("Infallible");
         let torii_sorafs_egress_drift_ratio = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_egress_drift_ratio",
-                "Absolute SoraFS egress counter drift ratio against billing bytes per provider and source",
-            ),
+            metric_specs.opts("torii_sorafs_egress_drift_ratio"),
             &["provider", "source"],
         )
         .expect("Infallible");
         let sorafs_governance_dag_publish_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_governance_dag_publish_total",
-                "SoraFS Governance DAG publication attempts grouped by payload kind, result, and sink",
-            ),
+            metric_specs.opts("sorafs_governance_dag_publish_total"),
             &["payload_kind", "result", "sink"],
         )
         .expect("Infallible");
         let sorafs_governance_dag_published_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_governance_dag_published_bytes_total",
-                "SoraFS Governance DAG bytes successfully published grouped by payload kind and sink",
-            ),
+            metric_specs.opts("sorafs_governance_dag_published_bytes_total"),
             &["payload_kind", "sink"],
         )
         .expect("Infallible");
         let sorafs_governance_dag_last_publish_timestamp_seconds = GenericGaugeVec::new(
-            Opts::new(
-                "sorafs_governance_dag_last_publish_timestamp_seconds",
-                "Unix timestamp of the last successful SoraFS Governance DAG publication",
-            ),
+            metric_specs.opts("sorafs_governance_dag_last_publish_timestamp_seconds"),
             &["payload_kind", "sink"],
         )
         .expect("Infallible");
         let sorafs_governance_dag_backlog = GenericGaugeVec::new(
-            Opts::new(
-                "sorafs_governance_dag_backlog",
-                "SoraFS Governance DAG publication backlog grouped by sink",
-            ),
+            metric_specs.opts("sorafs_governance_dag_backlog"),
             &["sink"],
         )
         .expect("Infallible");
         let sorafs_governance_dag_head_age_seconds = GenericGaugeVec::new(
-            Opts::new(
-                "sorafs_governance_dag_head_age_seconds",
-                "SoraFS Governance DAG head age in seconds grouped by sink",
-            ),
+            metric_specs.opts("sorafs_governance_dag_head_age_seconds"),
             &["sink"],
         )
         .expect("Infallible");
         let torii_sorafs_orderbook_finalized_events_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_orderbook_finalized_events_total",
-                "Committed SoraFS orderbook transitions grouped by event kind",
-            ),
+            metric_specs.opts("torii_sorafs_orderbook_finalized_events_total"),
             &["event"],
         )
         .expect("Infallible");
         let torii_sorafs_orderbook_open_depth_gib = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_orderbook_open_depth_gib",
-                "Authoritative open SoraFS orderbook depth in GiB grouped by tier and side",
-            ),
+            metric_specs.opts("torii_sorafs_orderbook_open_depth_gib"),
             &["tier", "side"],
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_matcher_lag_seconds = GenericGauge::new(
-            "torii_sorafs_orderbook_matcher_lag_seconds",
-            "Lag in seconds between the latest authoritative book mutation and bounded matcher scan",
+        let torii_sorafs_orderbook_matcher_lag_seconds = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_matcher_lag_seconds"),
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_settlement_backlog = GenericGauge::new(
-            "torii_sorafs_orderbook_settlement_backlog",
-            "Authoritative count of open SoraFS orderbook settlement channels",
+        let torii_sorafs_orderbook_settlement_backlog =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_orderbook_settlement_backlog"))
+                .expect("Infallible");
+        let torii_sorafs_orderbook_oldest_settlement_age_seconds = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_oldest_settlement_age_seconds"),
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_oldest_settlement_age_seconds = GenericGauge::new(
-            "torii_sorafs_orderbook_oldest_settlement_age_seconds",
-            "Age in seconds of the oldest authoritative open SoraFS orderbook channel",
+        let torii_sorafs_orderbook_escrow_runway_seconds = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_escrow_runway_seconds"),
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_escrow_runway_seconds = GenericGauge::new(
-            "torii_sorafs_orderbook_escrow_runway_seconds",
-            "Seconds until the earliest authoritative open SoraFS orderbook channel expires",
+        let torii_sorafs_orderbook_finalized_projection_ready = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_ready"),
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_ready = GenericGauge::new(
-            "torii_sorafs_orderbook_finalized_projection_ready",
-            "Whether the latest SoraFS orderbook telemetry projection is complete and finalized",
+        let torii_sorafs_orderbook_finalized_projection_height = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_height"),
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_height = GenericGauge::new(
-            "torii_sorafs_orderbook_finalized_projection_height",
-            "Finalized block height of the latest complete SoraFS orderbook telemetry projection",
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_timestamp_seconds = GenericGauge::new(
-            "torii_sorafs_orderbook_finalized_projection_timestamp_seconds",
-            "Finalized block timestamp of the latest complete SoraFS orderbook telemetry projection",
-        )
-        .expect("Infallible");
+        let torii_sorafs_orderbook_finalized_projection_timestamp_seconds =
+            GenericGauge::with_opts(
+                metric_specs.opts("torii_sorafs_orderbook_finalized_projection_timestamp_seconds"),
+            )
+            .expect("Infallible");
         let torii_sorafs_orderbook_finalized_projection_failures_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_orderbook_finalized_projection_failures_total",
-                "Fail-closed finalized SoraFS orderbook projection failures grouped by reason",
-            ),
+            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_failures_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let torii_sorafs_orderbook_book_revision = GenericGauge::new(
-            "torii_sorafs_orderbook_book_revision",
-            "Authoritative SoraFS orderbook revision in the latest complete projection",
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_matcher_scan_book_revision = GenericGauge::new(
-            "torii_sorafs_orderbook_matcher_scan_book_revision",
-            "Latest exhaustively scanned authoritative SoraFS orderbook revision",
+        let torii_sorafs_orderbook_book_revision =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_orderbook_book_revision"))
+                .expect("Infallible");
+        let torii_sorafs_orderbook_matcher_scan_book_revision = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_orderbook_matcher_scan_book_revision"),
         )
         .expect("Infallible");
         let torii_sorafs_orderbook_api_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_orderbook_api_requests_total",
-                "SoraFS orderbook API requests grouped by closed route and outcome labels",
-            ),
+            metric_specs.opts("torii_sorafs_orderbook_api_requests_total"),
             &["route", "outcome"],
         )
         .expect("Infallible");
@@ -12788,45 +11409,33 @@ impl Default for Metrics {
             }
         }
         let torii_sorafs_gateway_compliance_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_compliance_requests_total",
-                "SoraFS gateway compliance control requests grouped by closed operation and outcome labels",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_compliance_requests_total"),
             &["operation", "outcome"],
         )
         .expect("Infallible");
         let torii_sorafs_gateway_compliance_serving_decisions_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_compliance_serving_decisions_total",
-                "SoraFS gateway compliance serving decisions grouped by closed subject-kind, disposition, and decision-source labels",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_compliance_serving_decisions_total"),
             &["subject_kind", "disposition", "source"],
         )
         .expect("Infallible");
         let torii_sorafs_gateway_compliance_failures_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_compliance_failures_total",
-                "SoraFS gateway compliance failures grouped by closed surface and class labels",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_compliance_failures_total"),
             &["surface", "class"],
         )
         .expect("Infallible");
-        let torii_sorafs_gateway_compliance_serving_catalog_sequence = GenericGauge::new(
-            "torii_sorafs_gateway_compliance_serving_catalog_sequence",
-            "Sequence of the verified SoraFS gateway compliance catalog used by the serving path",
+        let torii_sorafs_gateway_compliance_serving_catalog_sequence = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_gateway_compliance_serving_catalog_sequence"),
         )
         .expect("Infallible");
         let torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds =
-            GenericGauge::new(
-                "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
-                "Expiry Unix second of the verified SoraFS gateway compliance catalog used by the serving path",
+            GenericGauge::with_opts(
+                metric_specs
+                    .opts("torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds"),
             )
             .expect("Infallible");
-        let torii_sorafs_gateway_compliance_ready = GenericGauge::new(
-            "torii_sorafs_gateway_compliance_ready",
-            "Whether a fresh verified SoraFS gateway compliance catalog is available to the serving path",
-        )
-        .expect("Infallible");
+        let torii_sorafs_gateway_compliance_ready =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_gateway_compliance_ready"))
+                .expect("Infallible");
         for operation in SORAFS_GATEWAY_COMPLIANCE_OPERATION_LABELS {
             for outcome in SORAFS_GATEWAY_COMPLIANCE_REQUEST_OUTCOME_LABELS {
                 let _ = torii_sorafs_gateway_compliance_requests_total
@@ -12848,435 +11457,281 @@ impl Default for Metrics {
             }
         }
         let torii_sorafs_hedging_xor_usd_reference_price_micro_usd = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
-                "SoraFS hedging XOR/USD reference price in micro-USD grouped by cluster",
-            ),
+            metric_specs.opts("torii_sorafs_hedging_xor_usd_reference_price_micro_usd"),
             &["cluster"],
         )
         .expect("Infallible");
         let torii_sorafs_hedging_feed_lag_seconds = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_hedging_feed_lag_seconds",
-                "SoraFS hedging feed lag in seconds grouped by cluster and source",
-            ),
+            metric_specs.opts("torii_sorafs_hedging_feed_lag_seconds"),
             &["cluster", "source"],
         )
         .expect("Infallible");
         let torii_sorafs_hedging_feed_divergence_bps = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_hedging_feed_divergence_bps",
-                "SoraFS hedging feed divergence in basis points grouped by cluster and source",
-            ),
+            metric_specs.opts("torii_sorafs_hedging_feed_divergence_bps"),
             &["cluster", "source"],
         )
         .expect("Infallible");
         let torii_sorafs_hedging_exposure_drift_bps = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_hedging_exposure_drift_bps",
-                "SoraFS hedging exposure drift in basis points grouped by cluster and asset",
-            ),
+            metric_specs.opts("torii_sorafs_hedging_exposure_drift_bps"),
             &["cluster", "asset"],
         )
         .expect("Infallible");
         let torii_sorafs_billing_statement_generation_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_billing_statement_generation_total",
-                "SoraFS billing statement generation attempts grouped by cluster and account type",
-            ),
+            metric_specs.opts("torii_sorafs_billing_statement_generation_total"),
             &["cluster", "account_type"],
         )
         .expect("Infallible");
         let torii_sorafs_billing_statement_failure_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_billing_statement_failure_total",
-                "SoraFS billing statement generation failures grouped by cluster and account type",
-            ),
+            metric_specs.opts("torii_sorafs_billing_statement_failure_total"),
             &["cluster", "account_type"],
         )
         .expect("Infallible");
         let torii_sorafs_billing_statement_ack_backlog = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_billing_statement_ack_backlog",
-                "SoraFS billing statement acknowledgement backlog grouped by cluster",
-            ),
+            metric_specs.opts("torii_sorafs_billing_statement_ack_backlog"),
             &["cluster"],
         )
         .expect("Infallible");
         let torii_sorafs_billing_escrow_runway_seconds = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_billing_escrow_runway_seconds",
-                "SoraFS billing escrow runway in seconds grouped by cluster and account type",
-            ),
+            metric_specs.opts("torii_sorafs_billing_escrow_runway_seconds"),
             &["cluster", "account_type"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_lifecycle_stage_providers = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_lifecycle_stage_providers",
-                "SoraFS reserve providers grouped by lifecycle stage",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_lifecycle_stage_providers"),
             &["stage"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_credit_draw_micro_xor = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_credit_draw_micro_xor",
-                "SoraFS outstanding reserve credit principal in micro-XOR grouped by lifecycle stage",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_credit_draw_micro_xor"),
             &["stage"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_credit_shortfall_micro_xor = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_credit_shortfall_micro_xor",
-                "SoraFS reserve credit shortfall in micro-XOR grouped by lifecycle stage",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_credit_shortfall_micro_xor"),
             &["stage"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_accrued_interest_micro_xor = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_accrued_interest_micro_xor",
-                "SoraFS reserve accrued interest in micro-XOR grouped by lifecycle stage",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_accrued_interest_micro_xor"),
             &["stage"],
         )
         .expect("Infallible");
-        let torii_sorafs_reserve_defaulted_providers = GenericGauge::new(
-            "torii_sorafs_reserve_defaulted_providers",
-            "SoraFS reserve providers currently in default",
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_appeal_backlog = GenericGauge::new(
-            "torii_sorafs_reserve_appeal_backlog",
-            "Open SoraFS reserve appeals awaiting decision",
-        )
-        .expect("Infallible");
+        let torii_sorafs_reserve_defaulted_providers =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_reserve_defaulted_providers"))
+                .expect("Infallible");
+        let torii_sorafs_reserve_appeal_backlog =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_reserve_appeal_backlog"))
+                .expect("Infallible");
         let torii_sorafs_reserve_custody_movements = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_custody_movements",
-                "SoraFS reserve movements grouped by custody status",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_custody_movements"),
             &["status"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_chain_reconciled_movements = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_chain_reconciled_movements",
-                "SoraFS reserve movements reconciled with terminal chain custody evidence",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_chain_reconciled_movements"),
             &["status"],
         )
         .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_ready = GenericGauge::new(
-            "torii_sorafs_reserve_finalized_projection_ready",
-            "Whether the SoraFS reserve telemetry projection is caught up and reconciled at one finalized view",
+        let torii_sorafs_reserve_finalized_projection_ready = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_reserve_finalized_projection_ready"),
         )
         .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_height = GenericGauge::new(
-            "torii_sorafs_reserve_finalized_projection_height",
-            "Finalized block height represented by the latest complete SoraFS reserve telemetry projection",
+        let torii_sorafs_reserve_finalized_projection_height = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_reserve_finalized_projection_height"),
         )
         .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_failure_total = IntCounter::new(
-            "torii_sorafs_reserve_finalized_projection_failure_total",
-            "Failed SoraFS reserve finalized-projection refresh attempts",
+        let torii_sorafs_reserve_finalized_projection_failure_total = IntCounter::with_opts(
+            metric_specs.opts("torii_sorafs_reserve_finalized_projection_failure_total"),
         )
         .expect("Infallible");
         let torii_sorafs_reserve_service_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_service_requests_total",
-                "SoraFS reserve service requests grouped by route and result",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_service_requests_total"),
             &["route", "result"],
         )
         .expect("Infallible");
         let torii_sorafs_reserve_service_rate_limit_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_reserve_service_rate_limit_total",
-                "SoraFS reserve service rate-limit events grouped by route and reason",
-            ),
+            metric_specs.opts("torii_sorafs_reserve_service_rate_limit_total"),
             &["route", "reason"],
         )
         .expect("Infallible");
-        let sorafs_reputation_ingest_lag_seconds = GenericGauge::new(
-            "sorafs_reputation_ingest_lag_seconds",
-            "SoraFS reputation ingest lag observed when a snapshot is accepted",
+        let sorafs_reputation_ingest_lag_seconds =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_ingest_lag_seconds"))
+                .expect("Infallible");
+        let sorafs_reputation_snapshot_age_seconds =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_snapshot_age_seconds"))
+                .expect("Infallible");
+        let sorafs_reputation_snapshot_generated_at_unix = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_snapshot_generated_at_unix"),
         )
         .expect("Infallible");
-        let sorafs_reputation_snapshot_age_seconds = GenericGauge::new(
-            "sorafs_reputation_snapshot_age_seconds",
-            "SoraFS reputation snapshot age observed when a snapshot is accepted",
-        )
-        .expect("Infallible");
-        let sorafs_reputation_snapshot_generated_at_unix = GenericGauge::new(
-            "sorafs_reputation_snapshot_generated_at_unix",
-            "SoraFS reputation snapshot generation time as a Unix timestamp",
-        )
-        .expect("Infallible");
-        let sorafs_reputation_provider_count = GenericGauge::new(
-            "sorafs_reputation_provider_count",
-            "Provider count in the latest accepted SoraFS reputation snapshot",
-        )
-        .expect("Infallible");
-        let sorafs_reputation_low_score_providers = GenericGauge::new(
-            "sorafs_reputation_low_score_providers",
-            "Providers below the low-score threshold in the latest SoraFS reputation snapshot",
-        )
-        .expect("Infallible");
+        let sorafs_reputation_provider_count =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_provider_count"))
+                .expect("Infallible");
+        let sorafs_reputation_low_score_providers =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_low_score_providers"))
+                .expect("Infallible");
         let sorafs_reputation_score = GaugeVec::new(
-            Opts::new(
-                "sorafs_reputation_score",
-                "SoraFS reputation provider score in basis points for the bounded top-N set",
-            ),
+            metric_specs.opts("sorafs_reputation_score"),
             &["provider_id"],
         )
         .expect("Infallible");
         let sorafs_reputation_threshold_crossings_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_reputation_threshold_crossings_total",
-                "SoraFS reputation low-score threshold crossings by level",
-            ),
+            metric_specs.opts("sorafs_reputation_threshold_crossings_total"),
             &["level"],
         )
         .expect("Infallible");
-        let sorafs_reputation_runtime_live = GenericGauge::new(
-            "sorafs_reputation_runtime_live",
-            "Whether the committed SoraFS reputation runtime completed a successful poll",
+        let sorafs_reputation_runtime_live =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_live"))
+                .expect("Infallible");
+        let sorafs_reputation_runtime_ready =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_ready"))
+                .expect("Infallible");
+        let sorafs_reputation_runtime_dependencies_ready = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_runtime_dependencies_ready"),
         )
         .expect("Infallible");
-        let sorafs_reputation_runtime_ready = GenericGauge::new(
-            "sorafs_reputation_runtime_ready",
-            "Whether every required committed SoraFS reputation runtime path is ready",
+        let sorafs_reputation_journal_transaction_submitter_ready = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_journal_transaction_submitter_ready"),
         )
         .expect("Infallible");
-        let sorafs_reputation_runtime_dependencies_ready = GenericGauge::new(
-            "sorafs_reputation_runtime_dependencies_ready",
-            "Whether all identity-pinned external SoraFS reputation adapters are healthy",
+        let sorafs_reputation_runtime_finalized_height = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_runtime_finalized_height"),
         )
         .expect("Infallible");
-        let sorafs_reputation_journal_transaction_submitter_ready = GenericGauge::new(
-            "sorafs_reputation_journal_transaction_submitter_ready",
-            "Whether the native reputation-journal transaction submitter is healthy",
+        let sorafs_reputation_runtime_consecutive_failures = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_runtime_consecutive_failures"),
         )
         .expect("Infallible");
-        let sorafs_reputation_runtime_finalized_height = GenericGauge::new(
-            "sorafs_reputation_runtime_finalized_height",
-            "Latest finalized height represented by the committed SoraFS reputation runtime",
+        let sorafs_reputation_runtime_material_acknowledged = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_reputation_runtime_material_acknowledged"),
         )
         .expect("Infallible");
-        let sorafs_reputation_runtime_consecutive_failures = GenericGauge::new(
-            "sorafs_reputation_runtime_consecutive_failures",
-            "Consecutive failed committed SoraFS reputation reconciliation attempts",
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_material_acknowledged = GenericGauge::new(
-            "sorafs_reputation_runtime_material_acknowledged",
-            "Whether exact SoraFS reputation signing material has a durable acknowledgement",
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_provider_count = GenericGauge::new(
-            "sorafs_reputation_runtime_provider_count",
-            "Provider accumulators retained by the committed SoraFS reputation projector",
-        )
-        .expect("Infallible");
+        let sorafs_reputation_runtime_provider_count =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_provider_count"))
+                .expect("Infallible");
         let sorafs_reputation_runtime_ticks_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_reputation_runtime_ticks_total",
-                "Supervised committed SoraFS reputation reconciliation ticks by result",
-            ),
+            metric_specs.opts("sorafs_reputation_runtime_ticks_total"),
             &["result"],
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_runtime_live = GenericGauge::new(
-            "sorafs_hedging_billing_runtime_live",
-            "Whether the committed SoraFS hedging/billing runtime completed a successful tick",
+        let sorafs_hedging_billing_runtime_live =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_runtime_live"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_runtime_ready =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_runtime_ready"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_runtime_dependencies_ready = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_runtime_dependencies_ready"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_runtime_ready = GenericGauge::new(
-            "sorafs_hedging_billing_runtime_ready",
-            "Whether every required committed SoraFS hedging/billing runtime path is ready",
+        let sorafs_hedging_billing_automatic_execution_enabled = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_automatic_execution_enabled"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_runtime_dependencies_ready = GenericGauge::new(
-            "sorafs_hedging_billing_runtime_dependencies_ready",
-            "Whether all identity-pinned SoraFS hedging/billing adapters are healthy",
+        let sorafs_hedging_billing_last_tick_fresh =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_last_tick_fresh"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_finalized_projection_ready = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_finalized_projection_ready"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_automatic_execution_enabled = GenericGauge::new(
-            "sorafs_hedging_billing_automatic_execution_enabled",
-            "Whether automatic SoraFS hedge execution is enabled (always zero in V1)",
+        let sorafs_hedging_billing_finalized_height =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_finalized_height"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_finalized_head_height = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_finalized_head_height"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_last_tick_fresh = GenericGauge::new(
-            "sorafs_hedging_billing_last_tick_fresh",
-            "Whether the most recent successful SoraFS hedging/billing runtime tick is fresh",
+        let sorafs_hedging_billing_finalized_lag_blocks = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_finalized_lag_blocks"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_finalized_projection_ready = GenericGauge::new(
-            "sorafs_hedging_billing_finalized_projection_ready",
-            "Whether the SoraFS billing projection is anchored to an admissibly recent finalized head",
+        let sorafs_hedging_billing_next_event_sequence = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_next_event_sequence"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_finalized_height = GenericGauge::new(
-            "sorafs_hedging_billing_finalized_height",
-            "Latest finalized height represented by the committed SoraFS billing projector",
+        let sorafs_hedging_billing_ready_for_signing =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_ready_for_signing"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_ready_for_publication = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_ready_for_publication"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_finalized_head_height = GenericGauge::new(
-            "sorafs_hedging_billing_finalized_head_height",
-            "Latest finalized ledger head observed by the SoraFS hedging/billing runtime",
+        let sorafs_hedging_billing_publication_ambiguous = GenericGauge::with_opts(
+            metric_specs.opts("sorafs_hedging_billing_publication_ambiguous"),
         )
         .expect("Infallible");
-        let sorafs_hedging_billing_finalized_lag_blocks = GenericGauge::new(
-            "sorafs_hedging_billing_finalized_lag_blocks",
-            "Finalized blocks between the observed ledger head and SoraFS billing projection",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_next_event_sequence = GenericGauge::new(
-            "sorafs_hedging_billing_next_event_sequence",
-            "First finalized SoraFS billing journal sequence not yet projected",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_ready_for_signing = GenericGauge::new(
-            "sorafs_hedging_billing_ready_for_signing",
-            "SoraFS billing statements waiting for external software signing",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_ready_for_publication = GenericGauge::new(
-            "sorafs_hedging_billing_ready_for_publication",
-            "Signed SoraFS billing statements waiting for immutable publication",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_publication_ambiguous = GenericGauge::new(
-            "sorafs_hedging_billing_publication_ambiguous",
-            "SoraFS billing publications awaiting authoritative reconciliation",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_published = GenericGauge::new(
-            "sorafs_hedging_billing_published",
-            "Published SoraFS billing statements waiting for acknowledgement",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_acknowledged = GenericGauge::new(
-            "sorafs_hedging_billing_acknowledged",
-            "Durably acknowledged SoraFS billing statements",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_dead_letter = GenericGauge::new(
-            "sorafs_hedging_billing_dead_letter",
-            "Terminal SoraFS billing statement delivery dead letters",
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_hedge_intents = GenericGauge::new(
-            "sorafs_hedging_billing_hedge_intents",
-            "Generated SoraFS hedge intents retained without automatic execution",
-        )
-        .expect("Infallible");
+        let sorafs_hedging_billing_published =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_published"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_acknowledged =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_acknowledged"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_dead_letter =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_dead_letter"))
+                .expect("Infallible");
+        let sorafs_hedging_billing_hedge_intents =
+            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_hedge_intents"))
+                .expect("Infallible");
         let sorafs_hedging_billing_runtime_ticks_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_hedging_billing_runtime_ticks_total",
-                "Supervised committed SoraFS hedging/billing ticks by result",
-            ),
+            metric_specs.opts("sorafs_hedging_billing_runtime_ticks_total"),
             &["result"],
         )
         .expect("Infallible");
         let torii_sorafs_fee_projection_nanos = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_fee_projection_nanos",
-                "SoraFS fee projection (nano units) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_fee_projection_nanos"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_disputes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_disputes_total",
-                "Total SoraFS capacity disputes submitted via Torii",
-            ),
+            metric_specs.opts("torii_sorafs_disputes_total"),
             &["result"],
         )
         .expect("Infallible");
         let torii_sorafs_orders_issued_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_orders_issued_total",
-                "SoraFS replication orders issued per provider",
-            ),
+            metric_specs.opts("torii_sorafs_orders_issued_total"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_orders_completed_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_orders_completed_total",
-                "SoraFS replication orders completed per provider",
-            ),
+            metric_specs.opts("torii_sorafs_orders_completed_total"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_orders_failed_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_orders_failed_total",
-                "SoraFS replication orders failed per provider",
-            ),
+            metric_specs.opts("torii_sorafs_orders_failed_total"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_outstanding_orders = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_outstanding_orders",
-                "Outstanding SoraFS replication orders per provider",
-            ),
+            metric_specs.opts("torii_sorafs_outstanding_orders"),
             &["provider"],
         )
         .expect("Infallible");
-        let torii_sorafs_uptime_bps = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_uptime_bps",
-                "SoraFS uptime success rate (basis points) per provider",
-            ),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_por_bps = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_por_bps",
-                "SoraFS PoR success rate (basis points) per provider",
-            ),
-            &["provider"],
-        )
-        .expect("Infallible");
+        let torii_sorafs_uptime_bps =
+            IntGaugeVec::new(metric_specs.opts("torii_sorafs_uptime_bps"), &["provider"])
+                .expect("Infallible");
+        let torii_sorafs_por_bps =
+            IntGaugeVec::new(metric_specs.opts("torii_sorafs_por_bps"), &["provider"])
+                .expect("Infallible");
         let torii_sorafs_por_challenges_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_por_challenges_total",
-                "SoraFS PoR scheduler challenges grouped by result",
-            ),
+            metric_specs.opts("torii_sorafs_por_challenges_total"),
             &["result"],
         )
         .expect("Infallible");
-        let torii_sorafs_por_forced_challenges_total = IntCounter::new(
-            "torii_sorafs_por_forced_challenges_total",
-            "SoraFS PoR forced challenges emitted by the scheduler",
-        )
-        .expect("Infallible");
-        let torii_sorafs_por_sampling_duplicates_total = IntCounter::new(
-            "torii_sorafs_por_sampling_duplicates_total",
-            "Duplicate SoraFS PoR samples emitted by the scheduler",
-        )
-        .expect("Infallible");
+        let torii_sorafs_por_forced_challenges_total =
+            IntCounter::with_opts(metric_specs.opts("torii_sorafs_por_forced_challenges_total"))
+                .expect("Infallible");
+        let torii_sorafs_por_sampling_duplicates_total =
+            IntCounter::with_opts(metric_specs.opts("torii_sorafs_por_sampling_duplicates_total"))
+                .expect("Infallible");
         let torii_sorafs_por_ingest_backlog = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_por_ingest_backlog",
-                "SoraFS PoR ingestion backlog per manifest/provider pair",
-            ),
+            metric_specs.opts("torii_sorafs_por_ingest_backlog"),
             &["manifest", "provider"],
         )
         .expect("Infallible");
         let torii_sorafs_por_ingest_failures_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_por_ingest_failures_total",
-                "Total SoraFS PoR ingestion failures per manifest/provider pair",
-            ),
+            metric_specs.opts("torii_sorafs_por_ingest_failures_total"),
             &["manifest", "provider"],
         )
         .expect("Infallible");
@@ -13430,42 +11885,30 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_por_ingest_backlog);
         register_guarded(&registry, &torii_sorafs_por_ingest_failures_total);
         let torii_sorafs_repair_tasks_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_repair_tasks_total",
-                "SoraFS repair task transitions grouped by status",
-            ),
+            metric_specs.opts("torii_sorafs_repair_tasks_total"),
             &["status"],
         )
         .expect("Infallible");
         let torii_sorafs_repair_latency_minutes = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_sorafs_repair_latency_minutes",
-                "SoraFS repair lifecycle latency distribution (minutes)",
-            )
-            .buckets(vec![
-                1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0, 480.0,
-            ]),
+            metric_specs
+                .histogram_opts("torii_sorafs_repair_latency_minutes")
+                .buckets(vec![
+                    1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0, 480.0,
+                ]),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_sorafs_repair_queue_depth = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_repair_queue_depth",
-                "SoraFS repair queue depth per provider",
-            ),
+            metric_specs.opts("torii_sorafs_repair_queue_depth"),
             &["provider"],
         )
         .expect("Infallible");
-        let torii_sorafs_repair_backlog_oldest_age_seconds = GenericGauge::new(
-            "torii_sorafs_repair_backlog_oldest_age_seconds",
-            "Age of the oldest queued SoraFS repair task (seconds)",
+        let torii_sorafs_repair_backlog_oldest_age_seconds = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_repair_backlog_oldest_age_seconds"),
         )
         .expect("Infallible");
         let torii_sorafs_repair_lease_expired_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_repair_lease_expired_total",
-                "SoraFS repair lease expirations grouped by outcome",
-            ),
+            metric_specs.opts("torii_sorafs_repair_lease_expired_total"),
             &["outcome"],
         )
         .expect("Infallible");
@@ -13475,148 +11918,94 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_repair_backlog_oldest_age_seconds);
         register_guarded(&registry, &torii_sorafs_repair_lease_expired_total);
         let torii_sorafs_slash_proposals_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_slash_proposals_total",
-                "SoraFS repair slash proposals grouped by outcome",
-            ),
+            metric_specs.opts("torii_sorafs_slash_proposals_total"),
             &["outcome"],
         )
         .expect("Infallible");
         register_guarded(&registry, &torii_sorafs_slash_proposals_total);
         let torii_sorafs_reconciliation_runs_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_reconciliation_runs_total",
-                "SoraFS reconciliation runs grouped by result",
-            ),
+            metric_specs.opts("torii_sorafs_reconciliation_runs_total"),
             &["result"],
         )
         .expect("Infallible");
-        let torii_sorafs_reconciliation_divergence_count = GenericGauge::new(
-            "torii_sorafs_reconciliation_divergence_count",
-            "SoraFS reconciliation divergence count for the latest snapshot",
+        let torii_sorafs_reconciliation_divergence_count = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_reconciliation_divergence_count"),
         )
         .expect("Infallible");
         register_guarded(&registry, &torii_sorafs_reconciliation_runs_total);
         register_guarded(&registry, &torii_sorafs_reconciliation_divergence_count);
-        let torii_sorafs_gc_runs_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gc_runs_total",
-                "SoraFS GC runs grouped by result",
-            ),
-            &["result"],
-        )
-        .expect("Infallible");
+        let torii_sorafs_gc_runs_total =
+            IntCounterVec::new(metric_specs.opts("torii_sorafs_gc_runs_total"), &["result"])
+                .expect("Infallible");
         let torii_sorafs_gc_evictions_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gc_evictions_total",
-                "SoraFS GC evictions grouped by reason",
-            ),
+            metric_specs.opts("torii_sorafs_gc_evictions_total"),
             &["reason"],
         )
         .expect("Infallible");
         let torii_sorafs_gc_bytes_freed_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gc_bytes_freed_total",
-                "Total SoraFS GC bytes freed grouped by reason",
-            ),
+            metric_specs.opts("torii_sorafs_gc_bytes_freed_total"),
             &["reason"],
         )
         .expect("Infallible");
         let torii_sorafs_gc_blocked_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gc_blocked_total",
-                "SoraFS GC evictions blocked grouped by reason",
-            ),
+            metric_specs.opts("torii_sorafs_gc_blocked_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let torii_sorafs_gc_expired_manifests = GenericGauge::new(
-            "torii_sorafs_gc_expired_manifests",
-            "Expired manifests observed by SoraFS GC sweeps",
-        )
-        .expect("Infallible");
-        let torii_sorafs_gc_oldest_expired_age_seconds = GenericGauge::new(
-            "torii_sorafs_gc_oldest_expired_age_seconds",
-            "Age of the oldest expired manifest observed by SoraFS GC (seconds)",
+        let torii_sorafs_gc_expired_manifests =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_gc_expired_manifests"))
+                .expect("Infallible");
+        let torii_sorafs_gc_oldest_expired_age_seconds = GenericGauge::with_opts(
+            metric_specs.opts("torii_sorafs_gc_oldest_expired_age_seconds"),
         )
         .expect("Infallible");
         let torii_sorafs_storage_bytes_used = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_bytes_used",
-                "SoraFS storage bytes used per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_bytes_used"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_bytes_capacity = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_bytes_capacity",
-                "SoraFS storage capacity bytes per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_bytes_capacity"),
             &["provider"],
         )
         .expect("Infallible");
         let sorafs_provider_ingest_inflight = GenericGaugeVec::new(
-            Opts::new(
-                "sorafs_provider_ingest_inflight",
-                "Finalized-ledger SoraFS provider ingests holding storage-write admission",
-            ),
+            metric_specs.opts("sorafs_provider_ingest_inflight"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_fetch_inflight = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_fetch_inflight",
-                "SoraFS fetch workers in flight per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_fetch_inflight"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_fetch_bytes_per_sec = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_fetch_bytes_per_sec",
-                "SoraFS fetch throughput (bytes/sec) per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_fetch_bytes_per_sec"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_por_inflight = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_por_inflight",
-                "SoraFS PoR workers in flight per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_por_inflight"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_por_samples_success_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_por_samples_success_total",
-                "SoraFS PoR samples marked successful per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_por_samples_success_total"),
             &["provider"],
         )
         .expect("Infallible");
         let torii_sorafs_storage_por_samples_failed_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_storage_por_samples_failed_total",
-                "SoraFS PoR samples marked failed per provider",
-            ),
+            metric_specs.opts("torii_sorafs_storage_por_samples_failed_total"),
             &["provider"],
         )
         .expect("Infallible");
         let sorafs_gateway_active = IntGaugeVec::new(
-            Opts::new(
-                "sorafs_gateway_active",
-                "Active SoraFS gateway requests grouped by canonical request dimensions",
-            ),
+            metric_specs.opts("sorafs_gateway_active"),
             &["endpoint", "method", "variant", "chunker", "profile"],
         )
         .expect("Infallible");
         let sorafs_gateway_responses_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_gateway_responses_total",
-                "Completed SoraFS gateway responses grouped by bounded outcome dimensions",
-            ),
+            metric_specs.opts("sorafs_gateway_responses_total"),
             &[
                 "endpoint",
                 "method",
@@ -13630,13 +12019,11 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let sorafs_gateway_ttfb_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_gateway_ttfb_ms",
-                "SoraFS gateway time to first byte in milliseconds",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 120.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sorafs_gateway_ttfb_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 120.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0,
+                ]),
             &[
                 "endpoint",
                 "method",
@@ -13650,141 +12037,93 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let sorafs_gateway_proof_verifications_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_gateway_proof_verifications_total",
-                "SoraFS proof verification outcomes grouped by profile and bounded error code",
-            ),
+            metric_specs.opts("sorafs_gateway_proof_verifications_total"),
             &["profile_version", "result", "error_code"],
         )
         .expect("Infallible");
         let sorafs_gateway_proof_duration_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_gateway_proof_duration_ms",
-                "SoraFS proof verification duration in milliseconds",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-            ]),
+            metric_specs
+                .histogram_opts("sorafs_gateway_proof_duration_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                ]),
             &["profile_version", "result", "error_code"],
         )
         .expect("Infallible");
         let torii_sorafs_chunk_range_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_chunk_range_requests_total",
-                "SoraFS chunk-range requests grouped by endpoint and status",
-            ),
+            metric_specs.opts("torii_sorafs_chunk_range_requests_total"),
             &["endpoint", "status"],
         )
         .expect("Infallible");
         let torii_sorafs_chunk_range_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_chunk_range_bytes_total",
-                "Total bytes served by SoraFS chunk-range endpoints",
-            ),
+            metric_specs.opts("torii_sorafs_chunk_range_bytes_total"),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_sorafs_provider_range_capability_total = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_provider_range_capability_total",
-                "Providers advertising SoraFS range capability grouped by feature",
-            ),
+            metric_specs.opts("torii_sorafs_provider_range_capability_total"),
             &["feature"],
         )
         .expect("Infallible");
         let torii_sorafs_routing_authority_cache_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_routing_authority_cache_total",
-                "SoraFS committed routing-authority cache events grouped by outcome",
-            ),
+            metric_specs.opts("torii_sorafs_routing_authority_cache_total"),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_sorafs_range_fetch_throttle_events_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_range_fetch_throttle_events_total",
-                "SoraFS range fetch throttle events grouped by reason",
-            ),
+            metric_specs.opts("torii_sorafs_range_fetch_throttle_events_total"),
             &["reason"],
         )
         .expect("Infallible");
-        let torii_sorafs_range_fetch_concurrency_current = IntGauge::with_opts(Opts::new(
-            "torii_sorafs_range_fetch_concurrency_current",
-            "Active SoraFS range fetch streams guarded by stream tokens",
-        ))
-        .expect("Infallible");
+        let torii_sorafs_range_fetch_concurrency_current =
+            IntGauge::with_opts(metric_specs.opts("torii_sorafs_range_fetch_concurrency_current"))
+                .expect("Infallible");
         let torii_sorafs_proof_stream_inflight = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_stream_inflight",
-                "Active SoraFS proof streams grouped by proof kind",
-            ),
+            metric_specs.opts("torii_sorafs_proof_stream_inflight"),
             &["kind"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_stream_events_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_proof_stream_events_total",
-                "SoraFS proof stream outcomes grouped by kind, result, and reason",
-            ),
+            metric_specs.opts("torii_sorafs_proof_stream_events_total"),
             &["kind", "result", "reason"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_stream_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_sorafs_proof_stream_latency_ms",
-                "Latency in milliseconds for SoraFS proof stream items",
-            )
-            .buckets(vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-            ]),
+            metric_specs
+                .histogram_opts("torii_sorafs_proof_stream_latency_ms")
+                .buckets(vec![
+                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                ]),
             &["kind"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_alerts_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_alerts_total",
-                "Proof-health alerts grouped by provider, trigger, and penalty outcome",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_alerts_total"),
             &["provider_id", "trigger", "penalty"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_pdp_failures = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_pdp_failures",
-                "PDP failures recorded on the latest proof-health alert per provider",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_pdp_failures"),
             &["provider_id"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_potr_breaches = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_potr_breaches",
-                "PoTR breaches recorded on the latest proof-health alert per provider",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_potr_breaches"),
             &["provider_id"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_penalty_nano = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_penalty_nano",
-                "Penalty amount applied (nano-XOR) on the latest proof-health alert per provider",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_penalty_nano"),
             &["provider_id"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_window_end_epoch = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_window_end_epoch",
-                "Telemetry window end epoch recorded on the latest proof-health alert per provider",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_window_end_epoch"),
             &["provider_id"],
         )
         .expect("Infallible");
         let torii_sorafs_proof_health_cooldown = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_proof_health_cooldown",
-                "Cooldown flag captured on the latest proof-health alert per provider (0 = inactive, 1 = active)",
-            ),
+            metric_specs.opts("torii_sorafs_proof_health_cooldown"),
             &["provider_id"],
         )
         .expect("Infallible");
@@ -13809,83 +12148,54 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_proof_health_window_end_epoch);
         register_guarded(&registry, &torii_sorafs_proof_health_cooldown);
         let torii_sorafs_gar_violations_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gar_violations_total",
-                "GAR policy violations grouped by reason and detail",
-            ),
+            metric_specs.opts("torii_sorafs_gar_violations_total"),
             &["reason", "detail"],
         )
         .expect("Infallible");
         let torii_sorafs_gateway_refusals_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_refusals_total",
-                "Gateway refusals grouped by reason, profile, provider, and scope",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_refusals_total"),
             &["reason", "profile", "provider_id", "scope"],
         )
         .expect("Infallible");
         let torii_sorafs_gateway_fixture_info = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_fixture_info",
-                "Canonical SoraFS gateway fixture metadata (value = release timestamp)",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_fixture_info"),
             &["version", "profile", "fixtures_digest"],
         )
         .expect("Infallible");
         let torii_sorafs_registry_manifests_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_registry_manifests_total",
-                "SoraFS pin registry manifests grouped by status",
-            ),
+            metric_specs.opts("torii_sorafs_registry_manifests_total"),
             &["status"],
         )
         .expect("Infallible");
-        let torii_sorafs_registry_aliases_total = GenericGauge::new(
-            "torii_sorafs_registry_aliases_total",
-            "Total manifest aliases recorded in the SoraFS pin registry",
-        )
-        .expect("Infallible");
+        let torii_sorafs_registry_aliases_total =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_registry_aliases_total"))
+                .expect("Infallible");
         let torii_sorafs_alias_cache_refresh_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_alias_cache_refresh_total",
-                "Alias cache refresh outcomes grouped by result and reason",
-            ),
+            metric_specs.opts("torii_sorafs_alias_cache_refresh_total"),
             &["result", "reason"],
         )
         .expect("Infallible");
         let torii_sorafs_alias_cache_age_seconds = Histogram::with_opts(
-            HistogramOpts::new(
-                "torii_sorafs_alias_cache_age_seconds",
-                "Observed age of alias proofs when served (seconds)",
-            )
-            .buckets(vec![
-                30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1_200.0, 1_800.0, 3_600.0, 7_200.0,
-            ]),
+            metric_specs
+                .histogram_opts("torii_sorafs_alias_cache_age_seconds")
+                .buckets(vec![
+                    30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1_200.0, 1_800.0, 3_600.0, 7_200.0,
+                ]),
         )
         .expect("Infallible");
-        let torii_sorafs_tls_cert_expiry_seconds = Gauge::with_opts(Opts::new(
-            "torii_sorafs_tls_cert_expiry_seconds",
-            "Seconds remaining until the active gateway TLS certificate expires",
-        ))
-        .expect("Infallible");
+        let torii_sorafs_tls_cert_expiry_seconds =
+            Gauge::with_opts(metric_specs.opts("torii_sorafs_tls_cert_expiry_seconds"))
+                .expect("Infallible");
         let torii_sorafs_tls_renewal_total = IntCounterVec::new(
-            Opts::new(
-                "torii_sorafs_tls_renewal_total",
-                "Gateway TLS renewal attempts grouped by outcome",
-            ),
+            metric_specs.opts("torii_sorafs_tls_renewal_total"),
             &["result"],
         )
         .expect("Infallible");
-        let torii_sorafs_tls_ech_enabled = IntGauge::with_opts(Opts::new(
-            "torii_sorafs_tls_ech_enabled",
-            "Whether ECH is enabled for the gateway (0 disabled, 1 enabled)",
-        ))
-        .expect("Infallible");
+        let torii_sorafs_tls_ech_enabled =
+            IntGauge::with_opts(metric_specs.opts("torii_sorafs_tls_ech_enabled"))
+                .expect("Infallible");
         let torii_sorafs_gateway_fixture_version = IntGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_gateway_fixture_version",
-                "Active SoraFS gateway fixture version",
-            ),
+            metric_specs.opts("torii_sorafs_gateway_fixture_version"),
             &["version"],
         )
         .expect("Infallible");
@@ -13897,39 +12207,25 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_gar_violations_total);
         register_guarded(&registry, &torii_sorafs_gateway_refusals_total);
         let torii_sorafs_registry_orders_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_registry_orders_total",
-                "SoraFS replication orders grouped by status",
-            ),
+            metric_specs.opts("torii_sorafs_registry_orders_total"),
             &["status"],
         )
         .expect("Infallible");
         let torii_sorafs_replication_sla_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_sla_total",
-                "SoraFS replication SLA outcomes (met, missed, pending)",
-            ),
+            metric_specs.opts("torii_sorafs_replication_sla_total"),
             &["outcome"],
         )
         .expect("Infallible");
-        let torii_sorafs_replication_backlog_total = GenericGauge::new(
-            "torii_sorafs_replication_backlog_total",
-            "Outstanding SoraFS replication backlog (pending orders)",
-        )
-        .expect("Infallible");
+        let torii_sorafs_replication_backlog_total =
+            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_replication_backlog_total"))
+                .expect("Infallible");
         let torii_sorafs_replication_completion_latency_epochs = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_completion_latency_epochs",
-                "Completion latency aggregates for SoraFS replication orders (epochs)",
-            ),
+            metric_specs.opts("torii_sorafs_replication_completion_latency_epochs"),
             &["stat"],
         )
         .expect("Infallible");
         let torii_sorafs_replication_deadline_slack_epochs = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_deadline_slack_epochs",
-                "Deadline slack aggregates for pending SoraFS replication orders (epochs)",
-            ),
+            metric_specs.opts("torii_sorafs_replication_deadline_slack_epochs"),
             &["stat"],
         )
         .expect("Infallible");
@@ -13944,473 +12240,309 @@ impl Default for Metrics {
         );
         register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
         let soranet_privacy_circuit_events_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_circuit_events_total",
-                "Aggregated SoraNet circuit outcomes keyed by relay mode and bucket start",
-            ),
+            metric_specs.opts("soranet_privacy_circuit_events_total"),
             &["mode", "bucket_start", "kind"],
         )
         .expect("Infallible");
         let soranet_privacy_ingest_reject_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_ingest_reject_total",
-                "Rejected SoraNet privacy ingest attempts grouped by endpoint/reason",
-            ),
+            metric_specs.opts("soranet_privacy_ingest_reject_total"),
             &["endpoint", "reason"],
         )
         .expect("Infallible");
         let soranet_privacy_pow_rejects_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_pow_rejects_total",
-                "PoW validation failures grouped by relay mode, bucket start, and reason",
-            ),
+            metric_specs.opts("soranet_privacy_pow_rejects_total"),
             &["mode", "bucket_start", "reason"],
         )
         .expect("Infallible");
         let soranet_pow_revocation_store_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_pow_revocation_store_total",
-                "SoraNet PoW revocation store fallbacks grouped by reason",
-            ),
+            metric_specs.opts("soranet_pow_revocation_store_total"),
             &["reason"],
         )
         .expect("Infallible");
         let soranet_privacy_throttles_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_throttles_total",
-                "Aggregated SoraNet throttling events keyed by relay mode and bucket start",
-            ),
+            metric_specs.opts("soranet_privacy_throttles_total"),
             &["mode", "bucket_start", "scope"],
         )
         .expect("Infallible");
         let soranet_privacy_verified_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_verified_bytes_total",
-                "Aggregated verified byte totals emitted per relay mode and bucket start",
-            ),
+            metric_specs.opts("soranet_privacy_verified_bytes_total"),
             &["mode", "bucket_start"],
         )
         .expect("Infallible");
         let soranet_privacy_active_circuits_avg = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_active_circuits_avg",
-                "Average concurrent SoraNet circuits per bucket",
-            ),
+            metric_specs.opts("soranet_privacy_active_circuits_avg"),
             &["mode", "bucket_start"],
         )
         .expect("Infallible");
         let soranet_privacy_active_circuits_max = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_active_circuits_max",
-                "Maximum concurrent SoraNet circuits per bucket",
-            ),
+            metric_specs.opts("soranet_privacy_active_circuits_max"),
             &["mode", "bucket_start"],
         )
         .expect("Infallible");
-        let soranet_privacy_open_buckets = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_open_buckets",
-                "Open SoraNet privacy buckets still accumulating contributors",
-            ),
-            &["mode"],
-        )
-        .expect("Infallible");
+        let soranet_privacy_open_buckets =
+            GaugeVec::new(metric_specs.opts("soranet_privacy_open_buckets"), &["mode"])
+                .expect("Infallible");
         let soranet_privacy_pending_collectors = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_pending_collectors",
-                "Pending SoraNet privacy collector share accumulators per mode",
-            ),
+            metric_specs.opts("soranet_privacy_pending_collectors"),
             &["mode"],
         )
         .expect("Infallible");
         let soranet_privacy_snapshot_suppressed = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_snapshot_suppressed",
-                "Suppressed SoraNet privacy buckets observed in the latest drain (per reason)",
-            ),
+            metric_specs.opts("soranet_privacy_snapshot_suppressed"),
             &["reason"],
         )
         .expect("Infallible");
         let soranet_privacy_snapshot_suppressed_by_mode = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_snapshot_suppressed_by_mode",
-                "Suppressed SoraNet privacy buckets observed in the latest drain (per mode and reason)",
-            ),
+            metric_specs.opts("soranet_privacy_snapshot_suppressed_by_mode"),
             &["mode", "reason"],
         )
         .expect("Infallible");
-        let soranet_privacy_snapshot_drained = IntGauge::new(
-            "soranet_privacy_snapshot_drained",
-            "Buckets drained during the latest privacy collector flush",
-        )
-        .expect("Infallible");
-        let soranet_privacy_snapshot_suppression_ratio = Gauge::new(
-            "soranet_privacy_snapshot_suppression_ratio",
-            "Ratio of suppressed to drained buckets observed in the latest privacy flush",
-        )
-        .expect("Infallible");
-        let soranet_privacy_evicted_buckets_total = IntCounter::new(
-            "soranet_privacy_evicted_buckets_total",
-            "Completed SoraNet privacy buckets evicted due to retention limits",
-        )
-        .expect("Infallible");
+        let soranet_privacy_snapshot_drained =
+            IntGauge::with_opts(metric_specs.opts("soranet_privacy_snapshot_drained"))
+                .expect("Infallible");
+        let soranet_privacy_snapshot_suppression_ratio =
+            Gauge::with_opts(metric_specs.opts("soranet_privacy_snapshot_suppression_ratio"))
+                .expect("Infallible");
+        let soranet_privacy_evicted_buckets_total =
+            IntCounter::with_opts(metric_specs.opts("soranet_privacy_evicted_buckets_total"))
+                .expect("Infallible");
         let soranet_privacy_bucket_suppressed = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_bucket_suppressed",
-                "Buckets withheld due to insufficient contributors",
-            ),
+            metric_specs.opts("soranet_privacy_bucket_suppressed"),
             &["mode", "bucket_start"],
         )
         .expect("Infallible");
         let soranet_privacy_suppression_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_suppression_total",
-                "Suppressed bucket counts grouped by mode and reason",
-            ),
+            metric_specs.opts("soranet_privacy_suppression_total"),
             &["mode", "reason"],
         )
         .expect("Infallible");
         let soranet_privacy_rtt_millis = GaugeVec::new(
-            Opts::new(
-                "soranet_privacy_rtt_millis",
-                "SoraNet RTT percentile estimates per bucket",
-            ),
+            metric_specs.opts("soranet_privacy_rtt_millis"),
             &["mode", "bucket_start", "percentile"],
         )
         .expect("Infallible");
         let soranet_privacy_gar_reports_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_gar_reports_total",
-                "Aggregated SoraNet GAR abuse reports keyed by hashed category",
-            ),
+            metric_specs.opts("soranet_privacy_gar_reports_total"),
             &["mode", "bucket_start", "category_hash"],
         )
         .expect("Infallible");
-        let soranet_privacy_last_poll_unixtime = IntGauge::new(
-            "soranet_privacy_last_poll_unixtime",
-            "Unix timestamp of the last successful SoraNet privacy poll",
-        )
-        .expect("Infallible");
+        let soranet_privacy_last_poll_unixtime =
+            IntGauge::with_opts(metric_specs.opts("soranet_privacy_last_poll_unixtime"))
+                .expect("Infallible");
         let soranet_privacy_poll_errors_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_privacy_poll_errors_total",
-                "Privacy polling failures grouped by provider alias",
-            ),
+            metric_specs.opts("soranet_privacy_poll_errors_total"),
             &["provider"],
         )
         .expect("Infallible");
-        let soranet_privacy_collector_enabled = IntGauge::new(
-            "soranet_privacy_collector_enabled",
-            "Flag indicating whether the privacy collector is active (1) or disabled (0)",
-        )
-        .expect("Infallible");
+        let soranet_privacy_collector_enabled =
+            IntGauge::with_opts(metric_specs.opts("soranet_privacy_collector_enabled"))
+                .expect("Infallible");
         let sorafs_orchestrator_active_fetches = IntGaugeVec::new(
-            Opts::new(
-                "sorafs_orchestrator_active_fetches",
-                "Active multi-source orchestrator fetches grouped by manifest and region",
-            ),
+            metric_specs.opts("sorafs_orchestrator_active_fetches"),
             &["manifest_id", "region"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_fetch_duration_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_fetch_duration_ms",
-                "Multi-source orchestrator fetch duration (milliseconds)",
-            )
-            .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("valid buckets")),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_fetch_duration_ms")
+                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("valid buckets")),
             &["manifest_id", "region"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_fetch_failures_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_fetch_failures_total",
-                "Multi-source orchestrator fetch failures grouped by manifest, region, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_fetch_failures_total"),
             &["manifest_id", "region", "reason"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_retries_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_retries_total",
-                "Multi-source orchestrator retries grouped by manifest, provider, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_retries_total"),
             &["manifest_id", "provider_id", "reason"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_provider_failures_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_provider_failures_total",
-                "Multi-source orchestrator provider failures grouped by manifest, provider, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_provider_failures_total"),
             &["manifest_id", "provider_id", "reason"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_chunk_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_chunk_latency_ms",
-                "Latency per chunk fetch served by the orchestrator (milliseconds)",
-            )
-            .buckets(prometheus::exponential_buckets(5.0, 1.7, 16).expect("valid buckets")),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_chunk_latency_ms")
+                .buckets(prometheus::exponential_buckets(5.0, 1.7, 16).expect("valid buckets")),
             &["manifest_id", "provider_id"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_bytes_total",
-                "Total bytes delivered by the orchestrator grouped by manifest and provider",
-            ),
+            metric_specs.opts("sorafs_orchestrator_bytes_total"),
             &["manifest_id", "provider_id"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_stalls_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_stalls_total",
-                "Count of orchestrator chunks exceeding the configured latency cap",
-            ),
+            metric_specs.opts("sorafs_orchestrator_stalls_total"),
             &["manifest_id", "provider_id"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_transport_events_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_transport_events_total",
-                "Transport events emitted by the orchestrator grouped by region, protocol, event, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_transport_events_total"),
             &["region", "protocol", "event", "reason"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_policy_events_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_policy_events_total",
-                "SoraFS anonymity policy outcomes grouped by region, stage, outcome, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_policy_events_total"),
             &["region", "stage", "outcome", "reason"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_pq_ratio = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_pq_ratio",
-                "Distribution of PQ-capable relay selection ratios per region and stage",
-            )
-            .buckets(vec![0.0, 0.25, 0.5, 0.66, 0.75, 1.0]),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_pq_ratio")
+                .buckets(vec![0.0, 0.25, 0.5, 0.66, 0.75, 1.0]),
             &["region", "stage"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_pq_candidate_ratio = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_pq_candidate_ratio",
-                "Distribution of PQ-capable relay supply ratios per region and stage",
-            )
-            .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_pq_candidate_ratio")
+                .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
             &["region", "stage"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_pq_deficit_ratio = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_pq_deficit_ratio",
-                "Distribution of PQ policy shortfall ratios per region and stage",
-            )
-            .buckets(vec![0.0, 0.1, 0.25, 0.5, 0.75, 1.0]),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_pq_deficit_ratio")
+                .buckets(vec![0.0, 0.1, 0.25, 0.5, 0.75, 1.0]),
             &["region", "stage"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_classical_ratio = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_classical_ratio",
-                "Distribution of classical relay selection ratios per region and stage",
-            )
-            .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_classical_ratio")
+                .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
             &["region", "stage"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_classical_selected = HistogramVec::new(
-            HistogramOpts::new(
-                "sorafs_orchestrator_classical_selected",
-                "Distribution of classical relay counts selected per region and stage",
-            )
-            .buckets(vec![0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 16.0]),
+            metric_specs
+                .histogram_opts("sorafs_orchestrator_classical_selected")
+                .buckets(vec![0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 16.0]),
             &["region", "stage"],
         )
         .expect("Infallible");
         let torii_da_rent_gib_months_total = IntCounterVec::new(
-            Opts::new(
-                "torii_da_rent_gib_months_total",
-                "Aggregate GiB-month usage quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_rent_gib_months_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_rent_base_micro_total = CounterVec::new(
-            Opts::new(
-                "torii_da_rent_base_micro_total",
-                "Aggregate base rent (micro XOR) quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_rent_base_micro_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_protocol_reserve_micro_total = CounterVec::new(
-            Opts::new(
-                "torii_da_protocol_reserve_micro_total",
-                "Aggregate protocol reserve (micro XOR) quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_protocol_reserve_micro_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_provider_reward_micro_total = CounterVec::new(
-            Opts::new(
-                "torii_da_provider_reward_micro_total",
-                "Aggregate provider rewards (micro XOR) quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_provider_reward_micro_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_pdp_bonus_micro_total = CounterVec::new(
-            Opts::new(
-                "torii_da_pdp_bonus_micro_total",
-                "Aggregate PDP bonuses (micro XOR) quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_pdp_bonus_micro_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_potr_bonus_micro_total = CounterVec::new(
-            Opts::new(
-                "torii_da_potr_bonus_micro_total",
-                "Aggregate PoTR bonuses (micro XOR) quoted by DA ingest grouped by cluster and storage class",
-            ),
+            metric_specs.opts("torii_da_potr_bonus_micro_total"),
             &["cluster", "storage_class"],
         )
         .expect("Infallible");
         let torii_da_receipts_total = IntCounterVec::new(
-            Opts::new(
-                "torii_da_receipts_total",
-                "DA receipt ingest outcomes grouped by bounded outcome and lane labels",
-            ),
+            metric_specs.opts("torii_da_receipts_total"),
             &["outcome", "lane"],
         )
         .expect("Infallible");
-        let torii_da_receipt_epoch = GenericGaugeVec::new(
-            Opts::new(
-                "torii_da_receipt_epoch",
-                "Current DA receipt epoch observed per lane",
-            ),
-            &["lane"],
-        )
-        .expect("Infallible");
+        let torii_da_receipt_epoch =
+            GenericGaugeVec::new(metric_specs.opts("torii_da_receipt_epoch"), &["lane"])
+                .expect("Infallible");
         let torii_da_receipt_highest_sequence = GenericGaugeVec::new(
-            Opts::new(
-                "torii_da_receipt_highest_sequence",
-                "Highest DA receipt sequence observed in the current epoch per lane",
-            ),
+            metric_specs.opts("torii_da_receipt_highest_sequence"),
             &["lane"],
         )
         .expect("Infallible");
         let torii_da_chunking_seconds = Histogram::with_opts(
-            HistogramOpts::new(
-                "torii_da_chunking_seconds",
-                "DA chunking and erasure coding duration (seconds)",
-            )
-            .buckets(vec![
-                0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-            ]),
+            metric_specs
+                .histogram_opts("torii_da_chunking_seconds")
+                .buckets(vec![
+                    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+                ]),
         )
         .expect("Infallible");
         let torii_da_spool_batches_total = IntCounterVec::new(
-            Opts::new(
-                "torii_da_spool_batches_total",
-                "DA spool worker batch outcomes",
-            ),
+            metric_specs.opts("torii_da_spool_batches_total"),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_da_spool_artifacts_total = IntCounterVec::new(
-            Opts::new(
-                "torii_da_spool_artifacts_total",
-                "DA spool worker artifact outcomes by artifact kind",
-            ),
+            metric_specs.opts("torii_da_spool_artifacts_total"),
             &["kind", "outcome"],
         )
         .expect("Infallible");
-        let torii_da_spool_queue_depth = GenericGauge::new(
-            "torii_da_spool_queue_depth",
-            "Current number of DA spool batches waiting for disk persistence",
-        )
-        .expect("Infallible");
+        let torii_da_spool_queue_depth =
+            GenericGauge::with_opts(metric_specs.opts("torii_da_spool_queue_depth"))
+                .expect("Infallible");
         let torii_da_spool_batch_write_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "torii_da_spool_batch_write_ms",
-                "DA spool worker batch disk-write duration in milliseconds",
-            )
-            .buckets(vec![
-                0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("torii_da_spool_batch_write_ms")
+                .buckets(vec![
+                    0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                ]),
         )
         .expect("Infallible");
         let da_shard_cursor_events_total = IntCounterVec::new(
-            Opts::new(
-                "da_shard_cursor_events_total",
-                "DA shard cursor events grouped by outcome, lane, and shard",
-            ),
+            metric_specs.opts("da_shard_cursor_events_total"),
             &["event", "lane", "shard"],
         )
         .expect("Infallible");
         let da_shard_cursor_height = IntGaugeVec::new(
-            Opts::new(
-                "da_shard_cursor_height",
-                "Latest block height recorded per DA shard cursor entry",
-            ),
+            metric_specs.opts("da_shard_cursor_height"),
             &["lane", "shard"],
         )
         .expect("Infallible");
         let da_shard_cursor_lag_blocks = IntGaugeVec::new(
-            Opts::new(
-                "da_shard_cursor_lag_blocks",
-                "Lag in blocks between the validated height and the last DA shard cursor advance",
-            ),
+            metric_specs.opts("da_shard_cursor_lag_blocks"),
             &["lane", "shard"],
         )
         .expect("Infallible");
         let taikai_ingest_segment_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "taikai_ingest_segment_latency_ms",
-                "Encoder-to-ingest latency per Taikai stream (milliseconds)",
-            )
-            .buckets(vec![
-                10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("taikai_ingest_segment_latency_ms")
+                .buckets(vec![
+                    10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0,
+                ]),
             &["cluster", "stream"],
         )
         .expect("Infallible");
         let taikai_ingest_live_edge_drift_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "taikai_ingest_live_edge_drift_ms",
-                "Absolute live-edge drift per Taikai stream (milliseconds)",
-            )
-            .buckets(vec![
-                50.0, 100.0, 250.0, 500.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0,
-            ]),
+            metric_specs
+                .histogram_opts("taikai_ingest_live_edge_drift_ms")
+                .buckets(vec![
+                    50.0, 100.0, 250.0, 500.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0,
+                ]),
             &["cluster", "stream"],
         )
         .expect("Infallible");
         let taikai_ingest_live_edge_drift_signed_ms = GaugeVec::new(
-            Opts::new(
-                "taikai_ingest_live_edge_drift_signed_ms",
-                "Signed live-edge drift per Taikai stream (milliseconds; negative = ahead)",
-            ),
+            metric_specs.opts("taikai_ingest_live_edge_drift_signed_ms"),
             &["cluster", "stream"],
         )
         .expect("Infallible");
         let taikai_ingest_errors_total = IntCounterVec::new(
-            Opts::new(
-                "taikai_ingest_errors_total",
-                "Taikai ingest failures grouped by reason",
-            ),
+            metric_specs.opts("taikai_ingest_errors_total"),
             &["cluster", "stream", "reason"],
         )
         .expect("Infallible");
         let taikai_trm_alias_rotations_total = IntCounterVec::new(
-            Opts::new(
-                "taikai_trm_alias_rotations_total",
-                "Taikai routing manifest alias rotations grouped by cluster/event/stream/alias",
-            ),
+            metric_specs.opts("taikai_trm_alias_rotations_total"),
             &[
                 "cluster",
                 "event",
@@ -14421,185 +12553,116 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let taikai_viewer_rebuffer_events_total = IntCounterVec::new(
-            Opts::new(
-                "taikai_viewer_rebuffer_events_total",
-                "Taikai viewer rebuffer events grouped by cluster and stream",
-            ),
+            metric_specs.opts("taikai_viewer_rebuffer_events_total"),
             &["cluster", "stream"],
         )
         .expect("Infallible");
         let taikai_viewer_playback_segments_total = IntCounterVec::new(
-            Opts::new(
-                "taikai_viewer_playback_segments_total",
-                "Taikai viewer playback segments grouped by cluster and stream",
-            ),
+            metric_specs.opts("taikai_viewer_playback_segments_total"),
             &["cluster", "stream"],
         )
         .expect("Infallible");
         let taikai_viewer_cek_fetch_duration_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "taikai_viewer_cek_fetch_duration_ms",
-                "CEK fetch duration per cluster and lane (milliseconds)",
-            )
-            .buckets(vec![5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
+            metric_specs
+                .histogram_opts("taikai_viewer_cek_fetch_duration_ms")
+                .buckets(vec![5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
             &["cluster", "lane"],
         )
         .expect("Infallible");
         let taikai_viewer_pq_circuit_health = GaugeVec::new(
-            Opts::new(
-                "taikai_viewer_pq_circuit_health",
-                "PQ circuit health percentage per cluster",
-            ),
+            metric_specs.opts("taikai_viewer_pq_circuit_health"),
             &["cluster"],
         )
         .expect("Infallible");
         let taikai_viewer_cek_rotation_seconds_ago = GenericGaugeVec::new(
-            Opts::new(
-                "taikai_viewer_cek_rotation_seconds_ago",
-                "Seconds since last CEK rotation per lane",
-            ),
+            metric_specs.opts("taikai_viewer_cek_rotation_seconds_ago"),
             &["lane"],
         )
         .expect("Infallible");
         let taikai_viewer_alerts_firing_total = IntCounterVec::new(
-            Opts::new(
-                "taikai_viewer_alerts_firing_total",
-                "Counts of Taikai viewer alerts firing grouped by cluster/alert name",
-            ),
+            metric_specs.opts("taikai_viewer_alerts_firing_total"),
             &["cluster", "alertname"],
         )
         .expect("Infallible");
         let sorafs_taikai_cache_query_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_cache_query_total",
-                "Taikai cache query outcomes grouped by result and tier",
-            ),
+            metric_specs.opts("sorafs_taikai_cache_query_total"),
             &["result", "tier"],
         )
         .expect("Infallible");
         let sorafs_taikai_cache_insert_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_cache_insert_total",
-                "Taikai cache insert events grouped by tier",
-            ),
+            metric_specs.opts("sorafs_taikai_cache_insert_total"),
             &["tier"],
         )
         .expect("Infallible");
         let sorafs_taikai_cache_evictions_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_cache_evictions_total",
-                "Taikai cache evictions grouped by tier and reason",
-            ),
+            metric_specs.opts("sorafs_taikai_cache_evictions_total"),
             &["tier", "reason"],
         )
         .expect("Infallible");
         let sorafs_taikai_cache_promotions_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_cache_promotions_total",
-                "Taikai cache promotions grouped by source and target tiers",
-            ),
+            metric_specs.opts("sorafs_taikai_cache_promotions_total"),
             &["from_tier", "to_tier"],
         )
         .expect("Infallible");
         let sorafs_taikai_cache_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_cache_bytes_total",
-                "Bytes processed by the Taikai cache grouped by event and tier",
-            ),
+            metric_specs.opts("sorafs_taikai_cache_bytes_total"),
             &["event", "tier"],
         )
         .expect("Infallible");
         let sorafs_taikai_qos_denied_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_qos_denied_total",
-                "Taikai QoS denials grouped by class",
-            ),
+            metric_specs.opts("sorafs_taikai_qos_denied_total"),
             &["class"],
         )
         .expect("Infallible");
         let sorafs_taikai_queue_events_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_queue_events_total",
-                "Taikai queue events grouped by event/class",
-            ),
+            metric_specs.opts("sorafs_taikai_queue_events_total"),
             &["event", "class"],
         )
         .expect("Infallible");
-        let sorafs_taikai_queue_depth = IntGaugeVec::new(
-            Opts::new(
-                "sorafs_taikai_queue_depth",
-                "Current Taikai queue depth grouped by state",
-            ),
-            &["state"],
-        )
-        .expect("Infallible");
+        let sorafs_taikai_queue_depth =
+            IntGaugeVec::new(metric_specs.opts("sorafs_taikai_queue_depth"), &["state"])
+                .expect("Infallible");
         let sorafs_taikai_shard_failovers_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_taikai_shard_failovers_total",
-                "Taikai shard failovers grouped by preferred and selected shard",
-            ),
+            metric_specs.opts("sorafs_taikai_shard_failovers_total"),
             &["preferred_shard", "selected_shard"],
         )
         .expect("Infallible");
         let sorafs_taikai_shard_circuits_open = IntGaugeVec::new(
-            Opts::new(
-                "sorafs_taikai_shard_circuits_open",
-                "Open circuit breakers per Taikai shard in the Taikai pull queue",
-            ),
+            metric_specs.opts("sorafs_taikai_shard_circuits_open"),
             &["shard"],
         )
         .expect("Infallible");
         let sorafs_orchestrator_brownouts_total = IntCounterVec::new(
-            Opts::new(
-                "sorafs_orchestrator_brownouts_total",
-                "Anonymity policy brownout events grouped by region, stage, and reason",
-            ),
+            metric_specs.opts("sorafs_orchestrator_brownouts_total"),
             &["region", "stage", "reason"],
         )
         .expect("Infallible");
-        let soranet_reward_base_payout_nanos = GenericGauge::new(
-            "soranet_reward_base_payout_nanos",
-            "Configured SoraNet base payout (nano XOR) applied per epoch",
-        )
-        .expect("Infallible");
+        let soranet_reward_base_payout_nanos =
+            GenericGauge::with_opts(metric_specs.opts("soranet_reward_base_payout_nanos"))
+                .expect("Infallible");
         soranet_reward_base_payout_nanos.set(0);
         let soranet_reward_events_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_reward_events_total",
-                "SoraNet relay reward events grouped by relay and result",
-            ),
+            metric_specs.opts("soranet_reward_events_total"),
             &["relay", "result"],
         )
         .expect("Infallible");
         let soranet_reward_payout_nanos_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_reward_payout_nanos_total",
-                "Aggregated SoraNet payout volume (nano XOR) grouped by relay and result",
-            ),
+            metric_specs.opts("soranet_reward_payout_nanos_total"),
             &["relay", "result"],
         )
         .expect("Infallible");
         let soranet_reward_skips_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_reward_skips_total",
-                "SoraNet relay reward skips grouped by relay and reason",
-            ),
+            metric_specs.opts("soranet_reward_skips_total"),
             &["relay", "reason"],
         )
         .expect("Infallible");
         let soranet_reward_adjustment_nanos_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_reward_adjustment_nanos_total",
-                "Aggregated SoraNet dispute adjustments (nano XOR) grouped by relay and kind",
-            ),
+            metric_specs.opts("soranet_reward_adjustment_nanos_total"),
             &["relay", "kind"],
         )
         .expect("Infallible");
         let soranet_reward_disputes_total = IntCounterVec::new(
-            Opts::new(
-                "soranet_reward_disputes_total",
-                "SoraNet reward dispute lifecycle counters grouped by action",
-            ),
+            metric_specs.opts("soranet_reward_disputes_total"),
             &["action"],
         )
         .expect("Infallible");
@@ -14704,10 +12767,7 @@ impl Default for Metrics {
         register_guarded(&registry, &soranet_reward_adjustment_nanos_total);
         register_guarded(&registry, &soranet_reward_disputes_total);
         let torii_http_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_http_requests_total",
-                "Torii HTTP requests grouped by stable route metadata, representation, method, and outcome",
-            ),
+            metric_specs.opts("torii_http_requests_total"),
             &[
                 "route_id",
                 "route_template",
@@ -14721,11 +12781,11 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let torii_http_request_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_http_request_duration_seconds",
-                "Torii HTTP request latency (seconds) grouped by stable route metadata and representation",
-            )
-            .buckets(prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_http_request_duration_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                ),
             &[
                 "route_id",
                 "route_template",
@@ -14737,10 +12797,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let torii_http_request_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_http_request_bytes_total",
-                "Torii HTTP request payload size (bytes) grouped by stable route metadata and representation",
-            ),
+            metric_specs.opts("torii_http_request_bytes_total"),
             &[
                 "route_id",
                 "route_template",
@@ -14752,10 +12809,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let torii_http_response_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_http_response_bytes_total",
-                "Torii HTTP response payload size (bytes) grouped by stable route metadata, representation, method, and outcome",
-            ),
+            metric_specs.opts("torii_http_response_bytes_total"),
             &[
                 "route_id",
                 "route_template",
@@ -14769,158 +12823,113 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let torii_api_token_hits_total = IntCounterVec::new(
-            Opts::new(
-                "torii_api_token_hits_total",
-                "Torii API-token-gated endpoint hits grouped by endpoint and bounded token state",
-            ),
+            metric_specs.opts("torii_api_token_hits_total"),
             &["endpoint", "token_state"],
         )
         .expect("Infallible");
         let torii_content_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_content_requests_total",
-                "Content gateway requests grouped by outcome",
-            ),
+            metric_specs.opts("torii_content_requests_total"),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_content_request_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_content_request_duration_seconds",
-                "Content gateway latency (seconds) grouped by outcome",
-            )
-            .buckets(prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_content_request_duration_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                ),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_content_response_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_content_response_bytes_total",
-                "Content gateway response payload size (bytes) grouped by outcome",
-            ),
+            metric_specs.opts("torii_content_response_bytes_total"),
             &["outcome"],
         )
         .expect("Infallible");
         let torii_proof_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_proof_requests_total",
-                "Proof endpoint requests grouped by endpoint and outcome",
-            ),
+            metric_specs.opts("torii_proof_requests_total"),
             &["endpoint", "outcome"],
         )
         .expect("Infallible");
         let torii_proof_request_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_proof_request_duration_seconds",
-                "Proof endpoint latency (seconds) grouped by endpoint and outcome",
-            )
-            .buckets(prometheus::exponential_buckets(0.001, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_proof_request_duration_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.001, 2.0, 12).expect("inputs are valid"),
+                ),
             &["endpoint", "outcome"],
         )
         .expect("Infallible");
         let torii_proof_response_bytes_total = IntCounterVec::new(
-            Opts::new(
-                "torii_proof_response_bytes_total",
-                "Proof endpoint response payload size (bytes) grouped by endpoint and outcome",
-            ),
+            metric_specs.opts("torii_proof_response_bytes_total"),
             &["endpoint", "outcome"],
         )
         .expect("Infallible");
         let torii_proof_cache_hits_total = IntCounterVec::new(
-            Opts::new(
-                "torii_proof_cache_hits_total",
-                "Proof endpoint cache hits grouped by endpoint",
-            ),
+            metric_specs.opts("torii_proof_cache_hits_total"),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_request_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_request_duration_seconds",
-                "Torii request latency (seconds) grouped by connection scheme",
-            )
-            .buckets(prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_request_duration_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                ),
             &["scheme"],
         )
         .expect("Infallible");
         let torii_request_failures_total = IntCounterVec::new(
-            Opts::new(
-                "torii_request_failures_total",
-                "Torii request failures grouped by connection scheme and status code",
-            ),
+            metric_specs.opts("torii_request_failures_total"),
             &["scheme", "code"],
         )
         .expect("Infallible");
         let torii_explorer_requests_total = IntCounterVec::new(
-            Opts::new(
-                "torii_explorer_requests_total",
-                "Explorer endpoint requests grouped by endpoint and outcome",
-            ),
+            metric_specs.opts("torii_explorer_requests_total"),
             &["endpoint", "outcome"],
         )
         .expect("Infallible");
         let torii_explorer_request_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "torii_explorer_request_duration_seconds",
-                "Explorer endpoint latency (seconds) grouped by endpoint and outcome",
-            )
-            .buckets(prometheus::exponential_buckets(0.001, 2.0, 14).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("torii_explorer_request_duration_seconds")
+                .buckets(
+                    prometheus::exponential_buckets(0.001, 2.0, 14).expect("inputs are valid"),
+                ),
             &["endpoint", "outcome"],
         )
         .expect("Infallible");
         let torii_norito_rpc_gate_total = IntCounterVec::new(
-            Opts::new(
-                "torii_norito_rpc_gate_total",
-                "Torii Norito-RPC gate decisions grouped by rollout stage and outcome",
-            ),
+            metric_specs.opts("torii_norito_rpc_gate_total"),
             &["stage", "outcome"],
         )
         .expect("Infallible");
         let torii_address_invalid_total = IntCounterVec::new(
-            Opts::new(
-                "torii_address_invalid_total",
-                "Torii account identifier rejects grouped by endpoint and reason",
-            ),
+            metric_specs.opts("torii_address_invalid_total"),
             &["endpoint", "reason"],
         )
         .expect("Infallible");
         let torii_address_domain_total = IntCounterVec::new(
-            Opts::new(
-                "torii_address_domain_total",
-                "Torii account domain kinds grouped by endpoint and selector type",
-            ),
+            metric_specs.opts("torii_address_domain_total"),
             &["endpoint", "domain_kind"],
         )
         .expect("Infallible");
         let torii_address_collision_total = IntCounterVec::new(
-            Opts::new(
-                "torii_address_collision_total",
-                "Torii Local-12 selector collisions grouped by endpoint and kind",
-            ),
+            metric_specs.opts("torii_address_collision_total"),
             &["endpoint", "kind"],
         )
         .expect("Infallible");
         let torii_address_collision_domain_total = IntCounterVec::new(
-            Opts::new(
-                "torii_address_collision_domain_total",
-                "Torii Local-12 selector collisions grouped by endpoint and domain label",
-            ),
+            metric_specs.opts("torii_address_collision_domain_total"),
             &["endpoint", "domain"],
         )
         .expect("Infallible");
         let torii_account_literal_total = IntCounterVec::new(
-            Opts::new(
-                "torii_account_literal_total",
-                "Torii account literal selections grouped by endpoint and format",
-            ),
+            metric_specs.opts("torii_account_literal_total"),
             &["endpoint", "format"],
         )
         .expect("Infallible");
         let torii_norito_decode_failures_total = IntCounterVec::new(
-            Opts::new(
-                "torii_norito_decode_failures_total",
-                "Torii Norito RPC decode failures grouped by payload kind and reason",
-            ),
+            metric_specs.opts("torii_norito_decode_failures_total"),
             &["payload_kind", "reason"],
         )
         .expect("Infallible");
@@ -14959,34 +12968,22 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_nts_unhealthy_reject_total);
         register_guarded(&registry, &torii_multisig_direct_sign_reject_total);
         let torii_proof_throttled_total = IntCounterVec::new(
-            Opts::new(
-                "torii_proof_throttled_total",
-                "Torii proof endpoints throttled by rate limiter",
-            ),
+            metric_specs.opts("torii_proof_throttled_total"),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_contract_throttled_total = IntCounterVec::new(
-            Opts::new(
-                "torii_contract_throttled_total",
-                "Torii contract endpoints throttled by rate limiter",
-            ),
+            metric_specs.opts("torii_contract_throttled_total"),
             &["endpoint"],
         )
         .expect("Infallible");
         let torii_contract_errors_total = IntCounterVec::new(
-            Opts::new(
-                "torii_contract_errors_total",
-                "Torii contract endpoints returning errors",
-            ),
+            metric_specs.opts("torii_contract_errors_total"),
             &["endpoint"],
         )
         .expect("Infallible");
         let sns_registrar_status_total = IntCounterVec::new(
-            Opts::new(
-                "sns_registrar_status_total",
-                "SNS registrar operation outcomes grouped by result and suffix",
-            ),
+            metric_specs.opts("sns_registrar_status_total"),
             &["result", "suffix"],
         )
         .expect("Infallible");
@@ -14995,149 +12992,83 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_contract_errors_total);
         register_guarded(&registry, &sns_registrar_status_total);
         let torii_active_connections_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_active_connections_total",
-                "Torii active connections by scheme",
-            ),
+            metric_specs.opts("torii_active_connections_total"),
             &["scheme"],
         )
         .expect("Infallible");
-        let torii_connect_buffered_sessions = GenericGauge::new(
-            "torii_connect_buffered_sessions",
-            "Torii Connect sessions with buffered frames",
-        )
-        .expect("Infallible");
-        let torii_connect_total_buffer_bytes = GenericGauge::new(
-            "torii_connect_total_buffer_bytes",
-            "Torii Connect total buffered bytes across sessions",
-        )
-        .expect("Infallible");
-        let torii_connect_dedupe_size = GenericGauge::new(
-            "torii_connect_dedupe_size",
-            "Torii Connect dedupe cache size",
-        )
-        .expect("Infallible");
-        let torii_connect_per_ip_sessions = GenericGaugeVec::new(
-            Opts::new(
-                "torii_connect_per_ip_sessions",
-                "Torii Connect per-IP session counts (gauge)",
-            ),
-            &["ip"],
-        )
-        .expect("Infallible");
+        let torii_connect_buffered_sessions =
+            GenericGauge::with_opts(metric_specs.opts("torii_connect_buffered_sessions"))
+                .expect("Infallible");
+        let torii_connect_total_buffer_bytes =
+            GenericGauge::with_opts(metric_specs.opts("torii_connect_total_buffer_bytes"))
+                .expect("Infallible");
+        let torii_connect_dedupe_size =
+            GenericGauge::with_opts(metric_specs.opts("torii_connect_dedupe_size"))
+                .expect("Infallible");
+        let torii_connect_per_ip_sessions =
+            GenericGaugeVec::new(metric_specs.opts("torii_connect_per_ip_sessions"), &["ip"])
+                .expect("Infallible");
         let zk_verify_latency_ms = HistogramVec::new(
-            HistogramOpts::new(
-                "zk_verify_latency_ms",
-                "Proof verification latency (milliseconds) grouped by backend and status",
-            )
-            .buckets(prometheus::exponential_buckets(1.0, 2.0, 15).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("zk_verify_latency_ms")
+                .buckets(prometheus::exponential_buckets(1.0, 2.0, 15).expect("inputs are valid")),
             &["backend", "status"],
         )
         .expect("Infallible");
         let zk_verify_proof_bytes = HistogramVec::new(
-            HistogramOpts::new(
-                "zk_verify_proof_bytes",
-                "Proof payload size (bytes) grouped by backend and status",
-            )
-            .buckets(prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid")),
+            metric_specs
+                .histogram_opts("zk_verify_proof_bytes")
+                .buckets(
+                    prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
+                ),
             &["backend", "status"],
         )
         .expect("Infallible");
 
         // Block-level gas and fees (latest block)
-        let block_gas_used = GenericGauge::new(
-            "block_gas_used",
-            "Total gas used by the latest validated block",
-        )
-        .expect("Infallible");
-        let confidential_gas_tx_used = GenericGauge::new(
-            "iroha_confidential_gas_tx_used",
-            "Confidential gas used by the most recent transaction",
-        )
-        .expect("Infallible");
-        let confidential_gas_block_used = GenericGauge::new(
-            "iroha_confidential_gas_block_used",
-            "Confidential gas used by transactions in the current block",
-        )
-        .expect("Infallible");
-        let confidential_gas_total = IntCounter::new(
-            "iroha_confidential_gas_total",
-            "Total confidential gas consumed since the node started",
-        )
-        .expect("Infallible");
-        let block_fee_total_units = GenericGauge::new(
-            "block_fee_total_units",
-            "Total fee units charged in the latest validated block",
-        )
-        .expect("Infallible");
-        let block_fee_total_scale = GenericGauge::new(
-            "block_fee_total_scale",
-            "Scale for block_fee_total_units so the exact latest-block fee amount can be reconstructed",
-        )
-        .expect("Infallible");
+        let block_gas_used =
+            GenericGauge::with_opts(metric_specs.opts("block_gas_used")).expect("Infallible");
+        let confidential_gas_tx_used =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_tx_used"))
+                .expect("Infallible");
+        let confidential_gas_block_used =
+            GenericGauge::with_opts(metric_specs.opts("confidential_gas_block_used"))
+                .expect("Infallible");
+        let confidential_gas_total =
+            IntCounter::with_opts(metric_specs.opts("confidential_gas_total")).expect("Infallible");
+        let block_fee_total_units =
+            GenericGauge::with_opts(metric_specs.opts("block_fee_total_units"))
+                .expect("Infallible");
+        let block_fee_total_scale =
+            GenericGauge::with_opts(metric_specs.opts("block_fee_total_scale"))
+                .expect("Infallible");
 
         // Network Time Service (basic gauges)
-        let nts_offset_ms = IntGauge::new(
-            "nts_offset_ms",
-            "Network time offset vs local system time (ms, signed)",
-        )
-        .expect("Infallible");
-        let nts_confidence_ms = GenericGauge::new(
-            "nts_confidence_ms",
-            "Network time confidence bound (MAD) in ms",
-        )
-        .expect("Infallible");
-        let nts_peers_sampled = GenericGauge::new(
-            "nts_peers_sampled",
-            "Number of peers contributing NTS samples",
-        )
-        .expect("Infallible");
-        let nts_samples_used = GenericGauge::new(
-            "nts_samples_used",
-            "Number of samples used in NTS aggregation after filtering",
-        )
-        .expect("Infallible");
-        let nts_healthy = IntGauge::new(
-            "nts_healthy",
-            "NTS health status (1 = healthy, 0 = unhealthy)",
-        )
-        .expect("Infallible");
-        let nts_fallback = IntGauge::new(
-            "nts_fallback",
-            "NTS fallback indicator (1 = local time fallback, 0 = network time)",
-        )
-        .expect("Infallible");
-        let nts_min_samples_ok = IntGauge::new(
-            "nts_min_samples_ok",
-            "NTS minimum-sample health check (1 = ok, 0 = fail)",
-        )
-        .expect("Infallible");
-        let nts_offset_ok = IntGauge::new(
-            "nts_offset_ok",
-            "NTS offset bound health check (1 = ok, 0 = fail)",
-        )
-        .expect("Infallible");
-        let nts_confidence_ok = IntGauge::new(
-            "nts_confidence_ok",
-            "NTS confidence bound health check (1 = ok, 0 = fail)",
-        )
-        .expect("Infallible");
-        let nts_rtt_ms_bucket = GenericGaugeVec::new(
-            Opts::new(
-                "nts_rtt_ms_bucket",
-                "NTS RTT histogram bucket counts labeled by le (ms)",
-            ),
-            &["le"],
-        )
-        .expect("Infallible");
-        let nts_rtt_ms_sum =
-            GenericGauge::new("nts_rtt_ms_sum", "NTS RTT histogram sum of milliseconds")
+        let nts_offset_ms =
+            IntGauge::with_opts(metric_specs.opts("nts_offset_ms")).expect("Infallible");
+        let nts_confidence_ms =
+            GenericGauge::with_opts(metric_specs.opts("nts_confidence_ms")).expect("Infallible");
+        let nts_peers_sampled =
+            GenericGauge::with_opts(metric_specs.opts("nts_peers_sampled")).expect("Infallible");
+        let nts_samples_used =
+            GenericGauge::with_opts(metric_specs.opts("nts_samples_used")).expect("Infallible");
+        let nts_healthy =
+            IntGauge::with_opts(metric_specs.opts("nts_healthy")).expect("Infallible");
+        let nts_fallback =
+            IntGauge::with_opts(metric_specs.opts("nts_fallback")).expect("Infallible");
+        let nts_min_samples_ok =
+            IntGauge::with_opts(metric_specs.opts("nts_min_samples_ok")).expect("Infallible");
+        let nts_offset_ok =
+            IntGauge::with_opts(metric_specs.opts("nts_offset_ok")).expect("Infallible");
+        let nts_confidence_ok =
+            IntGauge::with_opts(metric_specs.opts("nts_confidence_ok")).expect("Infallible");
+        let nts_rtt_ms_bucket =
+            GenericGaugeVec::new(metric_specs.opts("nts_rtt_ms_bucket"), &["le"])
                 .expect("Infallible");
-        let nts_rtt_ms_count = GenericGauge::new(
-            "nts_rtt_ms_count",
-            "NTS RTT histogram count of observations",
-        )
-        .expect("Infallible");
+        let nts_rtt_ms_sum =
+            GenericGauge::with_opts(metric_specs.opts("nts_rtt_ms_sum")).expect("Infallible");
+        let nts_rtt_ms_count =
+            GenericGauge::with_opts(metric_specs.opts("nts_rtt_ms_count")).expect("Infallible");
         register!(
             registry,
             nts_offset_ms,
@@ -15155,37 +13086,27 @@ impl Default for Metrics {
         );
 
         // BLS signature verification counters per latest block
-        let pipeline_sig_bls_agg_same = GenericGauge::new(
-            "pipeline_sig_bls_agg_same",
-            "BLS signature micro-batches verified via aggregate (same-message) in latest block",
-        )
-        .expect("Infallible");
-        let pipeline_sig_bls_agg_multi = GenericGauge::new(
-            "pipeline_sig_bls_agg_multi",
-            "BLS signature micro-batches verified via aggregate (multi-message) in latest block",
-        )
-        .expect("Infallible");
-        let pipeline_sig_bls_deterministic = GenericGauge::new(
-            "pipeline_sig_bls_deterministic",
-            "BLS signature micro-batches verified via deterministic per-signature path in latest block",
-        )
-        .expect("Infallible");
+        let pipeline_sig_bls_agg_same =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_agg_same"))
+                .expect("Infallible");
+        let pipeline_sig_bls_agg_multi =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_agg_multi"))
+                .expect("Infallible");
+        let pipeline_sig_bls_deterministic =
+            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_deterministic"))
+                .expect("Infallible");
         let pipeline_sig_bls_agg_same_total = IntCounterVec::new(
-            Opts::new(
-                "pipeline_sig_bls_agg_same_total",
-                "Cumulative BLS same-message aggregate verification attempts labeled by lane and result",
-            ),
+            metric_specs.opts("pipeline_sig_bls_agg_same_total"),
             &["lane", "result"],
         )
         .expect("Infallible");
         let pipeline_sig_bls_agg_multi_total = IntCounterVec::new(
-            Opts::new(
-                "pipeline_sig_bls_agg_multi_total",
-                "Cumulative BLS multi-message aggregate verification attempts labeled by lane and result",
-            ),
+            metric_specs.opts("pipeline_sig_bls_agg_multi_total"),
             &["lane", "result"],
         )
         .expect("Infallible");
+
+        metric_specs.finish();
 
         register!(
             registry,

@@ -32,9 +32,9 @@ Defaults:
 - The trustless verifier skeleton’s KZG/SDR paths are placeholders; point them
   at the signed KZG setup and SDR receipt spool used in your environment before
   promotion drills.
-- Billing preview packs live in `configs/soranet/gateway_m0/billing/` and can be
-  regenerated with `cargo xtask soranet-gateway-billing-m0` to attach meter
-  catalogs, rating rules, and ledger guardrails to rollout evidence.
+- The retained M0 billing preview under `configs/soranet/gateway_m0/billing/`
+  is archival evidence. Generate current invoices and ledger projections with
+  the canonical `cargo xtask soranet-gateway-billing` workflow.
 
 ## Operations pack (SN15-M0-10/11/12)
 

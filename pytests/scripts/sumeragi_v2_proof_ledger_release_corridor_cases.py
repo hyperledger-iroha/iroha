@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 849
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "15f837d911644b557c5a36064a1cff9c512f0cf2b120f5cc6fb21e7cfa530d83"
+        "a776dbab60a1b4c9fec7cdc048d094f509ce60b8c0d8ddebbacc38da5642f4ec"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "23d3c21dd3cb6d656e3f24a4751776289b6915f3ff59f65eb1a8d070f2ef4d70"
+        "461494e993332f027e2237a1e298d13f233b85dedc46cbf42f13b0b5e82d4d09"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
@@ -22,7 +22,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 524
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 525
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8"
+        "ef124fe3e2f909e892bf484e3869ab97d3c3632fef542d9133bcdc145dec6cd8"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -1802,12 +1802,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert native_merge_projection_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    terminal_sweep_regression = (
-        "sumeragi::v2_runner::tests::"
-        "terminal_sweep_source_partitions_whole_units_before_any_mutation"
+    deferred_terminal_regressions = {
+        "sumeragi::v2_apply::tests::deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication",
+        "sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed",
+    }
+    assert deferred_terminal_regressions <= set(production_inventory)
+    assert deferred_terminal_regressions <= set(
+        module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert terminal_sweep_regression in production_inventory
-    assert terminal_sweep_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -2206,10 +2208,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         '"preflight-release-receipt",\n                "pytest",\n                363,'
         in receipt_source
     )
-    assert "did not run exactly 4828 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 4828" in release_source
+    assert "did not run exactly 4865 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 4865" in release_source
     assert (
-        "^4828 passed in [0-9]+([.][0-9]+)?s( "
+        "^4865 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2262,7 +2264,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                4828,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                4865,'
         in receipt_source
     )
     assert "did not run exactly 26 passing tests" in release_source

@@ -1385,11 +1385,11 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     )
 
     path.write_text(
-        source.replace("  AsyncIngressCapacity = 6\n", "  AsyncIngressCapacity = 5\n", 1),
+        source.replace("  AsyncIngressCapacity = 7\n", "  AsyncIngressCapacity = 6\n", 1),
         encoding="utf-8",
     )
     errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("exact 4 * N + 2 geometry (6)" in error for error in errors)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
 
     path.write_text(
         source.replace(
@@ -1408,7 +1408,7 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     )
     errors = module._ownership_n1_configuration_errors(formal_dir)
     assert any("must remain the N=1 boundary" in error for error in errors)
-    assert any("exact 4 * N + 2 geometry (6)" in error for error in errors)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
     assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
 
     path.write_text(
@@ -2986,3 +2986,15 @@ def test_effect_capacity_reconciled_semantics_survive_digest_refresh(
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
 
     assert any(diagnostic in error for error in errors), errors
+    if item_name == "retire_restored_producer_continuation":
+        adapter = ROOT_DIR / "crates/iroha_core/src/sumeragi/v2.rs"
+        adapter_item, = module.rust_items(
+            adapter.read_text(encoding="utf-8"), "step_with_defer_policy"
+        )
+        check = module._adapter_step_has_synchronous_reducer_effect_dataflow
+        reducer = "self.reducer.step(event)"
+        drive = "self.drive_effects(outcome.into_effects())"
+        assert check(adapter_item.source)
+        assert not check(adapter_item.source.replace(drive, "Vec::new()", 1))
+        assert not check(f"let outcome = match {drive} {{}}; {reducer};")
+        assert not check(f"if false {{ let _ = {reducer}; }} {adapter_item.source}")

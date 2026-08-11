@@ -29,8 +29,6 @@ mod sumeragi_npos_stake_activation;
 mod sumeragi_rotation;
 #[path = "sumeragi_telemetry.rs"]
 mod sumeragi_telemetry;
-#[path = "sumeragi_v2_runner.rs"]
-mod sumeragi_v2_runner;
 #[path = "sumeragi_vote_qc_commit.rs"]
 mod sumeragi_vote_qc_commit;
 #[path = "taikai_da.rs"]

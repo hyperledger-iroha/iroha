@@ -77,6 +77,9 @@ const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;
+const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;
+const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
 
@@ -102,6 +105,9 @@ fn account_literal_for_chain_discriminant(
 }
 
 fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
+    let _default_chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+    );
     let account_id = iroha_data_model::account::AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("known account literal must parse");
@@ -357,6 +363,7 @@ fn inject_topology(
     peers: &[PeerMaterial],
 ) -> AnyResult<RawGenesisTransaction> {
     let consensus_mode = manifest.consensus_mode();
+    let chain_discriminant = manifest.chain_discriminant();
     let topology: Vec<GenesisTopologyEntry> = peers
         .iter()
         .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
@@ -366,11 +373,15 @@ fn inject_topology(
         .set_topology(topology)
         .build_raw()
         .with_consensus_mode(consensus_mode)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .with_chain_discriminant(chain_discriminant);
     Ok(manifest)
 }
 
 fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
+    let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        value.chain_discriminant(),
+    );
     let mut rendered = json::to_json_pretty(value)?;
     rendered.push('\n');
     fs::write(path, rendered)?;
@@ -737,15 +748,42 @@ max_sites = 1024
         ""
     };
     let taira_nexus_overrides = if spec.slug == "iroha3-taira" {
-        r#"
+        let discriminant = spec
+            .chain_discriminant
+            .expect("Taira profile must pin its chain discriminant");
+        let fee_sink_account_id = account_literal_string_for_chain_discriminant(
+            iroha_config::parameters::defaults::nexus::fees::FEE_SINK_ACCOUNT_ID,
+            discriminant,
+        );
+        let stake_escrow_account_id = account_literal_string_for_chain_discriminant(
+            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+            discriminant,
+        );
+        let slash_sink_account_id = account_literal_string_for_chain_discriminant(
+            &iroha_config::parameters::defaults::nexus::staking::slash_sink_account_id(),
+            discriminant,
+        );
+        let gas_tech_account_id = account_literal_string_for_chain_discriminant(
+            iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID,
+            discriminant,
+        );
+        format!(
+            r#"
 [nexus.fees]
 fee_asset_id = "xor#universal"
+fee_sink_account_id = "{fee_sink_account_id}"
 
 [nexus.staking]
 stake_asset_id = "xor#universal"
+stake_escrow_account_id = "{stake_escrow_account_id}"
+slash_sink_account_id = "{slash_sink_account_id}"
+
+[pipeline.gas]
+tech_account_id = "{gas_tech_account_id}"
 "#
+        )
     } else {
-        ""
+        String::new()
     };
     let taira_mcp_overrides = if spec.slug == "iroha3-taira" {
         r#"
@@ -757,6 +795,15 @@ allow_tool_prefixes = ["iroha."]
 "#
     } else {
         ""
+    };
+    let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {
+        format!(
+            "\nmax_frame_bytes = {TAIRA_MAX_FRAME_BYTES}\n\
+             max_frame_bytes_block_sync = {TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC}\n\
+             max_frame_bytes_tx_gossip = {TAIRA_MAX_FRAME_BYTES_TX_GOSSIP}"
+        )
+    } else {
+        String::new()
     };
     let max_transactions = if spec.slug == "iroha3-taira" {
         96
@@ -829,7 +876,7 @@ body_source_bytes = {body_source_bytes}
 
 [network]
 address = "{network_address}"
-public_address = "{network_public_address}"
+public_address = "{network_public_address}"{taira_network_frame_overrides}
 
 [torii]
 address = "{torii_address}"
@@ -868,6 +915,7 @@ expected_hash = "{genesis_expected_hash}"
         body_source_bytes = body_source_bytes,
         network_address = network_address,
         network_public_address = network_public_address,
+        taira_network_frame_overrides = taira_network_frame_overrides,
         torii_address = torii_address,
         torii_max_content_len = torii_max_content_len,
         sorafs_site_bindings = sorafs_site_bindings,
@@ -1273,17 +1321,11 @@ mod tests {
     use super::*;
 
     fn stub_genesis() -> RawGenesisTransaction {
-        json::from_str(
-            r#"{
-            "chain": "stub",
-            "chain_discriminant": 753,
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Npos",
-            "transactions": [ {} ]
-        }"#,
+        iroha_genesis::GenesisBuilder::new_without_executor(
+            iroha_data_model::ChainId::from("stub"),
+            ".",
         )
-        .expect("stub genesis parses")
+        .build_raw()
     }
 
     #[test]
@@ -1317,7 +1359,10 @@ mod tests {
     #[test]
     fn topology_is_injected_into_genesis() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
-        let patched = inject_topology(stub_genesis(), &peers).expect("inject topology");
+        let source = stub_genesis().with_chain_discriminant(369);
+        let _wrong_discriminant = ChainDiscriminantGuard::enter(753);
+        let patched = inject_topology(source, &peers).expect("inject topology");
+        assert_eq!(patched.chain_discriminant(), 369);
         let txs = patched.transactions();
         assert_eq!(txs.len(), 1, "stub genesis should carry one transaction");
         let tx0 = &txs[0];
@@ -1347,6 +1392,35 @@ mod tests {
         assert_eq!(topo.len(), peers.len());
         let first = topo[0].as_object().expect("topology entry object");
         assert!(first.get("pop_hex").is_some(), "pop_hex embedded");
+    }
+
+    #[test]
+    fn write_json_uses_manifest_chain_discriminant_for_account_literals() {
+        let account_key =
+            deterministic_keypair("manifest-chain-discriminant-account", Algorithm::Ed25519)
+                .expect("derive deterministic account key");
+        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
+            iroha_data_model::ChainId::from("manifest-chain-discriminant"),
+            ".",
+        )
+        .domain(
+            iroha_data_model::domain::DomainId::try_new("accounts", "universal")
+                .expect("valid fixture domain"),
+        )
+        .account(account_key.public_key().clone())
+        .finish_domain()
+        .build_raw()
+        .with_chain_discriminant(369);
+        let bundle = tempdir().expect("manifest serialization directory");
+        let path = bundle.path().join("genesis.json");
+        let _wrong_discriminant = ChainDiscriminantGuard::enter(753);
+
+        write_json(&path, &manifest).expect("serialize manifest with its own discriminant");
+        let reloaded = RawGenesisTransaction::from_path(&path)
+            .expect("account literals must decode under the manifest discriminant");
+
+        assert_eq!(reloaded.chain_discriminant(), 369);
+        assert_eq!(reloaded.instructions().count(), 2);
     }
 
     #[test]
@@ -1681,6 +1755,196 @@ mod tests {
                 profile.slug
             );
         }
+    }
+
+    #[test]
+    fn taira_peer_configs_pin_reviewed_network_frame_corridor() {
+        let frame_caps = [
+            ("max_frame_bytes", TAIRA_MAX_FRAME_BYTES),
+            (
+                "max_frame_bytes_block_sync",
+                TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC,
+            ),
+            ("max_frame_bytes_tx_gossip", TAIRA_MAX_FRAME_BYTES_TX_GOSSIP),
+        ];
+        let taira = &PROFILES[1];
+        let peers = build_peers(taira).expect("build deterministic Taira peers");
+        let genesis_key =
+            deterministic_keypair("config-taira-frame-caps-genesis", Algorithm::Ed25519)
+                .expect("derive deterministic Taira genesis key");
+        let bundle = tempdir().expect("Taira frame-cap config bundle");
+        write_peer_configs(
+            taira,
+            &peers,
+            genesis_key.public_key(),
+            bundle.path(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        )
+        .expect("write every Taira peer config alias");
+
+        let mut checked_aliases = 0_usize;
+        for peer_index in 0..peers.len() {
+            for file_name in [
+                peer_config_file_name(peer_index),
+                format!("peer{peer_index}.toml"),
+            ] {
+                let path = bundle.path().join(file_name);
+                let rendered = fs::read_to_string(&path).expect("read Taira peer config alias");
+                let table = rendered
+                    .parse::<toml::Table>()
+                    .expect("Taira peer config alias must be valid TOML");
+                let network = table
+                    .get("network")
+                    .and_then(toml::Value::as_table)
+                    .expect("Taira peer config alias must contain [network]");
+                for &(key, expected) in &frame_caps {
+                    assert_eq!(
+                        network.get(key).and_then(toml::Value::as_integer),
+                        Some(i64::try_from(expected).expect("Taira frame cap must fit i64")),
+                        "{} must pin the reviewed Taira {key}",
+                        path.display()
+                    );
+                }
+                checked_aliases += 1;
+            }
+        }
+        assert_eq!(
+            checked_aliases, 14,
+            "Taira must emit exactly 14 peer aliases"
+        );
+
+        for profile in [&PROFILES[0], &PROFILES[2]] {
+            let peers = build_peers(profile).expect("build non-Taira deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-frame-caps-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive non-Taira deterministic genesis key");
+            for peer_index in 0..peers.len() {
+                let rendered = render_peer_config(
+                    profile,
+                    &peers,
+                    peer_index,
+                    genesis_key.public_key(),
+                    GENESIS_EXPECTED_HASH_PLACEHOLDER,
+                );
+                let table = rendered
+                    .parse::<toml::Table>()
+                    .expect("non-Taira peer config must be valid TOML");
+                let network = table
+                    .get("network")
+                    .and_then(toml::Value::as_table)
+                    .expect("non-Taira peer config must contain [network]");
+                for &(key, _) in &frame_caps {
+                    assert!(
+                        !network.contains_key(key),
+                        "profile {} peer {peer_index} must not inherit Taira-only {key}",
+                        profile.slug
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn taira_peer_configs_bind_raw_protocol_accounts_to_profile_discriminant() {
+        fn nested_string<'a>(
+            table: &'a toml::Table,
+            parent: &str,
+            child: &str,
+            key: &str,
+        ) -> &'a str {
+            table
+                .get(parent)
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(child))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(key))
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("missing {parent}.{child}.{key}"))
+        }
+
+        let taira = &PROFILES[1];
+        let discriminant = taira
+            .chain_discriminant
+            .expect("Taira profile must pin its chain discriminant");
+        let expected = [
+            (
+                "nexus",
+                "fees",
+                "fee_sink_account_id",
+                account_literal_string_for_chain_discriminant(
+                    iroha_config::parameters::defaults::nexus::fees::FEE_SINK_ACCOUNT_ID,
+                    discriminant,
+                ),
+            ),
+            (
+                "nexus",
+                "staking",
+                "stake_escrow_account_id",
+                account_literal_string_for_chain_discriminant(
+                    &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+                    discriminant,
+                ),
+            ),
+            (
+                "nexus",
+                "staking",
+                "slash_sink_account_id",
+                account_literal_string_for_chain_discriminant(
+                    &iroha_config::parameters::defaults::nexus::staking::slash_sink_account_id(),
+                    discriminant,
+                ),
+            ),
+            (
+                "pipeline",
+                "gas",
+                "tech_account_id",
+                account_literal_string_for_chain_discriminant(
+                    iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID,
+                    discriminant,
+                ),
+            ),
+        ];
+        let peers = build_peers(taira).expect("build deterministic Taira peers");
+        let genesis_key =
+            deterministic_keypair("config-taira-protocol-accounts-genesis", Algorithm::Ed25519)
+                .expect("derive deterministic Taira genesis key");
+        let bundle = tempdir().expect("Taira protocol-account config bundle");
+        write_peer_configs(
+            taira,
+            &peers,
+            genesis_key.public_key(),
+            bundle.path(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        )
+        .expect("write every Taira peer config alias");
+        let _taira_chain = ChainDiscriminantGuard::enter(discriminant);
+
+        let mut checked_aliases = 0_usize;
+        for peer_index in 0..peers.len() {
+            for file_name in [
+                peer_config_file_name(peer_index),
+                format!("peer{peer_index}.toml"),
+            ] {
+                let path = bundle.path().join(file_name);
+                let table = fs::read_to_string(&path)
+                    .expect("read Taira peer config alias")
+                    .parse::<toml::Table>()
+                    .expect("Taira peer config alias must be valid TOML");
+                for (parent, child, key, expected_literal) in &expected {
+                    let literal = nested_string(&table, parent, child, key);
+                    assert_eq!(literal, expected_literal, "{} {key}", path.display());
+                    let parsed = iroha_data_model::account::AccountId::parse_encoded(literal)
+                        .unwrap_or_else(|error| {
+                            panic!("{} {key} must be canonical: {error}", path.display())
+                        });
+                    assert_eq!(parsed.canonical(), literal, "{} {key}", path.display());
+                }
+                checked_aliases += 1;
+            }
+        }
+        assert_eq!(checked_aliases, 14, "Taira must emit exactly 14 aliases");
     }
 
     #[test]

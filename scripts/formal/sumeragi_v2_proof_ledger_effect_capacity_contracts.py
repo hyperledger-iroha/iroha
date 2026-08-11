@@ -135,6 +135,9 @@ if let Some(finality) = &self.finality_completion {
         "retain_effect_batch_at_frontier",
         errors,
     )
+    _retained_effect_frontier_adapter_contracts(
+        effects_path, source, generic_executor_context, errors
+    )
     _require_rust_item_context(
         effects_path,
         retain,
@@ -1180,6 +1183,7 @@ self.commit_prepared_body_pipeline_completion_refinements(prepared)
             production_serialized_runtime_context,
             "checked single body-terminal authority commit wrapper",
             errors,
+            expected_attributes=("#[allow(dead_code)]",),
         )
         _require_exact_rust_tokens(
             runtime_path,

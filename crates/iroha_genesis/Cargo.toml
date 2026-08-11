@@ -30,11 +30,6 @@ path = "src/bin/genesis_inspect.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "genesis_probe"
-path = "src/bin/genesis_probe.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "genesis_resign"
 path = "src/bin/genesis_resign.rs"
 required-features = ["dev-tools"]

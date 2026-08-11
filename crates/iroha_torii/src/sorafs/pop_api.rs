@@ -37,8 +37,8 @@ use sorafs_node::pop_credentials::{
     PopCredentialServicePolicyV1, PopEnrollmentRecipientV1, PopEnrollmentStateV1,
     PopEnrollmentStatusV1, PopFinalizedCursorV1, PopFinalizedRegistryProjectionV1,
     PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerSigner, PopIssuerSigningPurposeV1,
-    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter,
-    PopRequestAuthorityV1, PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
+    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopRequestAuthorityV1,
+    PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
 };
 use tokio::sync::Mutex;
 

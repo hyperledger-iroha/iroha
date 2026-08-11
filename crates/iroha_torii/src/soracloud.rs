@@ -120,18 +120,12 @@ const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
 const AGENT_WALLET_DAY_TICKS: u64 = 10_000;
-const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
-const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
-const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 128;
 const AGENT_AUTONOMY_RECENT_RUN_LIMIT: usize = 20;
 const CIPHERTEXT_QUERY_PROOF_SCHEME_V1: &str = "soracloud.audit_anchor.v1";
 const HEALTH_COMPLIANCE_REPORT_VERSION_V1: u16 = 1;
 const DEFAULT_HEALTH_COMPLIANCE_LIMIT: usize = 50;
 const MAX_HEALTH_COMPLIANCE_LIMIT: usize = 500;
 const TRAINING_JOB_STATUS_SCHEMA_VERSION_V1: u16 = 1;
-const TRAINING_MAX_RETRIES: u8 = 16;
-const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
-const TRAINING_MAX_REASON_BYTES: usize = 512;
 pub(crate) const VERIFIED_ACCOUNT_HEADER: &str = "x-iroha-internal-soracloud-account";
 pub(crate) const VERIFIED_SIGNER_HEADER: &str = "x-iroha-internal-soracloud-signer";
 pub(crate) const VERIFIED_SIGNERS_HEADER: &str = "x-iroha-internal-soracloud-signers";
@@ -141,8 +135,6 @@ pub(crate) fn requires_signed_mutation_request(method: &axum::http::Method, path
 }
 const TRAINING_MAX_IDENTIFIER_BYTES: usize = 128;
 const MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
-const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
-const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
 const MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const UPLOADED_MODEL_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
@@ -908,21 +900,6 @@ pub(crate) struct ModelArtifactRegisterPayload {
 pub(crate) struct SignedModelArtifactRegisterRequest {
     pub payload: ModelArtifactRegisterPayload,
     pub provenance: ManifestProvenance,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct UploadedModelFinalizePayload {
-    pub service_name: String,
-    pub model_name: String,
-    pub model_id: String,
-    pub artifact_id: String,
-    pub weight_version: String,
-    pub bundle_root: Hash,
-    pub weight_artifact_hash: Hash,
-    pub dataset_ref: String,
-    pub training_config_hash: Hash,
-    pub reproducibility_hash: Hash,
-    pub provenance_attestation_hash: Hash,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2015,17 +1992,6 @@ pub(crate) struct ControlPlaneAuditEvent {
     pub signed_by: String,
 }
 
-#[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize,
-)]
-struct BindingRuntimeState {
-    total_bytes: u64,
-    #[norito(default)]
-    key_sizes: BTreeMap<String, u64>,
-    #[norito(default)]
-    ciphertext_records: BTreeMap<String, CiphertextRuntimeRecord>,
-}
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 struct CiphertextRuntimeRecord {
     encryption: SoraStateEncryptionV1,
@@ -2034,287 +2000,6 @@ struct CiphertextRuntimeRecord {
     last_update_sequence: u64,
     governance_tx_hash: Hash,
     source_action: SoracloudAction,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct TrainingJobRuntimeState {
-    model_name: String,
-    job_id: String,
-    status: TrainingJobStatus,
-    worker_group_size: u16,
-    target_steps: u32,
-    completed_steps: u32,
-    checkpoint_interval_steps: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_checkpoint_step: Option<u32>,
-    checkpoint_count: u32,
-    retry_count: u8,
-    max_retries: u8,
-    step_compute_units: u64,
-    compute_budget_units: u64,
-    compute_consumed_units: u64,
-    storage_budget_bytes: u64,
-    storage_consumed_bytes: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    latest_metrics_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_failure_reason: Option<String>,
-    created_sequence: u64,
-    updated_sequence: u64,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct TrainingJobAuditEvent {
-    sequence: u64,
-    action: TrainingJobAction,
-    service_name: String,
-    model_name: String,
-    job_id: String,
-    status: TrainingJobStatus,
-    completed_steps: u32,
-    checkpoint_count: u32,
-    retry_count: u8,
-    compute_consumed_units: u64,
-    storage_consumed_bytes: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_checkpoint_step: Option<u32>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    latest_metrics_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_failure_reason: Option<String>,
-    signed_by: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct ModelWeightVersionState {
-    weight_version: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    parent_version: Option<String>,
-    training_job_id: String,
-    weight_artifact_hash: Hash,
-    dataset_ref: String,
-    training_config_hash: Hash,
-    reproducibility_hash: Hash,
-    provenance_attestation_hash: Hash,
-    registered_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    promoted_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    gate_report_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    promoted_by: Option<String>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-#[cfg(test)]
-struct ModelWeightRegistryState {
-    model_name: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    current_version: Option<String>,
-    #[norito(default)]
-    versions: BTreeMap<String, ModelWeightVersionState>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct ModelWeightAuditEvent {
-    sequence: u64,
-    action: ModelWeightAction,
-    service_name: String,
-    model_name: String,
-    target_version: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    current_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    parent_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    gate_approved: Option<bool>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    rollback_reason: Option<String>,
-    signed_by: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct ModelArtifactState {
-    model_name: String,
-    training_job_id: String,
-    #[norito(default)]
-    artifact_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    weight_version: Option<String>,
-    weight_artifact_hash: Hash,
-    dataset_ref: String,
-    training_config_hash: Hash,
-    reproducibility_hash: Hash,
-    provenance_attestation_hash: Hash,
-    registered_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    consumed_by_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    chunk_manifest_root: Option<Hash>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct ModelArtifactAuditEvent {
-    sequence: u64,
-    action: ModelArtifactAction,
-    service_name: String,
-    model_name: String,
-    training_job_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    consumed_by_version: Option<String>,
-    signed_by: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentWalletSpendRequest {
-    request_id: String,
-    asset_definition: String,
-    amount: Quantity,
-    created_sequence: u64,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentWalletDailySpendEntry {
-    asset_definition: String,
-    day_bucket: u64,
-    spent: Quantity,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentMailboxMessage {
-    message_id: String,
-    from_apartment: String,
-    channel: String,
-    payload: String,
-    payload_hash: Hash,
-    enqueued_sequence: u64,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentArtifactAllowRule {
-    artifact_hash: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    provenance_hash: Option<String>,
-    added_sequence: u64,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentApartmentRuntimeState {
-    manifest: AgentApartmentManifestV1,
-    manifest_hash: Hash,
-    status: AgentRuntimeStatus,
-    deployed_sequence: u64,
-    lease_started_sequence: u64,
-    lease_expires_sequence: u64,
-    last_renewed_sequence: u64,
-    restart_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_restart_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_restart_reason: Option<String>,
-    #[norito(default)]
-    process_generation: u64,
-    #[norito(default)]
-    process_started_sequence: u64,
-    #[norito(default)]
-    last_active_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_checkpoint_sequence: Option<u64>,
-    #[norito(default)]
-    checkpoint_count: u32,
-    #[norito(default)]
-    persistent_state: BindingRuntimeState,
-    #[norito(default)]
-    revoked_policy_capabilities: BTreeSet<String>,
-    #[norito(default)]
-    pending_wallet_requests: BTreeMap<String, AgentWalletSpendRequest>,
-    #[norito(default)]
-    wallet_daily_spend: BTreeMap<String, AgentWalletDailySpendEntry>,
-    #[norito(default)]
-    mailbox_queue: Vec<AgentMailboxMessage>,
-    autonomy_budget_ceiling_units: u64,
-    autonomy_budget_remaining_units: u64,
-    #[norito(default)]
-    artifact_allowlist: BTreeMap<String, AgentArtifactAllowRule>,
-    #[norito(default)]
-    autonomy_run_history: Vec<AgentAutonomyRunRecord>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct AgentApartmentAuditEvent {
-    sequence: u64,
-    action: AgentApartmentAction,
-    apartment_name: String,
-    status: AgentRuntimeStatus,
-    lease_expires_sequence: u64,
-    manifest_hash: Hash,
-    restart_count: u32,
-    signed_by: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    request_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    asset_definition: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    amount: Option<Quantity>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    capability: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    from_apartment: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    to_apartment: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    channel: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    payload_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    artifact_hash: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    provenance_hash: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    run_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    run_label: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    budget_units: Option<u64>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2421,43 +2106,6 @@ pub(crate) struct AgentApartmentStatusEntry {
     pub last_restart_reason: Option<String>,
 }
 
-impl AgentApartmentStatusEntry {
-    fn from_state(apartment_name: &str, state: &AgentApartmentRuntimeState, sequence: u64) -> Self {
-        Self {
-            apartment_name: apartment_name.to_owned(),
-            manifest_hash: state.manifest_hash,
-            status: agent_runtime_status_for_sequence(state, sequence),
-            lease_started_sequence: state.lease_started_sequence,
-            lease_expires_sequence: state.lease_expires_sequence,
-            lease_remaining_ticks: agent_lease_remaining_ticks(state, sequence),
-            restart_count: state.restart_count,
-            state_quota_bytes: state.manifest.state_quota_bytes.get(),
-            tool_capability_count: u32::try_from(state.manifest.tool_capabilities.len())
-                .unwrap_or(u32::MAX),
-            policy_capability_count: u32::try_from(state.manifest.policy_capabilities.len())
-                .unwrap_or(u32::MAX),
-            revoked_policy_capability_count: agent_revoked_capability_count(state),
-            pending_wallet_request_count: agent_pending_wallet_request_count(state),
-            pending_mailbox_message_count: agent_pending_mailbox_message_count(state),
-            autonomy_budget_ceiling_units: state.autonomy_budget_ceiling_units,
-            autonomy_budget_remaining_units: state.autonomy_budget_remaining_units,
-            artifact_allowlist_count: agent_allowlist_count(state),
-            autonomy_run_count: agent_run_count(state),
-            process_generation: state.process_generation,
-            process_started_sequence: state.process_started_sequence,
-            last_active_sequence: state.last_active_sequence,
-            last_checkpoint_sequence: state.last_checkpoint_sequence,
-            checkpoint_count: state.checkpoint_count,
-            persistent_state_total_bytes: state.persistent_state.total_bytes,
-            persistent_state_key_count: agent_persistent_state_key_count(state),
-            spend_limit_count: u32::try_from(state.manifest.spend_limits.len()).unwrap_or(u32::MAX),
-            upgrade_policy: state.manifest.upgrade_policy.clone(),
-            last_restart_sequence: state.last_restart_sequence,
-            last_restart_reason: state.last_restart_reason.clone(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct AgentWalletMutationResponse {
     pub action: AgentApartmentAction,
@@ -2531,19 +2179,6 @@ pub(crate) struct AgentMailboxMessageEntry {
     pub payload: String,
     pub payload_hash: Hash,
     pub enqueued_sequence: u64,
-}
-
-impl AgentMailboxMessageEntry {
-    fn from_message(message: &AgentMailboxMessage) -> Self {
-        Self {
-            message_id: message.message_id.clone(),
-            from_apartment: message.from_apartment.clone(),
-            channel: message.channel.clone(),
-            payload: message.payload.clone(),
-            payload_hash: message.payload_hash,
-            enqueued_sequence: message.enqueued_sequence,
-        }
-    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2758,16 +2393,6 @@ pub(crate) struct AgentAutonomyAllowlistEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub provenance_hash: Option<String>,
     pub added_sequence: u64,
-}
-
-impl AgentAutonomyAllowlistEntry {
-    fn from_rule(rule: &AgentArtifactAllowRule) -> Self {
-        Self {
-            artifact_hash: rule.artifact_hash.clone(),
-            provenance_hash: rule.provenance_hash.clone(),
-            added_sequence: rule.added_sequence,
-        }
-    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -3028,20 +2653,6 @@ fn admit_scr_host_bundle(
     })
 }
 
-fn normalize_agent_runtime_defaults(runtime: &mut AgentApartmentRuntimeState) {
-    if runtime.process_generation == 0 {
-        runtime.process_generation = 1;
-    }
-    if runtime.process_started_sequence == 0 {
-        runtime.process_started_sequence = runtime.deployed_sequence;
-    }
-    if runtime.last_active_sequence == 0 {
-        runtime.last_active_sequence = runtime
-            .last_renewed_sequence
-            .max(runtime.process_started_sequence);
-    }
-}
-
 fn parse_agent_apartment_name(apartment_name: &str) -> Result<String, SoracloudError> {
     let normalized = apartment_name.trim();
     let parsed: Name = normalized
@@ -3059,14 +2670,6 @@ fn parse_service_name(service_name: &str) -> Result<Name, SoracloudError> {
 
 fn parse_optional_service_name(service_name: Option<&str>) -> Result<Option<Name>, SoracloudError> {
     service_name.map(parse_service_name).transpose()
-}
-
-fn parse_agent_capability_name(capability: &str) -> Result<String, SoracloudError> {
-    let normalized = capability.trim();
-    let parsed: Name = normalized
-        .parse()
-        .map_err(|err| SoracloudError::bad_request(format!("invalid capability: {err}")))?;
-    Ok(parsed.to_string())
 }
 
 fn parse_training_model_name(model_name: &str) -> Result<String, SoracloudError> {
@@ -3639,203 +3242,6 @@ fn parse_model_weight_version(weight_version: &str) -> Result<String, SoracloudE
     Ok(normalized.to_owned())
 }
 
-fn parse_model_weight_dataset_ref(dataset_ref: &str) -> Result<String, SoracloudError> {
-    let normalized = dataset_ref.trim();
-    if normalized.is_empty() {
-        return Err(SoracloudError::bad_request("dataset_ref must not be empty"));
-    }
-    if normalized.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
-        return Err(SoracloudError::bad_request(format!(
-            "dataset_ref exceeds max bytes ({MODEL_WEIGHT_MAX_DATASET_REF_BYTES})"
-        )));
-    }
-    if normalized.chars().any(char::is_control) {
-        return Err(SoracloudError::bad_request(
-            "dataset_ref must not contain control characters",
-        ));
-    }
-    Ok(normalized.to_owned())
-}
-
-fn normalize_model_weight_reason(reason: &str) -> Result<String, SoracloudError> {
-    let normalized = reason.trim();
-    if normalized.is_empty() {
-        return Err(SoracloudError::bad_request("reason must not be empty"));
-    }
-    if normalized.len() > MODEL_WEIGHT_MAX_REASON_BYTES {
-        return Err(SoracloudError::bad_request(format!(
-            "reason exceeds max bytes ({MODEL_WEIGHT_MAX_REASON_BYTES})"
-        )));
-    }
-    if normalized.chars().any(char::is_control) {
-        return Err(SoracloudError::bad_request(
-            "reason must not contain control characters",
-        ));
-    }
-    Ok(normalized.to_owned())
-}
-
-fn training_job_mutation_response(
-    action: TrainingJobAction,
-    service_name: &str,
-    runtime_state: &TrainingJobRuntimeState,
-    sequence: u64,
-    training_event_count: u32,
-    signed_by: String,
-) -> TrainingJobMutationResponse {
-    TrainingJobMutationResponse {
-        action,
-        service_name: service_name.to_owned(),
-        model_name: runtime_state.model_name.clone(),
-        job_id: runtime_state.job_id.clone(),
-        sequence,
-        status: runtime_state.status,
-        worker_group_size: runtime_state.worker_group_size,
-        target_steps: runtime_state.target_steps,
-        completed_steps: runtime_state.completed_steps,
-        checkpoint_interval_steps: runtime_state.checkpoint_interval_steps,
-        last_checkpoint_step: runtime_state.last_checkpoint_step,
-        checkpoint_count: runtime_state.checkpoint_count,
-        retry_count: runtime_state.retry_count,
-        max_retries: runtime_state.max_retries,
-        step_compute_units: runtime_state.step_compute_units,
-        compute_budget_units: runtime_state.compute_budget_units,
-        compute_consumed_units: runtime_state.compute_consumed_units,
-        compute_remaining_units: runtime_state
-            .compute_budget_units
-            .saturating_sub(runtime_state.compute_consumed_units),
-        storage_budget_bytes: runtime_state.storage_budget_bytes,
-        storage_consumed_bytes: runtime_state.storage_consumed_bytes,
-        storage_remaining_bytes: runtime_state
-            .storage_budget_bytes
-            .saturating_sub(runtime_state.storage_consumed_bytes),
-        latest_metrics_hash: runtime_state.latest_metrics_hash,
-        last_failure_reason: runtime_state.last_failure_reason.clone(),
-        training_event_count,
-        signed_by,
-    }
-}
-
-fn training_job_status_entry(
-    service_name: &str,
-    runtime_state: &TrainingJobRuntimeState,
-) -> TrainingJobStatusEntry {
-    TrainingJobStatusEntry {
-        service_name: service_name.to_owned(),
-        model_name: runtime_state.model_name.clone(),
-        job_id: runtime_state.job_id.clone(),
-        status: runtime_state.status,
-        worker_group_size: runtime_state.worker_group_size,
-        target_steps: runtime_state.target_steps,
-        completed_steps: runtime_state.completed_steps,
-        checkpoint_interval_steps: runtime_state.checkpoint_interval_steps,
-        last_checkpoint_step: runtime_state.last_checkpoint_step,
-        checkpoint_count: runtime_state.checkpoint_count,
-        retry_count: runtime_state.retry_count,
-        max_retries: runtime_state.max_retries,
-        step_compute_units: runtime_state.step_compute_units,
-        compute_budget_units: runtime_state.compute_budget_units,
-        compute_consumed_units: runtime_state.compute_consumed_units,
-        compute_remaining_units: runtime_state
-            .compute_budget_units
-            .saturating_sub(runtime_state.compute_consumed_units),
-        storage_budget_bytes: runtime_state.storage_budget_bytes,
-        storage_consumed_bytes: runtime_state.storage_consumed_bytes,
-        storage_remaining_bytes: runtime_state
-            .storage_budget_bytes
-            .saturating_sub(runtime_state.storage_consumed_bytes),
-        latest_metrics_hash: runtime_state.latest_metrics_hash,
-        last_failure_reason: runtime_state.last_failure_reason.clone(),
-        created_sequence: runtime_state.created_sequence,
-        updated_sequence: runtime_state.updated_sequence,
-    }
-}
-
-fn model_weight_mutation_response(
-    action: ModelWeightAction,
-    service_name: &str,
-    model_name: &str,
-    target_version: &str,
-    current_version: Option<String>,
-    parent_version: Option<String>,
-    sequence: u64,
-    version_count: u32,
-    model_event_count: u32,
-    signed_by: String,
-) -> ModelWeightMutationResponse {
-    ModelWeightMutationResponse {
-        action,
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        target_version: target_version.to_owned(),
-        current_version,
-        parent_version,
-        sequence,
-        version_count,
-        model_event_count,
-        signed_by,
-    }
-}
-
-#[cfg(test)]
-fn model_weight_status_entry(
-    service_name: &str,
-    model_registry: &ModelWeightRegistryState,
-) -> ModelWeightStatusEntry {
-    let versions = model_registry
-        .versions
-        .values()
-        .map(model_weight_version_entry)
-        .collect::<Vec<_>>();
-    ModelWeightStatusEntry {
-        service_name: service_name.to_owned(),
-        model_name: model_registry.model_name.clone(),
-        current_version: model_registry.current_version.clone(),
-        version_count: u32::try_from(versions.len()).unwrap_or(u32::MAX),
-        versions,
-    }
-}
-
-fn model_weight_version_entry(version: &ModelWeightVersionState) -> ModelWeightVersionEntry {
-    ModelWeightVersionEntry {
-        weight_version: version.weight_version.clone(),
-        parent_version: version.parent_version.clone(),
-        training_job_id: version.training_job_id.clone(),
-        weight_artifact_hash: version.weight_artifact_hash,
-        dataset_ref: version.dataset_ref.clone(),
-        training_config_hash: version.training_config_hash,
-        reproducibility_hash: version.reproducibility_hash,
-        provenance_attestation_hash: version.provenance_attestation_hash,
-        registered_sequence: version.registered_sequence,
-        promoted_sequence: version.promoted_sequence,
-        gate_report_hash: version.gate_report_hash,
-    }
-}
-
-fn model_artifact_status_entry(
-    service_name: &str,
-    artifact: &ModelArtifactState,
-) -> ModelArtifactStatusEntry {
-    ModelArtifactStatusEntry {
-        service_name: service_name.to_owned(),
-        model_name: artifact.model_name.clone(),
-        artifact_id: artifact
-            .artifact_id
-            .clone()
-            .unwrap_or_else(|| artifact.training_job_id.clone()),
-        training_job_id: artifact.training_job_id.clone(),
-        weight_version: artifact.weight_version.clone(),
-        weight_artifact_hash: artifact.weight_artifact_hash,
-        dataset_ref: artifact.dataset_ref.clone(),
-        training_config_hash: artifact.training_config_hash,
-        reproducibility_hash: artifact.reproducibility_hash,
-        provenance_attestation_hash: artifact.provenance_attestation_hash,
-        registered_sequence: artifact.registered_sequence,
-        consumed_by_version: artifact.consumed_by_version.clone(),
-        chunk_manifest_root: artifact.chunk_manifest_root,
-    }
-}
-
 fn authoritative_training_job_status(status: SoraTrainingJobStatusV1) -> TrainingJobStatus {
     match status {
         SoraTrainingJobStatusV1::Running => TrainingJobStatus::Running,
@@ -3933,219 +3339,12 @@ fn authoritative_model_artifact_status_entry(
     }
 }
 
-fn validate_agent_hash_like(flag_name: &str, value: &str) -> Result<(), SoracloudError> {
-    if value.is_empty() {
-        return Err(SoracloudError::bad_request(format!(
-            "{flag_name} must not be empty"
-        )));
-    }
-    if value.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
-        return Err(SoracloudError::bad_request(format!(
-            "{flag_name} exceeds max bytes ({AGENT_AUTONOMY_MAX_HASH_BYTES})"
-        )));
-    }
-    if value.chars().any(|ch| ch.is_ascii_whitespace()) {
-        return Err(SoracloudError::bad_request(format!(
-            "{flag_name} must not contain whitespace"
-        )));
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.' | '#'))
-    {
-        return Err(SoracloudError::bad_request(format!(
-            "{flag_name} must use only ASCII letters, digits, or [: - _ . #]"
-        )));
-    }
-    Ok(())
-}
-
-fn normalize_agent_hash_like(flag_name: &str, value: &str) -> Result<String, SoracloudError> {
-    let normalized = value.trim();
-    validate_agent_hash_like(flag_name, normalized)?;
-    Ok(normalized.to_owned())
-}
-
-fn normalize_optional_agent_hash_like(
-    flag_name: &str,
-    value: Option<&str>,
-) -> Result<Option<String>, SoracloudError> {
-    value
-        .map(|raw| normalize_agent_hash_like(flag_name, raw))
-        .transpose()
-}
-
-fn normalize_run_label(run_label: &str) -> Result<String, SoracloudError> {
-    let normalized = run_label.trim();
-    if normalized.is_empty() {
-        return Err(SoracloudError::bad_request("run_label must not be empty"));
-    }
-    if normalized.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
-        return Err(SoracloudError::bad_request(format!(
-            "run_label exceeds max bytes ({AGENT_AUTONOMY_MAX_LABEL_BYTES})"
-        )));
-    }
-    if normalized.chars().any(char::is_control) {
-        return Err(SoracloudError::bad_request(
-            "run_label must not contain control characters",
-        ));
-    }
-    Ok(normalized.to_owned())
-}
-
-fn agent_policy_capability_active(state: &AgentApartmentRuntimeState, capability: &str) -> bool {
-    let declared = state
-        .manifest
-        .policy_capabilities
-        .iter()
-        .any(|candidate| candidate.as_ref() == capability);
-    declared && !state.revoked_policy_capabilities.contains(capability)
-}
-
-fn agent_runtime_status_for_sequence(
-    state: &AgentApartmentRuntimeState,
-    current_sequence: u64,
-) -> AgentRuntimeStatus {
-    if current_sequence >= state.lease_expires_sequence {
-        AgentRuntimeStatus::LeaseExpired
-    } else {
-        state.status
-    }
-}
-
-fn agent_lease_remaining_ticks(state: &AgentApartmentRuntimeState, current_sequence: u64) -> u64 {
-    state
-        .lease_expires_sequence
-        .saturating_sub(current_sequence)
-}
-
-fn agent_revoked_capability_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.revoked_policy_capabilities.len()).unwrap_or(u32::MAX)
-}
-
-fn agent_pending_wallet_request_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.pending_wallet_requests.len()).unwrap_or(u32::MAX)
-}
-
-fn agent_pending_mailbox_message_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.mailbox_queue.len()).unwrap_or(u32::MAX)
-}
-
-fn agent_allowlist_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.artifact_allowlist.len()).unwrap_or(u32::MAX)
-}
-
-fn agent_run_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.autonomy_run_history.len()).unwrap_or(u32::MAX)
-}
-
-fn agent_persistent_state_key_count(state: &AgentApartmentRuntimeState) -> u32 {
-    u32::try_from(state.persistent_state.key_sizes.len()).unwrap_or(u32::MAX)
-}
-
-fn touch_agent_runtime_activity(state: &mut AgentApartmentRuntimeState, sequence: u64) {
-    state.last_active_sequence = state.last_active_sequence.max(sequence);
-}
-
-fn projected_persistent_state_total_bytes(
-    state: &AgentApartmentRuntimeState,
-    key: &str,
-    value_size_bytes: u64,
-) -> Result<u64, SoracloudError> {
-    let existing_size = state
-        .persistent_state
-        .key_sizes
-        .get(key)
-        .copied()
-        .unwrap_or(0);
-    state
-        .persistent_state
-        .total_bytes
-        .saturating_sub(existing_size)
-        .checked_add(value_size_bytes)
-        .ok_or_else(|| {
-            SoracloudError::internal(format!(
-                "persistent state accounting overflow for apartment `{}`",
-                state.manifest.apartment_name
-            ))
-        })
-}
-
-fn autonomy_checkpoint_key(apartment_name: &str, run_id: &str) -> String {
-    format!("/{apartment_name}/autonomy/{run_id}")
-}
-
-fn autonomy_checkpoint_value_size(
-    artifact_hash: &str,
-    provenance_hash: Option<&str>,
-    run_label: &str,
-    budget_units: u64,
-) -> u64 {
-    let mut value_size = u64::try_from(artifact_hash.len()).unwrap_or(u64::MAX);
-    value_size = value_size.saturating_add(u64::try_from(run_label.len()).unwrap_or(u64::MAX));
-    value_size = value_size
-        .saturating_add(u64::try_from(budget_units.to_string().len()).unwrap_or(u64::MAX));
-    if let Some(hash) = provenance_hash {
-        value_size = value_size.saturating_add(u64::try_from(hash.len()).unwrap_or(u64::MAX));
-    }
-    value_size.saturating_add(32)
-}
-
 fn wallet_day_bucket(sequence: u64) -> u64 {
     sequence / AGENT_WALLET_DAY_TICKS
 }
 
-fn wallet_day_spent(
-    state: &AgentApartmentRuntimeState,
-    asset_definition: &str,
-    day_bucket: u64,
-) -> Quantity {
-    let key = format!("{asset_definition}:{day_bucket}");
-    state
-        .wallet_daily_spend
-        .get(&key)
-        .map(|entry| entry.spent.clone())
-        .unwrap_or_else(Quantity::zero)
-}
-
-fn wallet_record_spend(
-    state: &mut AgentApartmentRuntimeState,
-    asset_definition: &str,
-    day_bucket: u64,
-    spent: Quantity,
-) {
-    let key = format!("{asset_definition}:{day_bucket}");
-    state.wallet_daily_spend.insert(
-        key,
-        AgentWalletDailySpendEntry {
-            asset_definition: asset_definition.to_owned(),
-            day_bucket,
-            spent,
-        },
-    );
-}
-
 fn rollout_handle(service_name: &str, sequence: u64) -> String {
     format!("{service_name}:rollout:{sequence}")
-}
-
-fn derive_ciphertext_commitment_for_state_mutation(
-    service_name: &str,
-    binding_name: &str,
-    state_key: &str,
-    payload_bytes: u64,
-    encryption: SoraStateEncryptionV1,
-    governance_tx_hash: Hash,
-) -> Hash {
-    Hash::new(Encode::encode(&(
-        "soracloud.state_mutation.ciphertext.v1",
-        service_name,
-        binding_name,
-        state_key,
-        payload_bytes,
-        encryption,
-        governance_tx_hash,
-    )))
 }
 
 fn derive_state_key_digest(service_name: &str, binding_name: &str, state_key: &str) -> Hash {
@@ -5769,54 +4968,6 @@ where
 {
     world
         .soracloud_service_audit_events()
-        .iter()
-        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
-        .map(|(_sequence, event)| event)
-        .max_by_key(|event| event.sequence)
-}
-
-fn latest_training_job_audit_event_after<'a, P>(
-    world: &'a impl WorldReadOnly,
-    after_sequence: u64,
-    predicate: P,
-) -> Option<&'a SoraTrainingJobAuditEventV1>
-where
-    P: Fn(&SoraTrainingJobAuditEventV1) -> bool,
-{
-    world
-        .soracloud_training_job_audit_events()
-        .iter()
-        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
-        .map(|(_sequence, event)| event)
-        .max_by_key(|event| event.sequence)
-}
-
-fn latest_model_weight_audit_event_after<'a, P>(
-    world: &'a impl WorldReadOnly,
-    after_sequence: u64,
-    predicate: P,
-) -> Option<&'a SoraModelWeightAuditEventV1>
-where
-    P: Fn(&SoraModelWeightAuditEventV1) -> bool,
-{
-    world
-        .soracloud_model_weight_audit_events()
-        .iter()
-        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
-        .map(|(_sequence, event)| event)
-        .max_by_key(|event| event.sequence)
-}
-
-fn latest_model_artifact_audit_event_after<'a, P>(
-    world: &'a impl WorldReadOnly,
-    after_sequence: u64,
-    predicate: P,
-) -> Option<&'a SoraModelArtifactAuditEventV1>
-where
-    P: Fn(&SoraModelArtifactAuditEventV1) -> bool,
-{
-    world
-        .soracloud_model_artifact_audit_events()
         .iter()
         .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
         .map(|(_sequence, event)| event)
@@ -8410,60 +7561,6 @@ fn authoritative_agent_artifact_allow_mutation_response(
             SoracloudError::conflict(format!(
                 "artifact-allow audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
                 rule.added_sequence
-            ))
-        })?;
-    let mut response = authoritative_agent_autonomy_mutation_response(app, &record, &event)?;
-    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
-    Ok(response)
-}
-
-fn authoritative_agent_autonomy_run_mutation_response(
-    app: &SharedAppState,
-    baseline: &SoracloudAuditBaseline,
-    apartment_name: &str,
-    artifact_hash: &str,
-    provenance_hash: Option<&str>,
-    run_label: &str,
-) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let record = world
-        .soracloud_agent_apartments()
-        .get(apartment_name)
-        .cloned()
-        .ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "apartment `{apartment_name}` not found in authoritative Soracloud state"
-            ))
-        })?;
-    let run = record
-        .autonomy_run_history
-        .iter()
-        .rev()
-        .find(|run| {
-            run.approved_sequence > baseline.agent_apartment_max
-                && run.artifact_hash == artifact_hash
-                && run.provenance_hash.as_deref() == provenance_hash
-                && run.run_label == run_label
-        })
-        .cloned()
-        .ok_or_else(|| {
-            SoracloudError::conflict(format!(
-                "authoritative autonomy-run event for apartment `{apartment_name}` artifact `{artifact_hash}` label `{run_label}` was not observed after mutation"
-            ))
-        })?;
-    let event = world
-        .soracloud_agent_apartment_audit_events()
-        .get(&run.approved_sequence)
-        .cloned()
-        .filter(|event| {
-            event.action == SoraAgentApartmentActionV1::AutonomyRunApproved
-                && event.apartment_name.as_ref() == apartment_name
-        })
-        .ok_or_else(|| {
-            SoracloudError::conflict(format!(
-                "autonomy-run audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
-                run.approved_sequence
             ))
         })?;
     let mut response = authoritative_agent_autonomy_mutation_response(app, &record, &event)?;
@@ -13382,11 +12479,6 @@ mod tests {
         })
     }
 
-    fn checked_test_bls_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-            .expect("test fixture BLS key derivation should succeed")
-    }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -13597,30 +12689,6 @@ mod tests {
             0xcd, 0x2f,
         ])
         .expect("valid asset definition")
-    }
-
-    fn signed_bundle_request(
-        bundle: SoraDeploymentBundleV1,
-        key_pair: &KeyPair,
-    ) -> SignedBundleRequest {
-        let initial_service_configs = BTreeMap::new();
-        let initial_service_secrets = BTreeMap::new();
-        let payload = encode_bundle_signature_payload(
-            &bundle,
-            &initial_service_configs,
-            &initial_service_secrets,
-        )
-        .expect("encode bundle payload");
-        let signature = checked_test_signature(key_pair.private_key(), &payload);
-        SignedBundleRequest {
-            bundle,
-            initial_service_configs,
-            initial_service_secrets,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
     }
 
     fn signed_rollback_request(
@@ -15920,22 +14988,6 @@ mod tests {
         );
     }
 
-    fn signed_state_mutation_request(
-        payload: StateMutationRequest,
-        key_pair: &KeyPair,
-    ) -> SignedStateMutationRequest {
-        let encoded = encode_state_mutation_signature_payload(&payload)
-            .expect("encode state mutation payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedStateMutationRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
     fn signed_fhe_job_run_request(
         payload: FheJobRunPayload,
         key_pair: &KeyPair,
@@ -15944,118 +14996,6 @@ mod tests {
             encode_fhe_job_run_signature_payload(&payload).expect("encode fhe job run payload");
         let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedFheJobRunRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_training_job_start_request(
-        payload: TrainingJobStartPayload,
-        key_pair: &KeyPair,
-    ) -> SignedTrainingJobStartRequest {
-        let encoded = encode_training_job_start_signature_payload(&payload)
-            .expect("encode training start payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedTrainingJobStartRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_training_job_checkpoint_request(
-        payload: TrainingJobCheckpointPayload,
-        key_pair: &KeyPair,
-    ) -> SignedTrainingJobCheckpointRequest {
-        let encoded = encode_training_job_checkpoint_signature_payload(&payload)
-            .expect("encode training checkpoint payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedTrainingJobCheckpointRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_training_job_retry_request(
-        payload: TrainingJobRetryPayload,
-        key_pair: &KeyPair,
-    ) -> SignedTrainingJobRetryRequest {
-        let encoded = encode_training_job_retry_signature_payload(&payload)
-            .expect("encode training retry payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedTrainingJobRetryRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_model_weight_register_request(
-        payload: ModelWeightRegisterPayload,
-        key_pair: &KeyPair,
-    ) -> SignedModelWeightRegisterRequest {
-        let encoded = encode_model_weight_register_signature_payload(&payload)
-            .expect("encode model weight register payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedModelWeightRegisterRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_model_weight_promote_request(
-        payload: ModelWeightPromotePayload,
-        key_pair: &KeyPair,
-    ) -> SignedModelWeightPromoteRequest {
-        let encoded = encode_model_weight_promote_signature_payload(&payload)
-            .expect("encode model weight promote payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedModelWeightPromoteRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_model_weight_rollback_request(
-        payload: ModelWeightRollbackPayload,
-        key_pair: &KeyPair,
-    ) -> SignedModelWeightRollbackRequest {
-        let encoded = encode_model_weight_rollback_signature_payload(&payload)
-            .expect("encode model weight rollback payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedModelWeightRollbackRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_model_artifact_register_request(
-        payload: ModelArtifactRegisterPayload,
-        key_pair: &KeyPair,
-    ) -> SignedModelArtifactRegisterRequest {
-        let encoded = encode_model_artifact_register_signature_payload(&payload)
-            .expect("encode model artifact register payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedModelArtifactRegisterRequest {
             payload,
             provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
@@ -16611,22 +15551,6 @@ mod tests {
         );
     }
 
-    fn signed_decryption_request(
-        payload: DecryptionRequestPayload,
-        key_pair: &KeyPair,
-    ) -> SignedDecryptionRequest {
-        let encoded = encode_decryption_request_signature_payload(&payload)
-            .expect("encode decryption request payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedDecryptionRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
     fn signed_ciphertext_query_request(
         query: CiphertextQuerySpecV1,
         key_pair: &KeyPair,
@@ -16636,32 +15560,6 @@ mod tests {
         let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedCiphertextQueryRequest {
             query,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_rollout_request(
-        service_name: &str,
-        rollout_handle: &str,
-        healthy: bool,
-        promote_to_percent: Option<u8>,
-        governance_seed: &[u8],
-        key_pair: &KeyPair,
-    ) -> SignedRolloutAdvanceRequest {
-        let payload = RolloutAdvancePayload {
-            service_name: service_name.to_string(),
-            rollout_handle: rollout_handle.to_string(),
-            healthy,
-            promote_to_percent,
-            governance_tx_hash: Hash::new(governance_seed),
-        };
-        let encoded = encode_rollout_signature_payload(&payload).expect("encode rollout payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedRolloutAdvanceRequest {
-            payload,
             provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
                 signature,
@@ -16685,187 +15583,6 @@ mod tests {
         );
         manifest.validate().expect("agent manifest should validate");
         manifest
-    }
-
-    fn fixture_agent_manifest_with_capabilities(
-        apartment_name: &str,
-        extra_capabilities: &[&str],
-    ) -> AgentApartmentManifestV1 {
-        let mut manifest = fixture_agent_manifest();
-        manifest.apartment_name = apartment_name.parse().expect("valid apartment name");
-        for capability in extra_capabilities {
-            let parsed = capability.parse::<Name>().expect("valid capability");
-            if !manifest.policy_capabilities.contains(&parsed) {
-                manifest.policy_capabilities.push(parsed);
-            }
-        }
-        manifest.validate().expect("agent manifest should validate");
-        manifest
-    }
-
-    fn signed_agent_deploy_request(
-        payload: AgentDeployPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentDeployRequest {
-        let encoded =
-            encode_agent_deploy_signature_payload(&payload).expect("encode agent deploy payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentDeployRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_lease_renew_request(
-        payload: AgentLeaseRenewPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentLeaseRenewRequest {
-        let encoded = encode_agent_lease_renew_signature_payload(&payload)
-            .expect("encode agent lease renew payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentLeaseRenewRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_restart_request(
-        payload: AgentRestartPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentRestartRequest {
-        let encoded =
-            encode_agent_restart_signature_payload(&payload).expect("encode agent restart payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentRestartRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_policy_revoke_request(
-        payload: AgentPolicyRevokePayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentPolicyRevokeRequest {
-        let encoded = encode_agent_policy_revoke_signature_payload(&payload)
-            .expect("encode agent policy revoke payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentPolicyRevokeRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_wallet_spend_request(
-        payload: AgentWalletSpendPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentWalletSpendRequest {
-        let encoded = encode_agent_wallet_spend_signature_payload(&payload)
-            .expect("encode agent wallet spend payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentWalletSpendRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_wallet_approve_request(
-        payload: AgentWalletApprovePayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentWalletApproveRequest {
-        let encoded = encode_agent_wallet_approve_signature_payload(&payload)
-            .expect("encode agent wallet approve payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentWalletApproveRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_message_send_request(
-        payload: AgentMessageSendPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentMessageSendRequest {
-        let encoded = encode_agent_message_send_signature_payload(&payload)
-            .expect("encode agent message send payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentMessageSendRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_message_ack_request(
-        payload: AgentMessageAckPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentMessageAckRequest {
-        let encoded = encode_agent_message_ack_signature_payload(&payload)
-            .expect("encode agent message ack payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentMessageAckRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_artifact_allow_request(
-        payload: AgentArtifactAllowPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentArtifactAllowRequest {
-        let encoded = encode_agent_artifact_allow_signature_payload(&payload)
-            .expect("encode agent artifact allow payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentArtifactAllowRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn signed_agent_autonomy_run_request(
-        payload: AgentAutonomyRunPayload,
-        key_pair: &KeyPair,
-    ) -> SignedAgentAutonomyRunRequest {
-        let encoded = encode_agent_autonomy_run_signature_payload(&payload)
-            .expect("encode agent autonomy run payload");
-        let signature = checked_test_signature(key_pair.private_key(), &encoded);
-        SignedAgentAutonomyRunRequest {
-            payload,
-            provenance: ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            },
-        }
-    }
-
-    fn legacy_struct_layout_signature<T: Encode>(payload: &T, key_pair: &KeyPair) -> Signature {
-        let encoded = norito::to_bytes(payload).expect("encode legacy struct-layout payload");
-        checked_test_signature(key_pair.private_key(), &encoded)
     }
 
     #[test]

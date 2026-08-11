@@ -310,7 +310,6 @@ mod tests {
         slice,
     };
 
-    #[cfg(feature = "fast_dsl")]
     use data_model::query::QueryItemKind;
     use data_model::{
         permission::Permission,
@@ -325,53 +324,10 @@ mod tests {
 
     static CALLED: AtomicBool = AtomicBool::new(false);
 
-    #[cfg(not(feature = "fast_dsl"))]
-    macro_rules! iter_query_empty_batch {
-        ($query_box:expr; $($ty:ty => $variant:ident),+ $(,)?) => {{
-            'found: {
-                $(
-                    if data_model::query::iter_query_inner::<$ty>($query_box).is_some() {
-                        break 'found QueryOutputBatchBox::$variant(Vec::new());
-                    }
-                )+
-                QueryOutputBatchBox::Permission(Vec::new())
-            }
-        }};
-    }
-
-    #[cfg(not(feature = "fast_dsl"))]
-    fn empty_iterable_batch_non_fast(
+    fn empty_iterable_batch(
         query: &data_model::query::QueryWithParams,
-    ) -> QueryOutputBatchBox {
-        let query_box = query
-            .query_box()
-            .expect("non-fast_dsl query must provide query box");
-        iter_query_empty_batch!(
-            query_box;
-            data_model::domain::Domain => Domain,
-            data_model::account::Account => Account,
-            data_model::asset::value::Asset => Asset,
-            data_model::asset::definition::AssetDefinition => AssetDefinition,
-            data_model::repo::RepoAgreement => RepoAgreement,
-            data_model::nft::Nft => Nft,
-            data_model::role::Role => Role,
-            data_model::role::RoleId => RoleId,
-            data_model::peer::PeerId => Peer,
-            data_model::trigger::TriggerId => TriggerId,
-            data_model::trigger::Trigger => Trigger,
-            data_model::query::CommittedTransaction => CommittedTransaction,
-            data_model::block::SignedBlock => Block,
-            data_model::block::BlockHeader => BlockHeader,
-            data_model::proof::ProofRecord => ProofRecord,
-            data_model::permission::Permission => Permission,
-        )
-    }
-
-    #[cfg(feature = "fast_dsl")]
-    fn empty_iterable_batch_fast(
-        query: &data_model::query::QueryWithParams,
-    ) -> QueryOutputBatchBox {
-        match query.item {
+    ) -> QueryOutputBatchBoxTuple {
+        let batch = match query.item {
             QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
             QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
             QueryItemKind::AccountId => QueryOutputBatchBox::AccountId(Vec::new()),
@@ -379,6 +335,7 @@ mod tests {
             QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
             QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
             QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
+            QueryItemKind::Rwa => QueryOutputBatchBox::Rwa(Vec::new()),
             QueryItemKind::Role => QueryOutputBatchBox::Role(Vec::new()),
             QueryItemKind::RoleId => QueryOutputBatchBox::RoleId(Vec::new()),
             QueryItemKind::PeerId => QueryOutputBatchBox::Peer(Vec::new()),
@@ -390,18 +347,39 @@ mod tests {
             QueryItemKind::SignedBlock => QueryOutputBatchBox::Block(Vec::new()),
             QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
             QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
+            QueryItemKind::OracleFeedConfig => QueryOutputBatchBox::OracleFeedConfig(Vec::new()),
+            QueryItemKind::OracleFeedEventRecord => {
+                QueryOutputBatchBox::OracleFeedEventRecord(Vec::new())
+            }
+            QueryItemKind::OracleProviderStatsRecord => {
+                QueryOutputBatchBox::OracleProviderStatsRecord(Vec::new())
+            }
+            QueryItemKind::OracleDispute => QueryOutputBatchBox::OracleDispute(Vec::new()),
+            QueryItemKind::OracleChangeProposal => {
+                QueryOutputBatchBox::OracleChangeProposal(Vec::new())
+            }
+            QueryItemKind::TwitterBindingRecord => {
+                QueryOutputBatchBox::TwitterBindingRecord(Vec::new())
+            }
+            QueryItemKind::DefiOracleAttestation => {
+                QueryOutputBatchBox::DefiOracleAttestation(Vec::new())
+            }
             QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
-        }
-    }
-
-    fn empty_iterable_batch(
-        query: &data_model::query::QueryWithParams,
-    ) -> QueryOutputBatchBoxTuple {
-        #[cfg(not(feature = "fast_dsl"))]
-        let batch = empty_iterable_batch_non_fast(query);
-
-        #[cfg(feature = "fast_dsl")]
-        let batch = empty_iterable_batch_fast(query);
+            QueryItemKind::AssetEscrowRecord => QueryOutputBatchBox::AssetEscrowRecord(Vec::new()),
+            QueryItemKind::AssetEscrowsBySeller => {
+                QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
+            }
+            QueryItemKind::AssetEscrowsByBuyer => {
+                QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
+            }
+            QueryItemKind::AssetEscrowsByStatus => {
+                QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
+            }
+            QueryItemKind::FeeSponsorProgram => QueryOutputBatchBox::FeeSponsorProgram(Vec::new()),
+            QueryItemKind::FeeSponsorProgramId => {
+                QueryOutputBatchBox::FeeSponsorProgramId(Vec::new())
+            }
+        };
 
         QueryOutputBatchBoxTuple::from_batch(batch)
     }

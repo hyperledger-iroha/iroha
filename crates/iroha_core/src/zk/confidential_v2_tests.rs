@@ -286,6 +286,76 @@ mod tests {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
+    fn incremental_frontier_preserves_prefix_shape_and_full_tree_transition() {
+        let commitments = (1_u64..=3).map(scalar_bytes).collect::<Vec<_>>();
+        let expected_roots = super::compute_confidential_prefix_roots_v2(&commitments)
+            .expect("canonical prefix roots");
+        let mut frontier = [None; super::CONFIDENTIAL_TREE_DEPTH_V2];
+        let mut current_root = super::poseidon_empty_root_v2();
+        for (index, commitment) in commitments.iter().enumerate() {
+            let append = super::append_confidential_tree_frontier_v2(
+                index,
+                frontier,
+                current_root,
+                core::slice::from_ref(commitment),
+            )
+            .expect("single prefix append");
+            frontier = append.frontier;
+            current_root = append.current_root;
+            assert_eq!(append.appended_roots.as_slice(), &[expected_roots[index]]);
+
+            let projection = super::ConfidentialTreeProjectionV2::build(&commitments[..=index])
+                .expect("canonical prefix projection");
+            assert_eq!(
+                frontier,
+                projection.frontier().expect("canonical prefix frontier")
+            );
+            assert_eq!(current_root, projection.root());
+            super::validate_confidential_tree_frontier_v2(index + 1, &frontier, current_root)
+                .expect("prefix frontier remains self-consistent");
+        }
+
+        let full_frontier_scalars: [super::Scalar; super::CONFIDENTIAL_TREE_DEPTH_V2] =
+            core::array::from_fn(|level| {
+                super::Scalar::from(u64::try_from(level + 1).expect("tree level fits u64"))
+            });
+        let full_frontier =
+            full_frontier_scalars.map(|node| Some(super::scalar_to_repr_bytes(node)));
+        let empty_roots = super::confidential_empty_subtree_roots_v3();
+        let mut prior_root = empty_roots[0];
+        for left in full_frontier_scalars {
+            prior_root = super::merkle_parent_v3(left, prior_root);
+        }
+        let final_commitment = scalar_bytes(0xA5);
+        let mut expected_full_root = super::confidential_commitment_leaf_v3(
+            final_commitment,
+            super::CONFIDENTIAL_TREE_CAPACITY_V2 - 1,
+        )
+        .expect("canonical final commitment");
+        for left in full_frontier_scalars {
+            expected_full_root = super::merkle_parent_v3(left, expected_full_root);
+        }
+        let expected_full_root = super::scalar_to_repr_bytes(expected_full_root);
+        let full = super::append_confidential_tree_frontier_v2(
+            super::CONFIDENTIAL_TREE_CAPACITY_V2 - 1,
+            full_frontier,
+            super::scalar_to_repr_bytes(prior_root),
+            &[final_commitment],
+        )
+        .expect("final-capacity append");
+        assert!(full.frontier.iter().all(Option::is_none));
+        assert_eq!(full.current_root, expected_full_root);
+        assert_eq!(full.appended_roots.as_slice(), &[expected_full_root]);
+        super::validate_confidential_tree_frontier_v2(
+            super::CONFIDENTIAL_TREE_CAPACITY_V2,
+            &full.frontier,
+            full.current_root,
+        )
+        .expect("full tree retains its separately persisted root");
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
     fn compact_projection_hashes_each_commitment_once_for_many_paths() {
         let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
         let expected_root =

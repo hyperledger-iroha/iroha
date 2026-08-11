@@ -3194,7 +3194,9 @@ fn localnet_tempdir(label: &str) -> Result<TempDir> {
     ensure!(!target.is_empty(), "CARGO_TARGET_DIR must not be empty");
     let root = PathBuf::from(target).join("taira-localnet");
     fs::create_dir_all(&root).wrap_err("create Taira localnet artifact root")?;
-    tempfile::Builder::new().prefix(label).tempdir_in(&root)
+    tempfile::Builder::new()
+        .prefix(label)
+        .tempdir_in(&root)
         .wrap_err("create taira localnet temp dir")
 }
 
@@ -3655,9 +3657,7 @@ fn apply_client_transaction_ttl_caps_status_timeout() {
     transaction.insert("status_timeout_ms".into(), TomlValue::Integer(900_000));
     let mut root = Table::new();
     root.insert("transaction".into(), TomlValue::Table(transaction));
-
     apply_client_transaction_ttl(&mut root, 300_000).expect("client ttl should apply");
-
     let tx = root
         .get("transaction")
         .and_then(TomlValue::as_table)

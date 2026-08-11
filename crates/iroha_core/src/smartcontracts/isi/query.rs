@@ -18,7 +18,7 @@ use iroha_data_model::{
     escrow::AssetEscrowRecord,
     prelude::*,
     query::{
-        CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
+        CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
@@ -1384,15 +1384,6 @@ impl ExecuteSingularQuery for SingularQueryBox {
     }
 }
 
-#[allow(dead_code)]
-trait ExecuteQueryBox {
-    fn execute(
-        self,
-        state: &impl StateReadOnly,
-        params: &QueryParams,
-    ) -> Result<QueryOutputBatchBox, Error>;
-}
-
 /// Decode an erased iterable-query payload only when it is the canonical encoding of `Q`.
 ///
 /// Norito unit structs decode from any byte slice, so decode success alone is not enough to
@@ -1412,116 +1403,6 @@ fn encode_stored_query_revalidation_request(request: &QueryRequest) -> Result<Ve
             "failed to encode stored-query authorization request: {error}"
         ))
     })
-}
-
-// NOTE: This trait is currently unused. Iterable query execution of erased
-// `QueryBox<QueryOutputBatchBox>` is performed in `ValidQueryRequest::execute`
-// via registry-based dispatch (`iter_query_inner::<T>`), followed by
-// post-processing and registration in the live-query store. If a direct
-// `QueryBox::execute` path becomes necessary, this impl should be updated to
-// mirror that behavior instead of returning an error.
-impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
-    fn execute(
-        self,
-        state: &impl StateReadOnly,
-        params: &QueryParams,
-    ) -> Result<QueryOutputBatchBox, Error> {
-        use iroha_data_model as dm;
-        fn run_dispatch<T, Q>(
-            qbox: &QueryBox<QueryOutputBatchBox>,
-            state: &impl StateReadOnly,
-            params: &QueryParams,
-            limits: QueryLimits,
-        ) -> Option<Result<QueryOutputBatchBox, Error>>
-        where
-            T: HasProjection<SelectorMarker, AtomType = ()>
-                + HasProjection<PredicateMarker>
-                + SortableQueryOutput
-                + Send
-                + Sync
-                + 'static,
-            <T as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<T> + Send + Sync,
-            Q: super::super::ValidQuery<Item = T> + norito::codec::Decode + norito::codec::Encode,
-            QueryOutputBatchBox: From<Vec<T>>,
-        {
-            let erased = dm::query::iter_query_inner::<T>(qbox)?;
-            let concrete = match decode_iter_query_payload_exact::<Q>(erased.payload()) {
-                Some(query) => query,
-                None => return None,
-            };
-            let iter =
-                match super::super::ValidQuery::execute(concrete, erased.predicate_cloned(), state)
-                {
-                    Ok(iter) => iter,
-                    Err(err) => return Some(Err(err)),
-                };
-            let mut batched =
-                match apply_query_postprocessing(iter, erased.selector_cloned(), params, limits) {
-                    Ok(b) => b,
-                    Err(err) => return Some(Err(err)),
-                };
-            let (tuple, _next) = match batched.next_batch(0) {
-                Ok(batch) => batch,
-                Err(err) => return Some(Err(err)),
-            };
-            let batch = tuple
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| QueryOutputBatchBox::from(Vec::<T>::new()));
-            Some(Ok(batch))
-        }
-
-        let limits = QueryLimits::from_defaults();
-        macro_rules! dispatch {
-            ($($item:ty => $query:ty),+ $(,)?) => {{
-                $(if let Some(out) = run_dispatch::<$item, $query>(&self, state, params, limits) {
-                    return out;
-                })+
-            }};
-        }
-
-        dispatch! {
-            dm::domain::Domain => dm::query::domain::prelude::FindDomains,
-            dm::account::Account => dm::query::account::prelude::FindAccounts,
-            dm::asset::value::Asset => dm::query::asset::prelude::FindAssets,
-            dm::asset::definition::AssetDefinition =>
-                dm::query::asset::prelude::FindAssetsDefinitions,
-            dm::repo::RepoAgreement => dm::query::repo::prelude::FindRepoAgreements,
-            dm::nft::Nft => dm::query::nft::prelude::FindNfts,
-            dm::rwa::Rwa => dm::query::rwa::prelude::FindRwas,
-            dm::role::Role => dm::query::role::prelude::FindRoles,
-            dm::role::RoleId => dm::query::role::prelude::FindRoleIds,
-            dm::peer::PeerId => dm::query::peer::prelude::FindPeers,
-            dm::trigger::Trigger => dm::query::trigger::prelude::FindTriggers,
-            dm::trigger::TriggerId => dm::query::trigger::prelude::FindActiveTriggerIds,
-            dm::block::SignedBlock => dm::query::block::prelude::FindBlocks,
-            dm::block::BlockHeader => dm::query::block::prelude::FindBlockHeaders,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByBackend,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByStatus,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecords,
-            dm::oracle::FeedConfig => dm::query::oracle::prelude::FindOracleFeeds,
-            dm::events::data::oracle::FeedEventRecord =>
-                dm::query::oracle::prelude::FindOracleHistoryByFeedId,
-            dm::oracle::OracleProviderStatsRecord =>
-                dm::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-            dm::oracle::OracleDispute => dm::query::oracle::prelude::FindOracleDisputes,
-            dm::oracle::OracleChangeProposal => dm::query::oracle::prelude::FindOracleChanges,
-            dm::oracle::TwitterBindingRecord =>
-                dm::query::oracle::prelude::FindTwitterBindingsByUaid,
-            dm::oracle::DefiOracleAttestation =>
-                dm::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-            dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
-            dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
-            dm::nexus::FeeSponsorProgram =>
-                dm::query::nexus::prelude::FindFeeSponsorProgramsBySponsor,
-            dm::nexus::FeeSponsorProgram => dm::query::nexus::prelude::FindFeeSponsorPrograms,
-            dm::nexus::FeeSponsorProgramId => dm::query::nexus::prelude::FindFeeSponsorProgramIds,
-        }
-
-        Err(Error::Conversion(
-            "dynamic QueryBox execution type not supported".to_string(),
-        ))
-    }
 }
 
 impl SortableQueryOutput for iroha_data_model::block::SignedBlock {
@@ -3471,17 +3352,10 @@ mod fetch_size_limit_tests {
     fn request_with_fetch_size(fetch_size: u64) -> QueryRequest {
         let fetch_size = std::num::NonZeroU64::new(fetch_size).expect("nonzero fetch size");
         QueryRequest::Start(QueryWithParams {
-            #[cfg(not(feature = "fast_dsl"))]
-            query: QueryBox::from(iroha_data_model::query::account::prelude::FindAccounts),
-            #[cfg(feature = "fast_dsl")]
             query: (),
-            #[cfg(feature = "fast_dsl")]
             query_payload: Vec::new(),
-            #[cfg(feature = "fast_dsl")]
             item: iroha_data_model::query::QueryItemKind::Account,
-            #[cfg(feature = "fast_dsl")]
             predicate_bytes: Vec::new(),
-            #[cfg(feature = "fast_dsl")]
             selector_bytes: Vec::new(),
             params: QueryParams {
                 fetch_size: FetchSize::new(Some(fetch_size)),
@@ -3570,17 +3444,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .checked_add(1)
             .expect("nonzero add");
         let request = QueryRequest::Start(QueryWithParams {
-            #[cfg(not(feature = "fast_dsl"))]
-            query: QueryBox::from(iroha_data_model::query::account::prelude::FindAccounts),
-            #[cfg(feature = "fast_dsl")]
             query: (),
-            #[cfg(feature = "fast_dsl")]
             query_payload: Vec::new(),
-            #[cfg(feature = "fast_dsl")]
             item: iroha_data_model::query::QueryItemKind::Account,
-            #[cfg(feature = "fast_dsl")]
             predicate_bytes: Vec::new(),
-            #[cfg(feature = "fast_dsl")]
             selector_bytes: Vec::new(),
             params: QueryParams {
                 fetch_size: FetchSize::new(Some(
@@ -3924,331 +3791,224 @@ impl ValidQueryRequest {
                 Ok(QueryResponse::Singular(output))
             }
             QueryRequest::Start(iter_query) => {
-                use iroha_data_model::query;
-
-                fn try_decode_query<Q>(
-                    erased: &query::ErasedIterQuery<
-                        impl HasProjection<PredicateMarker>
-                        + HasProjection<SelectorMarker, AtomType = ()>
-                        + Send
-                        + Sync,
-                    >,
-                ) -> Option<Q>
-                where
-                    Q: norito::codec::Decode + norito::codec::Encode,
-                {
-                    decode_iter_query_payload_exact(erased.payload())
-                }
-
-                #[allow(clippy::too_many_arguments)]
-                fn run_dispatch<T, Q, F>(
-                    qbox: &query::QueryBox<query::QueryOutputBatchBox>,
-                    params: &query::parameters::QueryParams,
-                    limits: QueryLimits,
-                    state: &impl StateReadOnly,
-                    live_query_store: &LiveQueryStoreHandle,
-                    authority: &AccountId,
-                    gas_budget: Option<u64>,
-                    replay_state: Option<Weak<State>>,
-                    decode: F,
-                ) -> Result<Option<QueryResponse>, Error>
-                where
-                    T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T> + Clone + Send + Sync + 'static,
-                    T: HasProjection<SelectorMarker, AtomType = ()>
-                        + HasProjection<PredicateMarker>
-                        + crate::smartcontracts::isi::query::SortableQueryOutput
-                        + NoritoSerialize
-                        + Send
-                        + Sync
-                        + 'static,
-                    <T as HasProjection<SelectorMarker>>::Projection:
-                        EvaluateSelector<T> + Send + Sync,
-                    query::QueryOutputBatchBox: From<Vec<T>>,
-                    F: Fn(&query::ErasedIterQuery<T>) -> Option<Q>,
-                {
-                    if let Some(erased) = query::iter_query_inner::<T>(qbox) {
-                        // Decode the concrete query variant from the payload
-                        let Some(concrete) = decode(erased) else {
-                            return Ok(None);
-                        };
-                        // Execute the concrete ValidQuery with provided predicate
-                        let predicate = erased.predicate_cloned();
-                        let iter = ValidQuery::execute(concrete.clone(), predicate.clone(), state)?;
-
-                        // Postprocess and register a live iterator (or prepared fast-start).
-                        let output = handle_iter_start_stored_replayable(
-                            iter,
-                            concrete,
-                            predicate,
-                            erased.selector_cloned(),
-                            params,
-                            limits,
-                            live_query_store,
-                            authority,
-                            gas_budget,
-                            replay_state,
-                        )?;
-                        return Ok(Some(QueryResponse::Iterable(output)));
-                    }
-                    Ok(None)
-                }
-
                 let params = &iter_query.params;
-                #[cfg_attr(not(feature = "fast_dsl"), allow(unused_variables))]
                 let stored_cursor_budget = {
                     let min = state.pipeline().query_stored_min_gas_units;
                     stored_start_budget.or_else(|| (min > 0).then_some(min))
                 };
-                // Fast-DSL path: when the boxed query payload is not present, reconstruct
-                // from item kind and encoded predicate/selector.
-                if iter_query.query_box().is_none() {
+                // Reconstruct the concrete query from the canonical item kind and encoded components.
+                {
+                    use iroha_data_model::query::QueryItemKind;
+                    // Helpers to decode bytes into concrete predicate/selector
+                    fn dec<T>(bytes: &[u8]) -> Result<T, Error>
+                    where
+                        T: norito::codec::Decode + norito::codec::Encode,
                     {
-                        use iroha_data_model::query::QueryItemKind;
-                        // Helpers to decode bytes into concrete predicate/selector
-                        fn dec<T: norito::codec::Decode>(bytes: &[u8]) -> Result<T, Error> {
-                            let mut cursor = std::io::Cursor::new(bytes);
-                            norito::codec::Decode::decode(&mut cursor).map_err(|_| {
+                        decode_iter_query_payload_exact(bytes).ok_or_else(|| {
+                            Error::Conversion(
+                                "failed to decode canonical query predicate/selector".into(),
+                            )
+                        })
+                    }
+                    // Helper to run an iterable query using the encoded predicate/selector.
+                    macro_rules! run_payload_or_default {
+                        // Unit queries have an empty canonical payload. Reject any other bytes so
+                        // parameterized or malformed payloads cannot become global queries.
+                        ($itemty:ty, $find:ty) => {{
+                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                dec(&iter_query.predicate_bytes)?;
+                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                dec(&iter_query.selector_bytes)?;
+                            let concrete: $find =
+                                decode_iter_query_payload_exact(&iter_query.query_payload)
+                                    .ok_or_else(|| {
+                                        Error::Conversion(
+                                            "malformed payload for unit iterable query".into(),
+                                        )
+                                    })?;
+                            let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                            let output = handle_iter_start_stored_replayable(
+                                iter,
+                                concrete,
+                                pred,
+                                sel,
+                                params,
+                                limits,
+                                live_query_store,
+                                authority,
+                                stored_cursor_budget,
+                                replay_state.clone(),
+                            )?;
+                            return Ok(QueryResponse::Iterable(output));
+                        }};
+                        // For parameterized queries that require payload: fail if missing
+                        (require_payload $itemty:ty, $find:ty) => {{
+                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                dec(&iter_query.predicate_bytes)?;
+                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                dec(&iter_query.selector_bytes)?;
+                            let concrete: $find = decode_iter_query_payload_exact(
+                                &iter_query.query_payload,
+                            )
+                            .ok_or_else(|| {
                                 Error::Conversion(
-                                    "failed to decode query predicate/selector".into(),
+                                    "missing or malformed parameterized iterable query payload"
+                                        .into(),
                                 )
-                            })
-                        }
-                        // Helper to run an iterable query using the encoded predicate/selector.
-                        macro_rules! run_payload_or_default {
-                            // Unit queries have an empty canonical payload. Reject any other bytes so
-                            // parameterized or malformed payloads cannot become global queries.
-                            ($itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decode_iter_query_payload_exact(&iter_query.query_payload)
-                                        .ok_or_else(|| {
-                                            Error::Conversion(
-                                                "malformed payload for unit iterable query".into(),
-                                            )
-                                        })?;
-                                let iter =
-                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
-                                let output = handle_iter_start_stored_replayable(
-                                    iter,
-                                    concrete,
-                                    pred,
-                                    sel,
-                                    params,
-                                    limits,
-                                    live_query_store,
-                                    authority,
-                                    stored_cursor_budget,
-                                    replay_state.clone(),
-                                )?;
-                                return Ok(QueryResponse::Iterable(output));
-                            }};
-                            // For parameterized queries that require payload: fail if missing
-                            (require_payload $itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
-                                let concrete: $find = decode_iter_query_payload_exact(
-                                    &iter_query.query_payload,
-                                )
-                                .ok_or_else(|| {
-                                    Error::Conversion(
-                                        "missing or malformed parameterized iterable query payload"
-                                            .into(),
-                                    )
-                                })?;
-                                let iter =
-                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
-                                let output = handle_iter_start_stored_replayable(
-                                    iter,
-                                    concrete,
-                                    pred,
-                                    sel,
-                                    params,
-                                    limits,
-                                    live_query_store,
-                                    authority,
-                                    stored_cursor_budget,
-                                    replay_state.clone(),
-                                )?;
-                                return Ok(QueryResponse::Iterable(output));
-                            }};
-                        }
-                        macro_rules! run_fast {
-                            ($itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decode_iter_query_payload_exact(&iter_query.query_payload)
-                                        .ok_or_else(|| {
-                                            Error::Conversion(
-                                                "malformed payload for unit iterable query".into(),
-                                            )
-                                        })?;
-                                let iter =
-                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
-                                let output = handle_iter_start_stored_replayable(
-                                    iter,
-                                    concrete,
-                                    pred,
-                                    sel,
-                                    params,
-                                    limits,
-                                    live_query_store,
-                                    authority,
-                                    stored_cursor_budget,
-                                    replay_state.clone(),
-                                )?;
-                                return Ok(QueryResponse::Iterable(output));
-                            }};
-                        }
-                        match iter_query.item {
-                            QueryItemKind::Domain => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::domain::Domain,
-                                        iroha_data_model::query::domain::prelude::FindDomainsByAccountId
-                                    )
-                                }
+                            })?;
+                            let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                            let output = handle_iter_start_stored_replayable(
+                                iter,
+                                concrete,
+                                pred,
+                                sel,
+                                params,
+                                limits,
+                                live_query_store,
+                                authority,
+                                stored_cursor_budget,
+                                replay_state.clone(),
+                            )?;
+                            return Ok(QueryResponse::Iterable(output));
+                        }};
+                    }
+                    match iter_query.item {
+                        QueryItemKind::Domain => {
+                            if !iter_query.query_payload.is_empty() {
                                 run_payload_or_default!(
-                                    iroha_data_model::domain::Domain,
-                                    iroha_data_model::query::domain::prelude::FindDomains
+                                    require_payload iroha_data_model::domain::Domain,
+                                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId
                                 )
                             }
-                            QueryItemKind::Account => {
-                                // Prefer parameterized query when payload is present; otherwise default.
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::account::Account, iroha_data_model::query::account::prelude::FindAccountsWithAsset)
-                                }
-                                run_fast!(
-                                    iroha_data_model::account::Account,
-                                    iroha_data_model::query::account::prelude::FindAccounts
-                                )
+                            run_payload_or_default!(
+                                iroha_data_model::domain::Domain,
+                                iroha_data_model::query::domain::prelude::FindDomains
+                            )
+                        }
+                        QueryItemKind::Account => {
+                            // Prefer parameterized query when payload is present; otherwise default.
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::account::Account, iroha_data_model::query::account::prelude::FindAccountsWithAsset)
                             }
-                            QueryItemKind::AccountId => run_payload_or_default!(
-                                iroha_data_model::account::AccountId,
-                                iroha_data_model::query::account::prelude::FindAccountIds
-                            ),
-                            QueryItemKind::Asset => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::asset::value::Asset,
-                                        iroha_data_model::query::asset::prelude::FindAssetsByAccountId
-                                    )
-                                }
+                            run_payload_or_default!(
+                                iroha_data_model::account::Account,
+                                iroha_data_model::query::account::prelude::FindAccounts
+                            )
+                        }
+                        QueryItemKind::AccountId => run_payload_or_default!(
+                            iroha_data_model::account::AccountId,
+                            iroha_data_model::query::account::prelude::FindAccountIds
+                        ),
+                        QueryItemKind::Asset => {
+                            if !iter_query.query_payload.is_empty() {
                                 run_payload_or_default!(
-                                    iroha_data_model::asset::value::Asset,
-                                    iroha_data_model::query::asset::prelude::FindAssets
+                                    require_payload iroha_data_model::asset::value::Asset,
+                                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId
                                 )
                             }
-                            QueryItemKind::AssetDefinition => run_payload_or_default!(
-                                iroha_data_model::asset::definition::AssetDefinition,
-                                iroha_data_model::query::asset::prelude::FindAssetsDefinitions
-                            ),
-                            QueryItemKind::RepoAgreement => run_payload_or_default!(
-                                iroha_data_model::repo::RepoAgreement,
-                                iroha_data_model::query::repo::prelude::FindRepoAgreements
-                            ),
-                            QueryItemKind::Nft => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::nft::Nft,
-                                        iroha_data_model::query::nft::prelude::FindNftsByAccountId
-                                    )
-                                }
+                            run_payload_or_default!(
+                                iroha_data_model::asset::value::Asset,
+                                iroha_data_model::query::asset::prelude::FindAssets
+                            )
+                        }
+                        QueryItemKind::AssetDefinition => run_payload_or_default!(
+                            iroha_data_model::asset::definition::AssetDefinition,
+                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        ),
+                        QueryItemKind::RepoAgreement => run_payload_or_default!(
+                            iroha_data_model::repo::RepoAgreement,
+                            iroha_data_model::query::repo::prelude::FindRepoAgreements
+                        ),
+                        QueryItemKind::Nft => {
+                            if !iter_query.query_payload.is_empty() {
                                 run_payload_or_default!(
-                                    iroha_data_model::nft::Nft,
-                                    iroha_data_model::query::nft::prelude::FindNfts
+                                    require_payload iroha_data_model::nft::Nft,
+                                    iroha_data_model::query::nft::prelude::FindNftsByAccountId
                                 )
                             }
-                            QueryItemKind::Rwa => run_payload_or_default!(
-                                iroha_data_model::rwa::Rwa,
-                                iroha_data_model::query::rwa::prelude::FindRwas
-                            ),
-                            QueryItemKind::Role => run_payload_or_default!(
-                                iroha_data_model::role::Role,
-                                iroha_data_model::query::role::prelude::FindRoles
-                            ),
-                            QueryItemKind::RoleId => {
-                                // If payload present, it's a parameterized FindRolesByAccountId; otherwise use FindRoleIds.
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::role::RoleId, iroha_data_model::query::role::prelude::FindRolesByAccountId)
-                                }
-                                run_fast!(
-                                    iroha_data_model::role::RoleId,
-                                    iroha_data_model::query::role::prelude::FindRoleIds
+                            run_payload_or_default!(
+                                iroha_data_model::nft::Nft,
+                                iroha_data_model::query::nft::prelude::FindNfts
+                            )
+                        }
+                        QueryItemKind::Rwa => run_payload_or_default!(
+                            iroha_data_model::rwa::Rwa,
+                            iroha_data_model::query::rwa::prelude::FindRwas
+                        ),
+                        QueryItemKind::Role => run_payload_or_default!(
+                            iroha_data_model::role::Role,
+                            iroha_data_model::query::role::prelude::FindRoles
+                        ),
+                        QueryItemKind::RoleId => {
+                            // If payload present, it's a parameterized FindRolesByAccountId; otherwise use FindRoleIds.
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::role::RoleId, iroha_data_model::query::role::prelude::FindRolesByAccountId)
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::role::RoleId,
+                                iroha_data_model::query::role::prelude::FindRoleIds
+                            )
+                        }
+                        QueryItemKind::PeerId => run_payload_or_default!(
+                            iroha_data_model::peer::PeerId,
+                            iroha_data_model::query::peer::prelude::FindPeers
+                        ),
+                        QueryItemKind::TriggerId => run_payload_or_default!(
+                            iroha_data_model::trigger::TriggerId,
+                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
+                        ),
+                        QueryItemKind::Trigger => run_payload_or_default!(
+                            iroha_data_model::trigger::Trigger,
+                            iroha_data_model::query::trigger::prelude::FindTriggers
+                        ),
+                        QueryItemKind::CommittedTransaction => {
+                            decode_iter_query_payload_exact::<
+                                iroha_data_model::query::transaction::prelude::FindTransactions,
+                            >(&iter_query.query_payload)
+                            .ok_or_else(|| {
+                                Error::Conversion(
+                                    "malformed payload for unit iterable query".into(),
                                 )
-                            }
-                            QueryItemKind::PeerId => run_payload_or_default!(
-                                iroha_data_model::peer::PeerId,
-                                iroha_data_model::query::peer::prelude::FindPeers
-                            ),
-                            QueryItemKind::TriggerId => run_payload_or_default!(
-                                iroha_data_model::trigger::TriggerId,
-                                iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
-                            ),
-                            QueryItemKind::Trigger => run_payload_or_default!(
-                                iroha_data_model::trigger::Trigger,
-                                iroha_data_model::query::trigger::prelude::FindTriggers
-                            ),
-                            QueryItemKind::CommittedTransaction => {
-                                decode_iter_query_payload_exact::<
-                                    iroha_data_model::query::transaction::prelude::FindTransactions,
-                                >(&iter_query.query_payload)
-                                .ok_or_else(|| {
-                                    Error::Conversion(
-                                        "malformed payload for unit iterable query".into(),
-                                    )
-                                })?;
-                                let pred = dec::<CompoundPredicate<CommittedTransaction>>(
-                                    &iter_query.predicate_bytes,
-                                )?;
-                                let sel = dec::<SelectorTuple<CommittedTransaction>>(
-                                    &iter_query.selector_bytes,
-                                )?;
-                                let output = handle_find_transactions_stored(
-                                    state,
-                                    pred,
-                                    sel,
-                                    params,
-                                    limits,
-                                    live_query_store,
-                                    authority,
-                                    stored_cursor_budget,
-                                    replay_state.clone(),
-                                )?;
-                                return Ok(QueryResponse::Iterable(output));
-                            }
-                            QueryItemKind::SignedBlock => run_payload_or_default!(
-                                iroha_data_model::block::SignedBlock,
-                                iroha_data_model::query::block::prelude::FindBlocks
-                            ),
-                            QueryItemKind::BlockHeader => run_payload_or_default!(
-                                iroha_data_model::block::BlockHeader,
-                                iroha_data_model::query::block::prelude::FindBlockHeaders
-                            ),
-                            QueryItemKind::ProofRecord => {
-                                let pred = dec::<
-                                    iroha_data_model::query::dsl::CompoundPredicate<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.predicate_bytes
-                                )?;
-                                let sel = dec::<
-                                    iroha_data_model::query::dsl::SelectorTuple<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.selector_bytes
-                                )?;
-                                macro_rules! try_proof_query {
+                            })?;
+                            let pred = dec::<CompoundPredicate<CommittedTransaction>>(
+                                &iter_query.predicate_bytes,
+                            )?;
+                            let sel = dec::<SelectorTuple<CommittedTransaction>>(
+                                &iter_query.selector_bytes,
+                            )?;
+                            let output = handle_find_transactions_stored(
+                                state,
+                                pred,
+                                sel,
+                                params,
+                                limits,
+                                live_query_store,
+                                authority,
+                                stored_cursor_budget,
+                                replay_state.clone(),
+                            )?;
+                            return Ok(QueryResponse::Iterable(output));
+                        }
+                        QueryItemKind::SignedBlock => run_payload_or_default!(
+                            iroha_data_model::block::SignedBlock,
+                            iroha_data_model::query::block::prelude::FindBlocks
+                        ),
+                        QueryItemKind::BlockHeader => run_payload_or_default!(
+                            iroha_data_model::block::BlockHeader,
+                            iroha_data_model::query::block::prelude::FindBlockHeaders
+                        ),
+                        QueryItemKind::ProofRecord => {
+                            let pred = dec::<
+                                iroha_data_model::query::dsl::CompoundPredicate<
+                                    iroha_data_model::proof::ProofRecord,
+                                >,
+                            >(&iter_query.predicate_bytes)?;
+                            let sel = dec::<
+                                iroha_data_model::query::dsl::SelectorTuple<
+                                    iroha_data_model::proof::ProofRecord,
+                                >,
+                            >(&iter_query.selector_bytes)?;
+                            macro_rules! try_proof_query {
                                     ($find:ty) => {{
                                         if let Some(concrete) = decode_iter_query_payload_exact::<
                                             $find,
@@ -4275,120 +4035,19 @@ impl ValidQueryRequest {
                                         }
                                     }};
                                 }
-                                if !iter_query.query_payload.is_empty() {
-                                    try_proof_query!(
+                            if !iter_query.query_payload.is_empty() {
+                                try_proof_query!(
                                         iroha_data_model::query::proof::prelude::FindProofRecordsByBackend
                                     );
-                                    try_proof_query!(
+                                try_proof_query!(
                                         iroha_data_model::query::proof::prelude::FindProofRecordsByStatus
                                     );
-                                    return Err(Error::Conversion(
-                                        "failed to decode proof query payload".into(),
-                                    ));
-                                }
-                                let concrete =
-                                    iroha_data_model::query::proof::prelude::FindProofRecords;
-                                let iter =
-                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
-                                let output = handle_iter_start_stored_replayable(
-                                    iter,
-                                    concrete,
-                                    pred,
-                                    sel,
-                                    params,
-                                    limits,
-                                    live_query_store,
-                                    authority,
-                                    stored_cursor_budget,
-                                    replay_state.clone(),
-                                )?;
-                                return Ok(QueryResponse::Iterable(output));
+                                return Err(Error::Conversion(
+                                    "failed to decode proof query payload".into(),
+                                ));
                             }
-                            QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
-                                iroha_data_model::escrow::AssetEscrowRecord,
-                                iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                            ),
-                            QueryItemKind::OracleFeedConfig => run_payload_or_default!(
-                                iroha_data_model::oracle::FeedConfig,
-                                iroha_data_model::query::oracle::prelude::FindOracleFeeds
-                            ),
-                            QueryItemKind::OracleFeedEventRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
-                            }
-                            QueryItemKind::OracleProviderStatsRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
-                            }
-                            QueryItemKind::OracleDispute => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::oracle::OracleDispute,
-                                        iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::oracle::OracleDispute,
-                                    iroha_data_model::query::oracle::prelude::FindOracleDisputes
-                                )
-                            }
-                            QueryItemKind::OracleChangeProposal => run_payload_or_default!(
-                                iroha_data_model::oracle::OracleChangeProposal,
-                                iroha_data_model::query::oracle::prelude::FindOracleChanges
-                            ),
-                            QueryItemKind::TwitterBindingRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
-                            }
-                            QueryItemKind::DefiOracleAttestation => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
-                            }
-                            QueryItemKind::Permission => {
-                                run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
-                            }
-                            QueryItemKind::FeeSponsorProgram => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::nexus::FeeSponsorProgram,
-                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
-                                )
-                            }
-                            QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
-                                iroha_data_model::nexus::FeeSponsorProgramId,
-                                iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
-                            ),
-                        }
-                    }
-                    #[cfg(any())]
-                    {
-                        // unreachable: iroha_core is built with std; fast_dsl iterable path requires std in data_model.
-                        return Err(Error::Conversion(
-                            "fast_dsl iterable path requires std".into(),
-                        ));
-                    }
-                }
-                // Fallback for fast_dsl-enabled callers: if the boxed query is absent,
-                // reconstruct a default iterable query from the item kind.
-                if iter_query.query_box().is_none() {
-                    use iroha_data_model::query::QueryItemKind;
-                    fn dec<T: norito::codec::Decode>(bytes: &[u8]) -> Result<T, Error> {
-                        let mut cursor = std::io::Cursor::new(bytes);
-                        norito::codec::Decode::decode(&mut cursor).map_err(|_| {
-                            Error::Conversion("failed to decode query predicate/selector".into())
-                        })
-                    }
-                    macro_rules! run_unit {
-                        ($itemty:ty, $find:ty) => {{
-                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                dec(&iter_query.predicate_bytes)?;
-                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                dec(&iter_query.selector_bytes)?;
-                            let concrete: $find =
-                                decode_iter_query_payload_exact(&iter_query.query_payload)
-                                    .ok_or_else(|| {
-                                        Error::Conversion(
-                                            "malformed payload for unit iterable query".into(),
-                                        )
-                                    })?;
+                            let concrete =
+                                iroha_data_model::query::proof::prelude::FindProofRecords;
                             let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                             let output = handle_iter_start_stored_replayable(
                                 iter,
@@ -4403,1015 +4062,73 @@ impl ValidQueryRequest {
                                 replay_state.clone(),
                             )?;
                             return Ok(QueryResponse::Iterable(output));
-                        }};
-                    }
-                    match iter_query.item {
-                        QueryItemKind::Domain => run_unit!(
-                            iroha_data_model::domain::Domain,
-                            iroha_data_model::query::domain::prelude::FindDomains
-                        ),
-                        QueryItemKind::Account => run_unit!(
-                            iroha_data_model::account::Account,
-                            iroha_data_model::query::account::prelude::FindAccounts
-                        ),
-                        QueryItemKind::AccountId => run_unit!(
-                            iroha_data_model::account::AccountId,
-                            iroha_data_model::query::account::prelude::FindAccountIds
-                        ),
-                        QueryItemKind::Asset => run_unit!(
-                            iroha_data_model::asset::value::Asset,
-                            iroha_data_model::query::asset::prelude::FindAssets
-                        ),
-                        QueryItemKind::AssetDefinition => run_unit!(
-                            iroha_data_model::asset::definition::AssetDefinition,
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions
-                        ),
-                        QueryItemKind::RepoAgreement => run_unit!(
-                            iroha_data_model::repo::RepoAgreement,
-                            iroha_data_model::query::repo::prelude::FindRepoAgreements
-                        ),
-                        QueryItemKind::Nft => run_unit!(
-                            iroha_data_model::nft::Nft,
-                            iroha_data_model::query::nft::prelude::FindNfts
-                        ),
-                        QueryItemKind::Rwa => run_unit!(
-                            iroha_data_model::rwa::Rwa,
-                            iroha_data_model::query::rwa::prelude::FindRwas
-                        ),
-                        QueryItemKind::Role => run_unit!(
-                            iroha_data_model::role::Role,
-                            iroha_data_model::query::role::prelude::FindRoles
-                        ),
-                        QueryItemKind::RoleId => run_unit!(
-                            iroha_data_model::role::RoleId,
-                            iroha_data_model::query::role::prelude::FindRoleIds
-                        ),
-                        QueryItemKind::PeerId => run_unit!(
-                            iroha_data_model::peer::PeerId,
-                            iroha_data_model::query::peer::prelude::FindPeers
-                        ),
-                        QueryItemKind::TriggerId => run_unit!(
-                            iroha_data_model::trigger::TriggerId,
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
-                        ),
-                        QueryItemKind::Trigger => run_unit!(
-                            iroha_data_model::trigger::Trigger,
-                            iroha_data_model::query::trigger::prelude::FindTriggers
-                        ),
-                        QueryItemKind::CommittedTransaction => run_unit!(
-                            iroha_data_model::query::CommittedTransaction,
-                            iroha_data_model::query::transaction::prelude::FindTransactions
-                        ),
-                        QueryItemKind::SignedBlock => run_unit!(
-                            iroha_data_model::block::SignedBlock,
-                            iroha_data_model::query::block::prelude::FindBlocks
-                        ),
-                        QueryItemKind::BlockHeader => run_unit!(
-                            iroha_data_model::block::BlockHeader,
-                            iroha_data_model::query::block::prelude::FindBlockHeaders
-                        ),
-                        QueryItemKind::ProofRecord => run_unit!(
-                            iroha_data_model::proof::ProofRecord,
-                            iroha_data_model::query::proof::prelude::FindProofRecords
-                        ),
-                        QueryItemKind::AssetEscrowRecord => run_unit!(
+                        }
+                        QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
-                        QueryItemKind::OracleFeedConfig => run_unit!(
+                        QueryItemKind::AssetEscrowsBySeller => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller
+                        ),
+                        QueryItemKind::AssetEscrowsByBuyer => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsByBuyer
+                        ),
+                        QueryItemKind::AssetEscrowsByStatus => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsByStatus
+                        ),
+                        QueryItemKind::OracleFeedConfig => run_payload_or_default!(
                             iroha_data_model::oracle::FeedConfig,
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds
                         ),
-                        QueryItemKind::OracleFeedEventRecord
-                        | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord
-                        | QueryItemKind::DefiOracleAttestation => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
+                        QueryItemKind::OracleFeedEventRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
                         }
-                        QueryItemKind::OracleDispute => run_unit!(
-                            iroha_data_model::oracle::OracleDispute,
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
-                        ),
-                        QueryItemKind::OracleChangeProposal => run_unit!(
+                        QueryItemKind::OracleProviderStatsRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
+                        }
+                        QueryItemKind::OracleDispute => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(
+                                    require_payload iroha_data_model::oracle::OracleDispute,
+                                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
+                                )
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::oracle::OracleDispute,
+                                iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                            )
+                        }
+                        QueryItemKind::OracleChangeProposal => run_payload_or_default!(
                             iroha_data_model::oracle::OracleChangeProposal,
                             iroha_data_model::query::oracle::prelude::FindOracleChanges
                         ),
-                        QueryItemKind::Permission => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
+                        QueryItemKind::TwitterBindingRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
                         }
-                        QueryItemKind::FeeSponsorProgram => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorProgram,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
-                        ),
-                        QueryItemKind::FeeSponsorProgramId => run_unit!(
+                        QueryItemKind::DefiOracleAttestation => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
+                        }
+                        QueryItemKind::Permission => {
+                            run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
+                        }
+                        QueryItemKind::FeeSponsorProgram => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorProgram,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
+                            )
+                        }
+                        QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
                             iroha_data_model::nexus::FeeSponsorProgramId,
                             iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                         ),
                     }
                 }
-                if iter_query.query_box().is_none() {
-                    use iroha_data_model::query::QueryItemKind;
-                    fn dec<T: norito::codec::Decode>(bytes: &[u8]) -> Result<T, Error> {
-                        let mut cursor = std::io::Cursor::new(bytes);
-                        norito::codec::Decode::decode(&mut cursor).map_err(|_| {
-                            Error::Conversion("failed to decode query predicate/selector".into())
-                        })
-                    }
-                    macro_rules! run_unit {
-                        ($itemty:ty, $find:ty) => {{
-                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                dec(&iter_query.predicate_bytes)?;
-                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                dec(&iter_query.selector_bytes)?;
-                            let concrete: $find =
-                                decode_iter_query_payload_exact(&iter_query.query_payload)
-                                    .ok_or_else(|| {
-                                        Error::Conversion(
-                                            "malformed payload for unit iterable query".into(),
-                                        )
-                                    })?;
-                            let iter = ValidQuery::execute(concrete, pred, state)?;
-                            let (output, _processed_items) =
-                                apply_query_postprocessing_ephemeral_with_budget(
-                                    iter, sel, params, limits, None,
-                                )?;
-                            return Ok(QueryResponse::Iterable(output));
-                        }};
-                    }
-                    match iter_query.item {
-                        QueryItemKind::Domain => run_unit!(
-                            iroha_data_model::domain::Domain,
-                            iroha_data_model::query::domain::prelude::FindDomains
-                        ),
-                        QueryItemKind::Account => run_unit!(
-                            iroha_data_model::account::Account,
-                            iroha_data_model::query::account::prelude::FindAccounts
-                        ),
-                        QueryItemKind::AccountId => run_unit!(
-                            iroha_data_model::account::AccountId,
-                            iroha_data_model::query::account::prelude::FindAccountIds
-                        ),
-                        QueryItemKind::Asset => run_unit!(
-                            iroha_data_model::asset::value::Asset,
-                            iroha_data_model::query::asset::prelude::FindAssets
-                        ),
-                        QueryItemKind::AssetDefinition => run_unit!(
-                            iroha_data_model::asset::definition::AssetDefinition,
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions
-                        ),
-                        QueryItemKind::RepoAgreement => run_unit!(
-                            iroha_data_model::repo::RepoAgreement,
-                            iroha_data_model::query::repo::prelude::FindRepoAgreements
-                        ),
-                        QueryItemKind::Nft => run_unit!(
-                            iroha_data_model::nft::Nft,
-                            iroha_data_model::query::nft::prelude::FindNfts
-                        ),
-                        QueryItemKind::Rwa => run_unit!(
-                            iroha_data_model::rwa::Rwa,
-                            iroha_data_model::query::rwa::prelude::FindRwas
-                        ),
-                        QueryItemKind::Role => run_unit!(
-                            iroha_data_model::role::Role,
-                            iroha_data_model::query::role::prelude::FindRoles
-                        ),
-                        QueryItemKind::RoleId => run_unit!(
-                            iroha_data_model::role::RoleId,
-                            iroha_data_model::query::role::prelude::FindRoleIds
-                        ),
-                        QueryItemKind::PeerId => run_unit!(
-                            iroha_data_model::peer::PeerId,
-                            iroha_data_model::query::peer::prelude::FindPeers
-                        ),
-                        QueryItemKind::TriggerId => run_unit!(
-                            iroha_data_model::trigger::TriggerId,
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
-                        ),
-                        QueryItemKind::Trigger => run_unit!(
-                            iroha_data_model::trigger::Trigger,
-                            iroha_data_model::query::trigger::prelude::FindTriggers
-                        ),
-                        QueryItemKind::CommittedTransaction => run_unit!(
-                            iroha_data_model::query::CommittedTransaction,
-                            iroha_data_model::query::transaction::prelude::FindTransactions
-                        ),
-                        QueryItemKind::SignedBlock => run_unit!(
-                            iroha_data_model::block::SignedBlock,
-                            iroha_data_model::query::block::prelude::FindBlocks
-                        ),
-                        QueryItemKind::BlockHeader => run_unit!(
-                            iroha_data_model::block::BlockHeader,
-                            iroha_data_model::query::block::prelude::FindBlockHeaders
-                        ),
-                        QueryItemKind::ProofRecord => run_unit!(
-                            iroha_data_model::proof::ProofRecord,
-                            iroha_data_model::query::proof::prelude::FindProofRecords
-                        ),
-                        QueryItemKind::AssetEscrowRecord => run_unit!(
-                            iroha_data_model::escrow::AssetEscrowRecord,
-                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                        ),
-                        QueryItemKind::OracleFeedConfig => run_unit!(
-                            iroha_data_model::oracle::FeedConfig,
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
-                        ),
-                        QueryItemKind::OracleFeedEventRecord
-                        | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord
-                        | QueryItemKind::DefiOracleAttestation => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
-                        }
-                        QueryItemKind::OracleDispute => run_unit!(
-                            iroha_data_model::oracle::OracleDispute,
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
-                        ),
-                        QueryItemKind::OracleChangeProposal => run_unit!(
-                            iroha_data_model::oracle::OracleChangeProposal,
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges
-                        ),
-                        QueryItemKind::Permission => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
-                        }
-                        QueryItemKind::FeeSponsorProgram => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorProgram,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
-                        ),
-                        QueryItemKind::FeeSponsorProgramId => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorProgramId,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
-                        ),
-                    }
-                }
-                let Some(qbox) = iter_query.query_box() else {
-                    // Final fallback: default unit iterable by item kind
-                    use iroha_data_model::query::QueryItemKind;
-                    fn dec<T: norito::codec::Decode>(bytes: &[u8]) -> Result<T, Error> {
-                        let mut cursor = std::io::Cursor::new(bytes);
-                        norito::codec::Decode::decode(&mut cursor).map_err(|_| {
-                            Error::Conversion("failed to decode query predicate/selector".into())
-                        })
-                    }
-                    macro_rules! run_unit {
-                        ($itemty:ty, $find:ty) => {{
-                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                dec(&iter_query.predicate_bytes)?;
-                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                dec(&iter_query.selector_bytes)?;
-                            let concrete: $find =
-                                decode_iter_query_payload_exact(&iter_query.query_payload)
-                                    .ok_or_else(|| {
-                                        Error::Conversion(
-                                            "malformed payload for unit iterable query".into(),
-                                        )
-                                    })?;
-                            let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
-                            let output = handle_iter_start_stored_replayable(
-                                iter,
-                                concrete,
-                                pred,
-                                sel,
-                                params,
-                                limits,
-                                live_query_store,
-                                authority,
-                                stored_cursor_budget,
-                                replay_state.clone(),
-                            )?;
-                            return Ok(QueryResponse::Iterable(output));
-                        }};
-                    }
-                    match iter_query.item {
-                        QueryItemKind::Domain => run_unit!(
-                            iroha_data_model::domain::Domain,
-                            iroha_data_model::query::domain::prelude::FindDomains
-                        ),
-                        QueryItemKind::Account => run_unit!(
-                            iroha_data_model::account::Account,
-                            iroha_data_model::query::account::prelude::FindAccounts
-                        ),
-                        QueryItemKind::AccountId => run_unit!(
-                            iroha_data_model::account::AccountId,
-                            iroha_data_model::query::account::prelude::FindAccountIds
-                        ),
-                        QueryItemKind::Asset => run_unit!(
-                            iroha_data_model::asset::value::Asset,
-                            iroha_data_model::query::asset::prelude::FindAssets
-                        ),
-                        QueryItemKind::AssetDefinition => run_unit!(
-                            iroha_data_model::asset::definition::AssetDefinition,
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions
-                        ),
-                        QueryItemKind::RepoAgreement => run_unit!(
-                            iroha_data_model::repo::RepoAgreement,
-                            iroha_data_model::query::repo::prelude::FindRepoAgreements
-                        ),
-                        QueryItemKind::Nft => run_unit!(
-                            iroha_data_model::nft::Nft,
-                            iroha_data_model::query::nft::prelude::FindNfts
-                        ),
-                        QueryItemKind::Rwa => run_unit!(
-                            iroha_data_model::rwa::Rwa,
-                            iroha_data_model::query::rwa::prelude::FindRwas
-                        ),
-                        QueryItemKind::Role => run_unit!(
-                            iroha_data_model::role::Role,
-                            iroha_data_model::query::role::prelude::FindRoles
-                        ),
-                        QueryItemKind::RoleId => run_unit!(
-                            iroha_data_model::role::RoleId,
-                            iroha_data_model::query::role::prelude::FindRoleIds
-                        ),
-                        QueryItemKind::PeerId => run_unit!(
-                            iroha_data_model::peer::PeerId,
-                            iroha_data_model::query::peer::prelude::FindPeers
-                        ),
-                        QueryItemKind::TriggerId => run_unit!(
-                            iroha_data_model::trigger::TriggerId,
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
-                        ),
-                        QueryItemKind::Trigger => run_unit!(
-                            iroha_data_model::trigger::Trigger,
-                            iroha_data_model::query::trigger::prelude::FindTriggers
-                        ),
-                        QueryItemKind::CommittedTransaction => run_unit!(
-                            iroha_data_model::query::CommittedTransaction,
-                            iroha_data_model::query::transaction::prelude::FindTransactions
-                        ),
-                        QueryItemKind::SignedBlock => run_unit!(
-                            iroha_data_model::block::SignedBlock,
-                            iroha_data_model::query::block::prelude::FindBlocks
-                        ),
-                        QueryItemKind::BlockHeader => run_unit!(
-                            iroha_data_model::block::BlockHeader,
-                            iroha_data_model::query::block::prelude::FindBlockHeaders
-                        ),
-                        QueryItemKind::ProofRecord => run_unit!(
-                            iroha_data_model::proof::ProofRecord,
-                            iroha_data_model::query::proof::prelude::FindProofRecords
-                        ),
-                        QueryItemKind::AssetEscrowRecord => run_unit!(
-                            iroha_data_model::escrow::AssetEscrowRecord,
-                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                        ),
-                        QueryItemKind::OracleFeedConfig => run_unit!(
-                            iroha_data_model::oracle::FeedConfig,
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
-                        ),
-                        QueryItemKind::OracleFeedEventRecord
-                        | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord
-                        | QueryItemKind::DefiOracleAttestation => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
-                        }
-                        QueryItemKind::OracleDispute => run_unit!(
-                            iroha_data_model::oracle::OracleDispute,
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
-                        ),
-                        QueryItemKind::OracleChangeProposal => run_unit!(
-                            iroha_data_model::oracle::OracleChangeProposal,
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges
-                        ),
-                        QueryItemKind::Permission => {
-                            return Err(Error::Conversion(
-                                "missing or malformed query payload".into(),
-                            ));
-                        }
-                        QueryItemKind::FeeSponsorProgram => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorProgram,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
-                        ),
-                        QueryItemKind::FeeSponsorProgramId => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorProgramId,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
-                        ),
-                    }
-                };
-
-                // Try dispatch for all supported iterable queries, keyed by their item type.
-                // For item types that have multiple concrete query variants (e.g., Account),
-                // attempt decodes in priority order.
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::domain::Domain,
-                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::domain::Domain,
-                    iroha_data_model::query::domain::prelude::FindDomains,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::domain::prelude::FindDomains>(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                // Accounts: support both `FindAccounts` and `FindAccountsWithAsset`
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::account::Account,
-                    iroha_data_model::query::account::prelude::FindAccounts,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::account::prelude::FindAccounts>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::account::Account,
-                    iroha_data_model::query::account::prelude::FindAccountsWithAsset,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::account::prelude::FindAccountsWithAsset,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::asset::value::Asset,
-                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::asset::value::Asset,
-                    iroha_data_model::query::asset::prelude::FindAssets,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e),
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::asset::definition::AssetDefinition,
-                    iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::repo::RepoAgreement,
-                    iroha_data_model::query::repo::prelude::FindRepoAgreements,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::repo::prelude::FindRepoAgreements>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::nft::Nft,
-                    iroha_data_model::query::nft::prelude::FindNftsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNftsByAccountId>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::nft::Nft,
-                    iroha_data_model::query::nft::prelude::FindNfts,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e),
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::role::Role,
-                    iroha_data_model::query::role::prelude::FindRoles,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e),
-                )? {
-                    return Ok(resp);
-                }
-                // RoleId: support both `FindRoleIds` and `FindRolesByAccountId`.
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::role::RoleId,
-                    iroha_data_model::query::role::prelude::FindRoleIds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::role::RoleId,
-                    iroha_data_model::query::role::prelude::FindRolesByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::role::prelude::FindRolesByAccountId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecords,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::proof::prelude::FindProofRecords>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::peer::PeerId,
-                    iroha_data_model::query::peer::prelude::FindPeers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e),
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::trigger::TriggerId,
-                    iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::trigger::Trigger,
-                    iroha_data_model::query::trigger::prelude::FindTriggers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::trigger::prelude::FindTriggers>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
-                    if decode_iter_query_payload_exact::<
-                        iroha_data_model::query::transaction::prelude::FindTransactions,
-                    >(erased.payload())
-                    .is_none()
-                    {
-                        return Err(Error::Conversion(
-                            "malformed payload for transaction iterable query".into(),
-                        ));
-                    }
-                    let output = handle_find_transactions_stored(
-                        state,
-                        erased.predicate_cloned(),
-                        erased.selector_cloned(),
-                        params,
-                        limits,
-                        live_query_store,
-                        authority,
-                        stored_cursor_budget,
-                        replay_state.clone(),
-                    )?;
-                    return Ok(QueryResponse::Iterable(output));
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::block::SignedBlock,
-                    iroha_data_model::query::block::prelude::FindBlocks,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e),
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::block::BlockHeader,
-                    iroha_data_model::query::block::prelude::FindBlockHeaders,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::block::prelude::FindBlockHeaders>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::FeedConfig,
-                    iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::oracle::prelude::FindOracleFeeds>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::events::data::oracle::FeedEventRecord,
-                    iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::OracleProviderStatsRecord,
-                    iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::OracleDispute,
-                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::OracleDispute,
-                    iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::OracleChangeProposal,
-                    iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::TwitterBindingRecord,
-                    iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::oracle::DefiOracleAttestation,
-                    iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-                        >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-
-                Err(Error::Conversion(
-                    "unsupported iterable query type".to_string(),
-                ))
             }
             QueryRequest::Continue(cursor) => Ok(QueryResponse::Iterable(
                 live_query_store.handle_iter_continue(cursor, authority)?,
@@ -5453,9 +4170,9 @@ impl ValidQueryRequest {
     #[allow(clippy::too_many_lines)]
     fn execute_ephemeral_inner_with_stats(
         self,
-        live_query_store: &LiveQueryStoreHandle,
+        _live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
-        authority: &AccountId,
+        _authority: &AccountId,
         budget: Option<QueryExecutionBudget>,
     ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
         let Self { request, limits } = self;
@@ -5477,276 +4194,207 @@ impl ValidQueryRequest {
                 Ok((QueryResponse::Singular(output), stats))
             }
             QueryRequest::Start(iter_query) => {
-                use iroha_data_model::query;
-
-                fn try_decode_query<Q>(
-                    erased: &query::ErasedIterQuery<
-                        impl HasProjection<PredicateMarker>
-                        + HasProjection<SelectorMarker, AtomType = ()>
-                        + Send
-                        + Sync,
-                    >,
-                ) -> Option<Q>
-                where
-                    Q: norito::codec::Decode + norito::codec::Encode,
-                {
-                    decode_iter_query_payload_exact(erased.payload())
-                }
-
-                #[allow(clippy::too_many_arguments)]
-                fn run_dispatch<T, Q, F>(
-                    qbox: &query::QueryBox<query::QueryOutputBatchBox>,
-                    params: &query::parameters::QueryParams,
-                    limits: QueryLimits,
-                    budget: Option<QueryExecutionBudget>,
-                    state: &impl StateReadOnly,
-                    _live_query_store: &LiveQueryStoreHandle,
-                    _authority: &AccountId,
-                    __stored_cursor_budget: Option<u64>,
-                    decode: F,
-                ) -> Result<Option<(QueryResponse, QueryExecutionStats)>, Error>
-                where
-                    T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T>,
-                    T: HasProjection<SelectorMarker, AtomType = ()>
-                        + HasProjection<PredicateMarker>
-                        + crate::smartcontracts::isi::query::SortableQueryOutput
-                        + NoritoSerialize
-                        + Send
-                        + Sync
-                        + 'static,
-                    <T as HasProjection<SelectorMarker>>::Projection:
-                        EvaluateSelector<T> + Send + Sync,
-                    query::QueryOutputBatchBox: From<Vec<T>>,
-                    F: Fn(&query::ErasedIterQuery<T>) -> Option<Q>,
-                {
-                    if let Some(erased) = query::iter_query_inner::<T>(qbox) {
-                        // Decode the concrete query variant from the payload
-                        let Some(concrete) = decode(erased) else {
-                            return Ok(None);
-                        };
-                        // Execute the concrete ValidQuery with provided predicate
-                        let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
-
-                        // Postprocess: sort/paginate/project and return only the first batch (no cursor)
-                        let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
-                            iter,
-                            erased.selector_cloned(),
-                            params,
-                            limits,
-                            budget,
-                        )?;
-                        return Ok(Some((QueryResponse::Iterable(output), stats)));
-                    }
-                    Ok(None)
-                }
-
                 let params = &iter_query.params;
-                // Fast-DSL path: when the boxed query payload is not present, reconstruct
-                // from item kind and encoded predicate/selector.
-                if iter_query.query_box().is_none() {
-                    #[cfg(feature = "fast_dsl")]
+                // Reconstruct the concrete query from the canonical item kind and encoded components.
+                {
+                    use iroha_data_model::query::QueryItemKind;
+                    // Helpers to decode bytes into concrete predicate/selector
+                    fn dec<T>(bytes: &[u8]) -> Result<T, Error>
+                    where
+                        T: norito::codec::Decode + norito::codec::Encode,
                     {
-                        use iroha_data_model::query::QueryItemKind;
-                        // Helpers to decode bytes into concrete predicate/selector
-                        fn dec<T: norito::codec::Decode>(bytes: &[u8]) -> Result<T, Error> {
-                            let mut cursor = std::io::Cursor::new(bytes);
-                            norito::codec::Decode::decode(&mut cursor).map_err(|_| {
-                                Error::Conversion(
-                                    "failed to decode query predicate/selector".into(),
-                                )
-                            })
-                        }
-                        // Helper to run an iterable query using the encoded predicate/selector.
-                        macro_rules! run_payload_or_default {
-                            // Unit queries have an empty canonical payload. Reject any other bytes so
-                            // parameterized or malformed payloads cannot become global queries.
-                            ($itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decode_iter_query_payload_exact(&iter_query.query_payload)
-                                        .ok_or_else(|| {
-                                            Error::Conversion(
-                                                "malformed payload for unit iterable query".into(),
-                                            )
-                                        })?;
-                                let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let (output, processed_items) =
-                                    apply_query_postprocessing_ephemeral_with_budget(
-                                        iter,
-                                        sel,
-                                        params,
-                                        limits,
-                                        budget_items,
-                                    )?;
-                                return Ok((QueryResponse::Iterable(output), processed_items));
-                            }};
-                            // For queries that always require a payload (e.g., FindPermissionsByAccountId)
-                            (require_payload $itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
-                                let concrete: $find = decode_iter_query_payload_exact(
-                                    &iter_query.query_payload,
-                                )
-                                .ok_or_else(|| {
-                                    Error::Conversion(
-                                        "missing or malformed parameterized iterable query payload"
-                                            .into(),
-                                    )
-                                })?;
-                                let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let (output, processed_items) =
-                                    apply_query_postprocessing_ephemeral_with_budget(
-                                        iter,
-                                        sel,
-                                        params,
-                                        limits,
-                                        budget_items,
-                                    )?;
-                                return Ok((QueryResponse::Iterable(output), processed_items));
-                            }};
-                        }
-                        match iter_query.item {
-                            QueryItemKind::Domain => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::domain::Domain,
-                                        iroha_data_model::query::domain::prelude::FindDomainsByAccountId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::domain::Domain,
-                                    iroha_data_model::query::domain::prelude::FindDomains
-                                )
-                            }
-                            QueryItemKind::Account => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::account::Account, iroha_data_model::query::account::prelude::FindAccountsWithAsset)
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::account::Account,
-                                    iroha_data_model::query::account::prelude::FindAccounts
-                                )
-                            }
-                            QueryItemKind::AccountId => run_payload_or_default!(
-                                iroha_data_model::account::AccountId,
-                                iroha_data_model::query::account::prelude::FindAccountIds
-                            ),
-                            QueryItemKind::Asset => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::asset::value::Asset,
-                                        iroha_data_model::query::asset::prelude::FindAssetsByAccountId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::asset::value::Asset,
-                                    iroha_data_model::query::asset::prelude::FindAssets
-                                )
-                            }
-                            QueryItemKind::AssetDefinition => run_payload_or_default!(
-                                iroha_data_model::asset::definition::AssetDefinition,
-                                iroha_data_model::query::asset::prelude::FindAssetsDefinitions
-                            ),
-                            QueryItemKind::RepoAgreement => run_payload_or_default!(
-                                iroha_data_model::repo::RepoAgreement,
-                                iroha_data_model::query::repo::prelude::FindRepoAgreements
-                            ),
-                            QueryItemKind::Nft => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::nft::Nft,
-                                        iroha_data_model::query::nft::prelude::FindNftsByAccountId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::nft::Nft,
-                                    iroha_data_model::query::nft::prelude::FindNfts
-                                )
-                            }
-                            QueryItemKind::Rwa => run_payload_or_default!(
-                                iroha_data_model::rwa::Rwa,
-                                iroha_data_model::query::rwa::prelude::FindRwas
-                            ),
-                            QueryItemKind::Role => run_payload_or_default!(
-                                iroha_data_model::role::Role,
-                                iroha_data_model::query::role::prelude::FindRoles
-                            ),
-                            QueryItemKind::RoleId => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::role::RoleId, iroha_data_model::query::role::prelude::FindRolesByAccountId)
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::role::RoleId,
-                                    iroha_data_model::query::role::prelude::FindRoleIds
-                                )
-                            }
-                            QueryItemKind::PeerId => run_payload_or_default!(
-                                iroha_data_model::peer::PeerId,
-                                iroha_data_model::query::peer::prelude::FindPeers
-                            ),
-                            QueryItemKind::TriggerId => run_payload_or_default!(
-                                iroha_data_model::trigger::TriggerId,
-                                iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
-                            ),
-                            QueryItemKind::Trigger => run_payload_or_default!(
-                                iroha_data_model::trigger::Trigger,
-                                iroha_data_model::query::trigger::prelude::FindTriggers
-                            ),
-                            QueryItemKind::CommittedTransaction => {
-                                decode_iter_query_payload_exact::<
-                                    iroha_data_model::query::transaction::prelude::FindTransactions,
-                                >(&iter_query.query_payload)
-                                .ok_or_else(|| {
-                                    Error::Conversion(
-                                        "malformed payload for unit iterable query".into(),
-                                    )
-                                })?;
-                                let pred = dec::<CompoundPredicate<CommittedTransaction>>(
-                                    &iter_query.predicate_bytes,
-                                )?;
-                                let sel = dec::<SelectorTuple<CommittedTransaction>>(
-                                    &iter_query.selector_bytes,
-                                )?;
-                                let (output, processed_items) = handle_find_transactions_ephemeral(
-                                    state,
-                                    pred,
+                        decode_iter_query_payload_exact(bytes).ok_or_else(|| {
+                            Error::Conversion(
+                                "failed to decode canonical query predicate/selector".into(),
+                            )
+                        })
+                    }
+                    // Helper to run an iterable query using the encoded predicate/selector.
+                    macro_rules! run_payload_or_default {
+                        // Unit queries have an empty canonical payload. Reject any other bytes so
+                        // parameterized or malformed payloads cannot become global queries.
+                        ($itemty:ty, $find:ty) => {{
+                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                dec(&iter_query.predicate_bytes)?;
+                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                dec(&iter_query.selector_bytes)?;
+                            let concrete: $find =
+                                decode_iter_query_payload_exact(&iter_query.query_payload)
+                                    .ok_or_else(|| {
+                                        Error::Conversion(
+                                            "malformed payload for unit iterable query".into(),
+                                        )
+                                    })?;
+                            let iter = ValidQuery::execute(concrete, pred, state)?;
+                            let (output, processed_items) =
+                                apply_query_postprocessing_ephemeral_with_budget(
+                                    iter,
                                     sel,
                                     params,
                                     limits,
                                     budget_items,
                                 )?;
-                                return Ok((QueryResponse::Iterable(output), processed_items));
+                            return Ok((QueryResponse::Iterable(output), processed_items));
+                        }};
+                        // For queries that always require a payload (e.g., FindPermissionsByAccountId)
+                        (require_payload $itemty:ty, $find:ty) => {{
+                            let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                dec(&iter_query.predicate_bytes)?;
+                            let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                dec(&iter_query.selector_bytes)?;
+                            let concrete: $find = decode_iter_query_payload_exact(
+                                &iter_query.query_payload,
+                            )
+                            .ok_or_else(|| {
+                                Error::Conversion(
+                                    "missing or malformed parameterized iterable query payload"
+                                        .into(),
+                                )
+                            })?;
+                            let iter = ValidQuery::execute(concrete, pred, state)?;
+                            let (output, processed_items) =
+                                apply_query_postprocessing_ephemeral_with_budget(
+                                    iter,
+                                    sel,
+                                    params,
+                                    limits,
+                                    budget_items,
+                                )?;
+                            return Ok((QueryResponse::Iterable(output), processed_items));
+                        }};
+                    }
+                    match iter_query.item {
+                        QueryItemKind::Domain => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(
+                                    require_payload iroha_data_model::domain::Domain,
+                                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId
+                                )
                             }
-                            QueryItemKind::SignedBlock => run_payload_or_default!(
-                                iroha_data_model::block::SignedBlock,
-                                iroha_data_model::query::block::prelude::FindBlocks
-                            ),
-                            QueryItemKind::BlockHeader => run_payload_or_default!(
-                                iroha_data_model::block::BlockHeader,
-                                iroha_data_model::query::block::prelude::FindBlockHeaders
-                            ),
-                            QueryItemKind::ProofRecord => {
-                                let pred = dec::<
-                                    iroha_data_model::query::dsl::CompoundPredicate<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.predicate_bytes
-                                )?;
-                                let sel = dec::<
-                                    iroha_data_model::query::dsl::SelectorTuple<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.selector_bytes
-                                )?;
-                                macro_rules! try_proof_query {
+                            run_payload_or_default!(
+                                iroha_data_model::domain::Domain,
+                                iroha_data_model::query::domain::prelude::FindDomains
+                            )
+                        }
+                        QueryItemKind::Account => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::account::Account, iroha_data_model::query::account::prelude::FindAccountsWithAsset)
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::account::Account,
+                                iroha_data_model::query::account::prelude::FindAccounts
+                            )
+                        }
+                        QueryItemKind::AccountId => run_payload_or_default!(
+                            iroha_data_model::account::AccountId,
+                            iroha_data_model::query::account::prelude::FindAccountIds
+                        ),
+                        QueryItemKind::Asset => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(
+                                    require_payload iroha_data_model::asset::value::Asset,
+                                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId
+                                )
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::asset::value::Asset,
+                                iroha_data_model::query::asset::prelude::FindAssets
+                            )
+                        }
+                        QueryItemKind::AssetDefinition => run_payload_or_default!(
+                            iroha_data_model::asset::definition::AssetDefinition,
+                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        ),
+                        QueryItemKind::RepoAgreement => run_payload_or_default!(
+                            iroha_data_model::repo::RepoAgreement,
+                            iroha_data_model::query::repo::prelude::FindRepoAgreements
+                        ),
+                        QueryItemKind::Nft => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(
+                                    require_payload iroha_data_model::nft::Nft,
+                                    iroha_data_model::query::nft::prelude::FindNftsByAccountId
+                                )
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::nft::Nft,
+                                iroha_data_model::query::nft::prelude::FindNfts
+                            )
+                        }
+                        QueryItemKind::Rwa => run_payload_or_default!(
+                            iroha_data_model::rwa::Rwa,
+                            iroha_data_model::query::rwa::prelude::FindRwas
+                        ),
+                        QueryItemKind::Role => run_payload_or_default!(
+                            iroha_data_model::role::Role,
+                            iroha_data_model::query::role::prelude::FindRoles
+                        ),
+                        QueryItemKind::RoleId => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::role::RoleId, iroha_data_model::query::role::prelude::FindRolesByAccountId)
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::role::RoleId,
+                                iroha_data_model::query::role::prelude::FindRoleIds
+                            )
+                        }
+                        QueryItemKind::PeerId => run_payload_or_default!(
+                            iroha_data_model::peer::PeerId,
+                            iroha_data_model::query::peer::prelude::FindPeers
+                        ),
+                        QueryItemKind::TriggerId => run_payload_or_default!(
+                            iroha_data_model::trigger::TriggerId,
+                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds
+                        ),
+                        QueryItemKind::Trigger => run_payload_or_default!(
+                            iroha_data_model::trigger::Trigger,
+                            iroha_data_model::query::trigger::prelude::FindTriggers
+                        ),
+                        QueryItemKind::CommittedTransaction => {
+                            decode_iter_query_payload_exact::<
+                                iroha_data_model::query::transaction::prelude::FindTransactions,
+                            >(&iter_query.query_payload)
+                            .ok_or_else(|| {
+                                Error::Conversion(
+                                    "malformed payload for unit iterable query".into(),
+                                )
+                            })?;
+                            let pred = dec::<CompoundPredicate<CommittedTransaction>>(
+                                &iter_query.predicate_bytes,
+                            )?;
+                            let sel = dec::<SelectorTuple<CommittedTransaction>>(
+                                &iter_query.selector_bytes,
+                            )?;
+                            let (output, processed_items) = handle_find_transactions_ephemeral(
+                                state,
+                                pred,
+                                sel,
+                                params,
+                                limits,
+                                budget_items,
+                            )?;
+                            return Ok((QueryResponse::Iterable(output), processed_items));
+                        }
+                        QueryItemKind::SignedBlock => run_payload_or_default!(
+                            iroha_data_model::block::SignedBlock,
+                            iroha_data_model::query::block::prelude::FindBlocks
+                        ),
+                        QueryItemKind::BlockHeader => run_payload_or_default!(
+                            iroha_data_model::block::BlockHeader,
+                            iroha_data_model::query::block::prelude::FindBlockHeaders
+                        ),
+                        QueryItemKind::ProofRecord => {
+                            let pred = dec::<
+                                iroha_data_model::query::dsl::CompoundPredicate<
+                                    iroha_data_model::proof::ProofRecord,
+                                >,
+                            >(&iter_query.predicate_bytes)?;
+                            let sel = dec::<
+                                iroha_data_model::query::dsl::SelectorTuple<
+                                    iroha_data_model::proof::ProofRecord,
+                                >,
+                            >(&iter_query.selector_bytes)?;
+                            macro_rules! try_proof_query {
                                     ($find:ty) => {{
                                         if let Some(concrete) = decode_iter_query_payload_exact::<
                                             $find,
@@ -5768,660 +4416,98 @@ impl ValidQueryRequest {
                                         }
                                     }};
                                 }
-                                if !iter_query.query_payload.is_empty() {
-                                    try_proof_query!(
+                            if !iter_query.query_payload.is_empty() {
+                                try_proof_query!(
                                         iroha_data_model::query::proof::prelude::FindProofRecordsByBackend
                                     );
-                                    try_proof_query!(
+                                try_proof_query!(
                                         iroha_data_model::query::proof::prelude::FindProofRecordsByStatus
                                     );
-                                    return Err(Error::Conversion(
-                                        "failed to decode proof query payload".into(),
-                                    ));
-                                }
-                                let iter = ValidQuery::execute(
-                                    iroha_data_model::query::proof::prelude::FindProofRecords,
-                                    pred,
-                                    state,
+                                return Err(Error::Conversion(
+                                    "failed to decode proof query payload".into(),
+                                ));
+                            }
+                            let iter = ValidQuery::execute(
+                                iroha_data_model::query::proof::prelude::FindProofRecords,
+                                pred,
+                                state,
+                            )?;
+                            let (output, processed_items) =
+                                apply_query_postprocessing_ephemeral_with_budget(
+                                    iter,
+                                    sel,
+                                    params,
+                                    limits,
+                                    budget_items,
                                 )?;
-                                let (output, processed_items) =
-                                    apply_query_postprocessing_ephemeral_with_budget(
-                                        iter,
-                                        sel,
-                                        params,
-                                        limits,
-                                        budget_items,
-                                    )?;
-                                return Ok((QueryResponse::Iterable(output), processed_items));
-                            }
-                            QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
-                                iroha_data_model::escrow::AssetEscrowRecord,
-                                iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                            ),
-                            QueryItemKind::OracleFeedConfig => run_payload_or_default!(
-                                iroha_data_model::oracle::FeedConfig,
-                                iroha_data_model::query::oracle::prelude::FindOracleFeeds
-                            ),
-                            QueryItemKind::OracleFeedEventRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
-                            }
-                            QueryItemKind::OracleProviderStatsRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
-                            }
-                            QueryItemKind::OracleDispute => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::oracle::OracleDispute,
-                                        iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::oracle::OracleDispute,
-                                    iroha_data_model::query::oracle::prelude::FindOracleDisputes
-                                )
-                            }
-                            QueryItemKind::OracleChangeProposal => run_payload_or_default!(
-                                iroha_data_model::oracle::OracleChangeProposal,
-                                iroha_data_model::query::oracle::prelude::FindOracleChanges
-                            ),
-                            QueryItemKind::TwitterBindingRecord => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
-                            }
-                            QueryItemKind::DefiOracleAttestation => {
-                                run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
-                            }
-                            QueryItemKind::Permission => {
-                                run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
-                            }
-                            QueryItemKind::FeeSponsorProgram => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::nexus::FeeSponsorProgram,
-                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
-                                )
-                            }
-                            QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
-                                iroha_data_model::nexus::FeeSponsorProgramId,
-                                iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
-                            ),
+                            return Ok((QueryResponse::Iterable(output), processed_items));
                         }
+                        QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
+                            iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
+                        ),
+                        QueryItemKind::AssetEscrowsBySeller => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller
+                        ),
+                        QueryItemKind::AssetEscrowsByBuyer => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsByBuyer
+                        ),
+                        QueryItemKind::AssetEscrowsByStatus => run_payload_or_default!(
+                            require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrowsByStatus
+                        ),
+                        QueryItemKind::OracleFeedConfig => run_payload_or_default!(
+                            iroha_data_model::oracle::FeedConfig,
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                        ),
+                        QueryItemKind::OracleFeedEventRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
+                        }
+                        QueryItemKind::OracleProviderStatsRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
+                        }
+                        QueryItemKind::OracleDispute => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(
+                                    require_payload iroha_data_model::oracle::OracleDispute,
+                                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
+                                )
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::oracle::OracleDispute,
+                                iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                            )
+                        }
+                        QueryItemKind::OracleChangeProposal => run_payload_or_default!(
+                            iroha_data_model::oracle::OracleChangeProposal,
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges
+                        ),
+                        QueryItemKind::TwitterBindingRecord => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
+                        }
+                        QueryItemKind::DefiOracleAttestation => {
+                            run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
+                        }
+                        QueryItemKind::Permission => {
+                            run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
+                        }
+                        QueryItemKind::FeeSponsorProgram => {
+                            if !iter_query.query_payload.is_empty() {
+                                run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
+                            }
+                            run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorProgram,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
+                            )
+                        }
+                        QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
+                            iroha_data_model::nexus::FeeSponsorProgramId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
+                        ),
                     }
-                    #[cfg(not(feature = "fast_dsl"))]
-                    {
-                        return Err(Error::Conversion("missing iterator payload".into()));
-                    }
                 }
-                let Some(qbox) = iter_query.query_box() else {
-                    return Err(Error::Conversion("missing iterator payload".into()));
-                };
-
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::domain::Domain,
-                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::domain::Domain,
-                    iroha_data_model::query::domain::prelude::FindDomains,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::domain::prelude::FindDomains>(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::account::Account,
-                    iroha_data_model::query::account::prelude::FindAccounts,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::account::prelude::FindAccounts>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::account::Account,
-                    iroha_data_model::query::account::prelude::FindAccountsWithAsset,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::account::prelude::FindAccountsWithAsset,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::asset::value::Asset,
-                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::asset::value::Asset,
-                    iroha_data_model::query::asset::prelude::FindAssets,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::asset::definition::AssetDefinition,
-                    iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::nft::Nft,
-                    iroha_data_model::query::nft::prelude::FindNftsByAccountId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNftsByAccountId>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::nft::Nft,
-                    iroha_data_model::query::nft::prelude::FindNfts,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::role::Role,
-                    iroha_data_model::query::role::prelude::FindRoles,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::role::RoleId,
-                    iroha_data_model::query::role::prelude::FindRoleIds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::peer::PeerId,
-                    iroha_data_model::query::peer::prelude::FindPeers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::trigger::TriggerId,
-                    iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::trigger::Trigger,
-                    iroha_data_model::query::trigger::prelude::FindTriggers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::trigger::prelude::FindTriggers>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
-                    if decode_iter_query_payload_exact::<
-                        iroha_data_model::query::transaction::prelude::FindTransactions,
-                    >(erased.payload())
-                    .is_none()
-                    {
-                        return Err(Error::Conversion(
-                            "malformed payload for transaction iterable query".into(),
-                        ));
-                    }
-                    let (output, processed_items) = handle_find_transactions_ephemeral(
-                        state,
-                        erased.predicate_cloned(),
-                        erased.selector_cloned(),
-                        params,
-                        limits,
-                        budget_items,
-                    )?;
-                    return Ok((QueryResponse::Iterable(output), processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::block::SignedBlock,
-                    iroha_data_model::query::block::prelude::FindBlocks,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e),
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::block::BlockHeader,
-                    iroha_data_model::query::block::prelude::FindBlockHeaders,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::block::prelude::FindBlockHeaders>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecords,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::proof::prelude::FindProofRecords>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::FeedConfig,
-                    iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::oracle::prelude::FindOracleFeeds>(
-                            e,
-                        )
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::events::data::oracle::FeedEventRecord,
-                    iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::OracleProviderStatsRecord,
-                    iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::OracleDispute,
-                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::OracleDispute,
-                    iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::OracleChangeProposal,
-                    iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::TwitterBindingRecord,
-                    iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::oracle::DefiOracleAttestation,
-                    iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-                        >(e)
-                    },
-                )? {
-                    return Ok((resp, processed_items));
-                }
-
-                Err(Error::Conversion(
-                    "unsupported iterable query in ephemeral execution".into(),
-                ))
             }
             QueryRequest::Continue(_cursor) => Err(Error::Conversion(
                 "ephemeral execution does not support continuation".into(),
@@ -6490,17 +4576,18 @@ mod tests {
         params: QueryParams,
         filter: CompoundPredicate<CommittedTransaction>,
     ) -> QueryRequest {
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::transaction::prelude::FindTransactions,
-        );
-        let qbox: QueryBox<_> = Box::new(iroha_data_model::query::ErasedIterQuery::<
-            CommittedTransaction,
-        >::new(filter, SelectorTuple::default(), payload));
-        #[cfg(feature = "fast_dsl")]
-        let query = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        #[cfg(not(feature = "fast_dsl"))]
-        let query = iroha_data_model::query::QueryWithParams::new(qbox, params);
-        QueryRequest::Start(query)
+        QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::transaction::prelude::FindTransactions,
+            ),
+            item: iroha_data_model::query::QueryItemKind::CommittedTransaction,
+            predicate_bytes: norito::codec::Encode::encode(&filter),
+            selector_bytes: norito::codec::Encode::encode(
+                &SelectorTuple::<CommittedTransaction>::default(),
+            ),
+            params,
+        })
     }
 
     fn find_transactions_request(params: QueryParams) -> QueryRequest {
@@ -6514,61 +4601,378 @@ mod tests {
         }
     }
 
-    fn iterable_request_with_box(qbox: QueryBox<QueryOutputBatchBox>) -> ValidQueryRequest {
-        #[cfg(feature = "fast_dsl")]
-        let query = iroha_data_model::query::QueryWithParams::new(&qbox, QueryParams::default());
-        #[cfg(not(feature = "fast_dsl"))]
-        let query = iroha_data_model::query::QueryWithParams::new(qbox, QueryParams::default());
-
+    fn domain_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
         ValidQueryRequest {
-            request: QueryRequest::Start(query),
+            request: QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+                query: (),
+                query_payload: payload,
+                item: iroha_data_model::query::QueryItemKind::Domain,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<iroha_data_model::domain::Domain>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<
+                    iroha_data_model::domain::Domain,
+                >::default()),
+                params: QueryParams::default(),
+            }),
             limits: QueryLimits::default(),
         }
     }
 
-    fn domain_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
-        iterable_request_with_box(erased_domain_query(payload))
-    }
-
     fn transaction_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
-        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
-            CommittedTransaction,
-        >::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            payload,
-        )))
+        ValidQueryRequest {
+            request: QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+                query: (),
+                query_payload: payload,
+                item: iroha_data_model::query::QueryItemKind::CommittedTransaction,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<CommittedTransaction>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(
+                    &SelectorTuple::<CommittedTransaction>::default(),
+                ),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        }
     }
 
     fn block_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
-        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
-            iroha_data_model::block::SignedBlock,
-        >::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            payload,
-        )))
+        ValidQueryRequest {
+            request: QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+                query: (),
+                query_payload: payload,
+                item: iroha_data_model::query::QueryItemKind::SignedBlock,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<iroha_data_model::block::SignedBlock>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<
+                    iroha_data_model::block::SignedBlock,
+                >::default()),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        }
     }
 
     fn role_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
-        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
-            iroha_data_model::role::Role,
-        >::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            payload,
-        )))
-    }
-
-    fn erased_domain_query(payload: Vec<u8>) -> QueryBox<QueryOutputBatchBox> {
-        Box::new(iroha_data_model::query::ErasedIterQuery::<
-            iroha_data_model::domain::Domain,
-        >::new(
-            CompoundPredicate::PASS, SelectorTuple::default(), payload
-        ))
+        ValidQueryRequest {
+            request: QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+                query: (),
+                query_payload: payload,
+                item: iroha_data_model::query::QueryItemKind::Role,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<iroha_data_model::role::Role>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<
+                    iroha_data_model::role::Role,
+                >::default()),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        }
     }
 
     include!("query_core_tests.rs");
+
+    fn escrow_dispatch_fixture() -> (
+        State,
+        crate::query::store::LiveQueryStoreHandle,
+        iroha_data_model::escrow::AssetEscrowRecord,
+    ) {
+        use std::collections::BTreeSet;
+
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
+        };
+        use iroha_primitives::numeric::Quantity;
+
+        let escrow_id = EscrowId::new(Hash::new("query-dispatch-escrow"));
+        let record = AssetEscrowRecord {
+            id: escrow_id,
+            seller: ALICE_ID.clone(),
+            buyer: Some(BOB_ID.clone()),
+            asset_definition: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("escrow-query", "universal").expect("escrow domain id"),
+                "xor".parse().expect("escrow asset name"),
+            ),
+            amount: Quantity::from(7_u32),
+            custody: ALICE_ID.clone(),
+            status: AssetEscrowStatus::PaymentSent,
+            kind: AssetEscrowKind::Marketplace,
+            remaining_amount: Quantity::from(7_u32),
+            release_authority: None,
+            expires_at_ms: None,
+            evidence_hashes: Vec::new(),
+            conditions: Vec::new(),
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+        let mut world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+            ],
+            [],
+        );
+        world.asset_escrows.insert(escrow_id, record.clone());
+        world
+            .asset_escrows_by_seller
+            .insert(ALICE_ID.clone(), BTreeSet::from([escrow_id]));
+        world
+            .asset_escrows_by_buyer
+            .insert(BOB_ID.clone(), BTreeSet::from([escrow_id]));
+        world
+            .asset_escrows_by_status
+            .insert(AssetEscrowStatus::PaymentSent, BTreeSet::from([escrow_id]));
+
+        let handle = LiveQueryStore::start_test();
+        let state = State::new(world, Kura::blank_kura_for_testing(), handle.clone());
+        (state, handle, record)
+    }
+
+    #[test]
+    fn stored_dispatch_distinguishes_escrow_seller_buyer_and_status_queries() {
+        use iroha_data_model::{
+            escrow::{AssetEscrowRecord, AssetEscrowStatus},
+            query::{
+                QueryItemKind, QueryOutputBatchBox, QueryWithParams,
+                escrow::prelude::{
+                    FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+                },
+            },
+        };
+
+        let (state, handle, expected) = escrow_dispatch_fixture();
+        let state_view = state.view();
+        let predicate_bytes =
+            norito::codec::Encode::encode(&CompoundPredicate::<AssetEscrowRecord>::PASS);
+        let selector_bytes =
+            norito::codec::Encode::encode(&SelectorTuple::<AssetEscrowRecord>::default());
+
+        let seller_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
+                    seller: ALICE_ID.clone(),
+                }),
+                item: QueryItemKind::AssetEscrowsBySeller,
+                predicate_bytes: predicate_bytes.clone(),
+                selector_bytes: selector_bytes.clone(),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(seller_output) = seller_request
+            .execute(&handle, &state_view, &ALICE_ID)
+            .expect("execute stored seller escrow query")
+        else {
+            panic!("expected stored seller iterable response")
+        };
+        let (seller_batch, _seller_remaining, seller_cursor) = seller_output.into_parts();
+        let seller_records = match seller_batch.into_iter().next().expect("seller batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected seller batch: {other:?}"),
+        };
+        assert_eq!(seller_records, vec![expected.clone()]);
+        assert!(seller_cursor.is_none());
+
+        let buyer_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByBuyer {
+                    buyer: BOB_ID.clone(),
+                }),
+                item: QueryItemKind::AssetEscrowsByBuyer,
+                predicate_bytes: predicate_bytes.clone(),
+                selector_bytes: selector_bytes.clone(),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(buyer_output) = buyer_request
+            .execute(&handle, &state_view, &ALICE_ID)
+            .expect("execute stored buyer escrow query")
+        else {
+            panic!("expected stored buyer iterable response")
+        };
+        let (buyer_batch, _buyer_remaining, buyer_cursor) = buyer_output.into_parts();
+        let buyer_records = match buyer_batch.into_iter().next().expect("buyer batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected buyer batch: {other:?}"),
+        };
+        assert_eq!(buyer_records, vec![expected.clone()]);
+        assert!(buyer_cursor.is_none());
+
+        let status_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByStatus {
+                    status: AssetEscrowStatus::PaymentSent,
+                }),
+                item: QueryItemKind::AssetEscrowsByStatus,
+                predicate_bytes,
+                selector_bytes,
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(status_output) = status_request
+            .execute(&handle, &state_view, &ALICE_ID)
+            .expect("execute stored status escrow query")
+        else {
+            panic!("expected stored status iterable response")
+        };
+        let (status_batch, _status_remaining, status_cursor) = status_output.into_parts();
+        let status_records = match status_batch.into_iter().next().expect("status batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected status batch: {other:?}"),
+        };
+        assert_eq!(status_records, vec![expected]);
+        assert!(status_cursor.is_none());
+    }
+
+    #[test]
+    fn ephemeral_dispatch_distinguishes_escrow_seller_buyer_and_status_queries() {
+        use iroha_data_model::{
+            escrow::{AssetEscrowRecord, AssetEscrowStatus},
+            query::{
+                QueryItemKind, QueryOutputBatchBox, QueryWithParams,
+                escrow::prelude::{
+                    FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+                },
+            },
+        };
+
+        let (state, handle, expected) = escrow_dispatch_fixture();
+        let state_view = state.view();
+        let predicate_bytes =
+            norito::codec::Encode::encode(&CompoundPredicate::<AssetEscrowRecord>::PASS);
+        let selector_bytes =
+            norito::codec::Encode::encode(&SelectorTuple::<AssetEscrowRecord>::default());
+
+        let seller_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
+                    seller: ALICE_ID.clone(),
+                }),
+                item: QueryItemKind::AssetEscrowsBySeller,
+                predicate_bytes: predicate_bytes.clone(),
+                selector_bytes: selector_bytes.clone(),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(seller_output) = seller_request
+            .execute_ephemeral(&handle, &state_view, &ALICE_ID)
+            .expect("execute ephemeral seller escrow query")
+        else {
+            panic!("expected ephemeral seller iterable response")
+        };
+        let (seller_batch, _seller_remaining, seller_cursor) = seller_output.into_parts();
+        let seller_records = match seller_batch.into_iter().next().expect("seller batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected seller batch: {other:?}"),
+        };
+        assert_eq!(seller_records, vec![expected.clone()]);
+        assert!(seller_cursor.is_none());
+
+        let buyer_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByBuyer {
+                    buyer: BOB_ID.clone(),
+                }),
+                item: QueryItemKind::AssetEscrowsByBuyer,
+                predicate_bytes: predicate_bytes.clone(),
+                selector_bytes: selector_bytes.clone(),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(buyer_output) = buyer_request
+            .execute_ephemeral(&handle, &state_view, &ALICE_ID)
+            .expect("execute ephemeral buyer escrow query")
+        else {
+            panic!("expected ephemeral buyer iterable response")
+        };
+        let (buyer_batch, _buyer_remaining, buyer_cursor) = buyer_output.into_parts();
+        let buyer_records = match buyer_batch.into_iter().next().expect("buyer batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected buyer batch: {other:?}"),
+        };
+        assert_eq!(buyer_records, vec![expected.clone()]);
+        assert!(buyer_cursor.is_none());
+
+        let status_request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByStatus {
+                    status: AssetEscrowStatus::PaymentSent,
+                }),
+                item: QueryItemKind::AssetEscrowsByStatus,
+                predicate_bytes,
+                selector_bytes,
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+        let QueryResponse::Iterable(status_output) = status_request
+            .execute_ephemeral(&handle, &state_view, &ALICE_ID)
+            .expect("execute ephemeral status escrow query")
+        else {
+            panic!("expected ephemeral status iterable response")
+        };
+        let (status_batch, _status_remaining, status_cursor) = status_output.into_parts();
+        let status_records = match status_batch.into_iter().next().expect("status batch") {
+            QueryOutputBatchBox::AssetEscrowRecord(records) => records,
+            other => panic!("unexpected status batch: {other:?}"),
+        };
+        assert_eq!(status_records, vec![expected]);
+        assert!(status_cursor.is_none());
+    }
+
+    #[test]
+    fn escrow_dispatch_rejects_noncanonical_payload_bytes() {
+        use iroha_data_model::{
+            escrow::AssetEscrowRecord,
+            query::{QueryItemKind, QueryWithParams, escrow::prelude::FindAssetEscrowsBySeller},
+        };
+
+        let (state, handle, _) = escrow_dispatch_fixture();
+        let state_view = state.view();
+        let mut query_payload = norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
+            seller: ALICE_ID.clone(),
+        });
+        query_payload.push(0);
+        let request = ValidQueryRequest {
+            request: QueryRequest::Start(QueryWithParams {
+                query: (),
+                query_payload,
+                item: QueryItemKind::AssetEscrowsBySeller,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<AssetEscrowRecord>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(
+                    &SelectorTuple::<AssetEscrowRecord>::default(),
+                ),
+                params: QueryParams::default(),
+            }),
+            limits: QueryLimits::default(),
+        };
+
+        let error = request
+            .execute_ephemeral(&handle, &state_view, &ALICE_ID)
+            .expect_err("trailing escrow payload bytes must fail closed");
+        assert!(matches!(error, Error::Conversion(_)));
+    }
 
     #[test]
     fn fresh_client_facade_rejects_bare_continue_before_store_lookup() {
@@ -8275,7 +6679,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iter_dispatch_erased_and_fastdsl_parity_for_domains() {
+    async fn iter_dispatch_erased_and_canonical_parity_for_domains() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -8350,7 +6754,7 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
 
-        // fast_dsl-style path with encoded predicate/selector and no boxed payload.
+        // Canonical path with encoded predicate/selector and no boxed payload.
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
@@ -8388,7 +6792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iter_dispatch_erased_and_fastdsl_parity_for_assets() {
+    async fn iter_dispatch_erased_and_canonical_parity_for_assets() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -8469,7 +6873,7 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
 
-        // fast_dsl path
+        // Canonical encoded-component path.
         let (world_fast, _ad_fast, _asset_fast) = make_world();
         let (state_fast, handle_fast) = build_state(world_fast);
         let predicate = CompoundPredicate::<iroha_data_model::asset::value::Asset>::PASS;
@@ -8513,7 +6917,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iter_dispatch_erased_and_fastdsl_parity_for_nfts() {
+    async fn iter_dispatch_erased_and_canonical_parity_for_nfts() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -8577,7 +6981,7 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
 
-        // fast_dsl path
+        // Canonical encoded-component path.
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
@@ -8621,7 +7025,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iter_dispatch_erased_and_fastdsl_parity_for_accounts() {
+    async fn iter_dispatch_erased_and_canonical_parity_for_accounts() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -8682,7 +7086,7 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
 
-        // fast_dsl path
+        // Canonical encoded-component path.
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
@@ -8728,7 +7132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iter_dispatch_erased_and_fastdsl_parity_for_block_headers() -> Result<()> {
+    async fn iter_dispatch_erased_and_canonical_parity_for_block_headers() -> Result<()> {
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
@@ -8772,7 +7176,7 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
 
-        // fast_dsl path
+        // Canonical encoded-component path.
         let fast_qwp = QueryWithParams {
             query: (),
             query_payload: norito::codec::Encode::encode(
@@ -9936,7 +8340,7 @@ mod tests {
         kura.store_block(vcb).expect("store block");
         state_block.commit().unwrap();
 
-        // Build an erased iterable query over domains with sorting by metadata desc (fast_dsl bundle)
+        // Build a canonical iterable query over domains with metadata-descending sorting.
         let params = QueryParams {
             sorting: Sorting {
                 sort_by_metadata_key: Some(key.clone()),
@@ -10067,7 +8471,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fast_dsl_iter_accounts_with_asset_uses_payload() {
+    async fn canonical_iter_accounts_with_asset_uses_payload() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryItemKind, QueryWithParams,
@@ -10124,7 +8528,7 @@ mod tests {
 
         let state_view = state.view();
 
-        // fast_dsl-style iterable query bundle: Accounts + payload FindAccountsWithAsset
+        // Canonical iterable-query bundle: Accounts + payload FindAccountsWithAsset.
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -10296,7 +8700,7 @@ mod tests {
         };
         let boxed_accounts = drain_accounts(first_boxed, &handle_boxed);
 
-        // fast_dsl-style bundle using predicate/selector bytes and payload.
+        // Canonical bundle using predicate/selector bytes and payload.
         let (state_fast, handle_fast, ad_id_fast) = build_state_with_holdings();
         let iter_query = QueryWithParams {
             query: (),
@@ -11731,21 +10135,12 @@ mod tests {
         let state_view = state.view();
 
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    Box::new(query::nft::prelude::FindNfts)
-                }
-                #[cfg(feature = "fast_dsl")]
-                {
-                    ()
-                }
-            },
+            (),
             CompoundPredicate::PASS,
             SelectorTuple::<Nft>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,
@@ -11800,21 +10195,12 @@ mod tests {
         let state_view = state.view();
 
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    Box::new(query::role::prelude::FindRoles)
-                }
-                #[cfg(feature = "fast_dsl")]
-                {
-                    ()
-                }
-            },
+            (),
             CompoundPredicate::PASS,
             SelectorTuple::<Role>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,
@@ -11880,21 +10266,12 @@ mod tests {
         let state_view = state.view();
 
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    Box::new(query::trigger::prelude::FindTriggers)
-                }
-                #[cfg(feature = "fast_dsl")]
-                {
-                    ()
-                }
-            },
+            (),
             CompoundPredicate::PASS,
             SelectorTuple::<Trigger>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,

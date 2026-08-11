@@ -60,7 +60,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha_core": {
         "default": ("node",),
-        "runtime": ("json", "bls", "fast_dsl", "proofs-halo2"),
+        "runtime": ("json", "bls", "proofs-halo2"),
         "node": ("runtime", "proofs-stark"),
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
         "proofs-stark": ("zk-stark",),

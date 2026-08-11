@@ -240,26 +240,17 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
 pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
-        Ok(body) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .unwrap_or_else(|err| {
-                iroha_logger::error!(?err, "failed to build OpenAPI response");
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("failed to build OpenAPI response"))
-                    .unwrap()
-            }),
-        Err(err) => {
-            iroha_logger::error!(?err, "failed to serialize Torii OpenAPI stub");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(crate::openapi::compiled_spec_json()))
+        .unwrap_or_else(|err| {
+            iroha_logger::error!(?err, "failed to build static Torii OpenAPI response");
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("failed to serialize OpenAPI stub"))
+                .body(Body::from("failed to build static OpenAPI response"))
                 .unwrap()
-        }
-    }
+        })
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
@@ -44142,7 +44133,7 @@ mod tx_query_filter_tests {
 
     #[test]
     fn tx_predicate_from_filter_applies_without_feature() {
-        use iroha_data_model::query::dsl_fast::EvaluatePredicate;
+        use iroha_data_model::query::dsl::EvaluatePredicate;
 
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
@@ -45295,7 +45286,7 @@ mod query_endpoint_tests {
     #[tokio::test]
     async fn handle_queries_iterable_assets_non_empty() {
         use iroha_data_model::query::{
-            QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+            QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
             parameters::QueryParams,
         };
@@ -45328,15 +45319,14 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
 
-        // Build a SignedQuery for iterable FindAssets (feature-agnostic via erased query)
-        use iroha_data_model::query::ErasedIterQuery;
-        let payload = norito::codec::Encode::encode(&FindAssets);
-        let qbox: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Asset>::new(
-            CompoundPredicate::<Asset>::PASS,
-            SelectorTuple::<Asset>::default(),
-            payload,
-        ));
-        let iter = QueryWithParams::new(&qbox, QueryParams::default());
+        let iter = QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(&FindAssets),
+            item: QueryItemKind::Asset,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Asset>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
+            params: QueryParams::default(),
+        };
         let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
@@ -45375,7 +45365,7 @@ mod query_endpoint_tests {
     #[tokio::test]
     async fn handle_queries_rejects_fetch_size_above_max() {
         use iroha_data_model::query::{
-            QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+            QueryItemKind, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
             parameters::{FetchSize, MAX_FETCH_SIZE, QueryParams},
         };
@@ -45398,20 +45388,17 @@ mod query_endpoint_tests {
             .expect("nonzero add must succeed");
 
         // Build an iterable FindAssets query with an oversized fetch size.
-        use iroha_data_model::query::ErasedIterQuery;
-        let payload = norito::codec::Encode::encode(&FindAssets);
-        let qbox: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Asset>::new(
-            CompoundPredicate::<Asset>::PASS,
-            SelectorTuple::<Asset>::default(),
-            payload,
-        ));
-        let iter = QueryWithParams::new(
-            &qbox,
-            QueryParams {
+        let iter = QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(&FindAssets),
+            item: QueryItemKind::Asset,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Asset>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
+            params: QueryParams {
                 fetch_size: FetchSize::new(Some(over_max)),
                 ..QueryParams::default()
             },
-        );
+        };
 
         let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
         let signed = payload.sign(&alice_keypair);
@@ -49446,7 +49433,7 @@ mod cursor_mode_tests {
     };
     use iroha_data_model::prelude::*;
     use iroha_data_model::query::{
-        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        QueryItemKind, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::{FetchSize, QueryParams},
     };
@@ -49480,14 +49467,16 @@ mod cursor_mode_tests {
             },
             ..QueryParams::default()
         };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
-        let query_box: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            payload,
-        ));
-        let request = QueryRequest::Start(QueryWithParams::new(&query_box, query_params));
+        let request = QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
+            item: QueryItemKind::Domain,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
+            params: query_params,
+        });
         let response = run_on_snapshot_with_mode_arc_and_start_budget(
             state,
             &state.query_handle,

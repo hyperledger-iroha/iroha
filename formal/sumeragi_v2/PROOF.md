@@ -1598,10 +1598,10 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`15f837d911644b557c5a36064a1cff9c512f0cf2b120f5cc6fb21e7cfa530d83`.
+`a776dbab60a1b4c9fec7cdc048d094f509ce60b8c0d8ddebbacc38da5642f4ec`.
 The separate source-sealed G-UNIT inventory contains 524 focused tests,
 including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`;
+`ef124fe3e2f909e892bf484e3869ab97d3c3632fef542d9133bcdc145dec6cd8`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through

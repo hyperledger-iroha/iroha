@@ -502,9 +502,9 @@ _PRODUCTION_MODULES = (
     ("production-v2-adapter", "sumeragi::v2::tests", 46),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
-    ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
+    ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -513,7 +513,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
@@ -1064,7 +1064,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                4828,
+                4865,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "

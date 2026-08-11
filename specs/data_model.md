@@ -201,7 +201,7 @@ a node advertising any other data-model version before submission.
   - `query_registry!{ ... }` builds a global registry mapping concrete query types to constructors by type name for dynamic decode.
   - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
   - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
-- DSL: Implemented in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. A `fast_dsl` feature exposes a lighter variant if needed.
+- DSL: Implemented unconditionally in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. Iterable requests carry a canonical item discriminator plus encoded query, predicate, and selector components.
 
 ## Executor and Extensibility
 
@@ -232,7 +232,7 @@ a node advertising any other data-model version before submission.
 
 ## Features and Determinism
 
-- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
+- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `http`, `fault_injection`).
 - Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
 
 ### Transparent API (`transparent_api`)

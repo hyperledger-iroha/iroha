@@ -5,13 +5,6 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-#[cfg(not(feature = "fast_dsl"))]
-use iroha_data_model::query::{
-    account::prelude::FindAccounts,
-    asset::prelude::{FindAssets, FindAssetsDefinitions},
-    domain::prelude::FindDomains,
-    peer::prelude::FindPeers,
-};
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::{Account, AccountId},
@@ -20,9 +13,13 @@ use iroha_data_model::{
     metadata::Metadata,
     peer::PeerId,
     query::{
-        QueryBox, QueryOutput, QueryOutputBatchBox, QueryRequest, QueryWithFilter, QueryWithParams,
+        QueryItemKind, QueryOutput, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        account::prelude::FindAccounts,
+        asset::prelude::{FindAssets, FindAssetsDefinitions},
+        domain::prelude::FindDomains,
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
+        peer::prelude::FindPeers,
     },
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -77,69 +74,54 @@ impl StateQueryKind {
             FetchSize::new(fetch_size),
         );
 
-        let query_box: QueryBox<QueryOutputBatchBox> = match self {
-            StateQueryKind::Accounts => {
-                let with_filter: QueryWithFilter<Account> = QueryWithFilter::new_with_query(
-                    #[cfg(not(feature = "fast_dsl"))]
-                    Box::new(FindAccounts),
-                    #[cfg(feature = "fast_dsl")]
-                    (),
-                    CompoundPredicate::<Account>::PASS,
-                    SelectorTuple::<Account>::default(),
-                );
-                with_filter.into()
-            }
-            StateQueryKind::Assets => {
-                let with_filter: QueryWithFilter<Asset> = QueryWithFilter::new_with_query(
-                    #[cfg(not(feature = "fast_dsl"))]
-                    Box::new(FindAssets),
-                    #[cfg(feature = "fast_dsl")]
-                    (),
-                    CompoundPredicate::<Asset>::PASS,
-                    SelectorTuple::<Asset>::default(),
-                );
-                with_filter.into()
-            }
-            StateQueryKind::AssetDefinitions => {
-                let with_filter: QueryWithFilter<AssetDefinition> = QueryWithFilter::new_with_query(
-                    #[cfg(not(feature = "fast_dsl"))]
-                    Box::new(FindAssetsDefinitions),
-                    #[cfg(feature = "fast_dsl")]
-                    (),
-                    CompoundPredicate::<AssetDefinition>::PASS,
-                    SelectorTuple::<AssetDefinition>::default(),
-                );
-                with_filter.into()
-            }
-            StateQueryKind::Domains => {
-                let with_filter: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
-                    #[cfg(not(feature = "fast_dsl"))]
-                    Box::new(FindDomains),
-                    #[cfg(feature = "fast_dsl")]
-                    (),
-                    CompoundPredicate::<Domain>::PASS,
-                    SelectorTuple::<Domain>::default(),
-                );
-                with_filter.into()
-            }
-            StateQueryKind::Peers => {
-                let with_filter: QueryWithFilter<PeerId> = QueryWithFilter::new_with_query(
-                    #[cfg(not(feature = "fast_dsl"))]
-                    Box::new(FindPeers),
-                    #[cfg(feature = "fast_dsl")]
-                    (),
-                    CompoundPredicate::<PeerId>::PASS,
-                    SelectorTuple::<PeerId>::default(),
-                );
-                with_filter.into()
-            }
+        let query = match self {
+            StateQueryKind::Accounts => QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAccounts),
+                item: QueryItemKind::Account,
+                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::default()),
+                params,
+            },
+            StateQueryKind::Assets => QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssets),
+                item: QueryItemKind::Asset,
+                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Asset>::PASS),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
+                params,
+            },
+            StateQueryKind::AssetDefinitions => QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindAssetsDefinitions),
+                item: QueryItemKind::AssetDefinition,
+                predicate_bytes: norito::codec::Encode::encode(
+                    &CompoundPredicate::<AssetDefinition>::PASS,
+                ),
+                selector_bytes: norito::codec::Encode::encode(
+                    &SelectorTuple::<AssetDefinition>::default(),
+                ),
+                params,
+            },
+            StateQueryKind::Domains => QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindDomains),
+                item: QueryItemKind::Domain,
+                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
+                params,
+            },
+            StateQueryKind::Peers => QueryWithParams {
+                query: (),
+                query_payload: norito::codec::Encode::encode(&FindPeers),
+                item: QueryItemKind::PeerId,
+                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<PeerId>::PASS),
+                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<PeerId>::default()),
+                params,
+            },
         };
 
-        #[cfg(feature = "fast_dsl")]
-        let request = QueryRequest::Start(QueryWithParams::new(&query_box, params));
-        #[cfg(not(feature = "fast_dsl"))]
-        let request = QueryRequest::Start(QueryWithParams::new(query_box, params));
-        request
+        QueryRequest::Start(query)
     }
 }
 
@@ -844,6 +826,27 @@ mod tests {
                 "expected QueryRequest::Start for {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn build_request_encodes_canonical_domain_components() {
+        let QueryRequest::Start(query) = StateQueryKind::Domains.build_request(None) else {
+            panic!("domain state query must use the iterable start variant");
+        };
+
+        assert_eq!(query.item, QueryItemKind::Domain);
+        assert_eq!(
+            query.query_payload,
+            norito::codec::Encode::encode(&FindDomains)
+        );
+        assert_eq!(
+            query.predicate_bytes,
+            norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS)
+        );
+        assert_eq!(
+            query.selector_bytes,
+            norito::codec::Encode::encode(&SelectorTuple::<Domain>::default())
+        );
     }
 
     #[test]

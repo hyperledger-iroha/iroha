@@ -1270,19 +1270,19 @@ pub(crate) fn decode_uleb128(data: &[u8]) -> Result<(u64, usize), Uleb128Error> 
     Err(Uleb128Error::Truncated)
 }
 
-fn decode_cbor_map_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
+pub(super) fn decode_cbor_map_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(5, data)
 }
 
-fn decode_cbor_array_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
+pub(super) fn decode_cbor_array_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(4, data)
 }
 
-fn decode_cbor_uint(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
+pub(super) fn decode_cbor_uint(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(0, data)
 }
 
-fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyError> {
+pub(super) fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyError> {
     let (len, consumed) = decode_cbor_len(3, data)?;
     let start = consumed;
     let len = usize::try_from(len)
@@ -1298,7 +1298,7 @@ fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyError> {
     Ok((text, end))
 }
 
-fn decode_cbor_bytes(data: &[u8]) -> Result<(Vec<u8>, usize), CarVerifyError> {
+pub(super) fn decode_cbor_bytes(data: &[u8]) -> Result<(Vec<u8>, usize), CarVerifyError> {
     let (len, consumed) = decode_cbor_len(2, data)?;
     let start = consumed;
     let len = usize::try_from(len)

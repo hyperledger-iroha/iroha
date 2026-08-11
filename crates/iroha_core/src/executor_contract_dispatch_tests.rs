@@ -642,10 +642,7 @@
                 SelectorTuple::default(),
                 norito::codec::Encode::encode(&FindAccounts),
             ));
-        #[cfg(feature = "fast_dsl")]
         let query = QueryWithParams::new(&query, QueryParams::default());
-        #[cfg(not(feature = "fast_dsl"))]
-        let query = QueryWithParams::new(query, QueryParams::default());
         QueryRequest::Start(query)
     }
 
@@ -662,10 +659,7 @@
                 SelectorTuple::default(),
                 payload,
             ));
-        #[cfg(feature = "fast_dsl")]
         let query = QueryWithParams::new(&query, QueryParams::default());
-        #[cfg(not(feature = "fast_dsl"))]
-        let query = QueryWithParams::new(query, QueryParams::default());
         QueryRequest::Start(query)
     }
 

@@ -1,6 +1,7 @@
 [package]
 name = "sorafs_car"
 autobins = false
+autotests = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -117,3 +118,7 @@ required-features = ["dev-tools", "da_harness"]
 name = "soranet_trustless_verifier"
 path = "src/bin/soranet_trustless_verifier.rs"
 required-features = ["cli", "dev-tools"]
+
+[[test]]
+name = "sorafs_car_integration"
+path = "tests/sorafs_car_integration.rs"

@@ -392,12 +392,14 @@ available:
 cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
 ```
 
-Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
-and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+The canonical Rust host verifier in
+`crates/iroha_data_model/tests/account_address_vectors.rs`, together with the JS,
 Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
 `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
 `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
-consume the same fixture to guarantee codec parity across SDKs and Torii admission.
+consumes the same fixture to guarantee codec parity across SDKs. Actual Torii
+route admission remains covered separately by
+`crates/iroha_torii/tests/address_parsing.rs`.
 
 ### 3. Globally unique domains & normalization
 

@@ -235,7 +235,7 @@ injected transport and cannot be changed after `HttpClient` construction.
   `FindDomainCommittee`, `FindDaPinIntentByTicket`, `FindDaPinIntentByManifest`,
   `FindDaPinIntentByAlias`, `FindDaPinIntentByLaneEpochSequence`,
   `FindSorafsProviderOwner`, `FindDataspaceNameOwnerById`), a managed
-  `SignedIterableQueryBuilder` for the current fast_dsl iterable subset
+  `SignedIterableQueryBuilder` for the current canonical iterable subset
   (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`,
   `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`,
   `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`,
@@ -373,7 +373,7 @@ injected transport and cannot be changed after `HttpClient` construction.
 - `IrohaClient`, `LedgerClient`, and `ToriiClient` entry points, with raw JSON helpers still available for uncovered endpoints
 - fixture-backed unit tests against the repo's canonical address vectors
 
-Broader iterable families beyond the current fast_dsl subset, richer typed event coverage beyond the current pipeline/proof/explorer SSE projections, broader contract admin/lifecycle helpers beyond deploy/activate/call/multisig plus verified-source job helpers, Connect, Nexus, and the remaining parity work are still planned.
+Broader iterable families beyond the current canonical subset, richer typed event coverage beyond the current pipeline/proof/explorer SSE projections, broader contract admin/lifecycle helpers beyond deploy/activate/call/multisig plus verified-source job helpers, Connect, Nexus, and the remaining parity work are still planned.
 
 ## Kagemusha Torii transport
 
@@ -761,7 +761,7 @@ asset-lock cancellation. The Torii client can also parse generic SSE frames,
 project the common pipeline, proof, and explorer
 block/transaction/instruction streams into typed models, read the core
 explorer JSON endpoints including latest/health/metrics snapshots with typed
-DTOs, and build/sign the current singular set plus the first fast_dsl
+DTOs, and build/sign the current singular set plus the first canonical
 iterable-query subset, but broader iterable families, richer instruction
 families beyond that slice, broader typed event families, and the broader
 parity surfaces are still open work.

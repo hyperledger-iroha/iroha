@@ -2,12 +2,6 @@
 
 mod ascii;
 mod etenraku;
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-mod etenraku_trace;
 mod fetch;
 #[cfg(any(
     target_os = "macos",

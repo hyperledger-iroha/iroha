@@ -111,6 +111,14 @@ async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
     (status, body)
 }
 
+async fn post_operator_mcp(payload: Value) -> (StatusCode, Value) {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let app = build_router(cfg);
+    post_mcp(&app, payload).await
+}
+
 async fn post_mcp_bytes(app: &axum::Router, payload: Value) -> (StatusCode, Bytes) {
     let request = Request::builder()
         .method("POST")
@@ -352,6 +360,37 @@ fn assert_openai_compatible_top_level_input_schema(tool_name: &str, schema: &nor
             !schema.contains_key(keyword),
             "{tool_name} schema should not use top-level {keyword}"
         );
+    }
+}
+
+fn assert_operator_tool_contract(names: &[String]) {
+    const CONTRACT: &str = include_str!("fixtures/mcp_operator_tool_contract.v1.tsv");
+
+    for (line_index, line) in CONTRACT.lines().enumerate() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut columns = line.split('\t');
+        let expectation = columns.next().expect("tool contract expectation");
+        let tool_name = columns.next().expect("tool contract name");
+        assert_eq!(
+            columns.next(),
+            None,
+            "invalid tool contract row {}",
+            line_index + 1
+        );
+        let is_present = names.iter().any(|name| name == tool_name);
+        match expectation {
+            "present" => assert!(is_present, "expected MCP tool `{tool_name}`"),
+            "absent" => assert!(
+                !is_present,
+                "retired or unprojected MCP tool `{tool_name}` leaked"
+            ),
+            _ => panic!(
+                "invalid tool contract expectation on row {}",
+                line_index + 1
+            ),
+        }
     }
 }
 
@@ -1258,22 +1297,14 @@ async fn mcp_jsonrpc_rejects_manual_tools_without_catalog_projection() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 100,
-            "method": "tools/call",
-            "params": {
-                "name": "torii.get_health"
-            }
-        }),
-    )
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 100,
+        "method": "tools/call",
+        "params": {
+            "name": "torii.get_health"
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -1431,26 +1462,18 @@ async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_commit_certificates_accepts_flat_query_fields()
 {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1038,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.sumeragi.commit_certificates",
-                "arguments": {
-                    "from": 1,
-                    "limit": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1038,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.sumeragi.commit_certificates",
+            "arguments": {
+                "from": 1,
+                "limit": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -2199,25 +2222,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_subm
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10406,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.contracts.code.get",
-                "arguments": {
-                    "hash": "not-a-code-hash"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10406,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.contracts.code.get",
+            "arguments": {
+                "hash": "not-a-code-hash"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -2237,25 +2252,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shor
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_hash_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10409,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.contracts.code.bytes.get",
-                "arguments": {
-                    "hash": "not-a-code-hash"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10409,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.contracts.code.bytes.get",
+            "arguments": {
+                "hash": "not-a-code-hash"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -2306,25 +2313,17 @@ async fn retired_server_contract_deploy_mcp_tools_are_not_callable() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contracts_state_get_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10407,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.contracts.state.get",
-                "arguments": {
-                    "path": "k"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10407,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.contracts.state.get",
+            "arguments": {
+                "path": "k"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -2345,782 +2344,27 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
 
     let app = build_router(cfg);
     let names = list_all_tool_names(&app).await;
-
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.list"),
-        "expected explicitly allowlisted account listing tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.accounts.transactions"),
-        "expected explicitly allowlisted account transaction tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.history"),
-        "expected explicitly allowlisted account history tool"
-    );
-    assert!(
-        names.iter().all(|name| {
-            !matches!(
-                name.as_str(),
-                "torii.get_v1_accounts"
-                    | "torii.get_v1_accounts_account_id_transactions"
-                    | "torii.get_v1_accounts_account_id_history"
-            )
-        }),
-        "uncataloged OpenAPI operations must not become tools implicitly"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.health"),
-        "expected agent-friendly node health MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.status"),
-        "diagnostic status must not be projected into MCP"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.parameters.get"),
-        "expected agent-friendly parameters MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.node.capabilities"),
-        "expected agent-friendly node capabilities MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.time.now"),
-        "non-projected time-now route must not be an MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.time.status"),
-        "non-projected time-status route must not be an MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "torii.get_v1_api_version"),
-        "expected explicitly projected API-version MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.da.ingest"),
-        "expected agent-friendly DA ingest MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.da.proof_policies"),
-        "expected agent-friendly DA proof-policies MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.da.proof_policy_snapshot"),
-        "expected agent-friendly DA proof-policy snapshot MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.da.manifests.get"),
-        "expected agent-friendly DA manifest lookup MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.da.commitments.list"),
-        "expected agent-friendly DA commitment list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.da.commitments.prove"),
-        "expected agent-friendly DA commitment prove MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.da.commitments.verify"),
-        "expected agent-friendly DA commitment verify MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.da.pin_intents.list"),
-        "expected agent-friendly DA pin intents list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.da.pin_intents.prove"),
-        "expected agent-friendly DA pin intents prove MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.da.pin_intents.verify"),
-        "expected agent-friendly DA pin intents verify MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.runtime.abi.active"),
-        "expected agent-friendly runtime ABI-active MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.runtime.abi.hash"),
-        "expected agent-friendly runtime ABI-hash MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.runtime.metrics"),
-        "expected agent-friendly runtime metrics MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.runtime.upgrades.list"),
-        "expected agent-friendly runtime upgrades-list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.runtime.upgrades.propose"),
-        "expected agent-friendly runtime upgrades-propose MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.runtime.upgrades.activate"),
-        "expected agent-friendly runtime upgrades-activate MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.runtime.upgrades.cancel"),
-        "expected agent-friendly runtime upgrades-cancel MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.commit_certificates"),
-        "expected agent-friendly sumeragi commit-certificates MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.validator_sets.list"),
-        "expected agent-friendly sumeragi validator-set list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.validator_sets.get"),
-        "expected agent-friendly sumeragi validator-set detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
-        "expected agent-friendly sumeragi pacemaker MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.phases"),
-        "expected agent-friendly sumeragi phases MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.params"),
-        "expected agent-friendly sumeragi params MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.status"),
-        "expected agent-friendly sumeragi status MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.leader"),
-        "expected agent-friendly sumeragi leader MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.qc"),
-        "expected agent-friendly sumeragi qc MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.checkpoints"),
-        "expected agent-friendly sumeragi checkpoints MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.consensus_keys"),
-        "expected agent-friendly sumeragi consensus-keys MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.bls_keys"),
-        "expected agent-friendly sumeragi bls-keys MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.key_lifecycle"),
-        "expected agent-friendly sumeragi key-lifecycle MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.telemetry"),
-        "expected agent-friendly sumeragi telemetry MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.commit_qc.get"),
-        "expected agent-friendly sumeragi commit-qc-by-hash MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.evidence.count"),
-        "expected agent-friendly sumeragi evidence-count MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.evidence.list"),
-        "expected agent-friendly sumeragi evidence-list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.vrf.penalties"),
-        "expected agent-friendly sumeragi VRF penalties MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.vrf.epoch"),
-        "expected agent-friendly sumeragi VRF epoch MCP tool"
-    );
-    for retired_name in [
-        "iroha.sumeragi.evidence.submit",
-        "iroha.sumeragi.vrf.commit",
-        "iroha.sumeragi.vrf.reveal",
-    ] {
-        assert!(
-            !names.iter().any(|name| name == retired_name),
-            "retired Sumeragi mutation tool must remain absent: {retired_name}"
-        );
-    }
-    assert!(
-        !names.iter().any(|name| name == "iroha.ledger.headers"),
-        "non-projected ledger headers route must not be an MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.ledger.state_root"),
-        "non-projected ledger state-root route must not be an MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.ledger.state_proof"),
-        "non-projected ledger state-proof route must not be an MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.ledger.block_proof"),
-        "non-projected ledger block-proof route must not be an MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.bridge.finality.proof"),
-        "expected agent-friendly bridge finality-proof MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.bridge.finality.bundle"),
-        "expected agent-friendly bridge finality-bundle MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.proofs.get"),
-        "non-projected proof detail route must not be an MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.proofs.query"),
-        "expected agent-friendly proof query MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.proofs.retention"),
-        "non-projected proof retention route must not be an MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.contract.get"),
-        "expected agent-friendly governance contract-get MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.gov.proposals.deploy_contract"),
-        "expected agent-friendly governance deploy-contract MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.proposals.get"),
-        "expected agent-friendly governance proposal detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.locks.get"),
-        "expected agent-friendly governance lock-detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.referenda.get"),
-        "expected agent-friendly governance referendum detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.tally.get"),
-        "expected agent-friendly governance tally detail MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.gov.ballots.zk"),
-        "retired legacy governance ZK-ballot MCP tool must remain absent"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.ballots.zk_v1"),
-        "expected agent-friendly governance ZK-v1-ballot MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.gov.ballots.zk_v1.ballot_proof"),
-        "expected agent-friendly governance ballot-proof MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.ballots.plain"),
-        "expected agent-friendly governance plain-ballot MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.gov.protected_namespaces.list"),
-        "expected agent-friendly governance protected-namespaces list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.gov.protected_namespaces.update"),
-        "expected agent-friendly governance protected-namespaces update MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.unlocks.stats"),
-        "expected agent-friendly governance unlocks-stats MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.council.current"),
-        "expected agent-friendly governance council snapshot MCP tool"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.gov.council.persist"),
-        "removed governance council persist MCP tool must remain absent"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.gov.council.replace"),
-        "removed governance council replace MCP tool must remain absent"
-    );
-    assert!(
-        !names.iter().any(|name| name == "iroha.gov.council.audit"),
-        "removed governance council audit MCP tool must remain absent"
-    );
-    assert!(
-        !names
-            .iter()
-            .any(|name| name == "iroha.gov.council.derive_vrf"),
-        "removed governance council derive-vrf MCP tool must remain absent"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.enact"),
-        "expected agent-friendly governance enact MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.finalize"),
-        "expected agent-friendly governance finalize MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.aliases.resolve"),
-        "expected agent-friendly alias-resolve MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.aliases.resolve_index"),
-        "expected agent-friendly alias-resolve-index MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.contracts.code.get"),
-        "expected agent-friendly contract code detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.code.bytes.get"),
-        "expected agent-friendly contract code-bytes MCP tool"
-    );
-    for retired in [
-        "iroha.contracts.deploy",
-        "iroha.contracts.deploy_bundle",
-        "iroha.contracts.deploy_bundles.get",
-    ] {
-        assert!(
-            names.iter().all(|name| name != retired),
-            "retired server-side deployment MCP tool leaked into tool list: {retired}"
-        );
-    }
-    assert!(
-        names.iter().any(|name| name == "iroha.contracts.call"),
-        "expected agent-friendly contract call MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.call_and_wait"),
-        "expected agent-friendly contract call-and-wait MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.contracts.state.get"),
-        "expected agent-friendly contract state MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.list"),
-        "expected agent-friendly account listing MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.get"),
-        "expected agent-friendly account detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.qr"),
-        "expected agent-friendly account QR MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.query"),
-        "expected agent-friendly account query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.onboard"),
-        "expected agent-friendly account onboarding MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.accounts.transactions"),
-        "expected agent-friendly account transactions MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.history"),
-        "expected agent-friendly account history MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.accounts.transactions.query"),
-        "expected agent-friendly account transactions query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.assets"),
-        "expected agent-friendly account assets MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.accounts.assets.query"),
-        "expected agent-friendly account assets query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.accounts.permissions"),
-        "expected agent-friendly account permissions MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.portfolio"),
-        "expected agent-friendly account portfolio MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.domains.list"),
-        "expected agent-friendly domains list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.domains.get"),
-        "expected agent-friendly domains detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.domains.query"),
-        "expected agent-friendly domains query MCP tool"
-    );
-    for expected in [
-        "iroha.musubi.queries.exact_package",
-        "iroha.musubi.queries.exact_release",
-        "iroha.musubi.queries.resolver_index",
-        "iroha.musubi.queries.versions",
-        "iroha.musubi.queries.maintainers",
-        "iroha.musubi.queries.archive_locations",
-        "iroha.musubi.queries.provider_bundle_attestation",
-        "iroha.musubi.queries.archive_retention",
-        "iroha.musubi.queries.alias",
-        "iroha.musubi.queries.alias_history",
-        "iroha.musubi.queries.ordered_prefix",
-        "iroha.musubi.queries.search",
-        "iroha.musubi.instructions.namespace_binding_register",
-        "iroha.musubi.instructions.archive_register",
-        "iroha.musubi.instructions.provider_bundle_attestation_register",
-        "iroha.musubi.instructions.archive_location_add",
-        "iroha.musubi.instructions.archive_location_retire",
-        "iroha.musubi.instructions.release_publish",
-        "iroha.musubi.instructions.release_yank_set",
-        "iroha.musubi.instructions.package_metadata_set",
-        "iroha.musubi.instructions.package_member_invite",
-        "iroha.musubi.instructions.package_member_accept",
-        "iroha.musubi.instructions.package_member_invitation_revoke",
-        "iroha.musubi.instructions.package_member_set_role",
-        "iroha.musubi.instructions.package_member_remove",
-        "iroha.musubi.instructions.alias_register",
-        "iroha.musubi.instructions.package_recover",
-        "iroha.musubi.instructions.alias_retarget",
-        "iroha.musubi.instructions.artifact_takedown",
-        "iroha.musubi.instructions.registry_policy_set",
-        "iroha.musubi.instructions.release_digest_assert",
-    ] {
-        assert!(
-            names.iter().any(|name| name == expected),
-            "expected first-release Musubi MCP tool `{expected}`"
-        );
-    }
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.plans.list"),
-        "expected agent-friendly subscription plans list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.plans.create"),
-        "expected agent-friendly subscription plans create MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.subscriptions.list"),
-        "expected agent-friendly subscriptions list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.create"),
-        "expected agent-friendly subscription create MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.subscriptions.get"),
-        "expected agent-friendly subscription detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.cancel"),
-        "expected agent-friendly subscription cancel MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.subscriptions.pause"),
-        "expected agent-friendly subscription pause MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.resume"),
-        "expected agent-friendly subscription resume MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.subscriptions.keep"),
-        "expected agent-friendly subscription keep MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.subscriptions.usage"),
-        "expected agent-friendly subscription usage MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.subscriptions.charge_now"),
-        "expected agent-friendly subscription charge-now MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.assets.definitions"),
-        "expected agent-friendly asset definitions MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.assets.definitions.get"),
-        "expected agent-friendly asset definitions detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.assets.definitions.query"),
-        "expected agent-friendly asset definitions query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.assets.holders"),
-        "expected agent-friendly asset holders MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.assets.holders.query"),
-        "expected agent-friendly asset holders query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.assets.list"),
-        "expected agent-friendly asset list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.assets.get"),
-        "expected agent-friendly asset detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.nfts.chain.list"),
-        "expected agent-friendly chain NFT list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.nfts.list"),
-        "expected agent-friendly nft list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.nfts.get"),
-        "expected agent-friendly nft detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.nfts.query"),
-        "expected agent-friendly nft query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.rwas.chain.list"),
-        "expected agent-friendly chain RWA list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.rwas.list"),
-        "expected agent-friendly rwa list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.rwas.get"),
-        "expected agent-friendly rwa detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.rwas.query"),
-        "expected agent-friendly rwa query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.iso20022.pacs008.submit"),
-        "expected agent-friendly ISO pacs.008 submit MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.iso20022.pacs009.submit"),
-        "expected agent-friendly ISO pacs.009 submit MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.iso20022.status.get"),
-        "expected agent-friendly ISO status MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.queries.submit"),
-        "expected agent-friendly signed query submit MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.transactions.submit"),
-        "expected agent-friendly transaction submit MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.transactions.submit_and_wait"),
-        "expected agent-friendly transaction submit-and-wait MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.transactions.wait"),
-        "expected agent-friendly transaction wait MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.transactions.status"),
-        "expected agent-friendly transaction status MCP tool"
-    );
-    for retired in [
-        "iroha.sumeragi.rbc",
-        "iroha.sumeragi.rbc.sessions",
-        "iroha.sumeragi.rbc.delivered",
-        "iroha.sumeragi.rbc.sample",
-        "iroha.sumeragi.collectors",
-    ] {
-        assert!(
-            names.iter().all(|name| name != retired),
-            "retired Sumeragi MCP tool {retired} must not be advertised"
-        );
-    }
-    assert!(
-        names.iter().any(|name| name == "iroha.transactions.list"),
-        "expected agent-friendly transaction list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.transactions.get"),
-        "expected agent-friendly transaction detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.instructions.list"),
-        "expected agent-friendly instruction list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.instructions.get"),
-        "expected agent-friendly instruction detail MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.blocks.list"),
-        "expected agent-friendly block list MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.blocks.get"),
-        "expected agent-friendly block detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.connect.session.create"),
-        "expected agent-friendly connect session create MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.connect.session.create_and_ticket"),
-        "expected agent-friendly connect session create-and-ticket MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.connect.ws.ticket"),
-        "expected agent-friendly connect ws ticket MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.connect.status"),
-        "expected agent-friendly connect status MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.connect.session.delete"),
-        "expected agent-friendly connect session delete MCP tool"
-    );
+    assert_operator_tool_contract(&names);
 }
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 104,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.transactions",
-                "arguments": {
-                    "path": {
-                        "account_id": TEST_ACCOUNT_I105
-                    },
-                    "query": {
-                        "limit": 0
-                    }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 104,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.transactions",
+            "arguments": {
+                "path": {
+                    "account_id": TEST_ACCOUNT_I105
+                },
+                "query": {
+                    "limit": 0
                 }
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3144,30 +2388,22 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_account_history_uses_path_and_query_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10450,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.history",
-                "arguments": {
-                    "path": {
-                        "account_id": TEST_ACCOUNT_I105
-                    },
-                    "query": {
-                        "limit": 0
-                    }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10450,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.history",
+            "arguments": {
+                "path": {
+                    "account_id": TEST_ACCOUNT_I105
+                },
+                "query": {
+                    "limit": 0
                 }
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3187,22 +2423,14 @@ async fn mcp_jsonrpc_tools_call_account_history_uses_path_and_query_arguments() 
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 105,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.list"
-            }
-        }),
-    )
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 105,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.list"
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3212,25 +2440,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1051,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.get",
-                "arguments": {
-                    "account_id": "not-an-account-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1051,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.get",
+            "arguments": {
+                "account_id": "not-an-account-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3250,25 +2470,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1052,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.qr",
-                "arguments": {
-                    "account_id": "not-an-account-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1052,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.qr",
+            "arguments": {
+                "account_id": "not-an-account-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3288,27 +2500,19 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id(
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.status",
-                "arguments": {
-                    "query": {
-                        "hash": "not-a-hash"
-                    }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.status",
+            "arguments": {
+                "query": {
+                    "hash": "not-a-hash"
                 }
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3328,25 +2532,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query()
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1061,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.status",
-                "arguments": {
-                    "hash": "not-a-hash"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1061,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.status",
+            "arguments": {
+                "hash": "not-a-hash"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3366,25 +2562,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10616,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.status",
-                "arguments": {
-                    "transaction_hash": "not-a-hash"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10616,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.status",
+            "arguments": {
+                "transaction_hash": "not-a-hash"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3404,27 +2592,19 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transacti
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.wait",
-                "arguments": {
-                    "hash": "not-a-hash",
-                    "timeout_ms": 1000,
-                    "poll_interval_ms": 100
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": {
+                "hash": "not-a-hash",
+                "timeout_ms": 1000,
+                "poll_interval_ms": 100
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3445,29 +2625,21 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash()
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_transaction_hash_alias()
 {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10621,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.wait",
-                "arguments": {
-                    "query": {
-                        "transaction_hash": "not-a-hash"
-                    },
-                    "timeout_ms": 1000,
-                    "poll_interval_ms": 100
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10621,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": {
+                "query": {
+                    "transaction_hash": "not-a-hash"
+                },
+                "timeout_ms": 1000,
+                "poll_interval_ms": 100
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3487,25 +2659,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_trans
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10611,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.list",
-                "arguments": {
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10611,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.list",
+            "arguments": {
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3519,25 +2683,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10612,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.get",
-                "arguments": {
-                    "hash": "not-a-hash"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10612,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.get",
+            "arguments": {
+                "hash": "not-a-hash"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3557,27 +2713,19 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash()
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transaction_hash_alias() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106121,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.transactions.get",
-                "arguments": {
-                    "path": {
-                        "transaction_hash": "not-a-hash"
-                    }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106121,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.get",
+            "arguments": {
+                "path": {
+                    "transaction_hash": "not-a-hash"
                 }
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3597,25 +2745,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transa
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10613,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.instructions.list",
-                "arguments": {
-                    "page": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10613,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.instructions.list",
+            "arguments": {
+                "page": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3629,26 +2769,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_and_index() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10614,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.instructions.get",
-                "arguments": {
-                    "hash": "not-a-hash",
-                    "index": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10614,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.instructions.get",
+            "arguments": {
+                "hash": "not-a-hash",
+                "index": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3668,26 +2800,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_a
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_alias_shortcuts() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10615,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.instructions.get",
-                "arguments": {
-                    "transaction_hash": "not-a-hash",
-                    "instruction_index": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10615,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.instructions.get",
+            "arguments": {
+                "transaction_hash": "not-a-hash",
+                "instruction_index": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3707,28 +2831,20 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_alias_short
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transaction_hash_alias() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1061511,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.instructions.get",
-                "arguments": {
-                    "path": {
-                        "transaction_hash": "not-a-hash",
-                        "index": 0
-                    }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1061511,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.instructions.get",
+            "arguments": {
+                "path": {
+                    "transaction_hash": "not-a-hash",
+                    "index": 0
                 }
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3748,25 +2864,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transa
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106151,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.list",
-                "arguments": {
-                    "page": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106151,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.list",
+            "arguments": {
+                "page": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3780,25 +2888,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_field
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106152,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.get",
-                "arguments": {
-                    "asset_id": "not-an-asset-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106152,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.get",
+            "arguments": {
+                "asset_id": "not-an-asset-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3818,23 +2918,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106151,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.chain.list",
-                "arguments": {}
-            }
-        }),
-    )
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106151,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.nfts.chain.list",
+            "arguments": {}
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3860,25 +2952,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106153,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.list",
-                "arguments": {
-                    "page": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106153,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.nfts.list",
+            "arguments": {
+                "page": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3892,25 +2976,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields(
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106154,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.get",
-                "arguments": {
-                    "nft_id": "not-an-nft-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106154,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.nfts.get",
+            "arguments": {
+                "nft_id": "not-an-nft-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3930,25 +3006,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106155,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.nfts.query",
-                "arguments": {
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106155,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.nfts.query",
+            "arguments": {
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -3962,23 +3030,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fie
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106156,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.chain.list",
-                "arguments": {}
-            }
-        }),
-    )
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106156,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.rwas.chain.list",
+            "arguments": {}
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4004,25 +3064,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106157,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.list",
-                "arguments": {
-                    "page": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106157,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.rwas.list",
+            "arguments": {
+                "page": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4036,25 +3088,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields(
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106158,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.get",
-                "arguments": {
-                    "rwa_id": "not-a-rwa-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106158,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.rwas.get",
+            "arguments": {
+                "rwa_id": "not-a-rwa-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4074,25 +3118,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106159,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.rwas.query",
-                "arguments": {
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106159,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.rwas.query",
+            "arguments": {
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4106,25 +3142,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fie
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10616,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.blocks.list",
-                "arguments": {
-                    "page": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10616,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.blocks.list",
+            "arguments": {
+                "page": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4138,25 +3166,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_field
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10617,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.blocks.get",
-                "arguments": {
-                    "block_height": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10617,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.blocks.get",
+            "arguments": {
+                "block_height": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4176,26 +3196,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.transactions",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.transactions",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105,
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4215,26 +3227,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_ar
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_history_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10621,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.history",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10621,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.history",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105,
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4254,26 +3258,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_history_accepts_flat_argumen
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10620,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.query",
-                "arguments": {
-                    "limit": 2,
-                    "offset": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10620,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.query",
+            "arguments": {
+                "limit": 2,
+                "offset": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4327,26 +3323,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10623,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.transactions.query",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10623,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.transactions.query",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105,
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4360,26 +3348,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_f
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10621,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.assets",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10621,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.assets",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105,
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4399,26 +3379,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_argument
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10624,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.assets.query",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10624,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.assets.query",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105,
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4432,25 +3404,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_ar
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_account_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10622,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.permissions",
-                "arguments": {
-                    "account_id": TEST_ACCOUNT_I105
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10622,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.permissions",
+            "arguments": {
+                "account_id": TEST_ACCOUNT_I105
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4464,25 +3428,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_acc
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_portfolio_accepts_flat_uaid() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106221,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.accounts.portfolio",
-                "arguments": {
-                    "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106221,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.accounts.portfolio",
+            "arguments": {
+                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4496,25 +3452,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_portfolio_accepts_flat_uaid(
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106222,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.domains.list",
-                "arguments": {
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106222,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.domains.list",
+            "arguments": {
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4534,25 +3482,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062221,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.domains.get",
-                "arguments": {
-                    "domain_id": "not-a-domain-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062221,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.domains.get",
+            "arguments": {
+                "domain_id": "not-a-domain-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4572,25 +3512,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id()
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106223,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.domains.query",
-                "arguments": {
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106223,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.domains.query",
+            "arguments": {
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4604,23 +3536,15 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10622301,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.musubi.queries.exact_package",
-                "arguments": {}
-            }
-        }),
-    )
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 10622301,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.musubi.queries.exact_package",
+            "arguments": {}
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4639,26 +3563,18 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106223011,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.musubi.instructions.release_yank_set",
-                "arguments": {
-                    "body": {},
-                    "private_key": "must-not-be-accepted"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106223011,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.musubi.instructions.release_yank_set",
+            "arguments": {
+                "body": {},
+                "private_key": "must-not-be-accepted"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4796,25 +3712,17 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062231,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.subscriptions.plans.list",
-                "arguments": {
-                    "limit": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062231,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.subscriptions.plans.list",
+            "arguments": {
+                "limit": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4858,25 +3766,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_create_accepts_b
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062232,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.subscriptions.list",
-                "arguments": {
-                    "limit": 1
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062232,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.subscriptions.list",
+            "arguments": {
+                "limit": 1
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -4920,25 +3820,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subscription_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062233,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.subscriptions.get",
-                "arguments": {
-                    "subscription_id": "not-a-subscription-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062233,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.subscriptions.get",
+            "arguments": {
+                "subscription_id": "not-a-subscription-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5044,25 +3936,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscription_actions_accept_flat_sub
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106224,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.definitions",
-                "arguments": {
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106224,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.definitions",
+            "arguments": {
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5082,25 +3966,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_definition_id() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1062241,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.definitions.get",
-                "arguments": {
-                    "definition_id": "not-a-definition-id"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1062241,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.definitions.get",
+            "arguments": {
+                "definition_id": "not-a-definition-id"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5120,25 +3996,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_d
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106225,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.definitions.query",
-                "arguments": {
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106225,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.definitions.query",
+            "arguments": {
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5152,26 +4020,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106226,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.holders",
-                "arguments": {
-                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                    "limit": 0
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106226,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.holders",
+            "arguments": {
+                "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                "limit": 0
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5191,26 +4051,18 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arguments() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106227,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.assets.holders.query",
-                "arguments": {
-                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                    "limit": 2
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 106227,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.assets.holders.query",
+            "arguments": {
+                "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                "limit": 2
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);
@@ -5555,25 +4407,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs009_accepts_xml_shortcu
 
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_status_accepts_message_id_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1137,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.iso20022.status.get",
-                "arguments": {
-                    "message_id": "msg-001"
-                }
+    let (status, call) = post_operator_mcp(norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1137,
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.iso20022.status.get",
+            "arguments": {
+                "message_id": "msg-001"
             }
-        }),
-    )
+        }
+    }))
     .await;
 
     assert_eq!(status, StatusCode::OK);

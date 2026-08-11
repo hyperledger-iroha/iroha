@@ -55,6 +55,17 @@ def test_reply_writer_deadline_selects_flush_fixture_methods_by_context(
         for error in errors
     ), errors
 
+    mutate_source_once(
+        network,
+        "pub async fn start_with_crypto_and_initial_authorities(",
+        "pub async fn start_with_crypto_and_initial_authorities_disabled(",
+    )
+    errors = module._reply_writer_deadline_production_source_fidelity_errors(tmp_path)
+    assert any(
+        "P2P startup must destructure the configured exact-reply writer deadline" in error
+        for error in errors
+    ), errors
+
 @pytest.mark.parametrize(
     ("relative_path", "old", "new", "error_fragment"),
     (
@@ -451,6 +462,12 @@ def test_reply_writer_deadline_production_item_mutations_fail_closed(
             old,
             new,
         )
+    if relative_path == "crates/iroha_core/src/sumeragi/v2_worker.rs" and item_name == "drive_with_budget_ack":
+        mutated = module.rust_items((tmp_path / relative_path).read_text(encoding="utf-8"), item_name)
+        assert len(mutated) == 1
+        module._REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256[
+            "PendingExactOutput::drive_with_budget_ack"
+        ] = module._rust_item_token_sha256(mutated[0])
 
     errors = module._reply_writer_deadline_production_source_fidelity_errors(
         tmp_path

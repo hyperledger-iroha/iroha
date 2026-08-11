@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -19,9 +19,12 @@ Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
 not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
-regressions, generated-artifact determinism, exact profile-config admission,
-and public consensus wire roundtrips are complete. The outstanding revision-4
-work is limited to:
+regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
+profile-config admission, and public consensus wire roundtrips are complete.
+The five checked-in OpenAPI artifacts remain stale and require deterministic
+regeneration from a clean exact candidate; the dirty unsigned development
+checkout is not release provenance. The outstanding revision-4 work is limited
+to:
 
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
@@ -319,9 +322,13 @@ tests pass.
 The validator-only, prepared-bundle Compose redesign passes its focused
 `iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
 regressions. The zero-chain genesis, three generated Compose manifests, and
-dev/Taira profile bundles are refreshed and deterministic; exact generated
-profile configs also pass runtime admission. Daemon config-digest execution
-remains blocked by the unrelated Bootle-Lantern lib-test compile error.
+dev/Taira profile bundles are refreshed and deterministic. Taira generation
+now pins all three reviewed network frame caps, chain discriminant `369`, and
+the canonical fee, stake, slash, and gas protocol accounts; all 18 tracked
+Taira bundle outputs were regenerated together. Exact generated profile
+configs also pass runtime admission. This development-tree regeneration is not
+a live Taira rollout or release receipt. Daemon config-digest execution remains
+blocked by the unrelated Bootle-Lantern lib-test compile error.
 
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
@@ -333,7 +340,8 @@ exact verified copy of the pinned installed Node dependency graph, and clean up
 safely under Bash 3.2 even when preflight rejects the checkout.
 Closure still requires a clean double regeneration, synchronized manifests and
 version maps, an explicit generated-client versus hand-maintained-SDK policy,
-the external Ed25519 HSM envelope, and a production gate run with
+an independently administered external software Ed25519 envelope, and a
+production gate run with
 `OPENAPI_REQUIRE_SIGNED=1` and the approved operator allowlist.
 
 ## SoraFS V1 Governance DAG deployment closure
@@ -737,8 +745,11 @@ Repository conformance and synthetic fixture aggregates are not promotion
 evidence. L1 requires the live four-voting-validator, multi-provider,
 dual-gateway, dual-Governance-DAG deployment, resilience/load/24-hour soak
 evidence, and exactly 17 fresh payload-free summaries under one deployment
-context. L2 requires the externally HSM-signed ordered `SFM-1`, `SF-1`,
-`SF-2`, `SF-2c`, `SF-3`, `SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope.
+context. L2 requires the ordered `SFM-1`, `SF-1`, `SF-2`, `SF-2c`, `SF-3`,
+`SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope signed by an independently
+administered external software Ed25519 signer. Its binding must pin
+`signing_provider=authenticated_external_signer`, `signing_backend=software`,
+and `signer_qualification=software-key-qualified`.
 Promotion is allowed only when both deterministic runs emit `status=ready`,
 `summary_file_count=17`, `recognized_summary_count=17`, every lane is valid,
 no critical/high vulnerability remains, and rollback is usable.
@@ -761,9 +772,11 @@ before opening any archive, consensus, node-handle, or outbox state. The exact
 opaque-preflight consumption/revalidation and main daemon startup-order tests
 are green; remaining L0 execution includes clean workspace gates and final
 artifact provenance. Seven focused Rust `EscrowId` hard-cut
-regressions and the aggregate production-readiness regression suite passed all
-459 tests in two complete runs. Neither local result substitutes for native
-qualification or genuine L1/L2 evidence.
+regressions and the latest complete aggregate production-readiness regression
+run passed all 465 current tests; earlier complete runs covered the then-current
+459-test suite. A second complete 465-test final-tree replay remains required.
+Neither local result substitutes for native qualification or genuine L1/L2
+evidence.
 PDP, PoR, and PoTR production failure handoff uses the exact-chain durable
 native transaction forwarder, and storage work is gated by the finalized
 native task cursor, revision, lease owner, generation, and expiry. The

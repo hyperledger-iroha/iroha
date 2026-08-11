@@ -292,19 +292,6 @@ fn commit_stateful_admission_sequence(
     Ok(())
 }
 
-fn commit_stateful_admission_sequence_to_block(
-    state_block: &mut StateBlock<'_>,
-    admission: &crate::tx::StatefulAdmission,
-) -> Result<(), TransactionRejectionReason> {
-    if admission.sequence_to_commit.is_none() && admission.validation_fee_credit.is_none() {
-        return Ok(());
-    }
-    let mut state_tx = state_block.transaction();
-    commit_stateful_admission_sequence(&mut state_tx, admission)?;
-    state_tx.apply();
-    Ok(())
-}
-
 #[cfg(test)]
 mod overlay_error_tests {
     use iroha_data_model::{
@@ -13634,7 +13621,7 @@ pub(crate) mod valid {
             if state_block.pipeline.parallel_apply {
                 use rayon::prelude::*;
 
-                use crate::state::{DetachedMergeContext, DetachedStateTransactionDelta};
+                use crate::state::DetachedStateTransactionDelta;
 
                 #[derive(Clone)]
                 struct PreparedEntry {
@@ -14120,9 +14107,6 @@ pub(crate) mod valid {
                     let t_layer_merge = Instant::now();
                     let layer_merge_start = timings.as_ref().map(|_| Instant::now());
                     let mut layer_fallback_ms = 0u64;
-                    // Detached metadata merges rely on DetachedStateTransactionDelta's SoA + name
-                    // interning layout to avoid redundant map probes while preserving determinism.
-
                     let mut apply_overlay_sequential =
                         |state_block_mut: &mut StateBlock<'_>,
                          lane_summaries_mut: &mut BTreeMap<LaneId, LaneSummary>,
@@ -14642,82 +14626,18 @@ pub(crate) mod valid {
                                         }
                                         continue;
                                     }
-                                    if admission.validation_fee_credit.is_some() {
-                                        // Validation-fee credits are consensus state that must be
-                                        // committed in the same rollback scope as the signed
-                                        // transfers and all data triggers. The direct detached
-                                        // merge applies its delta before admission facts, so use
-                                        // the ordinary transactional path for fee-bearing work.
-                                        drop(state_tx);
-                                        let result = apply_overlay_sequential(
-                                            state_block,
-                                            &mut lane_summaries,
-                                            p.idx,
-                                        );
-                                        let result_is_err = result.is_err();
-                                        record_result(p.idx, result);
-                                        if result_is_err {
-                                            record_amx_abort(state_block, p.idx, "commit");
-                                        }
-                                        continue;
-                                    }
+                                    // A malformed detached delta cannot be produced by the
+                                    // evaluator, but preserve a deterministic sequential fallback.
                                     drop(state_tx);
-                                    let merge_context = DetachedMergeContext {
-                                        tx_call_hash: Some(iroha_crypto::Hash::from(hash)),
-                                        current_tx_hash: Some(
-                                            prepared_txs[p.idx].metadata.signed_hash,
-                                        ),
-                                        current_lane_id: Some(routing_decisions[p.idx].lane_id),
-                                        current_dataspace_id: Some(
-                                            routing_decisions[p.idx].dataspace_id,
-                                        ),
-                                    };
-                                    match delta.merge_into_with_context(
+                                    let result = apply_overlay_sequential(
                                         state_block,
-                                        &p.authority,
-                                        merge_context,
-                                    ) {
-                                        Ok(trigger_sequence) => {
-                                            let admission_commit =
-                                                commit_stateful_admission_sequence_to_block(
-                                                    state_block,
-                                                    &admission,
-                                                );
-                                            if let Err(reason) = admission_commit {
-                                                record_amx_abort(state_block, p.idx, "commit");
-                                                record_result(p.idx, Err(reason));
-                                                continue;
-                                            }
-                                            record_result(p.idx, Ok(trigger_sequence));
-                                            let lane_id = routing_decisions[p.idx].lane_id;
-                                            let summary =
-                                                lane_summaries.entry(lane_id).or_default();
-                                            summary.detached_merged =
-                                                summary.detached_merged.saturating_add(1);
-                                            if debug_trace_tx_eval {
-                                                let ts = tx.creation_time().as_millis();
-                                                eprintln!(
-                                                    "[core-eval] ok(prepared-merge) hash={} ts={} auth={}",
-                                                    hash, ts, p.authority,
-                                                );
-                                            }
-                                        }
-                                        Err(reason) => {
-                                            record_amx_abort(state_block, p.idx, "commit");
-                                            match reason {
-                                                TransactionRejectionReason::Validation(_) => {
-                                                    let result = apply_overlay_sequential(
-                                                        state_block,
-                                                        &mut lane_summaries,
-                                                        p.idx,
-                                                    );
-                                                    record_result(p.idx, result);
-                                                }
-                                                other => {
-                                                    record_result(p.idx, Err(other));
-                                                }
-                                            }
-                                        }
+                                        &mut lane_summaries,
+                                        p.idx,
+                                    );
+                                    let result_is_err = result.is_err();
+                                    record_result(p.idx, result);
+                                    if result_is_err {
+                                        record_amx_abort(state_block, p.idx, "commit");
                                     }
                                 }
                                 Some(Err(reason)) => {

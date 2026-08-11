@@ -14,7 +14,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "e21f876507ce5152a8e64a07cfcff235bc9709d294800f77130e819deccd3537"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
+        "3e00fb93a6bd95b2d6c4818c97384160fe40de5aef5b6486e76bb0e241abc01e"
     ),
     "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
         "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
@@ -961,10 +961,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "2795cb0b98dafe93a05bafe01680d2ffab9d5527a35b1530af43a97d0e7083d9"
+        "61943f166f8ced64916306aa42ca38d7e9e5f697ec1744390d93c03e3fa12982"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "b4dad546374a4b3eaab321e127d075bcb280f5a0821f50fb31c35575245364f5"
+        "a9b6ca524df7d45de91a4a1af9b850fef0ff9b686d78e09967b2b2c9532e59ba"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "b8e3639568e60423f2b1b42db90e25bd4ee81bc82dccc1dd8ff7920d53d1d19a"
@@ -973,16 +973,16 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "34f078f0f00d321f86bb06d31cb528f32559123410c929a92a2300338e95406f"
+        "48cce7600cbe03d7a75c274bb62485798dcba19b812bc09ade7a9012c556f55c"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "793834972cfc1d403e43ed5405f9dd52eb14d8418a6e1c6b2aa77bbd1d332f9f"
+        "7f4c316c6b8ecb1ab29c142cfc773810085d884352a1ace3eb6c48f7ebaf51ae"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "7dcca5fd82b47747d670eadd8a8d5f42919b3706499fb4f804c6bb1fe31b8192"
+        "8ceaf224db6e9220c7f5123c74eba8c8a95dca8d12648ab8d86846178b7bb521"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "8854b0996f37153290c6dda30c0a504b7af16c5105ee86c5ebd1fa12949f507d"
+        "9233e7bc930bc1dde0d74fc35163b6d4ffb553e5d20bdee149ed592a2921e7dd"
     ),
 }
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (

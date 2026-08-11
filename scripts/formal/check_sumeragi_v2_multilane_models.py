@@ -1050,7 +1050,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "prune_lock.lock",
             "ensure_prune_recovery_not_required",
             "native_amx_participant_application_evidence_for_block_under_publication_guard",
-            "block, true",
+            "NativeAmxMergeAssociation::CommittedOnly",
             "persist_native_amx_participant_application_evidence_under_publication_guard",
             "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
         ),

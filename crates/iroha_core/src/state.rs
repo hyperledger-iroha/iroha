@@ -17187,210 +17187,17 @@ mod custom_parameter_tests {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct SortedUniqueVec<T> {
-    inner: Vec<T>,
-}
-
-#[cfg(test)]
-impl<T> Default for SortedUniqueVec<T> {
-    fn default() -> Self {
-        Self { inner: Vec::new() }
-    }
-}
-
-#[cfg(test)]
-impl<T: Ord> SortedUniqueVec<T> {
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    fn insert(&mut self, value: T) -> bool {
-        match self.inner.binary_search(&value) {
-            Ok(_) => false,
-            Err(pos) => {
-                self.inner.insert(pos, value);
-                true
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-impl<T> IntoIterator for SortedUniqueVec<T> {
-    type Item = T;
-    type IntoIter = std::vec::IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
-    }
-}
-
-#[cfg(test)]
-impl<'a, T> IntoIterator for &'a SortedUniqueVec<T> {
-    type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
-    }
-}
-
-/// Compact identifier assigned to a metadata key within a detached transaction.
-#[cfg(test)]
-type NameId = u32;
-
-/// Interns metadata key names for a single detached transaction delta so that
-/// downstream aggregation can compare inexpensive integer handles instead of
-/// cloning `Name` values repeatedly.
-#[cfg(test)]
 #[derive(Default, Debug, Clone)]
-struct NameIntern {
-    entries: Vec<iroha_data_model::name::Name>,
-    index: std::collections::BTreeMap<iroha_data_model::name::Name, NameId>,
-}
-
-#[cfg(test)]
-impl NameIntern {
-    fn intern(&mut self, name: iroha_data_model::name::Name) -> NameId {
-        if let Some(&id) = self.index.get(&name) {
-            return id;
-        }
-        let id = self
-            .entries
-            .len()
-            .try_into()
-            .expect("detached delta exceeded NameId capacity");
-        self.entries.push(name.clone());
-        self.index.insert(name, id);
-        id
-    }
-
-    fn resolve(&self, id: NameId) -> &iroha_data_model::name::Name {
-        self.entries
-            .get(usize::try_from(id).expect("invalid NameId index"))
-            .expect("interned name id out of bounds")
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionDeltaOp {
-    Grant,
-    Revoke,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoleDeltaOp {
-    Grant,
-    Revoke,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-enum DetachedPermissionOp {
-    AccountPermission {
-        account: AccountId,
-        permission: Permission,
-        op: PermissionDeltaOp,
-    },
-    RolePermission {
-        role: RoleId,
-        permission: Permission,
-        op: PermissionDeltaOp,
-    },
-    RoleAssignment {
-        account: AccountId,
-        role: RoleId,
-        op: RoleDeltaOp,
-    },
-}
-
-#[derive(Default, Debug, Clone)]
-/// Detached, per-transaction delta suitable for parallel execution outside of
-/// a live `StateBlock` borrow. Only mutations with a complete, canonical
-/// replay primitive belong here; supply-changing asset operations always fall
-/// back to sequential execution.
+/// Detached, per-transaction delta for the source-owned transparent-transfer fast path.
+/// Every other mutation falls back to sequential execution.
 pub(crate) struct DetachedStateTransactionDelta {
     // SoA: transparent asset-quantity transfers.
     asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
     asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
     asset_transfer_amounts: Vec<Quantity>,
-    // Intern pool shared by metadata operations
-    #[cfg(test)]
-    name_intern: NameIntern,
-    // Account key-value deltas (SoA + interned keys)
-    #[cfg(test)]
-    account_kv_set_accounts: Vec<iroha_data_model::account::AccountId>,
-    #[cfg(test)]
-    account_kv_set_key_ids: Vec<NameId>,
-    #[cfg(test)]
-    account_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    #[cfg(test)]
-    account_kv_del_accounts: Vec<iroha_data_model::account::AccountId>,
-    #[cfg(test)]
-    account_kv_del_key_ids: Vec<NameId>,
-    // Domain key-value deltas
-    #[cfg(test)]
-    domain_kv_set_domains: Vec<iroha_data_model::domain::DomainId>,
-    #[cfg(test)]
-    domain_kv_set_key_ids: Vec<NameId>,
-    #[cfg(test)]
-    domain_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    // NFT deltas
-    #[cfg(test)]
-    nft_delete: std::collections::BTreeSet<iroha_data_model::nft::NftId>,
-    // AssetDefinition metadata
-    #[cfg(test)]
-    asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    #[cfg(test)]
-    asset_def_kv_set_key_ids: Vec<NameId>,
-    #[cfg(test)]
-    asset_def_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    // Account permissions and roles (maps for last-write checks)
-    #[cfg(test)]
-    perm_ops: std::collections::BTreeMap<
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::permission::Permission,
-        ),
-        PermissionDeltaOp,
-    >,
-    #[cfg(test)]
-    role_ops: std::collections::BTreeMap<
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::role::RoleId,
-        ),
-        RoleDeltaOp,
-    >,
-    // Role permission changes
-    #[cfg(test)]
-    role_perm_ops: std::collections::BTreeMap<
-        (
-            iroha_data_model::role::RoleId,
-            iroha_data_model::permission::Permission,
-        ),
-        PermissionDeltaOp,
-    >,
-    // Ordered permission/role operations for deterministic replay.
-    #[cfg(test)]
-    permission_ops: Vec<DetachedPermissionOp>,
-    // Peer registrations
-    #[cfg(test)]
-    peer_adds: SortedUniqueVec<iroha_data_model::peer::PeerId>,
-    #[cfg(test)]
-    peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
-    // Parameter updates (applied in order)
-    #[cfg(test)]
-    param_updates: Vec<iroha_data_model::parameter::Parameter>,
-    // By‑call trigger executions to apply at merge time
-    #[cfg(test)]
-    exec_by_call: Vec<iroha_data_model::events::execute_trigger::ExecuteTriggerEvent>,
 }
 
+#[cfg(test)]
 #[derive(Default, Debug, Clone)]
 /// Transaction context needed when replaying a detached delta into a live block.
 pub(crate) struct DetachedMergeContext {
@@ -17405,53 +17212,6 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
 }
 
-#[cfg(test)]
-fn gather_last_wins_keyed<E, V>(
-    entities: &[E],
-    key_ids: &[NameId],
-    vals: &[V],
-) -> Vec<(E, NameId, V)>
-where
-    E: Ord + Clone,
-    V: Clone,
-{
-    debug_assert_eq!(entities.len(), key_ids.len());
-    debug_assert_eq!(key_ids.len(), vals.len());
-    let mut ordered: Vec<(E, NameId, V)> = Vec::with_capacity(vals.len());
-    let mut positions: BTreeMap<(E, NameId), usize> = BTreeMap::new();
-    for idx in 0..entities.len() {
-        let key = (entities[idx].clone(), key_ids[idx]);
-        if let Some(entry_idx) = positions.get(&key) {
-            ordered[*entry_idx].2 = vals[idx].clone();
-        } else {
-            let entry_idx = ordered.len();
-            ordered.push((entities[idx].clone(), key_ids[idx], vals[idx].clone()));
-            positions.insert(key, entry_idx);
-        }
-    }
-    ordered
-}
-
-#[cfg(test)]
-fn gather_set_keyed<E: Ord + Clone>(entities: &[E], key_ids: &[NameId]) -> Vec<(E, NameId)> {
-    debug_assert_eq!(entities.len(), key_ids.len());
-    let mut ordered = Vec::with_capacity(entities.len());
-    let mut seen: BTreeSet<(E, NameId)> = BTreeSet::new();
-    for idx in 0..entities.len() {
-        let key = (entities[idx].clone(), key_ids[idx]);
-        if seen.insert(key.clone()) {
-            ordered.push(key);
-        }
-    }
-    ordered
-}
-
-// Hot fields within `DetachedStateTransactionDelta` use a structure-of-arrays
-// layout (paired vectors or sorted array sets) so detached execution threads can
-// record operations without hammering tree-based collections. Each field keeps
-// deterministic ordering by sorting once during insertion while reusing the same
-// stable iteration order when the overlay is merged back into the live state.
-
 impl DetachedStateTransactionDelta {
     pub(crate) fn single_transfer_delta(
         &self,
@@ -17463,8 +17223,6 @@ impl DetachedStateTransactionDelta {
         let transfer_only = self.asset_transfer_source_ids.len() == 1
             && self.asset_transfer_destination_accounts.len() == 1
             && self.asset_transfer_amounts.len() == 1;
-        #[cfg(test)]
-        let transfer_only = transfer_only && self.extended_delta_is_empty();
         transfer_only.then(|| {
             (
                 self.asset_transfer_source_ids[0].clone(),
@@ -17472,30 +17230,6 @@ impl DetachedStateTransactionDelta {
                 self.asset_transfer_amounts[0].clone(),
             )
         })
-    }
-
-    #[cfg(test)]
-    fn extended_delta_is_empty(&self) -> bool {
-        self.account_kv_set_accounts.is_empty()
-            && self.account_kv_set_key_ids.is_empty()
-            && self.account_kv_set_vals.is_empty()
-            && self.account_kv_del_accounts.is_empty()
-            && self.account_kv_del_key_ids.is_empty()
-            && self.domain_kv_set_domains.is_empty()
-            && self.domain_kv_set_key_ids.is_empty()
-            && self.domain_kv_set_vals.is_empty()
-            && self.nft_delete.is_empty()
-            && self.asset_def_kv_set_ids.is_empty()
-            && self.asset_def_kv_set_key_ids.is_empty()
-            && self.asset_def_kv_set_vals.is_empty()
-            && self.perm_ops.is_empty()
-            && self.role_ops.is_empty()
-            && self.role_perm_ops.is_empty()
-            && self.permission_ops.is_empty()
-            && self.peer_adds.is_empty()
-            && self.peer_removes.is_empty()
-            && self.param_updates.is_empty()
-            && self.exec_by_call.is_empty()
     }
 
     /// Return true when this transfer can use the simple batch merge path.
@@ -17572,154 +17306,6 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_destination_accounts.push(destination);
         self.asset_transfer_amounts.push(amount);
     }
-    /// Record a key-value insertion/update on an account.
-    #[cfg(test)]
-    pub(crate) fn set_account_kv(
-        &mut self,
-        id: iroha_data_model::account::AccountId,
-        key: iroha_data_model::name::Name,
-        val: iroha_primitives::json::Json,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.account_kv_set_accounts.push(id);
-        self.account_kv_set_key_ids.push(key_id);
-        self.account_kv_set_vals.push(val);
-    }
-    /// Record a key-value removal on an account.
-    #[cfg(test)]
-    pub(crate) fn remove_account_kv(
-        &mut self,
-        id: iroha_data_model::account::AccountId,
-        key: iroha_data_model::name::Name,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.account_kv_del_accounts.push(id);
-        self.account_kv_del_key_ids.push(key_id);
-    }
-    /// Record a key-value insertion/update on a domain.
-    #[cfg(test)]
-    pub(crate) fn set_domain_kv(
-        &mut self,
-        id: iroha_data_model::domain::DomainId,
-        key: iroha_data_model::name::Name,
-        val: iroha_primitives::json::Json,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.domain_kv_set_domains.push(id);
-        self.domain_kv_set_key_ids.push(key_id);
-        self.domain_kv_set_vals.push(val);
-    }
-    /// Record an NFT deletion.
-    #[cfg(test)]
-    pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
-        self.nft_delete.insert(id);
-    }
-    /// Record a key-value insertion/update on an asset definition.
-    #[cfg(test)]
-    pub(crate) fn set_asset_def_kv(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        key: iroha_data_model::name::Name,
-        val: iroha_primitives::json::Json,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.asset_def_kv_set_ids.push(id);
-        self.asset_def_kv_set_key_ids.push(key_id);
-        self.asset_def_kv_set_vals.push(val);
-    }
-    /// Record a permission grant to an account.
-    #[cfg(test)]
-    pub(crate) fn grant_permission(
-        &mut self,
-        account: iroha_data_model::account::AccountId,
-        perm: iroha_data_model::permission::Permission,
-    ) {
-        let op = PermissionDeltaOp::Grant;
-        self.perm_ops.insert((account.clone(), perm.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::AccountPermission {
-                account,
-                permission: perm,
-                op,
-            });
-    }
-    /// Record a permission revoke from an account.
-    #[cfg(test)]
-    pub(crate) fn revoke_permission(
-        &mut self,
-        account: iroha_data_model::account::AccountId,
-        perm: iroha_data_model::permission::Permission,
-    ) {
-        let op = PermissionDeltaOp::Revoke;
-        self.perm_ops.insert((account.clone(), perm.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::AccountPermission {
-                account,
-                permission: perm,
-                op,
-            });
-    }
-    /// Record a role grant to an account.
-    #[cfg(test)]
-    pub(crate) fn grant_role(
-        &mut self,
-        account: iroha_data_model::account::AccountId,
-        role: iroha_data_model::role::RoleId,
-    ) {
-        let op = RoleDeltaOp::Grant;
-        self.role_ops.insert((account.clone(), role.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::RoleAssignment { account, role, op });
-    }
-    /// Record a role revoke from an account.
-    #[cfg(test)]
-    pub(crate) fn revoke_role(
-        &mut self,
-        account: iroha_data_model::account::AccountId,
-        role: iroha_data_model::role::RoleId,
-    ) {
-        let op = RoleDeltaOp::Revoke;
-        self.role_ops.insert((account.clone(), role.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::RoleAssignment { account, role, op });
-    }
-    /// Record a role-permission grant.
-    #[cfg(test)]
-    pub(crate) fn grant_role_permission(
-        &mut self,
-        role: iroha_data_model::role::RoleId,
-        perm: iroha_data_model::permission::Permission,
-    ) {
-        let op = PermissionDeltaOp::Grant;
-        self.role_perm_ops.insert((role.clone(), perm.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::RolePermission {
-                role,
-                permission: perm,
-                op,
-            });
-    }
-    /// Record a role-permission revoke.
-    #[cfg(test)]
-    pub(crate) fn revoke_role_permission(
-        &mut self,
-        role: iroha_data_model::role::RoleId,
-        perm: iroha_data_model::permission::Permission,
-    ) {
-        let op = PermissionDeltaOp::Revoke;
-        self.role_perm_ops.insert((role.clone(), perm.clone()), op);
-        self.permission_ops
-            .push(DetachedPermissionOp::RolePermission {
-                role,
-                permission: perm,
-                op,
-            });
-    }
-    /// Record a peer registration.
-    #[cfg(test)]
-    pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
-        self.peer_adds.insert(id);
-    }
     /// Check whether `authority` may modify metadata for `nft_id` under the current delta.
     pub(crate) fn can_modify_nft_metadata(
         &self,
@@ -17740,65 +17326,16 @@ impl DetachedStateTransactionDelta {
             nft: nft_id.clone(),
         }
         .into();
-        #[cfg(test)]
-        let direct_op = self
-            .perm_ops
-            .get(&(authority.clone(), target_perm.clone()))
-            .copied();
-
-        #[cfg(test)]
-        match direct_op {
-            Some(PermissionDeltaOp::Grant) => return Ok(true),
-            Some(PermissionDeltaOp::Revoke) => {}
-            None => {
-                let permissions = world
-                    .account_permissions_iter(authority)
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-                if permissions.into_iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
-            }
-        }
-        #[cfg(not(test))]
-        {
-            let permissions = world
-                .account_permissions_iter(authority)
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-            if permissions.into_iter().any(|perm| perm == &target_perm) {
-                return Ok(true);
-            }
+        let permissions = world
+            .account_permissions_iter(authority)
+            .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+        if permissions.into_iter().any(|perm| perm == &target_perm) {
+            return Ok(true);
         }
 
-        #[cfg(test)]
-        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        #[cfg(not(test))]
         let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        #[cfg(test)]
-        for ((acc, role), op) in &self.role_ops {
-            if acc != authority {
-                continue;
-            }
-            match op {
-                RoleDeltaOp::Grant => {
-                    roles.insert(role.clone());
-                }
-                RoleDeltaOp::Revoke => {
-                    roles.remove(role);
-                }
-            }
-        }
 
         for role in roles {
-            #[cfg(test)]
-            match self
-                .role_perm_ops
-                .get(&(role.clone(), target_perm.clone()))
-                .copied()
-            {
-                Some(PermissionDeltaOp::Grant) => return Ok(true),
-                Some(PermissionDeltaOp::Revoke) => continue,
-                None => {}
-            }
             if let Some(role_def) = world.roles().get(&role) {
                 if role_def.permissions.iter().any(|perm| perm == &target_perm) {
                     return Ok(true);
@@ -17854,65 +17391,16 @@ impl DetachedStateTransactionDelta {
                 account: account_id.clone(),
             }
             .into();
-        #[cfg(test)]
-        let direct_op = self
-            .perm_ops
-            .get(&(authority.clone(), target_perm.clone()))
-            .copied();
-
-        #[cfg(test)]
-        match direct_op {
-            Some(PermissionDeltaOp::Grant) => return Ok(true),
-            Some(PermissionDeltaOp::Revoke) => {}
-            None => {
-                let permissions = world
-                    .account_permissions_iter(authority)
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-                if permissions.into_iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
-            }
-        }
-        #[cfg(not(test))]
-        {
-            let permissions = world
-                .account_permissions_iter(authority)
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-            if permissions.into_iter().any(|perm| perm == &target_perm) {
-                return Ok(true);
-            }
+        let permissions = world
+            .account_permissions_iter(authority)
+            .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+        if permissions.into_iter().any(|perm| perm == &target_perm) {
+            return Ok(true);
         }
 
-        #[cfg(test)]
-        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        #[cfg(not(test))]
         let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        #[cfg(test)]
-        for ((acc, role), op) in &self.role_ops {
-            if acc != authority {
-                continue;
-            }
-            match op {
-                RoleDeltaOp::Grant => {
-                    roles.insert(role.clone());
-                }
-                RoleDeltaOp::Revoke => {
-                    roles.remove(role);
-                }
-            }
-        }
 
         for role in roles {
-            #[cfg(test)]
-            match self
-                .role_perm_ops
-                .get(&(role.clone(), target_perm.clone()))
-                .copied()
-            {
-                Some(PermissionDeltaOp::Grant) => return Ok(true),
-                Some(PermissionDeltaOp::Revoke) => continue,
-                None => {}
-            }
             if let Some(role_def) = world.roles().get(&role) {
                 if role_def.permissions.iter().any(|perm| perm == &target_perm) {
                     return Ok(true);
@@ -17921,35 +17409,6 @@ impl DetachedStateTransactionDelta {
         }
 
         Ok(false)
-    }
-
-    /// Record a parameter update to be applied at merge.
-    #[cfg(test)]
-    pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
-        self.param_updates.push(param);
-    }
-    /// Record an `ExecuteTrigger` (by‑call) to be executed at merge.
-    #[cfg(test)]
-    pub(crate) fn execute_trigger_by_call(
-        &mut self,
-        evt: iroha_data_model::events::execute_trigger::ExecuteTriggerEvent,
-    ) {
-        self.exec_by_call.push(evt);
-    }
-
-    /// Merge the recorded changes into the live `StateBlock` using a per-transaction
-    /// overlay. Emits asset events similar to the sequential path.
-    ///
-    /// # Errors
-    /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
-    #[cfg(test)]
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn merge_into(
-        self,
-        state_block: &mut StateBlock<'_>,
-        authority: &iroha_data_model::account::AccountId,
-    ) -> TransactionResultInner {
-        self.merge_into_with_context(state_block, authority, DetachedMergeContext::default())
     }
 
     /// Merge a single transparent asset-quantity transfer into an existing transaction overlay.
@@ -18036,6 +17495,7 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[cfg(test)]
     pub(crate) fn merge_into_with_context(
         self,
         state_block: &mut StateBlock<'_>,
@@ -18044,10 +17504,11 @@ impl DetachedStateTransactionDelta {
     ) -> TransactionResultInner {
         use iroha_data_model::transaction::error::TransactionRejectionReason;
 
-        #[cfg(test)]
-        if !self.extended_delta_is_empty() {
-            return self.merge_test_only_into_with_context(state_block, authority, context);
-        }
+        let (source_id, destination, amount) = self.single_transfer_delta().ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                "detached delta must contain exactly one transparent transfer".to_owned(),
+            ))
+        })?;
 
         let mut stx = state_block.transaction();
         stx.tx_call_hash = context.tx_call_hash;
@@ -18057,453 +17518,18 @@ impl DetachedStateTransactionDelta {
         if let Some(dataspace_id) = context.current_dataspace_id {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
-        for ((source_id, destination), amount) in self
-            .asset_transfer_source_ids
-            .iter()
-            .zip(self.asset_transfer_destination_accounts.iter())
-            .zip(self.asset_transfer_amounts.iter())
-        {
-            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
-                &mut stx,
-                authority,
-                source_id.clone(),
-                destination.clone(),
-                amount.clone(),
-            )
-            .map_err(ValidationFail::InstructionFailed)
-            .map_err(TransactionRejectionReason::Validation)?;
-        }
+        crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+            &mut stx,
+            authority,
+            source_id,
+            destination,
+            amount,
+        )
+        .map_err(ValidationFail::InstructionFailed)
+        .map_err(TransactionRejectionReason::Validation)?;
         let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
         stx.apply();
         Ok(trigger_sequence)
-    }
-
-    /// Merge the recorded test-only extended delta into the live block.
-    ///
-    /// # Errors
-    /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
-    #[cfg(test)]
-    #[allow(clippy::too_many_lines)]
-    fn merge_test_only_into_with_context(
-        self,
-        state_block: &mut StateBlock<'_>,
-        authority: &iroha_data_model::account::AccountId,
-        context: DetachedMergeContext,
-    ) -> TransactionResultInner {
-        use crate::smartcontracts::Execute as _;
-        use iroha_data_model::events::data::prelude::{
-            AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent, MetadataChanged,
-            NftEvent, ParameterChanged, PeerEvent,
-        };
-        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
-        use iroha_data_model::transaction::error::TransactionRejectionReason;
-
-        let mut stx = state_block.transaction();
-        stx.tx_call_hash = context.tx_call_hash;
-        stx.current_tx_hash = context.current_tx_hash;
-        stx.current_lane_id = context.current_lane_id;
-        stx.current_dataspace_id = context.current_dataspace_id;
-        if let Some(dataspace_id) = context.current_dataspace_id {
-            stx.world.current_dataspace_id = Some(dataspace_id);
-        }
-        let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let account_kv_sets = gather_last_wins_keyed(
-                &self.account_kv_set_accounts,
-                &self.account_kv_set_key_ids,
-                &self.account_kv_set_vals,
-            );
-            let account_kv_dels =
-                gather_set_keyed(&self.account_kv_del_accounts, &self.account_kv_del_key_ids);
-            let domain_kv_sets = gather_last_wins_keyed(
-                &self.domain_kv_set_domains,
-                &self.domain_kv_set_key_ids,
-                &self.domain_kv_set_vals,
-            );
-            let asset_def_kv_sets = gather_last_wins_keyed(
-                &self.asset_def_kv_set_ids,
-                &self.asset_def_kv_set_key_ids,
-                &self.asset_def_kv_set_vals,
-            );
-
-            // Apply transparent transfers through the same asset module path as sequential ISI
-            // execution so policy gates, events, and FASTPQ transcripts stay identical.
-            for ((source_id, destination), amount) in self
-                .asset_transfer_source_ids
-                .iter()
-                .zip(self.asset_transfer_destination_accounts.iter())
-                .zip(self.asset_transfer_amounts.iter())
-            {
-                crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
-                    &mut stx,
-                    authority,
-                    source_id.clone(),
-                    destination.clone(),
-                    amount.clone(),
-                )
-                .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-            }
-
-            // Apply account metadata operations in recorded order.
-            for (acc, key_id, val) in &account_kv_sets {
-                let key = self.name_intern.resolve(*key_id);
-                // Record read pre-value
-                if let Ok(acct_ro) = stx.world.account(acc) {
-                    let pre = acct_ro.value().metadata().get(key).cloned();
-                    crate::sumeragi::witness::record_read_account_kv(acc, key, pre.as_ref());
-                }
-                let acct = stx.world.account_mut(acc)?;
-                acct.insert(key.clone(), val.clone());
-                crate::sumeragi::witness::record_write_account_kv(acc, key, val);
-                stx.world
-                    .emit_events(Some(AccountEvent::MetadataInserted(MetadataChanged {
-                        target: acc.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    })));
-            }
-            for (acc, key_id) in &account_kv_dels {
-                let key = self.name_intern.resolve(*key_id);
-                let val = stx.world.account_mut(acc).and_then(|a| {
-                    a.remove(key).ok_or_else(|| {
-                        iroha_data_model::query::error::FindError::MetadataKey(key.clone())
-                    })
-                })?;
-                crate::sumeragi::witness::record_delete_account_kv(acc, key, &val);
-                stx.world
-                    .emit_events(Some(AccountEvent::MetadataRemoved(MetadataChanged {
-                        target: acc.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    })));
-            }
-            for (dom, key_id, val) in &domain_kv_sets {
-                let key = self.name_intern.resolve(*key_id);
-                // Read pre-value
-                if let Ok(dom_ro) = stx.world.domain(dom) {
-                    let pre = dom_ro.metadata.get(key).cloned();
-                    crate::sumeragi::witness::record_read_domain_kv(dom, key, pre.as_ref());
-                }
-                let domv = stx.world.domain_mut(dom)?;
-                domv.metadata.insert(key.clone(), val.clone());
-                crate::sumeragi::witness::record_write_domain_kv(dom, key, val);
-                stx.world
-                    .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
-                        target: dom.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    })));
-            }
-            // Apply AssetDefinition metadata sets after domain/account metadata to mirror ISI order.
-            for (ad, key_id, val) in &asset_def_kv_sets {
-                let key = self.name_intern.resolve(*key_id);
-                // Record read (pre) before mutation
-                if let Ok(def_pre) = stx.world.asset_definition(ad) {
-                    let pre = def_pre.metadata().get(key).cloned();
-                    crate::sumeragi::witness::record_read_asset_def_kv(ad, key, pre.as_ref());
-                }
-                let def = stx.world.asset_definition_mut(ad)?;
-                def.metadata_mut().insert(key.clone(), val.clone());
-                crate::sumeragi::witness::record_write_asset_def_kv(ad, key, val);
-                stx.world
-                    .emit_asset_definition_event(AssetDefinitionEvent::MetadataInserted(
-                        MetadataChanged {
-                            target: ad.clone(),
-                            key: key.clone(),
-                            value: val.clone(),
-                        },
-                    ));
-            }
-            // Apply NFT deletions.
-            for id in self.nft_delete {
-                crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
-                    &mut stx, &id,
-                );
-                let _ = stx.world.remove_nft_entry(&id).ok_or_else(|| {
-                    iroha_data_model::ValidationFail::NotPermitted(format!("NFT not found: {id}"))
-                })?;
-                let _ = stx.world.domain(id.domain())?;
-                stx.world
-                    .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(id))));
-            }
-            // Apply peer registrations.
-            for pid in self.peer_adds {
-                use iroha_primitives::unique_vec::PushResult;
-                if let PushResult::Duplicate(_) = stx.world.peers.push(pid.clone()) {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "peer already registered: {pid}"
-                    )));
-                }
-                stx.world.emit_events(Some(PeerEvent::Added(pid)));
-            }
-            // Replay permission/role operations in recorded order using the same ISI semantics.
-            for op in self.permission_ops {
-                let result = match op {
-                    DetachedPermissionOp::AccountPermission {
-                        account,
-                        permission,
-                        op,
-                    } => match op {
-                        PermissionDeltaOp::Grant => Grant::account_permission(permission, account)
-                            .execute(authority, &mut stx),
-                        PermissionDeltaOp::Revoke => {
-                            Revoke::account_permission(permission, account)
-                                .execute(authority, &mut stx)
-                        }
-                    },
-                    DetachedPermissionOp::RolePermission {
-                        role,
-                        permission,
-                        op,
-                    } => {
-                        match op {
-                            PermissionDeltaOp::Grant => Grant::role_permission(permission, role)
-                                .execute(authority, &mut stx),
-                            PermissionDeltaOp::Revoke => Revoke::role_permission(permission, role)
-                                .execute(authority, &mut stx),
-                        }
-                    }
-                    DetachedPermissionOp::RoleAssignment { account, role, op } => match op {
-                        RoleDeltaOp::Grant => {
-                            Grant::account_role(role, account).execute(authority, &mut stx)
-                        }
-                        RoleDeltaOp::Revoke => {
-                            Revoke::account_role(role, account).execute(authority, &mut stx)
-                        }
-                    },
-                };
-                if let Err(err) = result {
-                    return Err(ValidationFail::InstructionFailed(err));
-                }
-            }
-
-            // Apply parameter changes and emit configuration events (old/new)
-            for param in self.param_updates {
-                let is_consensus_lane_lifecycle = matches!(
-                    &param,
-                    iroha_data_model::parameter::Parameter::Custom(custom)
-                        if custom.id
-                            == iroha_data_model::nexus::LaneLifecycleParameterV1::parameter_id()
-                );
-                let is_ivm_heap_parameter = matches!(
-                    &param,
-                    iroha_data_model::parameter::Parameter::SmartContract(
-                        iroha_data_model::parameter::SmartContractParameter::Memory(_)
-                    ) | iroha_data_model::parameter::Parameter::Executor(
-                        iroha_data_model::parameter::SmartContractParameter::Memory(_)
-                    )
-                );
-                if is_consensus_lane_lifecycle
-                    || is_ivm_heap_parameter
-                    || matches!(&param, iroha_data_model::parameter::Parameter::Sumeragi(_))
-                {
-                    if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {
-                        return Err(ValidationFail::InstructionFailed(err));
-                    }
-                    continue;
-                }
-                macro_rules! set_param_and_emit {
-                    ($params:expr, $p:expr, $container:ident($single:ident::$variant:ident)) => {{
-                        // previous via iterator
-                        let prev = $params
-                            .parameters()
-                            .find_map(|p| match p {
-                                iroha_data_model::parameter::Parameter::$container(
-                                    iroha_data_model::parameter::$single::$variant(ref prev),
-                                ) => Some(iroha_data_model::parameter::Parameter::$container(
-                                    iroha_data_model::parameter::$single::$variant(prev.clone()),
-                                )),
-                                _ => None,
-                            })
-                            .unwrap_or($p.clone());
-                        $params.set_parameter($p.clone());
-                        stx.world.emit_events(Some(ConfigurationEvent::Changed(
-                            ParameterChanged {
-                                old_value: prev,
-                                new_value: $p,
-                            },
-                        )));
-                    }};
-                }
-                let params = stx.world.parameters.get_mut();
-                match param.clone() {
-                    iroha_data_model::parameter::Parameter::Sumeragi(_) => {
-                        unreachable!("Sumeragi parameters are validated through SetParameter")
-                    }
-                    iroha_data_model::parameter::Parameter::Block(x) => match x {
-                        iroha_data_model::parameter::BlockParameter::MaxTransactions(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Block(x),
-                                Block(BlockParameter::MaxTransactions)
-                            )
-                        }
-                    },
-                    iroha_data_model::parameter::Parameter::Transaction(x) => match x {
-                        iroha_data_model::parameter::TransactionParameter::MaxSignatures(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxSignatures)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::MaxInstructions(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxInstructions)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::IvmBytecodeSize(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::IvmBytecodeSize)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::MaxTxBytes(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxTxBytes)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::MaxDecompressedBytes(
-                            _,
-                        ) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxDecompressedBytes)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::MaxMetadataDepth(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxMetadataDepth)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::MaxTimeToLiveMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::MaxTimeToLiveMs)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::RequireHeightTtl(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::RequireHeightTtl)
-                            )
-                        }
-                        iroha_data_model::parameter::TransactionParameter::RequireSequence(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Transaction(x),
-                                Transaction(TransactionParameter::RequireSequence)
-                            )
-                        }
-                    },
-                    iroha_data_model::parameter::Parameter::SmartContract(x) => match x {
-                        iroha_data_model::parameter::SmartContractParameter::Fuel(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::SmartContract(x),
-                                SmartContract(SmartContractParameter::Fuel)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::Memory(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::SmartContract(x),
-                                SmartContract(SmartContractParameter::Memory)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::SmartContract(x),
-                                SmartContract(SmartContractParameter::ExecutionDepth)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::SmartContract(x),
-                                SmartContract(SmartContractParameter::MaxOutputItems)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::SmartContract(x),
-                                SmartContract(SmartContractParameter::MaxOutputBytes)
-                            )
-                        }
-                    },
-                    iroha_data_model::parameter::Parameter::Executor(x) => match x {
-                        iroha_data_model::parameter::SmartContractParameter::Fuel(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Executor(x),
-                                Executor(SmartContractParameter::Fuel)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::Memory(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Executor(x),
-                                Executor(SmartContractParameter::Memory)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Executor(x),
-                                Executor(SmartContractParameter::ExecutionDepth)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Executor(x),
-                                Executor(SmartContractParameter::MaxOutputItems)
-                            )
-                        }
-                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Executor(x),
-                                Executor(SmartContractParameter::MaxOutputBytes)
-                            )
-                        }
-                    },
-                    iroha_data_model::parameter::Parameter::Custom(x) => {
-                        let prev = iroha_data_model::parameter::Parameter::Custom(x.clone());
-                        params.set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                            x.clone(),
-                        ));
-                        stx.world.emit_events(Some(ConfigurationEvent::Changed(
-                            ParameterChanged {
-                                old_value: prev,
-                                new_value: iroha_data_model::parameter::Parameter::Custom(x),
-                            },
-                        )));
-                    }
-                }
-            }
-
-            Ok(())
-        })();
-
-        result
-            .map_err(TransactionRejectionReason::Validation)
-            .and_then(|()| {
-                let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
-                stx.apply();
-                Ok(trigger_sequence)
-            })
     }
 }
 
@@ -37096,20 +36122,20 @@ impl State {
             let certified = self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                requested,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+                    lane_id,
+                    requested,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             if certified.len() > remaining_native_evidence_scan {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "certified autonomous Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
@@ -37717,20 +36743,21 @@ impl State {
             for certified in self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            ) {
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+            {
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
@@ -38097,20 +37124,20 @@ impl State {
             let artifacts = self
                 .kura
                 .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                lane_id,
-                per_route_limit,
-                |artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.dataspace_id == dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane_id,
-                            dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                },
-            );
+                    lane_id,
+                    per_route_limit,
+                    |artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                );
             for artifact in artifacts {
                 let session = crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: artifact.proposal,
@@ -53457,8 +52484,7 @@ impl<'state> StateBlock<'state> {
             authorization.write_set_root,
         ) {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "finalized carrier economic authorization is stale or mismatched"
-                    .to_owned(),
+                "finalized carrier economic authorization is stale or mismatched".to_owned(),
             ));
         }
         if self.pending_autoscale_lifecycle.is_some()

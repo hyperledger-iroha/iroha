@@ -183,8 +183,6 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "ReserveExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
-        "ReserveExactServeCapacityVia",
-        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeIngressPredecessorCounts",
         "asyncNextServeAdmissionOrdinal",
@@ -199,8 +197,6 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "AdvanceExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
-        "AdvanceExactServeCapacityVia",
-        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeFamilyTombstoneRecords",
         "AsyncServeIngressPredecessorCounts",
@@ -403,8 +399,7 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderImmutableCandidatePayload",
     ): (
-        "AdequateLeaderRouteNeutralCandidateItem",
-        "AdequateLeaderRouteNeutralCandidateEvidence",
+        "AsyncCandidateSemanticStatement",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -418,10 +413,12 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderFrozenCandidatePayloadCarrier",
     ): (
-        "AdequateLeaderFrozenCandidateItemPayloadCarrier",
-        "AdequateLeaderFrozenCandidateEvidencePayloadCarrier",
-        "AsyncCommandClasses",
-        "AsyncWorkKinds",
+        "context",
+        "round",
+        "proposalRound",
+        "subject",
+        "AsyncCandidateSemanticPhases",
+        "executionCommitment",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -1654,7 +1651,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "1fea9bed1cf4cedeefd640f47d99367b73d9c1e82e2bba0a58d3aca1315578b6"
+        "9fb34599c1d4492972a7ce0b01d52ad63a1458d539411419b03d9bfeefb67c94"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {

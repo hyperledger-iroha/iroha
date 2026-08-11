@@ -1168,7 +1168,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExecuteExactCurrentViewTimeoutDeliveryRecordsExactReceipt",
     ): (
         "\\A vote \\in TimeoutVoteRecordSet, "
-        "recipient \\in AsyncCurrentResponsiveVoters, command: "
+        "recipient \\in AsyncCurrentResponsiveVoters, "
+        "command \\in AsyncCandidateSet: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ vote.signer \\in AsyncCurrentResponsiveVoters "
         "/\\ vote \\in timeoutIntents "
@@ -4167,8 +4168,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecProvidesHistoricalDueNodeModeFairness",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, owner, mode \\in "
-        "IndexedHistoricalTransport(initialContext)! "
+        "\\A initialContext \\in AdmissibleContextRecords: \\A owner: "
+        "\\A mode \\in IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: /\\ IndexedChainSpec /\\ "
         "owner \\in Responsive /\\ (mode = 2 => owner \\in "
         "IndexedHistoricalTransport(initialContext)! AsyncVotersAt("
@@ -4191,10 +4192,11 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueNodeModeMakesProgress",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
-        "Responsive, clockValue \\in Nat, sourceRank \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner, mode \\in "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: \\A owner: "
+        "\\A mode \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: IndexedChainSpec => "
         "(IndexedHistoricalDueNodeOwnerAtMode( initialContext, node, "
@@ -4206,10 +4208,11 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueIoModeMakesProgress",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
-        "Responsive, clockValue \\in Nat, sourceRank \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner, mode \\in "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: \\A owner: "
+        "\\A mode \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: IndexedChainSpec => "
         "(IndexedHistoricalDueIoOwnerAtMode( initialContext, node, "

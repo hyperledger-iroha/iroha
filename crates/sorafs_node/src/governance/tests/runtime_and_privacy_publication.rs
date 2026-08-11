@@ -4,12 +4,12 @@
 fn filesystem_publisher_recovers_checkpoint_cas_applied_response_error() {
     let temp = tempdir().expect("tempdir");
     let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
-    checkpoint_store
-        .fail_after_next_checkpoint_cas
-        .store(true, Ordering::SeqCst);
     {
         let publisher =
             signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
+        checkpoint_store
+            .fail_after_next_checkpoint_cas
+            .store(true, Ordering::SeqCst);
         let (settlement, encoded) = sample_settlement();
         let error = publisher
             .publish_deal_settlement(&settlement, &encoded)
@@ -601,7 +601,11 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
         .store(2, Ordering::SeqCst);
     let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
         .expect_err("provider qualification drift must fail closed");
-    assert!(error.to_string().contains("qualification"));
+    assert!(
+        error
+            .to_string()
+            .contains("signer identity or policy changed after injection")
+    );
 }
 
 #[test]
@@ -995,7 +999,14 @@ fn filesystem_publisher_temp_recovery_never_follows_substituted_parent() {
             qualified_test_runtime_dag_checkpoint_store(checkpoint_store),
         )
         .expect_err("substituted parent must fail closed");
-    assert!(error.to_string().contains("symlink") || error.to_string().contains("real directory"));
+    let message = error.to_string();
+    assert!(
+        message.contains("symlink")
+            || message.contains("symbolic link")
+            || message.contains("legacy mutable")
+            || message.contains("real directory"),
+        "unexpected substituted-parent diagnostic: {error}"
+    );
     assert_eq!(
         fs::read(&outside_temp).expect("outside temp remains"),
         b"must-remain-outside"

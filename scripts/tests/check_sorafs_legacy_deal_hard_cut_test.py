@@ -44,6 +44,7 @@ OPENAPI_COPIES = (
     / "versions"
     / "current"
     / "torii.json",
+    REPO_ROOT / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json",
 )
 
 

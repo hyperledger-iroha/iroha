@@ -168,6 +168,14 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
     assert_eq!(
+        AccountAddress::parse_encoded(
+            &case.encodings.i105.string,
+            Some(case.encodings.i105.prefix),
+        )
+        .expect("strict i105 parse"),
+        canonical_address
+    );
+    assert_eq!(
         canonical_bytes_from_address(&i105_addr),
         canonical_bytes,
         "{} i105 canonical mismatch",
@@ -178,6 +186,16 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         "{} i105 uses unexpected prefix",
         case.case_id
     );
+    assert_eq!(
+        canonical_address
+            .to_i105_for_discriminant(default_prefix)
+            .expect("default-prefix i105 encode"),
+        case.encodings.i105.string
+    );
+
+    if let Some(domain) = case.input.normalized_domain.as_deref() {
+        iroha_data_model::domain::DomainId::try_new(domain, "universal").expect("valid domain");
+    }
 
     // Strict parser must reject canonical hex literals.
     let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)

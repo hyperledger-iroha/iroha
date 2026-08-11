@@ -1151,7 +1151,7 @@ def _production_liveness_release_inventory_errors(
         / "iroha_core"
         / "src"
         / "sumeragi"
-        / "v2_runner_tests.rs"
+        / "v2_runner.rs"
     )
     if (
         not close_prefix_runner_path.is_file()
@@ -1177,7 +1177,7 @@ def _production_liveness_release_inventory_errors(
         _require_rust_item_context(
             close_prefix_runner_path,
             close_prefix_retry_test,
-            (),
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
             "closed-prefix suffix-retry release regression",
             errors,
             expected_attributes=("#[test]",),

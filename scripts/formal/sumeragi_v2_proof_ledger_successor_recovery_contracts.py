@@ -3002,7 +3002,9 @@ def _persistent_recovery_cut_source_fidelity_errors(
         return matches[0]
 
     adapter_context = (("impl", "SumeragiV2Adapter"),)
-    runtime_context = (("impl", "SerializedV2Runtime"),)
+    runtime_context = (
+        ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+    )
     executor_context = (
         (
             "impl",
@@ -3233,8 +3235,19 @@ if let Err(reason) = self
             paths["adapter"], frontier, sequence, description, errors
         )
 
-    adapter_open = _require_rust_item(
-        paths["adapter"], sources["adapter"], "open_with_aggregator", errors
+    adapter_open = require_context_item(
+        "adapter",
+        "open_with_aggregator_and_publication_with_capacity",
+        adapter_context,
+        "capacity-bound restart constructor",
+    )
+    _require_rust_item_context(
+        paths["adapter"],
+        adapter_open,
+        adapter_context,
+        "capacity-bound restart constructor",
+        errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
     )
     _require_rust_token_sequence(
         paths["adapter"],
@@ -3323,6 +3336,8 @@ let ingress = self
 let deferred = self
     .driver
     .rebind_deferred_body_available(previous, rebound, manifest);
+ingress.saturating_add(deferred)
+} else {
 """,
             "a sole persistent source must be retagged rather than retired",
         ),
@@ -3380,7 +3395,7 @@ if !ownership.exactly_binds_adapter_effect(effect) {
 match self.driver.retire_restored_body_fetch_parent(
     *round,
     *subject,
-    manifest.as_ref(),
+    manifest.as_ref()
 ) {
 """,
         "restored Fetch retirement must delegate durable parent lookup to the adapter",

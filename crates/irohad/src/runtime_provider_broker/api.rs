@@ -76,7 +76,7 @@ impl RuntimeProviderBrokerLifecycleV1 {
         self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn publish_ready<R>(&self, on_ready: R) -> bool
     where
         R: FnOnce(),

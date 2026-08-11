@@ -1,5 +1,6 @@
 [package]
 name = "iroha_config"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -15,6 +16,10 @@ default = []
 gost = ["iroha_crypto/gost", "iroha_data_model/gost"]
 sm = ["iroha_crypto/sm", "iroha_data_model/sm"]
 sm-ffi-openssl = []
+
+[[test]]
+name = "iroha_config_integration"
+path = "tests/iroha_config_integration.rs"
 
 [dependencies]
 iroha_config_base = { workspace = true }

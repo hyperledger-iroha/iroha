@@ -4,7 +4,7 @@ use norito::json::{self, Map, Value};
 
 use crate::{
     GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
-    PreparedRuntimeSource, path, peer,
+    PreparedRuntimeSource, base64_standard, path, peer,
 };
 
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
@@ -722,7 +722,7 @@ fn prepared_compose_configs(
         for file in &runtime.files {
             let name = prepared_runtime_file_name(file);
             let mut runtime_file = Map::new();
-            let rendered_content = BASE64_STANDARD.encode(&file.content);
+            let rendered_content = base64_standard::encode(&file.content);
             runtime_file.insert("content".into(), Value::String(rendered_content.clone()));
             match configs.insert(name.clone(), Value::Object(runtime_file)) {
                 Some(Value::Object(existing))

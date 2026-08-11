@@ -1,0 +1,654 @@
+iroha-bfv-diagnostics-v1
+0	N		S	BFV equality assertion at source line 44054
+1	N		S	BFV equality assertion at source line 44058
+2	N		S	BFV equality assertion at source line 44062
+3	N		S	BFV equality assertion at source line 44063
+4	N		S	BFV equality assertion at source line 44064
+5	N		S	BFV equality assertion at source line 44065
+6	N		S	BFV equality assertion at source line 44066
+7	N		S	BFV equality assertion at source line 44067
+8	N		S	BFV equality assertion at source line 44068
+9	N		S	BFV equality assertion at source line 44069
+10	N		S	BFV equality assertion at source line 44070
+11	N		S	BFV equality assertion at source line 44075
+12	N		S	BFV equality assertion at source line 44080
+13	N		S	execution witness material must echo the public claim Galois key-set digest
+14	N		S	execution claim must bind the exact Galois key set used by the trace
+15	N		S	Galois key-set digest must be canonical over automorphism powers, not caller order
+16	N		S	execution witness material must canonicalize reordered Galois key sets
+17	N		S	artifact-bound witness digest must be stable under Galois key order
+18	N		S	canonical Galois key-set bytes must decode to sorted typed keys
+19	N		S	canonical Galois key-set bytes must hash to the witness key-set digest
+20	N		S	canonical Galois key-set bytes must return sorted typed keys with the digest
+21	N		S	canonical Galois key-set bytes must return the witness digest with the decoded keys
+22	N		S	witness-bound Galois key-set byte digesting must return the admitted digest
+23	N		S	witness-bound Galois key-set byte digest helper must return sorted typed keys
+24	N		S	witness-bound Galois key-set byte digest helper must return the witness digest
+25	N		S	witness-bound Galois key-set byte admission must return sorted typed keys
+26	S	do not match execution witness material	S	witness-bound Galois key-set byte digesting must reject stale witness digests
+27	S	do not match execution witness material	S	witness-bound Galois key-set byte digest helper must reject stale witness digests
+28	S	do not match execution witness material	S	witness-bound Galois key-set byte admission must reject stale witness digests
+29	N		S	reordered Galois key bytes must still carry the same typed key order
+30	S	canonical v1 bytes	S	Galois key-set byte admission must reject noncanonical caller order
+31	S	canonical v1 bytes	S	Galois key-set byte digesting must reject noncanonical caller order
+32	S	canonical v1 bytes	S	Galois key-set byte decode-and-digest must reject noncanonical caller order
+33	S	canonical v1 bytes	S	witness-bound Galois key-set byte digesting must reject noncanonical caller order
+34	S	canonical v1 bytes	S	witness-bound Galois key-set byte digest helper must reject noncanonical caller order
+35	S	canonical v1 bytes	S	witness-bound Galois key-set byte admission must reject noncanonical caller order
+36	N		S	compressed Galois key set must carry the same typed material
+37	S	canonical v1 bytes	S	Galois key-set byte admission must reject compressed Norito framing
+38	S	canonical v1 bytes	S	Galois key-set byte digesting must reject compressed Norito framing
+39	S	canonical v1 bytes	S	Galois key-set byte decode-and-digest must reject compressed Norito framing
+40	S	canonical v1 bytes	S	witness-bound Galois key-set byte digesting must reject compressed Norito framing
+41	S	canonical v1 bytes	S	witness-bound Galois key-set byte digest helper must reject compressed Norito framing
+42	S	canonical v1 bytes	S	witness-bound Galois key-set byte admission must reject compressed Norito framing
+43	S	execution witness material version	S	witness-bound Galois key-set byte digesting must reject witness material metadata before key-set framing
+44	S	execution witness material version	S	witness-bound Galois key-set byte digest helper must reject witness material metadata before key-set framing
+45	S	execution witness material version	S	witness-bound Galois key-set byte admission must reject witness material metadata before key-set framing
+46	S	Norito-encoded Galois key-set material	S	Galois key-set byte admission must reject non-Norito placeholder-looking bytes
+47	S	Norito-encoded Galois key-set material	S	Galois key-set byte digesting must reject non-Norito placeholder-looking bytes
+48	S	Norito-encoded Galois key-set material	S	Galois key-set byte decode-and-digest must reject non-Norito placeholder-looking bytes
+49	S	Norito-encoded Galois key-set material	S	witness-bound Galois key-set byte digesting must reject non-Norito placeholder-looking bytes
+50	S	Norito-encoded Galois key-set material	S	witness-bound Galois key-set byte digest helper must reject non-Norito placeholder-looking bytes
+51	S	Norito-encoded Galois key-set material	S	witness-bound Galois key-set byte admission must reject non-Norito placeholder-looking bytes
+52	S	all zero	S	Galois key-set digesting must reject inert all-zero key-switch entries
+53	N		S	BFV equality assertion at source line 44447
+54	N		S	BFV equality assertion at source line 44448
+55	N		S	execution witness digest must hash the exposed typed material
+56	N		S	public witness-material hashing must match claim digest
+57	N		S	execution witness digest must be deterministic
+58	N		S	artifact-bound witness digest must match the public execution claim
+59	N		S	canonical witness material bytes must decode to typed material
+60	N		S	canonical witness material bytes must hash to the public execution claim
+61	N		S	canonical witness material bytes must return typed material with the digest
+62	N		S	canonical witness material bytes must return the public claim digest with decoded material
+63	N		S	artifact-bound witness byte digesting must match the typed digest
+64	N		S	artifact-bound canonical witness bytes must return typed material with the digest
+65	N		S	artifact-bound canonical witness bytes must return the typed digest with decoded material
+66	N		S	artifact-bound witness byte admission must return decoded witness material
+67	N		S	compressed witness material must carry the same typed material
+68	S	canonical v1 bytes	S	witness material byte admission must reject compressed Norito framing
+69	S	canonical v1 bytes	S	witness material byte digesting must reject compressed Norito framing
+70	S	canonical v1 bytes	S	witness material byte decode-and-digest must reject compressed Norito framing
+71	S	canonical v1 bytes	S	artifact-bound witness byte digesting must reject compressed Norito framing
+72	S	canonical v1 bytes	S	artifact-bound witness byte decode-and-digest must reject compressed Norito framing
+73	S	canonical v1 bytes	S	artifact-bound witness byte admission must reject compressed Norito framing
+74	D	runtime expected retained in Rust	S	artifact-aware typed witness validation must reject missing caller full-bootstrap material before witness material headers
+75	D	runtime expected retained in Rust	S	artifact-aware typed witness digesting must reject missing caller full-bootstrap material before witness material headers
+76	D	runtime expected retained in Rust	S	artifact-bound witness byte digesting must reject missing caller full-bootstrap material before compressed witness bytes
+77	D	runtime expected retained in Rust	S	artifact-bound witness byte digest helper must reject missing caller full-bootstrap material before compressed witness bytes
+78	D	runtime expected retained in Rust	S	artifact-bound witness byte admission must reject missing caller full-bootstrap material before compressed witness bytes
+79	S	Norito-encoded execution witness material	S	witness material byte admission must reject non-Norito placeholder-looking bytes
+80	S	Norito-encoded execution witness material	S	witness material byte digesting must reject non-Norito placeholder-looking bytes
+81	S	Norito-encoded execution witness material	S	witness material byte decode-and-digest must reject non-Norito placeholder-looking bytes
+82	S	Norito-encoded execution witness material	S	artifact-bound witness byte digesting must reject non-Norito placeholder-looking bytes
+83	S	Norito-encoded execution witness material	S	artifact-bound witness byte decode-and-digest must reject non-Norito placeholder-looking bytes
+84	S	Norito-encoded execution witness material	S	artifact-bound witness byte admission must reject non-Norito placeholder-looking bytes
+85	S	all-zero ciphertext	S	execution witness material must reject inert all-zero claim inputs
+86	S	all-zero ciphertext	S	execution witness material must reject inert all-zero claim outputs
+87	S	all-zero ciphertext	S	public witness material hashing must reject inert all-zero inputs
+88	S	all-zero ciphertext	S	public witness material hashing must reject inert all-zero outputs
+89	S	version	S	public witness material hashing must reject stale layout versions
+90	S	field count	S	public witness material hashing must reject stale layout field counts
+91	S	zero hash	S	public witness material hashing must reject missing artifact digests
+92	S	artifact bundle digest mismatch	S	public witness material hashing must reject stale artifact-bundle digests
+93	S	must be distinct from bootstrap public-key digest	S	public witness material hashing must reject governed material digests copied from the bootstrap public-key digest
+94	S	material digest mismatch	S	public witness material hashing must reject stale governed material digests
+95	S	placeholder	D	runtime context retained in Rust
+96	S	placeholder	D	runtime context retained in Rust
+97	S	placeholder	D	runtime context retained in Rust
+98	S	zero hash	S	public witness material hashing must reject missing Galois key set digests
+99	S	must be distinct from artifact bundle digest	S	public witness material hashing must reject aliased Galois key set digests
+100	S	Galois key set digest mismatch	S	artifact-aware witness validation must reject stale Galois key set digests
+101	S	Galois key set digest mismatch	S	execution witness derivation must reject stale claim Galois key-set digests before replaying output ciphertexts
+102	S	Galois key set digest mismatch	S	artifact-aware witness validation must reject replay with stale Galois keys
+103	S	Galois key set digest mismatch	S	strict execution statements must reject replay with stale Galois keys before ciphertext or bound replay
+104	S	ciphertext c0 length	S	public witness material hashing must reject malformed trace ciphertexts
+105	S	all-zero ciphertext	S	public witness material hashing must reject inert all-zero trace ciphertexts
+106	S	source_coefficient_index	S	public witness material hashing must reject malformed raw sample metadata
+107	S	raw extracted sample	S	public witness material hashing must reject blind-rotation/raw-sample drift
+108	S	raw extracted sample bound	S	public witness material hashing must reject blind-rotation/raw-sample bound drift
+109	S	coefficient-zero repack output	S	public witness material hashing must reject raw-sample repack drift
+110	S	coefficient-zero repack bound	S	public witness material hashing must reject raw-sample repack bound drift
+111	S	governed artifact trace	S	artifact-aware witness digest must reject self-consistent stale prefix traces
+112	S	governed artifact trace	S	artifact-aware witness validation must reject coefficient-to-slot trace drift
+113	S	governed artifact trace	S	artifact-bound witness byte digesting must reject canonical stale prefix trace bytes
+114	S	governed artifact trace	S	artifact-bound witness byte digest helper must reject canonical stale prefix trace bytes
+115	S	governed artifact trace	S	artifact-bound witness byte admission must reject canonical stale prefix trace bytes
+116	S	diagnostic slot-to-coefficient output does not match governed artifact trace	S	artifact-aware witness validation must reject diagnostic slot-to-coefficient trace drift
+117	S	sample-switch output does not match governed artifact trace	S	artifact-aware witness validation must reject sample-switch trace drift
+118	S	sample-switch bound	S	public witness material hashing must reject raw-sample sample-switch bound drift
+119	S	trace output ciphertext	S	public witness material hashing must reject trace/output ciphertext drift
+120	S	trace output bound	S	public witness material hashing must reject trace/output bound drift
+121	S	blind-rotation	S	public witness material hashing must reject oversized trace bounds
+122	N		S	strict and canonical statement digests must agree after witness validation
+123	S	placeholder	S	execution proof statements must reject pending witness digest placeholders
+124	S	placeholder	S	execution proof statements must reject transient witness digest placeholders
+125	S	placeholder	S	execution proof statements must reject delayed pending witness digest placeholders
+126	N		S	proof-input statement derivation must match the artifact-aware statement
+127	N		S	BFV equality assertion at source line 45343
+128	N		S	BFV equality assertion at source line 45347
+129	N		S	BFV equality assertion at source line 45351
+130	N		S	BFV equality assertion at source line 45352
+131	N		S	BFV equality assertion at source line 45353
+132	N		S	canonical proof input digest must match after artifact-aware replay
+133	N		S	execution proof input material digest must be deterministic
+134	S	canonical v1 bytes	S	execution proof input admission must reject alternate Norito layout
+135	N		S	execution proof-input hashing must ignore ambient Norito layout
+136	N		S	execution proof input material digest must hash self-describing typed material
+137	N		S	canonical proof input material bytes must decode to typed material
+138	N		S	canonical proof input material bytes must hash to the typed digest
+139	N		S	proof input material byte digest helper must return decoded proof input material
+140	N		S	proof input material byte digest helper must return the digest of the admitted proof input bytes
+141	N		S	artifact-bound proof input byte digesting must match the typed digest
+142	N		S	artifact-bound proof input byte digest helper must return decoded proof input
+143	N		S	artifact-bound proof input byte digest helper must return the admitted proof input digest
+144	N		S	artifact-bound proof input byte admission must return decoded proof input material
+145	N		S	caller-public-key-bound proof input digest must match the typed digest
+146	N		S	caller-public-key-bound proof input byte digesting must match the typed digest
+147	N		S	caller-bound proof input byte digest helper must return decoded proof input
+148	N		S	caller-bound proof input byte digest helper must return the admitted proof input digest
+149	N		S	caller-public-key-bound proof input byte admission must return decoded material
+150	N		S	public-key/proof-input byte admission must return decoded caller material
+151	N		S	BFV equality assertion at source line 45593
+152	N		S	public-key/proof-input byte digest admission must return decoded proof input
+153	N		S	public-key/proof-input byte digest admission must return the admitted proof input digest
+154	N		S	BFV equality assertion at source line 45616
+155	N		S	public-key/proof-input all-digest admission must return decoded proof input
+156	N		S	public-key/proof-input all-digest admission must return the admitted public-key digest
+157	N		S	public-key/proof-input all-digest admission must return the admitted proof-input digest
+158	N		S	execution governance byte admission must return the decoded public key
+159	N		S	execution governance byte admission must return the decoded evaluation-key bundle
+160	N		S	execution governance byte admission must return the decoded artifact bundle
+161	N		S	execution governance byte admission must return the sorted decoded Galois key set
+162	N		S	execution governance byte admission must return the decoded proof input material
+163	N		S	BFV equality assertion at source line 45682
+164	N		S	execution governance byte digest admission must return decoded evaluation keys
+165	N		S	BFV equality assertion at source line 45687
+166	N		S	execution governance byte digest admission must return decoded Galois keys
+167	N		S	BFV equality assertion at source line 45692
+168	N		S	execution governance byte digest admission must return the admitted proof input digest
+169	N		S	BFV equality assertion at source line 45720
+170	N		S	execution governance byte digests admission must return decoded evaluation keys
+171	N		S	execution governance byte digests admission must return decoded artifacts
+172	N		S	execution governance byte digests admission must return decoded Galois keys
+173	N		S	execution governance byte digests admission must return decoded proof input
+174	N		S	execution governance byte digests admission must return the admitted public-key digest
+175	N		S	execution governance byte digests admission must return the admitted evaluation-key bundle digest
+176	N		S	execution governance byte digests admission must return the admitted artifact-bundle digest
+177	N		S	execution governance byte digests admission must return the admitted Galois key-set digest
+178	N		S	execution governance byte digests admission must return the admitted proof input digest
+179	S	caller public key mismatch	S	caller-bound proof input validation must reject public-key substitution
+180	S	caller public key mismatch	S	caller-bound proof input digesting must reject public-key substitution
+181	S	public-key digest	S	caller-bound proof input byte digesting must reject public-key substitution before proof-input bytes
+182	S	public-key digest	S	caller-bound proof input byte digest helper must reject public-key substitution before proof-input bytes
+183	S	public-key digest	S	caller-bound proof input byte admission must reject public-key substitution before proof-input bytes
+184	S	public-key digest	S	execution governance byte admission must reject decoded public-key substitution before proof input handoff
+185	S	public-key digest	S	execution governance byte digest admission must reject decoded public-key substitution before proof input handoff
+186	S	public-key digest	S	execution governance byte digests admission must reject decoded public-key substitution before proof input handoff
+187	S	public-key digest	S	public-key/proof-input byte admission must reject decoded public-key substitution before proof-input bytes
+188	S	public-key digest	S	public-key/proof-input byte digest admission must reject decoded public-key substitution before proof-input bytes
+189	S	canonical v1 bytes	S	execution governance byte admission must reject compressed artifact-bundle framing
+190	S	canonical v1 bytes	S	execution governance byte digest admission must reject compressed artifact-bundle framing
+191	S	canonical v1 bytes	S	execution governance byte digests admission must reject compressed artifact-bundle framing
+192	S	canonical v1 bytes	S	execution governance byte admission must reject compressed Galois key-set framing
+193	S	canonical v1 bytes	S	execution governance byte digest admission must reject compressed Galois key-set framing
+194	S	canonical v1 bytes	S	execution governance byte digests admission must reject compressed Galois key-set framing
+195	N		S	compressed proof input material must carry the same typed material
+196	S	canonical v1 bytes	S	proof input material byte admission must reject compressed Norito framing
+197	S	canonical v1 bytes	S	proof input material byte digesting must reject compressed Norito framing
+198	S	canonical v1 bytes	S	proof input material byte digest helper must reject compressed Norito framing before hashing
+199	S	canonical v1 bytes	S	artifact-bound proof input byte digesting must reject compressed Norito framing
+200	S	canonical v1 bytes	S	artifact-bound proof input byte digest helper must reject compressed Norito framing
+201	S	canonical v1 bytes	S	artifact-bound proof input byte admission must reject compressed Norito framing
+202	S	canonical v1 bytes	S	caller-bound proof input byte digesting must reject compressed Norito framing
+203	S	canonical v1 bytes	S	caller-bound proof input byte digest helper must reject compressed Norito framing
+204	S	canonical v1 bytes	S	caller-bound proof input byte admission must reject compressed Norito framing
+205	D	runtime expected retained in Rust	S	artifact-aware typed proof input validation must reject missing caller full-bootstrap material before proof-input headers
+206	D	runtime expected retained in Rust	S	artifact-aware typed proof input digesting must reject missing caller full-bootstrap material before proof-input headers
+207	D	runtime expected retained in Rust	S	artifact-bound proof input byte digesting must reject missing caller full-bootstrap material before compressed proof-input bytes
+208	D	runtime expected retained in Rust	S	artifact-bound proof input byte digest helper must reject missing caller full-bootstrap material before compressed proof-input bytes
+209	D	runtime expected retained in Rust	S	artifact-bound proof input byte admission must reject missing caller full-bootstrap material before compressed proof-input bytes
+210	D	runtime expected retained in Rust	S	caller-bound proof input byte digesting must reject missing caller full-bootstrap material before compressed proof-input bytes
+211	D	runtime expected retained in Rust	S	caller-bound proof input byte digest helper must reject missing caller full-bootstrap material before compressed proof-input bytes
+212	D	runtime expected retained in Rust	S	caller-bound proof input byte admission must reject missing caller full-bootstrap material before compressed proof-input bytes
+213	D	runtime expected retained in Rust	S	execution governance byte admission must reject compressed artifact-bundle framing before compressed proof-input framing
+214	D	runtime expected retained in Rust	S	execution governance byte digest admission must reject compressed artifact-bundle framing before compressed proof-input framing
+215	D	runtime expected retained in Rust	S	execution governance byte digests admission must reject compressed artifact-bundle framing before compressed proof-input framing
+216	D	runtime expected retained in Rust	S	execution governance byte admission must reject compressed Galois key-set framing before compressed proof-input framing
+217	D	runtime expected retained in Rust	S	execution governance byte digest admission must reject compressed Galois key-set framing before compressed proof-input framing
+218	D	runtime expected retained in Rust	S	execution governance byte digests admission must reject compressed Galois key-set framing before compressed proof-input framing
+219	S	canonical v1 bytes	S	public-key/proof-input byte admission must reject compressed public-key framing
+220	S	canonical v1 bytes	S	public-key/proof-input byte digest admission must reject compressed public-key framing
+221	D	runtime expected retained in Rust	S	public-key/proof-input byte admission must reject missing caller full-bootstrap material before public-key or proof-input framing
+222	D	runtime expected retained in Rust	S	public-key/proof-input byte digest admission must reject missing caller full-bootstrap material before public-key or proof-input framing
+223	D	runtime expected retained in Rust	S	public-key/proof-input byte all-digest admission must reject missing caller full-bootstrap material before public-key or proof-input framing
+224	S	canonical v1 bytes	S	execution governance byte admission must reject compressed public-key framing
+225	S	canonical v1 bytes	S	execution governance byte digest admission must reject compressed public-key framing
+226	S	canonical v1 bytes	S	execution governance byte digests admission must reject compressed public-key framing
+227	S	Norito-encoded execution proof input material	S	proof input material byte admission must reject non-Norito placeholder-looking bytes
+228	S	Norito-encoded execution proof input material	S	proof input material byte digesting must reject non-Norito placeholder-looking bytes
+229	S	Norito-encoded execution proof input material	S	proof input material byte digest helper must reject non-Norito placeholder-looking bytes
+230	S	Norito-encoded execution proof input material	S	artifact-bound proof input byte digesting must reject non-Norito placeholder-looking bytes
+231	S	Norito-encoded execution proof input material	S	artifact-bound proof input byte digest helper must reject non-Norito placeholder-looking bytes
+232	S	Norito-encoded execution proof input material	S	artifact-bound proof input byte admission must reject non-Norito placeholder-looking bytes
+233	S	Norito-encoded execution proof input material	S	caller-bound proof input byte digesting must reject non-Norito placeholder-looking bytes
+234	S	Norito-encoded execution proof input material	S	caller-bound proof input byte digest helper must reject non-Norito placeholder-looking bytes
+235	S	Norito-encoded execution proof input material	S	caller-bound proof input byte admission must reject non-Norito placeholder-looking bytes
+236	S	Norito-encoded execution proof input material	S	public-key/proof-input byte admission must reject non-Norito proof-input bytes
+237	S	Norito-encoded execution proof input material	S	execution governance byte admission must reject non-Norito proof-input bytes
+238	S	role	S	artifact-aware witness validation must reject role-spliced evaluator artifacts
+239	S	role	S	artifact-aware witness digesting must reject role-spliced evaluator artifacts
+240	S	role	S	artifact-aware proof input validation must reject role-spliced evaluator artifacts
+241	S	role	S	artifact-aware proof input digesting must reject role-spliced evaluator artifacts
+242	S	governed artifact trace	S	artifact-aware proof input digest must reject self-consistent stale prefix traces
+243	N		S	proof input material must reconstruct the public execution claim
+244	S	version	S	proof input material must reject stale layout versions
+245	S	version	S	proof input material digest must reject stale layout versions
+246	S	field count	S	proof input material must reject stale layout field counts
+247	S	statement hash mismatch	S	proof input material must reject forged statement hashes
+248	D	runtime expected retained in Rust	D	runtime context retained in Rust
+249	D	runtime expected retained in Rust	D	runtime context retained in Rust
+250	D	runtime expected retained in Rust	D	runtime context retained in Rust
+251	S	BFV full-bootstrap execution proof input material statement hash must be distinct from input ciphertext digest	S	proof input byte admission must reject statement/input-ciphertext digest aliases before accepting canonical bytes
+252	S	BFV full-bootstrap execution proof input material statement hash must be distinct from input ciphertext digest	S	proof input byte digesting must reject statement/input-ciphertext digest aliases before hashing
+253	D	runtime expected retained in Rust	S	proof input material must reject statement hashes copied from execution witness digests before mismatch checks
+254	D	runtime expected retained in Rust	S	proof input material digesting must reject statement hashes copied from execution witness digests before hashing
+255	D	runtime expected retained in Rust	S	proof input byte admission must reject statement/witness digest aliases before accepting canonical bytes
+256	D	runtime expected retained in Rust	S	proof input byte digesting must reject statement/witness digest aliases before hashing
+257	D	runtime expected retained in Rust	S	proof input material must reject statement hashes copied from governed proof-key pair commitments before mismatch checks
+258	D	runtime expected retained in Rust	S	proof input material digesting must reject statement hashes copied from governed proof-key pair commitments before hashing
+259	D	runtime expected retained in Rust	S	proof input byte admission must reject statement/proof-key pair aliases before accepting canonical bytes
+260	D	runtime expected retained in Rust	S	proof input byte digesting must reject statement/proof-key pair aliases before hashing
+261	S	zero hash	S	proof input material must reject zero statement hashes
+262	S	placeholder	S	proof input material must reject placeholder statement hashes
+263	S	placeholder	S	proof input material must reject separator-spelled placeholder statement hashes
+264	S	placeholder	S	proof input material digesting must reject separator-spelled placeholder statement hashes
+265	S	placeholder	S	proof input material must reject delayed separator-spelled placeholder statement hashes
+266	S	placeholder	S	proof input material digesting must reject delayed separator-spelled placeholder statement hashes
+267	S	public-key digest	S	proof input material constructors must reject wrong but valid public keys
+268	S	public-key digest	S	proof input material must reject stale public keys
+269	S	public key a length	S	proof input material must reject malformed public keys
+270	S	trace output bound	S	proof input material must reject stale embedded witness material
+271	N		S	BFV equality assertion at source line 46909
+272	N		S	BFV equality assertion at source line 46913
+273	N		S	BFV equality assertion at source line 46917
+274	N		S	BFV equality assertion at source line 46922
+275	N		S	BFV equality assertion at source line 46923
+276	N		S	BFV equality assertion at source line 46927
+277	N		S	BFV equality assertion at source line 46931
+278	N		S	BFV equality assertion at source line 46935
+279	N		S	BFV equality assertion at source line 46946
+280	N		S	BFV equality assertion at source line 46950
+281	N		S	BFV equality assertion at source line 46954
+282	N		S	BFV equality assertion at source line 46955
+283	N		S	BFV equality assertion at source line 46956
+284	N		S	BFV equality assertion at source line 46957
+285	N		S	BFV equality assertion at source line 46958
+286	N		S	BFV equality assertion at source line 46959
+287	N		S	BFV equality assertion at source line 46960
+288	N		S	BFV equality assertion at source line 46961
+289	N		S	BFV equality assertion at source line 46965
+290	N		S	BFV equality assertion at source line 46969
+291	N		S	BFV equality assertion at source line 46978
+292	N		S	BFV equality assertion at source line 46982
+293	N		S	BFV equality assertion at source line 46989
+294	N		S	BFV equality assertion at source line 46993
+295	N		S	BFV equality assertion at source line 46997
+296	N		S	BFV equality assertion at source line 47005
+297	N		S	BFV equality assertion at source line 47009
+298	N		S	BFV equality assertion at source line 47013
+299	N		S	BFV equality assertion at source line 47014
+300	N		S	BFV equality assertion at source line 47015
+301	N		S	BFV equality assertion at source line 47016
+302	N		S	public padding row helper must match trace material encoding
+303	S	zero hash	S	public padding row construction must reject zero statement hashes
+304	S	placeholder	S	public padding row construction must reject placeholder statement hashes
+305	S	placeholder	S	public padding row construction must reject leading-whitespace delayed placeholder statement hashes
+306	S	slot index	S	public padding row construction must reject out-of-range slot headers
+307	S	zero hash	S	public padding opening validation must reject zero statement hashes
+308	S	placeholder	S	public padding opening validation must reject leading-whitespace delayed placeholder statement hashes
+309	S	slot index	S	public padding opening validation must reject out-of-range slot headers
+310	S	public padding row	S	public padding opening validation must reject stale slot headers
+311	S	public padding row	S	public padding opening validation must reject stale statement limbs
+312	S	public padding row	S	public padding opening validation must reject coefficient material in padding rows
+313	N		S	trace material digest must be deterministic
+314	N		S	trace material digest must hash self-describing typed material
+315	N		S	canonical trace material bytes must decode to typed trace material
+316	N		S	canonical trace material bytes must hash to the typed digest
+317	N		S	trace material byte digest helper must return decoded trace material
+318	N		S	trace material byte digest helper must return the digest of the admitted trace bytes
+319	N		S	proof-input-bound trace material byte digesting must match the typed digest
+320	N		S	proof-input-bound trace material byte digest helper must return decoded trace material
+321	N		S	proof-input-bound trace material byte digest helper must return the admitted trace digest
+322	N		S	proof-input-bound trace material byte admission must return decoded trace material
+323	S	does not match proof input material	S	proof-input-bound trace material byte admission must reject stale proof input material
+324	S	does not match proof input material	S	proof-input-bound trace material byte digesting must reject stale proof input material
+325	S	does not match proof input material	S	proof-input-bound trace material byte digest helper must reject stale proof input material
+326	N		S	compressed trace material must carry the same typed material
+327	S	canonical v1 bytes	S	trace material byte admission must reject compressed Norito framing
+328	S	canonical v1 bytes	S	trace material byte digesting must reject compressed Norito framing
+329	S	canonical v1 bytes	S	trace material byte digest helper must reject compressed Norito framing before hashing
+330	S	canonical v1 bytes	S	proof-input-bound trace material byte digesting must reject compressed Norito framing
+331	S	canonical v1 bytes	S	proof-input-bound trace material byte digest helper must reject compressed Norito framing
+332	S	canonical v1 bytes	S	proof-input-bound trace material byte admission must reject compressed Norito framing
+333	D	runtime expected retained in Rust	S	proof-input-bound trace byte digesting must reject stale proof-input context before compressed trace bytes
+334	D	runtime expected retained in Rust	S	proof-input-bound trace byte digest helper must reject stale proof-input context before compressed trace bytes
+335	D	runtime expected retained in Rust	S	proof-input-bound trace byte admission must reject stale proof-input context before compressed trace bytes
+336	S	Norito-encoded arithmetic trace material	S	trace material byte admission must reject non-Norito placeholder-looking bytes
+337	S	Norito-encoded arithmetic trace material	S	trace material byte digesting must reject non-Norito placeholder-looking bytes
+338	S	Norito-encoded arithmetic trace material	S	trace material byte digest helper must reject non-Norito placeholder-looking bytes
+339	S	Norito-encoded arithmetic trace material	S	proof-input-bound trace material byte digesting must reject non-Norito placeholder-looking bytes
+340	S	Norito-encoded arithmetic trace material	S	proof-input-bound trace material byte digest helper must reject non-Norito placeholder-looking bytes
+341	S	Norito-encoded arithmetic trace material	S	proof-input-bound trace material byte admission must reject non-Norito placeholder-looking bytes
+342	N		S	BFV equality assertion at source line 47411
+343	N		S	BFV equality assertion at source line 47415
+344	N		S	BFV equality assertion at source line 47419
+345	N		S	BFV equality assertion at source line 47423
+346	N		S	trace-bound public opening material digest must reuse the canonical material digest
+347	N		S	canonical trace-bound public opening material bytes must decode to typed material
+348	N		S	canonical public opening material bytes must hash to the typed digest
+349	N		S	public opening material byte digest helper must return decoded opening material
+350	N		S	public opening material byte digest helper must return the digest of the admitted opening bytes
+351	N		S	trace-bound public opening byte digesting must match the typed digest
+352	N		S	trace-bound public opening byte digest helper must return decoded opening material
+353	N		S	trace-bound public opening byte digest helper must return the admitted opening digest
+354	N		S	trace-bound public opening byte admission must return decoded opening material
+355	D	runtime expected retained in Rust	D	runtime context retained in Rust
+356	S	canonical v1 bytes	S	public opening material byte digest helper must reject compressed Norito framing before hashing
+357	S	canonical v1 bytes	S	trace-bound public opening byte digesting must reject compressed Norito framing
+358	S	canonical v1 bytes	S	trace-bound public opening byte digest helper must reject compressed Norito framing
+359	S	canonical v1 bytes	S	trace-bound public opening byte admission must reject compressed Norito framing
+360	D	runtime expected retained in Rust	S	trace-bound public opening byte digesting must reject stale trace context before compressed opening bytes
+361	D	runtime expected retained in Rust	S	trace-bound public opening byte digest helper must reject stale trace context before compressed opening bytes
+362	D	runtime expected retained in Rust	S	trace-bound public opening byte admission must reject stale trace context before compressed opening bytes
+363	S	Norito-encoded public opening material	S	public opening material byte admission must reject non-Norito placeholder-looking bytes
+364	S	Norito-encoded public opening material	S	public opening material byte digesting must reject non-Norito placeholder-looking bytes
+365	S	Norito-encoded public opening material	S	public opening material byte digest helper must reject non-Norito placeholder-looking bytes
+366	S	Norito-encoded public opening material	S	trace-bound public opening byte digesting must reject non-Norito placeholder-looking bytes
+367	S	Norito-encoded public opening material	S	trace-bound public opening byte digest helper must reject non-Norito placeholder-looking bytes
+368	S	Norito-encoded public opening material	S	trace-bound public opening byte admission must reject non-Norito placeholder-looking bytes
+369	S	does not match trace material	S	trace-bound public opening material validation must reject material for another trace digest
+370	S	does not match trace material	S	trace-bound public opening byte digesting must reject canonical bytes for another trace digest
+371	S	does not match trace material	S	trace-bound public opening byte digest helper must reject canonical bytes for another trace digest
+372	S	does not match trace material	S	trace-bound public opening byte admission must reject canonical bytes for another trace digest
+373	N		S	BFV equality assertion at source line 47749
+374	N		S	BFV equality assertion at source line 47753
+375	N		S	BFV equality assertion at source line 47757
+376	N		S	BFV equality assertion at source line 47758
+377	N		S	BFV equality assertion at source line 47762
+378	N		S	BFV equality assertion at source line 47766
+379	N		S	BFV equality assertion at source line 47770
+380	N		S	BFV equality assertion at source line 47774
+381	N		S	BFV equality assertion at source line 47779
+382	N		S	canonical AIR evaluation digest must match after trace-bound validation
+383	N		S	AIR evaluation material digest must hash self-describing typed material
+384	N		S	canonical AIR evaluation material bytes must decode to typed material
+385	N		S	canonical AIR evaluation material bytes must hash to the typed digest
+386	N		S	AIR evaluation material byte digest helper must return decoded AIR evaluation material
+387	N		S	AIR evaluation material byte digest helper must return the digest of the admitted AIR evaluation bytes
+388	N		S	trace-bound AIR evaluation byte digesting must match the typed digest
+389	N		S	trace-bound AIR evaluation byte digest helper must return decoded AIR evaluation material
+390	N		S	trace-bound AIR evaluation byte digest helper must return the admitted AIR evaluation digest
+391	N		S	trace-bound AIR evaluation byte admission must return decoded AIR evaluation material
+392	D	runtime expected retained in Rust	D	runtime context retained in Rust
+393	D	runtime expected retained in Rust	D	runtime context retained in Rust
+394	N		S	compressed AIR evaluation material must carry the same typed material
+395	S	canonical v1 bytes	S	AIR evaluation material byte admission must reject compressed Norito framing
+396	S	canonical v1 bytes	S	AIR evaluation material byte digest helper must reject compressed Norito framing before hashing
+397	S	canonical v1 bytes	S	trace-bound AIR evaluation byte digesting must reject compressed Norito framing
+398	S	canonical v1 bytes	S	trace-bound AIR evaluation byte digest helper must reject compressed Norito framing
+399	S	canonical v1 bytes	S	trace-bound AIR evaluation byte admission must reject compressed Norito framing
+400	D	runtime expected retained in Rust	S	trace-bound AIR evaluation byte digesting must reject stale trace context before compressed AIR bytes
+401	D	runtime expected retained in Rust	S	trace-bound AIR evaluation byte digest helper must reject stale trace context before compressed AIR bytes
+402	D	runtime expected retained in Rust	S	trace-bound AIR evaluation byte admission must reject stale trace context before compressed AIR bytes
+403	S	Norito-encoded AIR evaluation material	S	AIR evaluation material byte admission must reject non-Norito placeholder-looking bytes
+404	S	Norito-encoded AIR evaluation material	S	AIR evaluation material byte digesting must reject non-Norito placeholder-looking bytes
+405	S	Norito-encoded AIR evaluation material	S	AIR evaluation material byte digest helper must reject non-Norito placeholder-looking bytes
+406	S	Norito-encoded AIR evaluation material	S	trace-bound AIR evaluation byte digesting must reject non-Norito placeholder-looking bytes
+407	S	Norito-encoded AIR evaluation material	S	trace-bound AIR evaluation byte digest helper must reject non-Norito placeholder-looking bytes
+408	S	Norito-encoded AIR evaluation material	S	trace-bound AIR evaluation byte admission must reject non-Norito placeholder-looking bytes
+409	S	trace material digest mismatch	S	trace-bound AIR evaluation digest must reject material retargeted to another trace
+410	S	trace material digest mismatch	S	trace-bound AIR evaluation byte digesting must reject canonical bytes for another trace
+411	S	trace material digest mismatch	S	trace-bound AIR evaluation byte digest helper must reject canonical bytes for another trace
+412	S	trace material digest mismatch	S	trace-bound AIR evaluation byte admission must reject canonical bytes for another trace
+413	S	must be distinct from constraint-system digest	S	AIR evaluation material must reject trace digests copied from the AIR constraint-system digest before trace mismatch checks
+414	S	must be distinct from constraint-system digest	S	AIR evaluation material digesting must reject trace digests copied from the AIR constraint-system digest before hashing
+415	S	must be distinct from arithmetic AIR constraint-system digest	S	trace-bound AIR evaluation digesting must reject copied AIR constraint-system digests before trace mismatch checks
+416	S	placeholder	S	AIR evaluation material must reject placeholder trace material digests
+417	S	placeholder	S	AIR evaluation material digesting must reject placeholder trace material digests
+418	S	placeholder	S	AIR evaluation material must reject leading-whitespace delayed placeholder trace material digests
+419	S	placeholder	S	AIR evaluation material digesting must reject leading-whitespace delayed placeholder trace material digests
+420	S	placeholder	S	trace-bound AIR evaluation digesting must reject leading-whitespace delayed placeholder trace material digests
+421	S	placeholder	S	AIR evaluation material must reject separator-spelled placeholder trace material digests
+422	S	placeholder	S	AIR evaluation material digesting must reject separator-spelled placeholder trace material digests
+423	S	placeholder	S	trace-bound AIR evaluation digesting must reject separator-spelled placeholder trace material digests
+424	N		S	BFV equality assertion at source line 48263
+425	N		S	BFV equality assertion at source line 48267
+426	N		S	BFV equality assertion at source line 48271
+427	N		S	AIR evaluation material must be produced by the arithmetic composition evaluator
+428	N		S	padding-row arithmetic trace drift must use the trace-material-bound AIR challenge
+429	N		S	single-byte Goldilocks reduction must preserve low digest limbs
+430	S	zero hash	S	AIR composition challenges must reject zero statement hashes at derivation
+431	S	placeholder	S	AIR composition challenges must reject placeholder statement hashes at derivation
+432	S	placeholder	S	AIR composition challenges must reject leading-whitespace delayed placeholder statement hashes
+433	S	zero hash	S	AIR composition challenges must reject zero trace material digests at derivation
+434	S	distinct	S	AIR composition challenges must reject equal statement and trace material digests
+435	S	placeholder	S	AIR composition challenges must reject placeholder trace material digests at derivation
+436	S	placeholder	S	AIR composition challenges must reject leading-whitespace delayed placeholder trace material digests
+437	S	placeholder	S	AIR composition challenges must reject separator-spelled placeholder trace material digests
+438	N		S	single-column arithmetic trace drift must use the trace-material-bound AIR challenge
+439	N		S	constructed second drift must cancel the previous linear residual
+440	N		S	coordinated arithmetic trace drift must fail on the first nonzero residual
+441	S	Goldilocks	S	AIR composition evaluation must not let an early residual mask later noncanonical row coordinates
+442	N		S	BFV equality assertion at source line 48515
+443	N		S	BFV equality assertion at source line 48516
+444	S	prover key parameter digest must be distinct from proof input statement hash	S	prover input material must reject prover-key parameter digests copied from proof input statements before proof-key mismatch checks
+445	S	prover key parameter digest must be distinct from proof input statement hash	S	prover input material digesting must reject prover-key parameter digests copied from proof input statements before proof-key mismatch checks
+446	S	verifier key key-switch decomposition-chain digest must be distinct from proof input witness artifact bundle digest	S	prover input material must reject verifier-key key-switch digests copied from witness artifact bundles before proof-key mismatch checks
+447	S	verifier key key-switch decomposition-chain digest must be distinct from proof input witness artifact bundle digest	S	prover input material digesting must reject verifier-key key-switch digests copied from witness artifact bundles before proof-key mismatch checks
+448	S	prover key public-input schema digest must be distinct from proof input statement hash	S	prover input material must reject prover-key schema digests copied from proof input statements before proof-key mismatch checks
+449	S	prover key public-input schema digest must be distinct from proof input statement hash	S	prover input material digesting must reject prover-key schema digests copied from proof input statements before proof-key mismatch checks
+450	S	prover key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest	S	prover input material must reject prover-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks
+451	S	prover key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest	S	prover input material digesting must reject prover-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks
+452	S	verifier key public-input schema digest must be distinct from proof input statement hash	S	prover input material must reject verifier-key schema digests copied from proof input statements before proof-key mismatch checks
+453	S	verifier key public-input schema digest must be distinct from proof input statement hash	S	prover input material digesting must reject verifier-key schema digests copied from proof input statements before proof-key mismatch checks
+454	S	verifier key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest	S	prover input material must reject verifier-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks
+455	S	verifier key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest	S	prover input material digesting must reject verifier-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks
+456	S	verifier key proof-key pair commitment must be distinct from proof input witness artifact bundle digest	S	prover input material must reject verifier-key pair commitments copied from witness artifact bundles before proof-key mismatch checks
+457	S	verifier key proof-key pair commitment must be distinct from proof input witness artifact bundle digest	S	prover input material digesting must reject verifier-key pair commitments copied from witness artifact bundles before proof-key mismatch checks
+458	S	Galois key set digest mismatch	S	artifact-aware proof input validation must reject stale Galois key-set retargeting
+459	S	Galois key set digest mismatch	S	artifact-aware proof input digesting must reject stale Galois key-set retargeting
+460	S	Galois key set digest mismatch	S	artifact-aware prover input validation must reject stale Galois key-set retargeting
+461	S	Galois key set digest mismatch	S	artifact-aware prover input digesting must reject stale Galois key-set retargeting
+462	S	artifact	S	artifact-aware witness validation must reject caller artifact retargeting
+463	S	artifact	S	artifact-aware witness digesting must reject caller artifact retargeting
+464	S	artifact	S	artifact-aware proof input validation must reject caller artifact retargeting
+465	S	artifact	S	artifact-aware proof input digesting must reject caller artifact retargeting
+466	S	artifact	S	artifact-aware prover input validation must reject caller artifact retargeting
+467	S	artifact	S	artifact-aware prover input digesting must reject caller artifact retargeting
+468	S	bootstrap key mismatch	S	artifact-aware witness validation must reject bootstrap-key retargeting
+469	S	bootstrap key mismatch	S	artifact-aware witness digesting must reject bootstrap-key retargeting
+470	S	bootstrap key mismatch	S	artifact-aware proof input validation must reject bootstrap-key retargeting
+471	S	bootstrap key mismatch	S	artifact-aware proof input digesting must reject bootstrap-key retargeting
+472	S	bootstrap key mismatch	S	artifact-aware prover input validation must reject bootstrap-key retargeting
+473	S	bootstrap key mismatch	S	artifact-aware prover input digesting must reject bootstrap-key retargeting
+474	S	not registered	S	artifact-aware witness validation must reject BFV parameter-profile retargeting before witness material comparison
+475	S	not registered	S	artifact-aware proof input validation must reject BFV parameter-profile retargeting before proof-input material comparison
+476	S	not registered	S	artifact-aware prover input validation must reject BFV parameter-profile retargeting before prover-input material comparison
+477	S	not registered	S	artifact-aware prover input digesting must reject BFV parameter-profile retargeting before prover-input material comparison
+478	S	role	S	artifact-aware prover input validation must reject role-spliced evaluator artifacts
+479	S	role	S	artifact-aware prover input digesting must reject role-spliced evaluator artifacts
+480	S	artifact bundle digest mismatch	S	artifact-aware prover input validation must reject role-swapped proof-key artifacts before proof-key material comparison
+481	S	artifact bundle digest mismatch	S	artifact-aware prover input digesting must reject role-swapped proof-key artifacts before proof-key material comparison
+482	S	artifact bundle digest mismatch	S	artifact-aware prover input validation must reject stale same-role prover-key artifacts before proof-key material comparison
+483	S	artifact bundle digest mismatch	S	artifact-aware prover input digesting must reject stale same-role prover-key artifacts before proof-key material comparison
+484	S	artifact bundle digest mismatch	S	artifact-aware prover input validation must reject stale same-role verifier-key artifacts before proof-key material comparison
+485	S	artifact bundle digest mismatch	S	artifact-aware prover input digesting must reject stale same-role verifier-key artifacts before proof-key material comparison
+486	S	payload role	S	prover input material must reject typed prover/verifier key role swaps
+487	S	payload role	S	prover input material digesting must reject typed prover/verifier key role swaps
+488	S	governed artifact trace	S	artifact-aware proof input validation must reject prefix-stage witness drift
+489	S	governed artifact trace	S	artifact-aware prover input validation must reject prefix-stage witness drift
+490	S	proof input does not match arithmetic trace material	S	prover input material must reject internally valid trace material for another proof input
+491	N		S	canonical prover input digest must match after artifact-aware replay
+492	N		S	prover input material digest must be deterministic
+493	N		S	prover input material digest must hash self-describing typed material
+494	N		S	canonical prover input material bytes must decode to typed material
+495	N		S	canonical prover input material bytes must hash to the typed digest
+496	N		S	prover input material byte digest helper must return decoded prover input material
+497	N		S	prover input material byte digest helper must return the digest of the admitted prover input bytes
+498	N		S	artifact-bound prover input byte digesting must match the typed digest
+499	N		S	artifact-bound prover input byte digest helper must return decoded prover input
+500	N		S	artifact-bound prover input byte digest helper must return the admitted prover input digest
+501	N		S	artifact-bound prover input byte admission must return decoded prover input material
+502	N		S	caller-public-key-bound prover input digest must match the typed digest
+503	N		S	caller-public-key-bound prover input byte digesting must match the typed digest
+504	N		S	caller-bound prover input byte digest helper must return decoded prover input
+505	N		S	caller-bound prover input byte digest helper must return the admitted prover input digest
+506	N		S	caller-public-key-bound prover input byte admission must return decoded material
+507	N		S	public-key/prover-input byte admission must return decoded caller material
+508	N		S	BFV equality assertion at source line 49402
+509	N		S	public-key/prover-input byte digest admission must return decoded prover input
+510	N		S	public-key/prover-input byte digest admission must return the admitted prover input digest
+511	N		S	BFV equality assertion at source line 49428
+512	N		S	public-key/prover-input all-digest admission must return decoded prover input
+513	N		S	public-key/prover-input all-digest admission must return the admitted public-key digest
+514	N		S	public-key/prover-input all-digest admission must return the admitted prover-input digest
+515	N		S	prover governance byte admission must return the decoded public key
+516	N		S	prover governance byte admission must return the decoded evaluation-key bundle
+517	N		S	prover governance byte admission must return the decoded artifact bundle
+518	N		S	prover governance byte admission must return the sorted decoded Galois key set
+519	N		S	prover governance byte admission must return the decoded prover input material
+520	N		S	BFV equality assertion at source line 49494
+521	N		S	prover governance byte digest admission must return decoded evaluation keys
+522	N		S	BFV equality assertion at source line 49499
+523	N		S	prover governance byte digest admission must return decoded Galois keys
+524	N		S	BFV equality assertion at source line 49507
+525	N		S	prover governance byte digest admission must return the admitted prover input digest
+526	N		S	BFV equality assertion at source line 49538
+527	N		S	prover governance byte digests admission must return decoded evaluation keys
+528	N		S	prover governance byte digests admission must return decoded artifacts
+529	N		S	prover governance byte digests admission must return decoded Galois keys
+530	N		S	prover governance byte digests admission must return decoded prover input material
+531	N		S	prover governance byte digests admission must return the admitted public-key digest
+532	N		S	prover governance byte digests admission must return the admitted evaluation-key bundle digest
+533	N		S	prover governance byte digests admission must return the admitted artifact-bundle digest
+534	N		S	prover governance byte digests admission must return the admitted Galois key-set digest
+535	N		S	prover governance byte digests admission must return the admitted prover input digest
+536	S	caller public key mismatch	S	caller-bound prover input validation must reject public-key substitution
+537	S	caller public key mismatch	S	caller-bound prover input digesting must reject public-key substitution
+538	S	public-key digest	S	caller-bound prover input byte digesting must reject public-key substitution before prover-input bytes
+539	S	public-key digest	S	caller-bound prover input byte digest helper must reject public-key substitution before prover-input bytes
+540	S	public-key digest	S	caller-bound prover input byte admission must reject public-key substitution before prover-input bytes
+541	S	public-key digest	S	public-key/prover-input byte admission must reject decoded public-key substitution before prover-input bytes
+542	S	public-key digest	S	public-key/prover-input byte digest admission must reject decoded public-key substitution before prover-input bytes
+543	S	public-key digest	S	prover governance byte admission must reject decoded public-key substitution before prover input handoff
+544	S	public-key digest	S	prover governance byte digest admission must reject decoded public-key substitution before prover input handoff
+545	S	public-key digest	S	prover governance byte digests admission must reject decoded public-key substitution before prover input handoff
+546	S	canonical v1 bytes	S	prover governance byte admission must reject compressed artifact-bundle framing
+547	S	canonical v1 bytes	S	prover governance byte digest admission must reject compressed artifact-bundle framing
+548	S	canonical v1 bytes	S	prover governance byte digests admission must reject compressed artifact-bundle framing
+549	S	canonical v1 bytes	S	prover governance byte admission must reject compressed Galois key-set framing
+550	S	canonical v1 bytes	S	prover governance byte digest admission must reject compressed Galois key-set framing
+551	S	canonical v1 bytes	S	prover governance byte digests admission must reject compressed Galois key-set framing
+552	N		S	compressed prover input material must carry the same typed material
+553	S	canonical v1 bytes	S	prover input material byte admission must reject compressed Norito framing
+554	S	canonical v1 bytes	S	prover input material byte digest helper must reject compressed Norito framing before hashing
+555	S	canonical v1 bytes	S	artifact-bound prover input byte digesting must reject compressed Norito framing
+556	S	canonical v1 bytes	S	artifact-bound prover input byte digest helper must reject compressed Norito framing
+557	S	canonical v1 bytes	S	artifact-bound prover input byte admission must reject compressed Norito framing
+558	S	canonical v1 bytes	S	caller-bound prover input byte digesting must reject compressed Norito framing
+559	S	canonical v1 bytes	S	caller-bound prover input byte digest helper must reject compressed Norito framing
+560	S	canonical v1 bytes	S	caller-bound prover input byte admission must reject compressed Norito framing
+561	D	runtime expected retained in Rust	S	artifact-aware typed prover input validation must reject missing caller full-bootstrap material before prover-input headers
+562	D	runtime expected retained in Rust	S	artifact-aware typed prover input digesting must reject missing caller full-bootstrap material before prover-input headers
+563	D	runtime expected retained in Rust	S	artifact-bound prover input byte digesting must reject missing caller full-bootstrap material before compressed prover-input bytes
+564	D	runtime expected retained in Rust	S	artifact-bound prover input byte digest helper must reject missing caller full-bootstrap material before compressed prover-input bytes
+565	D	runtime expected retained in Rust	S	artifact-bound prover input byte admission must reject missing caller full-bootstrap material before compressed prover-input bytes
+566	D	runtime expected retained in Rust	S	caller-bound prover input byte digesting must reject missing caller full-bootstrap material before compressed prover-input bytes
+567	D	runtime expected retained in Rust	S	caller-bound prover input byte digest helper must reject missing caller full-bootstrap material before compressed prover-input bytes
+568	D	runtime expected retained in Rust	S	caller-bound prover input byte admission must reject missing caller full-bootstrap material before compressed prover-input bytes
+569	D	runtime expected retained in Rust	S	prover governance byte admission must reject compressed artifact-bundle framing before compressed prover-input framing
+570	D	runtime expected retained in Rust	S	prover governance byte digest admission must reject compressed artifact-bundle framing before compressed prover-input framing
+571	D	runtime expected retained in Rust	S	prover governance byte digests admission must reject compressed artifact-bundle framing before compressed prover-input framing
+572	D	runtime expected retained in Rust	S	prover governance byte admission must reject compressed Galois key-set framing before compressed prover-input framing
+573	D	runtime expected retained in Rust	S	prover governance byte digest admission must reject compressed Galois key-set framing before compressed prover-input framing
+574	D	runtime expected retained in Rust	S	prover governance byte digests admission must reject compressed Galois key-set framing before compressed prover-input framing
+575	S	canonical v1 bytes	S	public-key/prover-input byte admission must reject compressed public-key framing
+576	S	canonical v1 bytes	S	public-key/prover-input byte digest admission must reject compressed public-key framing
+577	D	runtime expected retained in Rust	S	public-key/prover-input byte admission must reject missing caller full-bootstrap material before public-key or prover-input framing
+578	D	runtime expected retained in Rust	S	public-key/prover-input byte digest admission must reject missing caller full-bootstrap material before public-key or prover-input framing
+579	D	runtime expected retained in Rust	S	public-key/prover-input byte all-digest admission must reject missing caller full-bootstrap material before public-key or prover-input framing
+580	S	canonical v1 bytes	S	prover governance byte admission must reject compressed public-key framing
+581	S	canonical v1 bytes	S	prover governance byte digest admission must reject compressed public-key framing
+582	S	canonical v1 bytes	S	prover governance byte digests admission must reject compressed public-key framing
+583	S	Norito-encoded execution prover input material	S	prover input material byte admission must reject non-Norito placeholder-looking bytes
+584	S	Norito-encoded execution prover input material	S	prover input material byte digesting must reject non-Norito placeholder-looking bytes
+585	S	Norito-encoded execution prover input material	S	prover input material byte digest helper must reject non-Norito placeholder-looking bytes
+586	S	Norito-encoded execution prover input material	S	artifact-bound prover input byte digesting must reject non-Norito placeholder-looking bytes
+587	S	Norito-encoded execution prover input material	S	artifact-bound prover input byte digest helper must reject non-Norito placeholder-looking bytes
+588	S	Norito-encoded execution prover input material	S	artifact-bound prover input byte admission must reject non-Norito placeholder-looking bytes
+589	S	Norito-encoded execution prover input material	S	caller-bound prover input byte digesting must reject non-Norito placeholder-looking bytes
+590	S	Norito-encoded execution prover input material	S	caller-bound prover input byte digest helper must reject non-Norito placeholder-looking bytes
+591	S	Norito-encoded execution prover input material	S	caller-bound prover input byte admission must reject non-Norito placeholder-looking bytes
+592	S	Norito-encoded execution prover input material	S	public-key/prover-input byte admission must reject non-Norito prover-input bytes
+593	S	Norito-encoded execution prover input material	S	prover governance byte admission must reject non-Norito prover-input bytes
+594	S	governed artifact trace	S	artifact-aware prover input digest must reject self-consistent stale prefix traces
+595	S	arithmetic trace material digest	S	prover input material must reject stale arithmetic trace material digests
+596	S	zero hash	S	prover input material must reject zero arithmetic trace material digests
+597	S	placeholder	S	prover input material must reject placeholder arithmetic trace material digests
+598	S	placeholder	S	prover input material must reject separator-spelled placeholder arithmetic trace material digests
+599	D	runtime expected retained in Rust	D	runtime context retained in Rust
+600	S	arithmetic AIR constraint-system	S	prover input material must reject stale arithmetic AIR contract digests
+601	S	zero hash	S	prover input material must reject zero arithmetic AIR contract digests
+602	S	zero hash	S	prover input material must reject zero arithmetic AIR artifact digests
+603	S	placeholder	S	prover input material must reject placeholder arithmetic AIR artifact digests
+604	S	placeholder	S	prover input material must reject separator-spelled placeholder arithmetic AIR artifact digests
+605	S	arithmetic AIR artifact digest mismatch	S	prover input material must reject stale governed arithmetic AIR artifact digests
+606	S	evaluation material constraint-system digest	S	prover input material must reject AIR evaluation material for another AIR contract
+607	S	trace material digest mismatch	S	prover input material must reject AIR evaluation material for another trace
+608	S	placeholder	S	prover input material must reject AIR evaluation material with separator-spelled placeholder trace digests
+609	S	arithmetic AIR evaluation material digest must be distinct from embedded arithmetic AIR constraint-system digest	S	prover input material must reject AIR evaluation material digests copied from retargeted embedded AIR constraint digests before canonical mismatch checks
+610	S	arithmetic AIR evaluation material digest must be distinct from embedded arithmetic trace material digest	S	prover input material must reject AIR evaluation material digests copied from retargeted embedded AIR trace digests before canonical mismatch checks
+611	S	composition value 0 must be zero	S	prover input material must reject non-zero AIR composition values
+612	S	zero hash	S	prover input material must reject zero AIR evaluation material digests
+613	S	placeholder	S	prover input material must reject placeholder AIR evaluation material digests
+614	S	placeholder	S	prover input material must reject separator-spelled placeholder AIR evaluation material digests
+615	S	arithmetic AIR evaluation material digest mismatch	S	prover input material must reject stale AIR evaluation material digests
+616	D	runtime expected retained in Rust	D	runtime context retained in Rust
+617	S	zero hash	S	prover input material must reject zero public-opening material digests
+618	S	placeholder	S	prover input material must reject placeholder public-opening material digests
+619	S	placeholder	S	prover input material must reject separator-spelled placeholder public-opening material digests
+620	S	public opening material digest mismatch	S	prover input material must reject stale public-opening material digests
+621	S	public opening material digest must be distinct from embedded statement hash	S	prover input material must reject public-opening material digests copied from retargeted embedded statement hashes before canonical mismatch checks
+622	S	public opening material digest must be distinct from embedded trace material digest	S	prover input material must reject public-opening material digests copied from retargeted embedded trace digests before canonical mismatch checks
+623	D	runtime expected retained in Rust	D	runtime context retained in Rust
+624	S	proof-key pair commitment must be distinct from public opening material digest	S	prover input material must reject proof-key pair commitments copied from public-opening material before proof-key mismatch checks
+625	S	prover key material commitment must be distinct from proof-key pair commitment	S	prover input material must reject prover key material commitments copied from the proof-key pair commitment before key-material mismatch checks
+626	S	verifier key material commitment must be distinct from prover key material commitment	S	prover input material must reject verifier key material commitments copied from the prover key material commitment before key-material mismatch checks
+627	S	does not match trace material	S	prover input material must reject public-opening material for another trace digest
+628	S	rows do not match	S	prover input material must reject stale arithmetic trace rows
+629	S	material commitment	S	prover input material must reject stale prover proof-key commitments
+630	S	material commitment	S	prover input material must reject stale verifier proof-key commitments
+631	S	proof-key pair commitment	S	prover input material must reject stale prover proof-key pair commitments
+632	S	proof-key pair commitment	S	prover input material must reject stale verifier proof-key pair commitments
+633	S	version	S	trace material must reject stale layout versions
+634	S	field count	S	trace material must reject stale layout field counts
+635	S	arithmetic trace profile	S	trace material must bind the canonical arithmetic trace profile
+636	D	runtime expected retained in Rust	D	runtime context retained in Rust
+637	S	row width	S	trace material must reject stale row widths
+638	S	active row count	S	trace material must reject stale active-row counts
+639	S	padded row count	S	trace material must reject stale padded-row counts
+640	S	row count	S	trace material must reject truncated row vectors
+641	S	row 0 width	S	trace material must reject truncated rows
+642	S	Goldilocks	S	trace material must reject non-canonical native field elements
+643	S	rows do not match	S	trace material must reject active-row coefficient drift
+644	S	rows do not match	S	trace material must reject padding-row drift
+645	S	statement hash mismatch	S	trace material must reject stale embedded proof input material
+646	S	witness digest mismatch	S	strict execution statements must reject forged witness digests
+647	S	placeholder	S	strict execution statements must reject placeholder witness digests before trace replay or ciphertext checks
+648	S	output ciphertext	S	execution witness digests must reject mismatched claimed outputs
+649	S	output bound	S	execution witness digests must reject mismatched claimed bounds
+650	S	artifact	S	execution witness material must reject stale artifact bundles
+651	S	digest	S	execution witness material must reject stale governed material
+652	S	Galois key	S	execution witness material must reject missing Galois keys

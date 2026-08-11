@@ -51,7 +51,7 @@ FORBIDDEN_COMPATIBILITY_BINS = frozenset(
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 111
+EXPECTED_DECLARED_BIN_COUNT = 110
 
 
 def load_metadata(root: Path) -> dict[str, Any]:
@@ -124,7 +124,7 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
     if len(declared) != EXPECTED_DECLARED_BIN_COUNT:
         errors.append(
             f"declared binary count {len(declared)} differs from the expected "
-            f"{EXPECTED_DECLARED_BIN_COUNT} after retiring five obsolete aliases "
+            f"{EXPECTED_DECLARED_BIN_COUNT} after retiring six obsolete aliases "
             f"(pre-refactor baseline: {BASELINE_DECLARED_BIN_COUNT})"
         )
 

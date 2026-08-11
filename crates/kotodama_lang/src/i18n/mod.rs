@@ -1,7 +1,131 @@
 pub use iroha_i18n::Language;
 use iroha_i18n::wrap_placeholder;
 
-mod translations;
+const TRANSLATION_LANGUAGE_COUNT: usize = 76;
+const TRANSLATION_MESSAGE_COUNT: usize = 15;
+const TRANSLATION_OFFSET_WIDTH: usize = std::mem::size_of::<u32>() * 2;
+const TRANSLATION_TEXT: &str = include_str!("translations/messages.v1.tsv");
+const TRANSLATION_OFFSETS: &[u8; TRANSLATION_LANGUAGE_COUNT
+     * TRANSLATION_MESSAGE_COUNT
+     * TRANSLATION_OFFSET_WIDTH] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/kotodama_i18n_v1_offsets.bin"));
+
+#[repr(usize)]
+enum MessageIndex {
+    NoFunctions,
+    UnsupportedBinaryOp,
+    UnknownParam,
+    ReadFile,
+    ParserError,
+    SemanticError,
+    LintUnusedState,
+    LintStateShadowedParam,
+    LintStateShadowedBinding,
+    LintStateShadowedMapBinding,
+    LintUnusedParameter,
+    LintUnreachableAfterReturn,
+    LintOk,
+    LintUsage,
+    LintUsageHelp,
+}
+
+const fn language_index(lang: Language) -> usize {
+    match lang {
+        Language::English => 0,
+        Language::Japanese => 1,
+        Language::SimplifiedChinese => 2,
+        Language::TraditionalChinese => 3,
+        Language::Thai => 4,
+        Language::Khmer => 5,
+        Language::Vietnamese => 6,
+        Language::Korean => 7,
+        Language::Arabic => 8,
+        Language::Hebrew => 9,
+        Language::Russian => 10,
+        Language::Burmese => 11,
+        Language::Hindi => 12,
+        Language::Urdu => 13,
+        Language::Sinhala => 14,
+        Language::Tamil => 15,
+        Language::French => 16,
+        Language::Ukrainian => 17,
+        Language::Polish => 18,
+        Language::Swedish => 19,
+        Language::German => 20,
+        Language::Greek => 21,
+        Language::Italian => 22,
+        Language::Kazakh => 23,
+        Language::Mongolian => 24,
+        Language::Javanese => 25,
+        Language::Madurese => 26,
+        Language::Balinese => 27,
+        Language::Minangkabau => 28,
+        Language::AncientEgyptianHieroglyph => 29,
+        Language::Dzongkha => 30,
+        Language::Serbian => 31,
+        Language::Turkish => 32,
+        Language::Armenian => 33,
+        Language::Amharic => 34,
+        Language::Hausa => 35,
+        Language::Tibetan => 36,
+        Language::Kashmiri => 37,
+        Language::Nepali => 38,
+        Language::Afrikaans => 39,
+        Language::Spanish => 40,
+        Language::Farsi => 41,
+        Language::OldAkkadian => 42,
+        Language::Quechua => 43,
+        Language::Aymara => 44,
+        Language::Bengali => 45,
+        Language::Balochi => 46,
+        Language::Bashkir => 47,
+        Language::Brahui => 48,
+        Language::Portuguese => 49,
+        Language::Punjabi => 50,
+        Language::Sindhi => 51,
+        Language::Pashto => 52,
+        Language::Saraiki => 53,
+        Language::Tatar => 54,
+        Language::Somali => 55,
+        Language::Sundanese => 56,
+        Language::Shona => 57,
+        Language::Swahili => 58,
+        Language::Oromo => 59,
+        Language::Igbo => 60,
+        Language::Yoruba => 61,
+        Language::Zulu => 62,
+        Language::Dutch => 63,
+        Language::Danish => 64,
+        Language::Norse => 65,
+        Language::Finnish => 66,
+        Language::Estonian => 67,
+        Language::Latvian => 68,
+        Language::Hungarian => 69,
+        Language::Czech => 70,
+        Language::Lao => 71,
+        Language::Indonesian => 72,
+        Language::Pijin => 73,
+        Language::Divehi => 74,
+        Language::Manchurian => 75,
+    }
+}
+
+fn translation_offset(index: usize) -> usize {
+    let start = index * std::mem::size_of::<u32>();
+    u32::from_le_bytes([
+        TRANSLATION_OFFSETS[start],
+        TRANSLATION_OFFSETS[start + 1],
+        TRANSLATION_OFFSETS[start + 2],
+        TRANSLATION_OFFSETS[start + 3],
+    ]) as usize
+}
+
+fn message_for(lang: Language, message: MessageIndex) -> &'static str {
+    let offset_index = (language_index(lang) * TRANSLATION_MESSAGE_COUNT + message as usize) * 2;
+    let start = translation_offset(offset_index);
+    let end = translation_offset(offset_index + 1);
+    &TRANSLATION_TEXT[start..end]
+}
 
 /// Detect the best-fit language from overrides and environment.
 pub fn detect_language() -> Language {
@@ -42,106 +166,6 @@ pub enum Message<'a> {
     LintUsageHelp,
 }
 
-#[derive(Clone, Copy)]
-struct Messages {
-    no_functions: &'static str,
-    unsupported_binary_op: &'static str,
-    unknown_param: &'static str,
-    read_file: &'static str,
-    parser_error: &'static str,
-    semantic_error: &'static str,
-    lint_unused_state: &'static str,
-    lint_state_shadowed_param: &'static str,
-    lint_state_shadowed_binding: &'static str,
-    lint_state_shadowed_map_binding: &'static str,
-    lint_unused_parameter: &'static str,
-    lint_unreachable_after_return: &'static str,
-    lint_ok: &'static str,
-    lint_usage: &'static str,
-    lint_usage_help: &'static str,
-}
-
-fn messages_for(lang: Language) -> Messages {
-    match lang {
-        Language::English => translations::english::MESSAGES,
-        Language::Japanese => translations::japanese::MESSAGES,
-        Language::SimplifiedChinese => translations::simplified_chinese::MESSAGES,
-        Language::TraditionalChinese => translations::traditional_chinese::MESSAGES,
-        Language::Thai => translations::thai::MESSAGES,
-        Language::Khmer => translations::khmer::MESSAGES,
-        Language::Vietnamese => translations::vietnamese::MESSAGES,
-        Language::Korean => translations::korean::MESSAGES,
-        Language::Arabic => translations::arabic::MESSAGES,
-        Language::Hebrew => translations::hebrew::MESSAGES,
-        Language::Russian => translations::russian::MESSAGES,
-        Language::Burmese => translations::burmese::MESSAGES,
-        Language::Hindi => translations::hindi::MESSAGES,
-        Language::Urdu => translations::urdu::MESSAGES,
-        Language::Sinhala => translations::sinhala::MESSAGES,
-        Language::Tamil => translations::tamil::MESSAGES,
-        Language::French => translations::french::MESSAGES,
-        Language::Ukrainian => translations::ukrainian::MESSAGES,
-        Language::Polish => translations::polish::MESSAGES,
-        Language::Swedish => translations::swedish::MESSAGES,
-        Language::German => translations::german::MESSAGES,
-        Language::Greek => translations::greek::MESSAGES,
-        Language::Italian => translations::italian::MESSAGES,
-        Language::Kazakh => translations::kazakh::MESSAGES,
-        Language::Mongolian => translations::mongolian::MESSAGES,
-        Language::Javanese => translations::javanese::MESSAGES,
-        Language::Madurese => translations::madurese::MESSAGES,
-        Language::Balinese => translations::balinese::MESSAGES,
-        Language::Minangkabau => translations::minangkabau::MESSAGES,
-        Language::AncientEgyptianHieroglyph => translations::ancient_egyptian_hieroglyph::MESSAGES,
-        Language::Dzongkha => translations::dzongkha::MESSAGES,
-        Language::Serbian => translations::serbian::MESSAGES,
-        Language::Turkish => translations::turkish::MESSAGES,
-        Language::Armenian => translations::armenian::MESSAGES,
-        Language::Amharic => translations::amharic::MESSAGES,
-        Language::Hausa => translations::hausa::MESSAGES,
-        Language::Tibetan => translations::tibetan::MESSAGES,
-        Language::Kashmiri => translations::kashmiri::MESSAGES,
-        Language::Nepali => translations::nepali::MESSAGES,
-        Language::Afrikaans => translations::afrikaans::MESSAGES,
-        Language::Spanish => translations::spanish::MESSAGES,
-        Language::Farsi => translations::farsi::MESSAGES,
-        Language::OldAkkadian => translations::old_akkadian::MESSAGES,
-        Language::Quechua => translations::quechua::MESSAGES,
-        Language::Aymara => translations::aymara::MESSAGES,
-        Language::Bengali => translations::bengali::MESSAGES,
-        Language::Balochi => translations::balochi::MESSAGES,
-        Language::Bashkir => translations::bashkir::MESSAGES,
-        Language::Brahui => translations::brahui::MESSAGES,
-        Language::Portuguese => translations::portuguese::MESSAGES,
-        Language::Punjabi => translations::punjabi::MESSAGES,
-        Language::Sindhi => translations::sindhi::MESSAGES,
-        Language::Pashto => translations::pashto::MESSAGES,
-        Language::Saraiki => translations::saraiki::MESSAGES,
-        Language::Tatar => translations::tatar::MESSAGES,
-        Language::Somali => translations::somali::MESSAGES,
-        Language::Sundanese => translations::sundanese::MESSAGES,
-        Language::Shona => translations::shona::MESSAGES,
-        Language::Swahili => translations::swahili::MESSAGES,
-        Language::Oromo => translations::oromo::MESSAGES,
-        Language::Igbo => translations::igbo::MESSAGES,
-        Language::Yoruba => translations::yoruba::MESSAGES,
-        Language::Zulu => translations::zulu::MESSAGES,
-        Language::Dutch => translations::dutch::MESSAGES,
-        Language::Danish => translations::danish::MESSAGES,
-        Language::Norse => translations::norse::MESSAGES,
-        Language::Finnish => translations::finnish::MESSAGES,
-        Language::Estonian => translations::estonian::MESSAGES,
-        Language::Latvian => translations::latvian::MESSAGES,
-        Language::Hungarian => translations::hungarian::MESSAGES,
-        Language::Czech => translations::czech::MESSAGES,
-        Language::Lao => translations::lao::MESSAGES,
-        Language::Indonesian => translations::indonesian::MESSAGES,
-        Language::Pijin => translations::pijin::MESSAGES,
-        Language::Divehi => translations::divehi::MESSAGES,
-        Language::Manchurian => translations::manchurian::MESSAGES,
-    }
-}
-
 fn render_template(
     template: &str,
     replacements: &[(&str, &str)],
@@ -169,38 +193,44 @@ fn render_template(
 }
 
 pub fn translate(lang: Language, msg: Message) -> String {
-    let msgs = messages_for(lang);
     match msg {
-        Message::NoFunctions => msgs.no_functions.to_string(),
+        Message::NoFunctions => message_for(lang, MessageIndex::NoFunctions).to_string(),
         Message::UnsupportedBinaryOp(op) => {
-            render_template(msgs.unsupported_binary_op, &[("op", op)], lang).unwrap_or_else(|| {
-                format!(
-                    "{} {}",
-                    msgs.unsupported_binary_op,
-                    wrap_placeholder(lang, op)
-                )
-            })
+            let template = message_for(lang, MessageIndex::UnsupportedBinaryOp);
+            render_template(template, &[("op", op)], lang)
+                .unwrap_or_else(|| format!("{} {}", template, wrap_placeholder(lang, op)))
         }
-        Message::UnknownParam(name) => render_template(msgs.unknown_param, &[("name", name)], lang)
-            .unwrap_or_else(|| format!("{} {}", msgs.unknown_param, wrap_placeholder(lang, name))),
+        Message::UnknownParam(name) => {
+            let template = message_for(lang, MessageIndex::UnknownParam);
+            render_template(template, &[("name", name)], lang)
+                .unwrap_or_else(|| format!("{} {}", template, wrap_placeholder(lang, name)))
+        }
         Message::ReadFile(path, err) => {
-            render_template(msgs.read_file, &[("path", path), ("error", err)], lang).unwrap_or_else(
+            let template = message_for(lang, MessageIndex::ReadFile);
+            render_template(template, &[("path", path), ("error", err)], lang).unwrap_or_else(
                 || {
                     format!(
                         "{} {}: {}",
-                        msgs.read_file,
+                        template,
                         wrap_placeholder(lang, path),
                         wrap_placeholder(lang, err)
                     )
                 },
             )
         }
-        Message::ParserError(e) => render_template(msgs.parser_error, &[("error", e)], lang)
-            .unwrap_or_else(|| format!("{}: {}", msgs.parser_error, wrap_placeholder(lang, e))),
-        Message::SemanticError(e) => render_template(msgs.semantic_error, &[("error", e)], lang)
-            .unwrap_or_else(|| format!("{}: {}", msgs.semantic_error, wrap_placeholder(lang, e))),
+        Message::ParserError(error) => {
+            let template = message_for(lang, MessageIndex::ParserError);
+            render_template(template, &[("error", error)], lang)
+                .unwrap_or_else(|| format!("{}: {}", template, wrap_placeholder(lang, error)))
+        }
+        Message::SemanticError(error) => {
+            let template = message_for(lang, MessageIndex::SemanticError);
+            render_template(template, &[("error", error)], lang)
+                .unwrap_or_else(|| format!("{}: {}", template, wrap_placeholder(lang, error)))
+        }
         Message::LintUnusedState { name } => {
-            render_template(msgs.lint_unused_state, &[("name", name)], lang).unwrap_or_else(|| {
+            let template = message_for(lang, MessageIndex::LintUnusedState);
+            render_template(template, &[("name", name)], lang).unwrap_or_else(|| {
                 format!(
                     "state {} is declared but never used",
                     wrap_placeholder(lang, name)
@@ -212,11 +242,12 @@ pub fn translate(lang: Language, msg: Message) -> String {
             name,
             context,
         } => {
-            let template = match context {
-                StateShadowContext::Parameter => msgs.lint_state_shadowed_param,
-                StateShadowContext::Binding => msgs.lint_state_shadowed_binding,
-                StateShadowContext::MapBinding => msgs.lint_state_shadowed_map_binding,
+            let message_index = match context {
+                StateShadowContext::Parameter => MessageIndex::LintStateShadowedParam,
+                StateShadowContext::Binding => MessageIndex::LintStateShadowedBinding,
+                StateShadowContext::MapBinding => MessageIndex::LintStateShadowedMapBinding,
             };
+            let template = message_for(lang, message_index);
             render_template(template, &[("func", func), ("name", name)], lang).unwrap_or_else(
                 || {
                     format!(
@@ -227,32 +258,30 @@ pub fn translate(lang: Language, msg: Message) -> String {
                 },
             )
         }
-        Message::LintUnusedParameter { func, name } => render_template(
-            msgs.lint_unused_parameter,
-            &[("func", func), ("name", name)],
-            lang,
-        )
-        .unwrap_or_else(|| {
-            format!(
-                "unused parameter {} in {}",
-                wrap_placeholder(lang, name),
-                wrap_placeholder(lang, func)
+        Message::LintUnusedParameter { func, name } => {
+            let template = message_for(lang, MessageIndex::LintUnusedParameter);
+            render_template(template, &[("func", func), ("name", name)], lang).unwrap_or_else(
+                || {
+                    format!(
+                        "unused parameter {} in {}",
+                        wrap_placeholder(lang, name),
+                        wrap_placeholder(lang, func)
+                    )
+                },
             )
-        }),
-        Message::LintUnreachableAfterReturn { context } => render_template(
-            msgs.lint_unreachable_after_return,
-            &[("context", context)],
-            lang,
-        )
-        .unwrap_or_else(|| {
-            format!(
-                "unreachable statement after return in {}",
-                wrap_placeholder(lang, context)
-            )
-        }),
-        Message::LintOk => msgs.lint_ok.to_string(),
-        Message::LintUsage => msgs.lint_usage.to_string(),
-        Message::LintUsageHelp => msgs.lint_usage_help.to_string(),
+        }
+        Message::LintUnreachableAfterReturn { context } => {
+            let template = message_for(lang, MessageIndex::LintUnreachableAfterReturn);
+            render_template(template, &[("context", context)], lang).unwrap_or_else(|| {
+                format!(
+                    "unreachable statement after return in {}",
+                    wrap_placeholder(lang, context)
+                )
+            })
+        }
+        Message::LintOk => message_for(lang, MessageIndex::LintOk).to_string(),
+        Message::LintUsage => message_for(lang, MessageIndex::LintUsage).to_string(),
+        Message::LintUsageHelp => message_for(lang, MessageIndex::LintUsageHelp).to_string(),
     }
 }
 

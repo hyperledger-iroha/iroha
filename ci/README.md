@@ -55,7 +55,10 @@ Four fast, read-only checks keep structural debt from returning:
   files across the complete non-ignored candidate tree, including files not
   yet staged, and applies an exact no-growth ratchet to legacy files that are
   still above the limit. Intentional splits should lower
-  `ci/source_file_budget.json`; unexplained growth must not refresh it.
+  `ci/source_file_budget.json`; unexplained growth must not refresh it. The
+  optional `aggregate_rust` section also enforces a repository-wide first-party
+  Rust ceiling while keeping its baseline and working target visible in JSON
+  reports; `--write-baseline` preserves those reviewed aggregate targets.
 - `python3 scripts/check_cargo_feature_hygiene.py` rejects workspace-wide
   feature injection and implicit default-feature ownership across every
   workspace member. Capability bundles belong to the crate or binary that
@@ -70,6 +73,30 @@ Four fast, read-only checks keep structural debt from returning:
 
 Their focused regression tests live under `scripts/tests/` and
 `pytests/scripts/`; the PR classifier runs them before selecting Rust lanes.
+
+## Reproducible Cargo profiling
+
+Use `scripts/profile_cargo_build.py` to compare compiler work without changing
+the repository-local `target/` layout used by CI. The profiler requires both
+its target directory and report path to be outside the checkout, adds
+`--locked`, Cargo JSON messages, timing output, and a deterministic job count,
+then records the source, lockfile, toolchain, environment, and compiled-unit
+fingerprints alongside wall-clock and process-resource measurements.
+
+For a cold profile, start with an absent or empty target directory:
+
+```sh
+python3 scripts/profile_cargo_build.py \
+  --target-dir /tmp/iroha-profile-target \
+  --out /tmp/iroha-profile/cold.json \
+  -- build --workspace
+```
+
+Warm profiles require an explicit `--reuse-target` so cached work cannot be
+mistaken for a cold measurement. Keep the emitted JSON report, JSONL Cargo
+message stream, stderr log, and Cargo timing HTML together when comparing two
+revisions. A comparison is meaningful only when the report input fingerprints
+and Cargo arguments identify the intended source/toolchain change.
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.

@@ -31539,25 +31539,6 @@ mod protocol {
             )
         }
 
-        /// Serve the stock catalog with caller-owned lifecycle controls.
-        pub(super) fn serve_with_lifecycle<R>(
-            bindings: &IrohaRuntimeProviderBindingsV1,
-            backends: RuntimeProviderBrokerBackendsV1,
-            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-            on_ready: R,
-        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
-        where
-            R: FnOnce(),
-        {
-            serve_with_policy_and_lifecycle(
-                bindings,
-                backends,
-                &EndpointPolicy::production(),
-                lifecycle,
-                on_ready,
-            )
-        }
-
         /// Serve the stock catalog with a fallible readiness publication.
         pub(super) fn serve_with_fallible_readiness<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
@@ -43833,19 +43814,6 @@ mod protocol {
         backends: RuntimeProviderBrokerBackendsV1,
     ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
         platform::serve(bindings, backends)
-    }
-
-    /// Serve the stock catalog with caller-owned lifecycle controls.
-    pub(super) fn serve_with_lifecycle<R>(
-        bindings: &IrohaRuntimeProviderBindingsV1,
-        backends: RuntimeProviderBrokerBackendsV1,
-        lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-        on_ready: R,
-    ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
-    where
-        R: FnOnce(),
-    {
-        platform::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
     }
 
     /// Serve the stock catalog with a fallible readiness publication.

@@ -1,0 +1,482 @@
+iroha-bfv-diagnostics-v1
+0	N		S	external-review package-and-digest builder must pin the returned bytes
+1	D	runtime expected retained in Rust	S	external-review packages must reject caller-pinned generated-body commitments as package digest aliases
+2	S	generated circuit body release-prover contract digest	S	caller-pinned generated-body commitment aliases must fail before stale package validation can mask the package-digest diagnostic
+3	N		S	package-byte digest helper must return the decoded package
+4	N		S	package-byte digest helper must return the digest of the admitted package bytes
+5	N		S	package-byte digests helper must return the decoded package
+6	N		S	package-byte digests helper must return the embedded record digest
+7	N		S	package-byte digests helper must return the embedded manifest digest
+8	N		S	package-byte digests helper must return the digest of the admitted package bytes
+9	N		S	package-byte all-digests helper must return the decoded package
+10	N		S	package-byte all-digests helper must return the embedded record digest
+11	N		S	package-byte all-digests helper must return the admitted evidence digest
+12	N		S	package-byte all-digests helper must return the admitted signoff digest
+13	N		S	package-byte all-digests helper must return the embedded manifest digest
+14	N		S	package-byte all-digests helper must return the digest of the admitted package bytes
+15	N		S	evidence-byte digest helper must return the decoded release-audit evidence
+16	N		S	evidence-byte digest helper must return the digest of the admitted evidence bytes
+17	N		S	record-byte digest helper must return the decoded signed record
+18	N		S	record-byte digest helper must return the digest of the admitted record bytes
+19	N		S	record-byte digests helper must return the decoded signed record
+20	N		S	record-byte digests helper must return the admitted evidence digest
+21	N		S	record-byte digests helper must return the admitted signoff digest
+22	N		S	record-byte digests helper must return the admitted record digest
+23	N		S	manifest-byte digest helper must return the decoded manifest
+24	N		S	manifest-byte digest helper must return the digest of the admitted manifest bytes
+25	N		S	manifest-byte digests helper must return the decoded manifest
+26	N		S	manifest-byte digests helper must return the embedded record digest
+27	N		S	manifest-byte digests helper must return the embedded evidence digest
+28	N		S	manifest-byte digests helper must return the admitted manifest digest
+29	N		S	manifest record-byte builder with digests must return the decoded record
+30	N		S	manifest record-byte builder with digests must reproduce the manifest
+31	N		S	manifest record-byte builder with digests must return the admitted record digest
+32	N		S	manifest record-byte builder with digests must return the generated manifest digest
+33	N		S	manifest record-byte builder with all digests must return the decoded record
+34	N		S	manifest record-byte builder with all digests must reproduce the manifest
+35	N		S	manifest record-byte builder with all digests must return the admitted evidence digest
+36	N		S	manifest record-byte builder with all digests must return the admitted signoff digest
+37	N		S	manifest record-byte builder with all digests must return the admitted record digest
+38	N		S	manifest record-byte builder with all digests must return the generated manifest digest
+39	N		S	record/manifest byte package builder must return the decoded record
+40	N		S	record/manifest byte package builder must return the decoded manifest
+41	N		S	record/manifest byte package builder must reconstruct the reviewed package
+42	N		S	record/manifest byte package-and-digest builder must return the decoded record
+43	N		S	record/manifest byte package-and-digest builder must return the decoded manifest
+44	N		S	record/manifest byte package-and-digest builder must reconstruct the reviewed package
+45	N		S	record/manifest byte package-and-digest builder must return the package digest
+46	N		S	record/manifest byte package-and-digests builder must return the decoded record
+47	N		S	record/manifest byte package-and-digests builder must return the decoded manifest
+48	N		S	record/manifest byte package-and-digests builder must reconstruct the reviewed package
+49	N		S	record/manifest byte package-and-digests builder must return the admitted record digest
+50	N		S	record/manifest byte package-and-digests builder must return the admitted manifest digest
+51	N		S	record/manifest byte package-and-digests builder must return the package digest
+52	N		S	record/manifest byte package-and-all-digests builder must return the decoded record
+53	N		S	record/manifest byte package-and-all-digests builder must return the decoded manifest
+54	N		S	record/manifest byte package-and-all-digests builder must reconstruct the reviewed package
+55	N		S	record/manifest byte package-and-all-digests builder must return the admitted record digest
+56	N		S	record/manifest byte package-and-all-digests builder must return the admitted evidence digest
+57	N		S	record/manifest byte package-and-all-digests builder must return the admitted signoff digest
+58	N		S	record/manifest byte package-and-all-digests builder must return the admitted manifest digest
+59	N		S	record/manifest byte package-and-all-digests builder must return the package digest
+60	N		S	external-review record/manifest byte builder must return the decoded record
+61	N		S	external-review record/manifest byte builder must return the decoded manifest
+62	N		S	external-review record/manifest byte builder must reconstruct the reviewed package
+63	N		S	external-review record/manifest byte package-and-digest builder must return the decoded record
+64	N		S	external-review record/manifest byte package-and-digest builder must return the decoded manifest
+65	N		S	external-review record/manifest byte package-and-digest builder must reconstruct the reviewed package
+66	N		S	external-review record/manifest byte package-and-digest builder must return the package digest
+67	N		S	external-review record/manifest byte package-and-digests builder must return the decoded record
+68	N		S	external-review record/manifest byte package-and-digests builder must return the decoded manifest
+69	N		S	external-review record/manifest byte package-and-digests builder must reconstruct the reviewed package
+70	N		S	external-review record/manifest byte package-and-digests builder must return the admitted record digest
+71	N		S	external-review record/manifest byte package-and-digests builder must return the admitted manifest digest
+72	N		S	external-review record/manifest byte package-and-digests builder must return the package digest
+73	N		S	external-review record/manifest byte package-and-all-digests builder must return the decoded record
+74	N		S	external-review record/manifest byte package-and-all-digests builder must return the decoded manifest
+75	N		S	external-review record/manifest byte package-and-all-digests builder must reconstruct the reviewed package
+76	N		S	external-review record/manifest byte package-and-all-digests builder must return the admitted record digest
+77	N		S	external-review record/manifest byte package-and-all-digests builder must return the admitted evidence digest
+78	N		S	external-review record/manifest byte package-and-all-digests builder must return the admitted signoff digest
+79	N		S	external-review record/manifest byte package-and-all-digests builder must return the admitted manifest digest
+80	N		S	external-review record/manifest byte package-and-all-digests builder must return the package digest
+81	N		S	byte-level production package admission must return the canonical decoded package
+82	N		S	byte-derived production package admission must return the canonical decoded package
+83	N		S	byte-derived production package admission must return the digest of the admitted package bytes
+84	N		S	artifact-bundle byte digest helper must return the decoded artifacts
+85	N		S	artifact-bundle byte digest helper must return the digest of the admitted artifact bytes
+86	S	zero hash	S	byte-level production package admission must reject zero caller-pinned package digests before package-byte decoding
+87	S	placeholder	S	byte-level production package admission must reject placeholder caller-pinned package digests before package-byte decoding
+88	S	canonical	S	byte-level production package admission must reject malformed caller reviewer ids before package-byte decoding
+89	S	all zero	S	byte-level production package admission must reject all-zero caller reviewer keys before package-byte decoding
+90	S	canonical	S	byte-derived production package admission must reject malformed caller reviewer ids before package-byte decoding
+91	S	all zero	S	byte-derived production package admission must reject all-zero caller reviewer keys before package-byte decoding
+92	S	canonical	S	combined byte-level production admission must reject malformed caller reviewer ids before artifact-byte decoding
+93	S	all zero	S	combined byte-level production admission must reject all-zero caller reviewer keys before artifact-byte decoding
+94	S	canonical	S	derived-digest combined admission must reject malformed caller reviewer ids before artifact-byte decoding
+95	S	all zero	S	derived-digest combined admission must reject all-zero caller reviewer keys before artifact-byte decoding
+96	S	canonical	S	combined byte-level production admission with all digests must reject malformed caller reviewer ids before artifact-byte decoding
+97	S	all zero	S	combined byte-level production admission with all digests must reject all-zero caller reviewer keys before artifact-byte decoding
+98	S	zero hash	S	combined artifact/package byte admission must reject zero caller-pinned package digests before artifact-byte decoding
+99	S	placeholder	S	combined artifact/package byte admission must reject placeholder caller-pinned package digests before artifact-byte decoding
+100	N		S	deterministic package all-digests builder must return decoded artifacts
+101	N		S	deterministic package all-digests builder must return the admitted artifact-bundle digest
+102	N		S	deterministic package all-digests builder must return the generated evidence digest
+103	N		S	deterministic package all-digests builder must return the generated signoff digest
+104	N		S	deterministic package all-digests builder must return the generated record digest
+105	N		S	deterministic package all-digests builder must return the generated manifest digest
+106	N		S	deterministic package all-digests builder must return the generated package digest
+107	N		S	record/artifact byte builder with digests must return decoded artifacts
+108	N		S	record/artifact byte builder with digests must reproduce the signed record
+109	N		S	record/artifact byte builder with digests must return the admitted artifact-bundle digest
+110	N		S	record/artifact byte builder with digests must return the generated record digest
+111	N		S	record/artifact byte builder with all digests must return decoded artifacts
+112	N		S	record/artifact byte builder with all digests must reproduce the signed record
+113	N		S	record/artifact byte builder with all digests must return the admitted artifact-bundle digest
+114	N		S	record/artifact byte builder with all digests must return the generated evidence digest
+115	N		S	record/artifact byte builder with all digests must return the generated signoff digest
+116	N		S	record/artifact byte builder with all digests must return the generated record digest
+117	N		S	manifest/artifact byte builder with all digests must return decoded artifacts
+118	N		S	manifest/artifact byte builder with all digests must reproduce the signed record
+119	N		S	manifest/artifact byte builder with all digests must reproduce the manifest
+120	N		S	manifest/artifact byte builder with all digests must return the admitted artifact-bundle digest
+121	N		S	manifest/artifact byte builder with all digests must return the generated evidence digest
+122	N		S	manifest/artifact byte builder with all digests must return the generated signoff digest
+123	N		S	manifest/artifact byte builder with all digests must return the generated record digest
+124	N		S	manifest/artifact byte builder with all digests must return the generated manifest digest
+125	N		S	report/archive byte digest builder must return decoded artifacts
+126	N		S	artifact-byte report/archive builder must reproduce typed generated report bytes
+127	N		S	artifact-byte report/archive builder must reproduce typed generated archive bytes
+128	N		S	artifact-byte report/archive builder must return the generated report digest
+129	N		S	artifact-byte report/archive builder must return the generated archive digest
+130	N		S	report/archive byte all-digest builder must return decoded artifacts
+131	N		S	artifact-byte report/archive all-digest builder must reproduce typed generated report bytes
+132	N		S	artifact-byte report/archive all-digest builder must reproduce typed generated archive bytes
+133	N		S	artifact-byte report/archive all-digest builder must return the admitted artifact-bundle digest
+134	N		S	artifact-byte report/archive all-digest builder must return the generated report digest
+135	N		S	artifact-byte report/archive all-digest builder must return the generated archive digest
+136	S	canonical v1 bytes	S	report/archive all-digest byte builder must reject compressed artifact-bundle framing
+137	N		S	trusted record/artifact byte validation must return decoded artifacts
+138	N		S	trusted record/artifact byte validation must return decoded record
+139	N		S	record/artifact byte digest validation must return decoded artifacts
+140	N		S	record/artifact byte digest validation must return decoded record
+141	N		S	record/artifact byte digest validation must return the digest of the admitted record bytes
+142	N		S	record/artifact byte digests validation must return decoded artifacts
+143	N		S	record/artifact byte digests validation must return decoded record
+144	N		S	record/artifact byte digests validation must return the admitted artifact-bundle digest
+145	N		S	record/artifact byte digests validation must return the admitted record digest
+146	N		S	record/artifact byte all-digests validation must return decoded artifacts
+147	N		S	record/artifact byte all-digests validation must return decoded record
+148	N		S	record/artifact byte all-digests validation must return the admitted artifact-bundle digest
+149	N		S	record/artifact byte all-digests validation must return the admitted evidence digest
+150	N		S	record/artifact byte all-digests validation must return the admitted signoff digest
+151	N		S	record/artifact byte all-digests validation must return the admitted record digest
+152	N		S	trusted record/artifact byte digest validation must return decoded artifacts
+153	N		S	trusted record/artifact byte digest validation must return decoded record
+154	N		S	trusted record/artifact byte digest validation must return the digest of the admitted record bytes
+155	N		S	trusted record/artifact byte digests validation must return decoded artifacts
+156	N		S	trusted record/artifact byte digests validation must return decoded record
+157	N		S	trusted record/artifact byte digests validation must return the admitted artifact-bundle digest
+158	N		S	trusted record/artifact byte digests validation must return the admitted record digest
+159	N		S	trusted record/artifact byte all-digests validation must return decoded artifacts
+160	N		S	trusted record/artifact byte all-digests validation must return decoded record
+161	N		S	trusted record/artifact byte all-digests validation must return the admitted artifact-bundle digest
+162	N		S	trusted record/artifact byte all-digests validation must return the admitted evidence digest
+163	N		S	trusted record/artifact byte all-digests validation must return the admitted signoff digest
+164	N		S	trusted record/artifact byte all-digests validation must return the admitted record digest
+165	N		S	trusted manifest/artifact/record byte validation must return decoded artifacts
+166	N		S	trusted manifest/artifact/record byte validation must return decoded manifest
+167	N		S	trusted manifest/artifact/record byte validation must return decoded record
+168	N		S	manifest/record byte digest validation must return decoded manifest
+169	N		S	manifest/record byte digest validation must return decoded record
+170	N		S	manifest/record byte digest validation must return the digest of the admitted manifest bytes
+171	N		S	manifest/record byte digests validation must return decoded manifest
+172	N		S	manifest/record byte digests validation must return decoded record
+173	N		S	manifest/record byte digests validation must return the digest of the admitted record bytes
+174	N		S	manifest/record byte digests validation must return the digest of the admitted manifest bytes
+175	N		S	manifest/record byte all-digests validation must return decoded manifest
+176	N		S	manifest/record byte all-digests validation must return decoded record
+177	N		S	manifest/record byte all-digests validation must return the digest of the admitted record bytes
+178	N		S	manifest/record byte all-digests validation must return the admitted evidence digest
+179	N		S	manifest/record byte all-digests validation must return the admitted signoff digest
+180	N		S	manifest/record byte all-digests validation must return the digest of the admitted manifest bytes
+181	N		S	trusted manifest/record byte digest validation must return decoded manifest
+182	N		S	trusted manifest/record byte digest validation must return decoded record
+183	N		S	trusted manifest/record byte digest validation must return the digest of the admitted manifest bytes
+184	N		S	trusted manifest/record byte digests validation must return decoded manifest
+185	N		S	trusted manifest/record byte digests validation must return decoded record
+186	N		S	trusted manifest/record byte digests validation must return the digest of the admitted record bytes
+187	N		S	trusted manifest/record byte digests validation must return the digest of the admitted manifest bytes
+188	N		S	trusted manifest/record byte all-digests validation must return decoded manifest
+189	N		S	trusted manifest/record byte all-digests validation must return decoded record
+190	N		S	trusted manifest/record byte all-digests validation must return the digest of the admitted record bytes
+191	N		S	trusted manifest/record byte all-digests validation must return the admitted evidence digest
+192	N		S	trusted manifest/record byte all-digests validation must return the admitted signoff digest
+193	N		S	trusted manifest/record byte all-digests validation must return the digest of the admitted manifest bytes
+194	N		S	trusted manifest/artifact/record byte digest validation must return decoded artifacts
+195	N		S	trusted manifest/artifact/record byte digest validation must return decoded manifest
+196	N		S	trusted manifest/artifact/record byte digest validation must return decoded record
+197	N		S	trusted manifest/artifact/record byte digest validation must return the digest of the admitted manifest bytes
+198	N		S	trusted manifest/artifact/record byte digests validation must return decoded artifacts
+199	N		S	trusted manifest/artifact/record byte digests validation must return decoded manifest
+200	N		S	trusted manifest/artifact/record byte digests validation must return decoded record
+201	N		S	trusted manifest/artifact/record byte digests validation must return the digest of the admitted record bytes
+202	N		S	trusted manifest/artifact/record byte digests validation must return the digest of the admitted manifest bytes
+203	N		S	trusted manifest/artifact/record byte all-digests validation must return decoded artifacts
+204	N		S	trusted manifest/artifact/record byte all-digests validation must return decoded manifest
+205	N		S	trusted manifest/artifact/record byte all-digests validation must return decoded record
+206	N		S	trusted manifest/artifact/record byte all-digests validation must return the admitted artifact-bundle digest
+207	N		S	trusted manifest/artifact/record byte all-digests validation must return the admitted evidence digest
+208	N		S	trusted manifest/artifact/record byte all-digests validation must return the admitted signoff digest
+209	N		S	trusted manifest/artifact/record byte all-digests validation must return the admitted record digest
+210	N		S	trusted manifest/artifact/record byte all-digests validation must return the admitted manifest digest
+211	N		S	signoff-byte digests helper must return the decoded signed signoff
+212	N		S	signoff-byte digests helper must return the signed evidence digest
+213	N		S	signoff-byte digests helper must return the admitted signoff digest
+214	N		S	signoff/artifact byte validation must return the decoded artifacts
+215	N		S	signoff/artifact byte validation must return the derived evidence
+216	N		S	signoff/artifact byte validation must return the decoded signoff
+217	N		S	signoff/artifact byte digest validation must return decoded artifacts
+218	N		S	signoff/artifact byte digest validation must return derived evidence
+219	N		S	signoff/artifact byte digest validation must return decoded signoff
+220	N		S	signoff/artifact byte digest validation must return the admitted signoff digest
+221	N		S	signoff/artifact byte digests validation must return decoded artifacts
+222	N		S	signoff/artifact byte digests validation must return derived evidence
+223	N		S	signoff/artifact byte digests validation must return decoded signoff
+224	N		S	signoff/artifact byte digests validation must return the derived evidence digest
+225	N		S	signoff/artifact byte digests validation must return the admitted signoff digest
+226	N		S	signoff/artifact byte all-digests validation must return decoded artifacts
+227	N		S	signoff/artifact byte all-digests validation must return derived evidence
+228	N		S	signoff/artifact byte all-digests validation must return decoded signoff
+229	N		S	signoff/artifact byte all-digests validation must return the admitted artifact-bundle digest
+230	N		S	signoff/artifact byte all-digests validation must return the derived evidence digest
+231	N		S	signoff/artifact byte all-digests validation must return the admitted signoff digest
+232	N		S	BFV equality assertion at source line 5641
+233	N		S	BFV equality assertion at source line 5642
+234	N		S	BFV equality assertion at source line 5643
+235	N		S	BFV equality assertion at source line 5661
+236	N		S	BFV equality assertion at source line 5662
+237	N		S	BFV equality assertion at source line 5663
+238	N		S	BFV equality assertion at source line 5667
+239	N		S	BFV equality assertion at source line 5683
+240	N		S	BFV equality assertion at source line 5684
+241	N		S	BFV equality assertion at source line 5685
+242	N		S	BFV equality assertion at source line 5689
+243	N		S	BFV equality assertion at source line 5693
+244	N		S	BFV equality assertion at source line 5713
+245	N		S	BFV equality assertion at source line 5714
+246	N		S	BFV equality assertion at source line 5718
+247	N		S	BFV equality assertion at source line 5722
+248	N		S	BFV equality assertion at source line 5726
+249	N		S	BFV equality assertion at source line 5730
+250	N		S	combined byte-level production admission must return the canonical decoded artifacts
+251	N		S	combined byte-level production admission must return the canonical decoded package
+252	N		S	derived-digest combined admission must return the canonical decoded artifacts
+253	N		S	derived-digest combined admission must return the canonical decoded package
+254	N		S	derived-digest combined admission must return the digest of the admitted package bytes
+255	N		S	combined byte-level production admission with digests must return the canonical decoded artifacts
+256	N		S	combined byte-level production admission with digests must return the canonical decoded package
+257	N		S	combined byte-level production admission with digests must return the admitted artifact-bundle digest
+258	N		S	combined byte-level production admission with digests must return the digest of the admitted package bytes
+259	N		S	combined byte-level production admission with all digests must return the canonical decoded artifacts
+260	N		S	combined byte-level production admission with all digests must return the canonical decoded package
+261	N		S	combined byte-level production admission with all digests must return the admitted artifact-bundle digest
+262	N		S	combined byte-level production admission with all digests must return the admitted evidence digest
+263	N		S	combined byte-level production admission with all digests must return the admitted signoff digest
+264	N		S	combined byte-level production admission with all digests must return the admitted record digest
+265	N		S	combined byte-level production admission with all digests must return the admitted manifest digest
+266	N		S	combined byte-level production admission with all digests must return the digest of the admitted package bytes
+267	N		S	byte-level external-review builder must return the decoded artifact bundle
+268	N		S	byte-level external-review builder must construct the same reviewed package
+269	N		S	byte-level external-review builder must return the caller-pinnable package digest
+270	N		S	byte-level external-review builder with digests must return the decoded artifact bundle
+271	N		S	byte-level external-review builder with digests must construct the same reviewed package
+272	N		S	byte-level external-review builder with digests must return the admitted artifact-bundle digest
+273	N		S	byte-level external-review builder with digests must return the caller-pinnable package digest
+274	N		S	byte-level external-review builder with all digests must return the decoded artifact bundle
+275	N		S	byte-level external-review builder with all digests must construct the same reviewed package
+276	N		S	byte-level external-review builder with all digests must return the admitted artifact-bundle digest
+277	N		S	byte-level external-review builder with all digests must return the generated evidence digest
+278	N		S	byte-level external-review builder with all digests must return the generated signoff digest
+279	N		S	byte-level external-review builder with all digests must return the generated record digest
+280	N		S	byte-level external-review builder with all digests must return the generated manifest digest
+281	N		S	byte-level external-review builder with all digests must return the caller-pinnable package digest
+282	N		S	compressed artifact-bundle bytes must be a structurally equivalent alternate framing
+283	S	canonical v1 bytes	S	artifact-bundle byte digest helper must reject noncanonical compressed framing before hashing
+284	S	canonical v1 bytes	S	report/archive byte digest builder must reject noncanonical compressed artifact-bundle framing before generation
+285	S	canonical v1 bytes	S	combined byte-level production admission must reject noncanonical artifact-bundle framing before trust
+286	S	canonical v1 bytes	S	derived-digest combined admission must reject noncanonical artifact-bundle framing before trust
+287	S	canonical v1 bytes	S	combined byte-level production admission with digests must reject noncanonical artifact-bundle framing before trust
+288	S	canonical v1 bytes	S	combined byte-level production admission with all digests must reject noncanonical artifact-bundle framing before trust
+289	S	canonical v1 bytes	S	trusted record/artifact byte validation must reject compressed artifact-bundle framing before record trust
+290	S	canonical v1 bytes	S	record/artifact byte digest validation must reject compressed artifact-bundle framing before record trust
+291	S	canonical v1 bytes	S	record/artifact byte digests validation must reject compressed artifact-bundle framing before record trust
+292	S	canonical v1 bytes	S	trusted record/artifact byte digest validation must reject compressed artifact-bundle framing before record trust
+293	S	canonical v1 bytes	S	trusted record/artifact byte digests validation must reject compressed artifact-bundle framing before record trust
+294	S	canonical v1 bytes	S	record/artifact byte builder with digests must reject compressed artifact-bundle framing before signing
+295	S	canonical v1 bytes	S	record/artifact byte builder with all digests must reject compressed artifact-bundle framing before signing
+296	S	canonical v1 bytes	S	manifest/artifact byte builder with all digests must reject compressed artifact-bundle framing before signing
+297	S	canonical v1 bytes	S	trusted manifest/artifact/record byte validation must reject compressed artifact-bundle framing before manifest trust
+298	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digest validation must reject compressed artifact-bundle framing before manifest trust
+299	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digests validation must reject compressed artifact-bundle framing before manifest trust
+300	S	canonical v1 bytes	S	trusted manifest/artifact/record byte all-digests validation must reject compressed artifact-bundle framing before manifest trust
+301	S	canonical v1 bytes	S	signoff/artifact byte validation must reject compressed artifact-bundle framing before signature trust
+302	S	canonical v1 bytes	S	signoff/artifact byte digest validation must reject compressed artifact-bundle framing before hashing
+303	S	canonical v1 bytes	S	signoff/artifact byte digests validation must reject compressed artifact-bundle framing before hashing
+304	S	canonical v1 bytes	S	trusted signoff/artifact byte digests validation must reject compressed artifact-bundle framing before trust
+305	S	canonical	S	byte-level external-review builder must reject malformed reviewer ids before artifact-byte decoding
+306	S	all zero	S	byte-level external-review builder must reject all-zero reviewer keys before artifact-byte decoding
+307	S	canonical	S	byte-level external-review builder with all digests must reject malformed reviewer ids before artifact-byte decoding
+308	S	report bytes must not be empty	S	byte-level external-review builder must reject empty report bytes before artifact-byte decoding
+309	S	evidence archive bytes must not be empty	S	byte-level external-review builder must reject empty archive bytes before artifact-byte decoding
+310	S	report bytes must not be empty	S	byte-level external-review builder with digests must reject empty report bytes before artifact-byte decoding
+311	S	evidence archive bytes must not be empty	S	byte-level external-review builder with all digests must reject empty archive bytes before artifact-byte decoding
+312	S	canonical v1 bytes	S	byte-level external-review builder must reject noncanonical artifact-bundle framing before signing
+313	S	canonical v1 bytes	S	byte-level external-review builder with digests must reject noncanonical artifact-bundle framing before signing
+314	S	canonical v1 bytes	S	byte-level external-review builder with all digests must reject noncanonical artifact-bundle framing before signing
+315	S	Norito-encoded BFV material	S	artifact-bundle byte digest helper must reject non-Norito artifact bytes
+316	S	Norito-encoded BFV material	S	report/archive byte digest builder must reject non-Norito artifact-bundle bytes before generation
+317	S	Norito-encoded BFV material	S	combined byte-level production admission must reject non-Norito artifact-bundle bytes
+318	S	Norito-encoded BFV material	S	derived-digest combined admission must reject non-Norito artifact-bundle bytes
+319	S	Norito-encoded BFV material	S	combined byte-level production admission with digests must reject non-Norito artifact-bundle bytes
+320	S	Norito-encoded BFV material	S	combined byte-level production admission with all digests must reject non-Norito artifact-bundle bytes
+321	S	Norito-encoded BFV material	S	trusted record/artifact byte validation must reject non-Norito artifact-bundle bytes before record trust
+322	S	Norito-encoded BFV material	S	record/artifact byte digest validation must reject non-Norito artifact-bundle bytes before record trust
+323	S	Norito-encoded BFV material	S	trusted record/artifact byte digest validation must reject non-Norito artifact-bundle bytes before record trust
+324	S	Norito-encoded BFV material	S	record/artifact byte builder with all digests must reject non-Norito artifact-bundle bytes before signing
+325	S	Norito-encoded BFV material	S	manifest/artifact byte builder with all digests must reject non-Norito artifact-bundle bytes before signing
+326	S	Norito-encoded BFV material	S	trusted manifest/artifact/record byte validation must reject non-Norito artifact-bundle bytes before manifest trust
+327	S	Norito-encoded BFV material	S	trusted manifest/artifact/record byte digest validation must reject non-Norito artifact-bundle bytes before manifest trust
+328	S	Norito-encoded BFV material	S	trusted manifest/artifact/record byte digests validation must reject non-Norito artifact-bundle bytes before manifest trust
+329	S	Norito-encoded BFV material	S	trusted manifest/artifact/record byte all-digests validation must reject non-Norito artifact-bundle bytes before manifest trust
+330	S	Norito-encoded BFV material	S	trusted signoff/artifact byte validation must reject non-Norito artifact-bundle bytes before trust
+331	S	Norito-encoded BFV material	S	trusted signoff/artifact byte digest validation must reject non-Norito artifact-bundle bytes before trust
+332	S	Norito-encoded BFV material	S	signoff/artifact byte digests validation must reject non-Norito artifact-bundle bytes before trust
+333	S	Norito-encoded BFV material	S	trusted signoff/artifact byte digests validation must reject non-Norito artifact-bundle bytes before trust
+334	S	Norito-encoded BFV material	S	byte-level external-review builder must reject non-Norito artifact-bundle bytes before signing
+335	S	Norito-encoded BFV material	S	byte-level external-review builder with digests must reject non-Norito artifact-bundle bytes before signing
+336	S	Norito-encoded BFV material	S	byte-level external-review builder with all digests must reject non-Norito artifact-bundle bytes before signing
+337	N		S	compressed package bytes must be a structurally equivalent alternate framing
+338	S	canonical v1 bytes	S	byte-level production package admission must reject noncanonical compressed framing before trust
+339	S	canonical v1 bytes	S	byte-derived production package admission must reject noncanonical compressed framing before trust
+340	S	canonical v1 bytes	S	derived-digest combined admission must reject noncanonical compressed package framing before trust
+341	S	canonical v1 bytes	S	combined byte-level production admission must reject noncanonical compressed package framing before trust
+342	S	canonical v1 bytes	S	combined byte-level production admission with digests must reject noncanonical compressed package framing before trust
+343	S	canonical v1 bytes	S	combined byte-level production admission with all digests must reject noncanonical compressed package framing before trust
+344	S	release audit package bytes must use canonical v1 bytes	S	combined byte-level production admission must reject noncanonical package framing before artifact-byte decoding
+345	S	release audit package bytes must use canonical v1 bytes	S	derived-digest combined admission must reject noncanonical package framing before artifact-byte decoding
+346	S	release audit package bytes must use canonical v1 bytes	S	combined byte-level production admission with digests must reject noncanonical package framing before artifact-byte decoding
+347	S	release audit package bytes must use canonical v1 bytes	S	combined byte-level production admission with all digests must reject noncanonical package framing before artifact-byte decoding
+348	S	canonical v1 bytes	S	package-byte digest helper must reject noncanonical compressed framing before hashing
+349	S	canonical v1 bytes	S	package-byte digests helper must reject noncanonical compressed framing before hashing
+350	S	canonical v1 bytes	S	package-byte all-digests helper must reject noncanonical compressed framing before hashing
+351	S	canonical v1 bytes	S	evidence-byte digest helper must reject noncanonical compressed framing before hashing
+352	S	release audit evidence bytes must use canonical v1 bytes	S	release audit evidence byte-pair validation must reject compressed evidence framing before artifact-byte decoding
+353	S	release audit evidence bytes must use canonical v1 bytes	S	release audit evidence raw-byte admission must reject compressed evidence framing before artifact-byte decoding
+354	S	release audit evidence bytes must use canonical v1 bytes	S	release audit evidence raw-byte digest admission must reject compressed evidence framing before artifact-byte decoding
+355	S	release audit evidence bytes must use canonical v1 bytes	S	release audit evidence raw-byte all-digest admission must reject compressed evidence framing before artifact-byte decoding
+356	S	canonical v1 bytes	S	record-byte digest helper must reject noncanonical compressed framing before hashing
+357	S	canonical v1 bytes	S	record-byte digests helper must reject noncanonical compressed framing before hashing
+358	S	canonical v1 bytes	S	manifest record-byte builder with digests must reject compressed record framing before manifest generation
+359	S	canonical v1 bytes	S	manifest record-byte builder with all digests must reject compressed record framing before manifest generation
+360	S	canonical v1 bytes	S	trusted record/artifact byte validation must reject compressed record framing before record trust
+361	S	canonical v1 bytes	S	record/artifact byte digest validation must reject compressed record framing before record trust
+362	S	canonical v1 bytes	S	record/artifact byte digests validation must reject compressed record framing before record trust
+363	S	canonical v1 bytes	S	trusted record/artifact byte digest validation must reject compressed record framing before record trust
+364	S	canonical v1 bytes	S	trusted record/artifact byte digests validation must reject compressed record framing before record trust
+365	S	release audit record bytes must use canonical v1 bytes	S	record/artifact byte validation must reject compressed record framing before artifact-byte decoding
+366	S	release audit record bytes must use canonical v1 bytes	S	record/artifact byte all-digests validation must reject compressed record framing before artifact-byte decoding
+367	S	release audit record bytes must use canonical v1 bytes	S	trusted record/artifact byte validation must reject compressed record framing before artifact-byte decoding
+368	S	release audit record bytes must use canonical v1 bytes	S	trusted record/artifact byte all-digests validation must reject compressed record framing before artifact-byte decoding
+369	S	canonical v1 bytes	S	trusted manifest/artifact/record byte validation must reject compressed record framing before manifest trust
+370	S	canonical v1 bytes	S	manifest/record byte digest validation must reject compressed record framing before manifest trust
+371	S	canonical v1 bytes	S	manifest/record byte digests validation must reject compressed record framing before manifest trust
+372	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digest validation must reject compressed record framing before manifest trust
+373	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digests validation must reject compressed record framing before manifest trust
+374	S	canonical v1 bytes	S	trusted manifest/artifact/record byte all-digests validation must reject compressed record framing before manifest trust
+375	S	canonical v1 bytes	S	signoff/artifact byte validation must reject compressed signoff framing
+376	S	canonical v1 bytes	S	signoff/artifact byte digest validation must reject compressed signoff framing before hashing
+377	S	release audit signoff bytes must use canonical v1 bytes	S	signoff/artifact byte validation must reject compressed signoff framing before artifact-byte decoding
+378	S	release audit signoff bytes must use canonical v1 bytes	S	signoff/artifact byte all-digests validation must reject compressed signoff framing before artifact-byte decoding
+379	S	release audit signoff bytes must use canonical v1 bytes	S	trusted signoff/artifact byte validation must reject compressed signoff framing before artifact-byte decoding
+380	S	release audit signoff bytes must use canonical v1 bytes	S	trusted signoff/artifact byte all-digests validation must reject compressed signoff framing before artifact-byte decoding
+381	S	canonical v1 bytes	S	signoff byte digest helper must reject compressed external-review signoff framing before hashing
+382	S	canonical v1 bytes	S	signoff byte digests helper must reject compressed external-review signoff framing before hashing
+383	S	report bytes must not be empty	S	record/manifest byte package builder must reject empty report bytes before record-byte decoding
+384	S	evidence archive bytes must not be empty	S	record/manifest byte package all-digests builder must reject empty archive bytes before record-byte decoding
+385	S	report bytes must not be empty	S	external-review record/manifest byte package builder must reject empty report bytes before record-byte decoding
+386	S	evidence archive bytes must not be empty	S	external-review record/manifest byte package all-digests builder must reject empty archive bytes before record-byte decoding
+387	S	canonical v1 bytes	S	record/manifest byte external-review builder must reject compressed record framing before package construction
+388	S	canonical v1 bytes	S	record/manifest byte package-and-digests builder must reject compressed record framing before package construction
+389	S	canonical v1 bytes	S	manifest-byte digest helper must reject noncanonical compressed framing before hashing
+390	S	canonical v1 bytes	S	manifest-byte digests helper must reject noncanonical compressed framing before hashing
+391	S	release audit manifest bytes must use canonical v1 bytes	S	trusted manifest/artifact/record byte validation must reject compressed manifest framing before artifact-byte decoding
+392	S	release audit manifest bytes must use canonical v1 bytes	S	trusted manifest/artifact/record byte digest validation must reject compressed manifest framing before artifact-byte decoding
+393	S	release audit manifest bytes must use canonical v1 bytes	S	trusted manifest/artifact/record byte digests validation must reject compressed manifest framing before artifact-byte decoding
+394	S	release audit manifest bytes must use canonical v1 bytes	S	trusted manifest/artifact/record byte all-digests validation must reject compressed manifest framing before artifact-byte decoding
+395	S	canonical v1 bytes	S	trusted manifest/artifact/record byte validation must reject compressed manifest framing before manifest trust
+396	S	canonical v1 bytes	S	manifest/record byte digest validation must reject compressed manifest framing before manifest trust
+397	S	canonical v1 bytes	S	manifest/record byte digests validation must reject compressed manifest framing before manifest trust
+398	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digest validation must reject compressed manifest framing before manifest trust
+399	S	canonical v1 bytes	S	trusted manifest/artifact/record byte digests validation must reject compressed manifest framing before manifest trust
+400	S	canonical v1 bytes	S	trusted manifest/artifact/record byte all-digests validation must reject compressed manifest framing before manifest trust
+401	S	canonical v1 bytes	S	record/manifest byte package builder must reject compressed manifest framing before package construction
+402	S	canonical v1 bytes	S	record/manifest byte external-review package-and-digests builder must reject compressed manifest framing before package construction
+403	S	Norito-encoded package	S	byte-level production package admission must reject non-Norito package bytes
+404	S	Norito-encoded package	S	byte-derived production package admission must reject non-Norito package bytes
+405	S	Norito-encoded package	S	derived-digest combined admission must reject non-Norito package bytes
+406	S	Norito-encoded package	S	combined byte-level production admission must reject non-Norito package bytes
+407	S	Norito-encoded package	S	combined byte-level production admission with digests must reject non-Norito package bytes
+408	S	Norito-encoded package	S	combined byte-level production admission with all digests must reject non-Norito package bytes
+409	S	Norito-encoded package	S	package-byte digest helper must reject non-Norito package bytes
+410	S	Norito-encoded package	S	package-byte digests helper must reject non-Norito package bytes
+411	S	Norito-encoded package	S	package-byte all-digests helper must reject non-Norito package bytes
+412	S	Norito-encoded release-audit object	S	evidence-byte digest helper must reject non-Norito evidence bytes
+413	S	Norito-encoded release-audit object	S	record-byte digest helper must reject non-Norito record bytes
+414	S	Norito-encoded release-audit object	S	record-byte digests helper must reject non-Norito record bytes
+415	S	Norito-encoded release-audit object	S	manifest record-byte builder with digests must reject non-Norito record bytes before manifest generation
+416	S	Norito-encoded release-audit object	S	manifest record-byte builder with all digests must reject non-Norito record bytes before manifest generation
+417	S	Norito-encoded release-audit object	S	trusted record/artifact byte validation must reject non-Norito record bytes before record trust
+418	S	Norito-encoded release-audit object	S	record/artifact byte digest validation must reject non-Norito record bytes before record trust
+419	S	Norito-encoded release-audit object	S	record/artifact byte digests validation must reject non-Norito record bytes before record trust
+420	S	Norito-encoded release-audit object	S	trusted record/artifact byte digest validation must reject non-Norito record bytes before record trust
+421	S	Norito-encoded release-audit object	S	trusted record/artifact byte digests validation must reject non-Norito record bytes before record trust
+422	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte validation must reject non-Norito record bytes before manifest trust
+423	S	Norito-encoded release-audit object	S	manifest/record byte digest validation must reject non-Norito record bytes before manifest trust
+424	S	Norito-encoded release-audit object	S	manifest/record byte digests validation must reject non-Norito record bytes before manifest trust
+425	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte digest validation must reject non-Norito record bytes before manifest trust
+426	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte digests validation must reject non-Norito record bytes before manifest trust
+427	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte all-digests validation must reject non-Norito record bytes before manifest trust
+428	S	Norito-encoded release-audit object	S	signoff/artifact byte validation must reject non-Norito signoff bytes before signature trust
+429	S	Norito-encoded release-audit object	S	signoff/artifact byte digest validation must reject non-Norito signoff bytes before hashing
+430	S	Norito-encoded release-audit object	S	signoff byte digest helper must reject non-Norito signoff bytes
+431	S	Norito-encoded release-audit object	S	signoff byte digests helper must reject non-Norito signoff bytes
+432	S	reviewer id does not match trusted reviewer	S	trusted signoff/artifact byte validation must reject reviewer-id drift
+433	S	reviewer id does not match trusted reviewer	S	trusted signoff/artifact byte digest validation must reject reviewer-id drift
+434	S	reviewer id does not match trusted reviewer	S	trusted record/artifact byte validation must reject reviewer-id drift
+435	S	reviewer id does not match trusted reviewer	S	trusted record/artifact byte digest validation must reject reviewer-id drift
+436	S	reviewer id does not match trusted reviewer	S	byte-derived production package admission must reject reviewer-id drift
+437	S	reviewer id does not match trusted reviewer	S	derived-digest combined admission must reject reviewer-id drift
+438	S	reviewer id does not match trusted reviewer	S	trusted manifest/artifact/record byte validation must reject reviewer-id drift
+439	S	reviewer id does not match trusted reviewer	S	trusted manifest/record byte digest validation must reject reviewer-id drift
+440	S	reviewer id does not match trusted reviewer	S	trusted manifest/record byte digests validation must reject reviewer-id drift
+441	S	reviewer id does not match trusted reviewer	S	trusted manifest/artifact/record byte digest validation must reject reviewer-id drift
+442	S	reviewer id does not match trusted reviewer	S	trusted manifest/artifact/record byte digests validation must reject reviewer-id drift
+443	S	Norito-encoded release-audit object	S	record/manifest byte package builder must reject non-Norito record bytes before package construction
+444	S	Norito-encoded release-audit object	S	record/manifest byte package-and-digests builder must reject non-Norito record bytes before package construction
+445	S	Norito-encoded release-audit object	S	manifest-byte digest helper must reject non-Norito manifest bytes
+446	S	Norito-encoded release-audit object	S	manifest-byte digests helper must reject non-Norito manifest bytes
+447	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte validation must reject non-Norito manifest bytes before manifest trust
+448	S	Norito-encoded release-audit object	S	manifest/record byte digest validation must reject non-Norito manifest bytes before manifest trust
+449	S	Norito-encoded release-audit object	S	manifest/record byte digests validation must reject non-Norito manifest bytes before manifest trust
+450	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte digest validation must reject non-Norito manifest bytes before manifest trust
+451	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte digests validation must reject non-Norito manifest bytes before manifest trust
+452	S	Norito-encoded release-audit object	S	trusted manifest/artifact/record byte all-digests validation must reject non-Norito manifest bytes before manifest trust
+453	S	Norito-encoded release-audit object	S	record/manifest byte external-review builder must reject non-Norito manifest bytes before package construction
+454	S	Norito-encoded release-audit object	S	record/manifest byte external-review package-and-digests builder must reject non-Norito manifest bytes before package construction
+455	S	report digest mismatch	S	record/manifest byte package builder must reject stale canonical manifest bytes
+456	S	report digest mismatch	S	record/manifest byte package-and-digests builder must reject stale canonical manifest bytes
+457	S	report digest mismatch	S	trusted manifest/artifact/record byte validation must reject stale canonical manifest bytes
+458	S	report digest mismatch	S	manifest/record byte digest validation must reject stale canonical manifest bytes
+459	S	report digest mismatch	S	manifest/record byte digests validation must reject stale canonical manifest bytes
+460	S	report digest mismatch	S	trusted manifest/artifact/record byte digest validation must reject stale canonical manifest bytes
+461	S	report digest mismatch	S	trusted manifest/artifact/record byte digests validation must reject stale canonical manifest bytes
+462	S	release audit report bytes digest mismatch	S	record/manifest byte package builder must reject report bytes mutated after signing
+463	S	release audit report bytes digest mismatch	S	external-review record/manifest byte package-and-digests builder must reject report bytes mutated after signing
+464	S	release audit report bytes digest mismatch	S	production-pinned release audit packages must reject report bytes mutated after package digest production
+465	S	release audit report bytes digest mismatch	S	byte-level production package admission must reject post-signature report byte tamper
+466	S	release audit report bytes digest mismatch	S	package-byte digest helper must reject post-signature report byte tamper before hashing
+467	S	release audit evidence archive bytes digest mismatch	S	production-pinned release audit packages must reject evidence archive bytes mutated after package digest production
+468	S	release audit evidence archive bytes digest mismatch	S	byte-level production package admission must reject post-signature archive byte tamper
+469	S	release audit evidence archive bytes digest mismatch	S	package-byte digest helper must reject post-signature archive byte tamper before hashing
+470	D	runtime expected retained in Rust	D	runtime context retained in Rust
+471	D	runtime expected retained in Rust	D	runtime context retained in Rust
+472	D	runtime expected retained in Rust	D	runtime context retained in Rust
+473	D	runtime expected retained in Rust	D	runtime context retained in Rust
+474	D	runtime expected retained in Rust	D	runtime context retained in Rust
+475	D	runtime expected retained in Rust	D	runtime context retained in Rust
+476	S	package digest mismatch	S	production-pinned release audit packages must reject stale caller-pinned package digests for otherwise valid reviewed bytes
+477	S	package digest mismatch	S	byte-level production package admission must reject stale caller-pinned package digests for otherwise valid reviewed bytes
+478	S	package digest mismatch	S	combined byte-level production admission must reject stale caller-pinned package digests for otherwise valid artifact and package bytes
+479	D	runtime expected retained in Rust	S	byte-level production package admission must reject caller-pinned digest aliases before package comparison
+480	D	runtime expected retained in Rust	S	combined artifact/package byte admission must reject caller-pinned digest aliases before package comparison

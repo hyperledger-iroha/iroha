@@ -355,9 +355,16 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
+        "repair_native_amx_participant_application_evidence",
+        "let plan=self.native_amx_participant_application_evidence_for_block_under_publication_guard("
+        "block,true,NativeAmxMergeAssociation::CommittedOnly)?;",
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
         "native_amx_participant_application_evidence_for_block_under_publication_guard",
-        "let native_manifest = self.native_amx_manifest_for_committed_block( "
-        "block, merge_association, &finality, )?;",
+        "let native_manifest = self.native_amx_manifest_for_committed_block("
+        "block, merge_association, &finality)?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/"
@@ -500,6 +507,13 @@ def _validate_native_merge_manifest_raw_tests(
             cursor = position
 
 
+def _normalize_rust_relation(source: str) -> str:
+    """Ignore layout and optional trailing commas, but preserve token order."""
+
+    compact = re.sub(r"\s+", "", source)
+    return re.sub(r",(?=[)\]}])", "", compact)
+
+
 def validate_native_merge_manifest_relations(
     root: Path,
     binding_items: dict[tuple[str, str, str], str],
@@ -525,8 +539,8 @@ def validate_native_merge_manifest_relations(
             )
         if item is None:
             continue
-        normalized = " ".join(item.split())
-        count = normalized.count(expected_relation)
+        normalized = _normalize_rust_relation(item)
+        count = normalized.count(_normalize_rust_relation(expected_relation))
         if count != 1:
             errors.append(
                 f"{root / relative}: Native merge-manifest relation {symbol} "

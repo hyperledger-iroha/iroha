@@ -19,6 +19,40 @@ TAIRA_DIR = ROOT / "configs" / "soranexus" / "taira"
 AUTHORITY_FINALIZER = ROOT / "scripts" / "finalize_taira_rollout_authority.py"
 
 
+def test_promotion_docs_pin_external_software_ed25519_signer_policy() -> None:
+    """Reject retired HSM wording at the active SoraFS promotion boundary."""
+
+    ledger = (ROOT / "specs/sorafs/v1_closure_ledger.md").read_text(
+        encoding="utf-8"
+    )
+    roadmap = (ROOT / "roadmap.md").read_text(encoding="utf-8")
+    status = (ROOT / "status.md").read_text(encoding="utf-8")
+    policy = (
+        "signing_provider=authenticated_external_signer",
+        "signing_backend=software",
+        "signer_qualification=software-key-qualified",
+    )
+
+    assert all(token in ledger for token in policy)
+    assert all(token in roadmap for token in policy)
+    assert (
+        "signed by an independently administered external software Ed25519 signer"
+        in " ".join(roadmap.split())
+    )
+    assert "authenticated external software Ed25519 prerequisite signature" in (
+        " ".join(status.split())
+    )
+    for retired in (
+        "externally HSM-signed ordered",
+        "external-HSM prerequisite signature",
+        "external-HSM signature.",
+        "HSM-signed L2 promotion result",
+        "HSM-signed foundational envelope",
+    ):
+        assert retired not in roadmap
+        assert retired not in status
+
+
 def test_taira_packages_exact_native_software_signers_and_separates_promotion() -> None:
     builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
         encoding="utf-8"
@@ -87,7 +121,10 @@ def test_taira_packages_exact_native_software_signers_and_separates_promotion() 
 
     assert all(f'                    "{role}",' in builder for role in native_roles)
     assert all(f'                    "{role}",' not in builder for role in typed_roles)
-    assert "none of the seven typed roles is auto-launched on a validator" in docs
+    assert (
+        "none of the seven typed roles is auto-launched on a validator"
+        in " ".join(docs.split())
+    )
     assert "ExternalSoftwareSignerPopRegistryV1" in docs
 
 
@@ -1114,6 +1151,7 @@ def test_public_cutover_cannot_skip_fleet_or_exact_commit() -> None:
 
     assert "TAIRA_RELEASE_VALIDATOR_COUNT=4" in source
     assert "public Taira rollout requires --require-all-validators" in source
+    assert "public Taira rollout requires MIN_VALIDATOR_SET_LEN=" in source
     assert (
         "public Taira rollout requires exactly ${TAIRA_RELEASE_VALIDATOR_COUNT}"
         in source
